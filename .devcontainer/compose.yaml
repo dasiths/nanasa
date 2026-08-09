@@ -1,0 +1,11 @@
+services:
+  nanasa:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+      args:
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmjs.org/}
+        COREPACK_NPM_REGISTRY: ${COREPACK_NPM_REGISTRY:-https://registry.npmjs.org/}
+    volumes:
+      - ..:/workspaces/nanasa:cached
+    command: sleep infinity
