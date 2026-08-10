@@ -1,4 +1,4 @@
-import type { AgentProfile, AgentRun } from "@nanasa/contracts";
+import type { AgentRun } from "@nanasa/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { RunRuntimeCoordinator } from "../src/run-runtime-coordinator.js";
@@ -58,12 +58,6 @@ describe("RunRuntimeCoordinator", () => {
       runtime as never,
       supervisor as never,
       {
-        shutdownRun: vi.fn(async () => {
-          operations.push("adapter:shutdown");
-        }),
-        close: vi.fn(async () => undefined),
-      } as never,
-      {
         start: vi.fn(),
         close: vi.fn(async () => undefined),
       } as never,
@@ -76,7 +70,6 @@ describe("RunRuntimeCoordinator", () => {
       );
       expect(operations).toEqual([
         "status:stopping",
-        "adapter:shutdown",
         "ttyd:stop",
         "view-session:remove",
         "owner-pane:stop",
@@ -86,84 +79,24 @@ describe("RunRuntimeCoordinator", () => {
     }
   });
 
-  it("intersects native modes and adds terminal only for current panes on every target", async () => {
-    const piProfile: AgentProfile = {
-      id: "profile-pi",
-      name: "Pi",
-      agentType: "pi",
-      kind: "pi",
-      adapter: "pi-rpc",
-      capabilities: ["queue", "steer"],
-      command: "pi",
-      args: [],
-      environment: {},
-      createdAt: "2026-08-10T12:00:00.000Z",
-      updatedAt: "2026-08-10T12:00:00.000Z",
-    };
-    const terminalProfile: AgentProfile = {
-      ...piProfile,
-      id: "profile-opencode",
-      name: "OpenCode",
-      agentType: "opencode",
-      kind: "opencode",
-      adapter: "terminal",
-      capabilities: ["queue"],
-      command: "opencode",
-    };
-    const targets = new Map([
-      ["alpha", { run: runningRun, profile: piProfile }],
-      [
-        "beta",
-        {
-          run: {
-            ...runningRun,
-            id: "run-beta",
-            memberId: "beta",
-            agentProfileId: terminalProfile.id,
-            terminal: { ...runningRun.terminal!, paneId: "%4" },
-          },
-          profile: terminalProfile,
-        },
-      ],
-    ]);
-    const store = {
-      getActiveDeliveryTarget: vi.fn((_groupId: string, memberId: string) => targets.get(memberId)),
-    };
-    const agentSupervisor = {
-      status: vi.fn((_: AgentRun, profile: AgentProfile) => ({
-        readiness: "ready",
-        capabilities: profile.capabilities,
-      })),
-      terminalAvailable: vi.fn(async () => true),
-      close: vi.fn(async () => undefined),
-    };
+  it("interrupts the verified owner terminal directly", async () => {
+    const interruptRun = vi.fn(async () => undefined);
     const coordinator = new RunRuntimeCoordinator(
-      store as never,
+      { getRun: vi.fn(() => runningRun) } as never,
+      { interruptRun, close: vi.fn(async () => undefined) } as never,
       { close: vi.fn(async () => undefined) } as never,
-      { close: vi.fn(async () => undefined) } as never,
-      agentSupervisor as never,
       { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
       { reconcileIntervalMs: 60_000 },
     );
-
     try {
-      await expect(
-        coordinator.effectiveDeliveryModes("group-one", ["alpha", "beta"]),
-      ).resolves.toEqual({ memberIds: ["alpha", "beta"], modes: ["queue", "terminal"] });
-      await expect(
-        coordinator.effectiveDeliveryModes("group-one", ["alpha", "missing"]),
-      ).resolves.toEqual({ memberIds: ["alpha", "missing"], modes: [] });
-
-      agentSupervisor.terminalAvailable.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-      await expect(
-        coordinator.effectiveDeliveryModes("group-one", ["alpha", "beta"]),
-      ).resolves.toEqual({ memberIds: ["alpha", "beta"], modes: ["queue"] });
+      await expect(coordinator.interrupt(runningRun.id)).resolves.toBeUndefined();
+      expect(interruptRun).toHaveBeenCalledWith(runningRun);
     } finally {
       await coordinator.close();
     }
   });
 
-  it("recovers a missing owner pane into one resumed generation and records recovery phases", async () => {
+  it("recovers a missing owner pane into one restarted generation", async () => {
     const store = new NanasaStore(":memory:");
     const group = store.createGroup({ name: "Recovery" });
     const profile = store.createInternalAgentProfile({
@@ -185,16 +118,10 @@ describe("RunRuntimeCoordinator", () => {
     const run = store.updateRunStatus(starting.id, "running", {
       terminal: runningRun.terminal,
     });
-    store.updateRunAdapterSession(run.id, run.generation, {
-      adapter: "pi-rpc",
-      adapterSessionId: "session-one",
-      sessionFile: "/tmp/session-one.jsonl",
-    });
-    const recoverRun = vi.fn(async (previous: AgentRun, preserveAdapterSession: boolean) => {
+    const recoverRun = vi.fn(async (previous: AgentRun) => {
       store.updateRunStatus(previous.id, "failed", { reason: "recovery_replaced" });
       const created = store.createRunForMembership(group.id, "alpha", {
         recoveryFrom: store.getRun(previous.id),
-        preserveAdapterSession,
       }).run;
       return store.updateRunStatus(created.id, "running", {
         terminal: { ...runningRun.terminal!, paneId: "%4", windowId: "@3" },
@@ -209,12 +136,6 @@ describe("RunRuntimeCoordinator", () => {
       ensureViewSession: vi.fn(async () => "view"),
       close: vi.fn(async () => undefined),
     };
-    const agentSupervisor = {
-      closeRun: vi.fn(async () => undefined),
-      reconcile: vi.fn(async () => undefined),
-      status: vi.fn(() => ({ readiness: "ready", capabilities: ["queue", "steer"] })),
-      close: vi.fn(async () => undefined),
-    };
     const ttyd = {
       stop: vi.fn(async () => undefined),
       reconcile: vi.fn(async () => undefined),
@@ -224,7 +145,6 @@ describe("RunRuntimeCoordinator", () => {
       store,
       runtime as never,
       ttyd as never,
-      agentSupervisor as never,
       { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
       { reconcileIntervalMs: 60_000, now: () => new Date("2026-08-10T12:00:00.000Z") },
     );
@@ -234,7 +154,6 @@ describe("RunRuntimeCoordinator", () => {
       const replacement = store.listDesiredRunningRuns()[0]!;
       expect(recoverRun).toHaveBeenCalledWith(
         expect.objectContaining({ id: run.id, recoveryAttempts: 1 }),
-        true,
         { cols: 120, rows: 40 },
       );
       expect(replacement).toMatchObject({
@@ -242,11 +161,85 @@ describe("RunRuntimeCoordinator", () => {
         status: "running",
         recoveryPhase: "recovered",
         recoveryAttempts: 1,
-        adapterSessionId: "session-one",
       });
       expect(store.listEvents().map((event) => event.type)).toEqual(
         expect.arrayContaining(["run.recovery-changed", "run.created", "run.status-changed"]),
       );
+    } finally {
+      await coordinator.close();
+      store.close();
+    }
+  });
+
+  it("forces one replacement for a migration-marked current pane", async () => {
+    const store = new NanasaStore(":memory:");
+    const group = store.createGroup({ name: "Migration" });
+    const profile = store.createInternalAgentProfile({
+      name: "Legacy worker",
+      agentType: "pi",
+      kind: "pi",
+      command: "pi",
+      args: [],
+      environment: {},
+    });
+    store.addMembership(group.id, {
+      memberId: "alpha",
+      agentProfileId: profile.id,
+      alias: "Alpha",
+    });
+    const original = store.createRun({
+      ...runningRun,
+      id: "run-migration",
+      groupId: group.id,
+      agentProfileId: profile.id,
+      recoveryPhase: "reconciling",
+      recoveryReason: "terminal_runtime_migration",
+    });
+    const recoverRun = vi.fn(async (previous: AgentRun) => {
+      store.updateRunStatus(previous.id, "failed", { reason: "recovery_replaced" });
+      const created = store.createRunForMembership(group.id, "alpha", {
+        recoveryFrom: store.getRun(previous.id),
+      }).run;
+      return store.updateRunStatus(created.id, "running", {
+        terminal: { ...runningRun.terminal!, paneId: "%4", windowId: "@3" },
+      });
+    });
+    const runtime = {
+      reconcile: vi.fn(async () => undefined),
+      isCurrentRun: vi.fn(async () => true),
+      recoverRun,
+      removeViewSession: vi.fn(async () => undefined),
+      removeStaleViewSessions: vi.fn(async () => undefined),
+      ensureViewSession: vi.fn(async () => "view"),
+      close: vi.fn(async () => undefined),
+    };
+    const coordinator = new RunRuntimeCoordinator(
+      store,
+      runtime as never,
+      {
+        stop: vi.fn(async () => undefined),
+        reconcile: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+      } as never,
+      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
+      { reconcileIntervalMs: 60_000 },
+    );
+
+    try {
+      await coordinator.reconcile();
+      expect(recoverRun).toHaveBeenCalledOnce();
+      expect(recoverRun).toHaveBeenCalledWith(
+        expect.objectContaining({ id: original.id, recoveryReason: "terminal_runtime_migration" }),
+        { cols: 120, rows: 40 },
+      );
+      expect(store.listDesiredRunningRuns()[0]).toMatchObject({
+        generation: 2,
+        recoveryPhase: "recovered",
+        recoveryReason: "runtime_recovered",
+      });
+
+      await coordinator.reconcile();
+      expect(recoverRun).toHaveBeenCalledOnce();
     } finally {
       await coordinator.close();
       store.close();
@@ -300,11 +293,9 @@ describe("RunRuntimeCoordinator", () => {
         close: vi.fn(async () => undefined),
       } as never,
       {
-        shutdownRun: vi.fn(async () => undefined),
-        reconcile: vi.fn(async () => undefined),
+        start: vi.fn(),
         close: vi.fn(async () => undefined),
       } as never,
-      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
       { reconcileIntervalMs: 60_000 },
     );
     try {
@@ -365,10 +356,9 @@ describe("RunRuntimeCoordinator", () => {
         close: vi.fn(async () => undefined),
       } as never,
       {
-        start: vi.fn(async () => undefined),
+        start: vi.fn(),
         close: vi.fn(async () => undefined),
       } as never,
-      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
       { reconcileIntervalMs: 60_000 },
     );
     try {
@@ -436,11 +426,9 @@ describe("RunRuntimeCoordinator", () => {
         close: vi.fn(async () => undefined),
       } as never,
       {
-        start: vi.fn(async () => undefined),
-        shutdownRun: vi.fn(async () => operations.push("adapter:stop")),
+        start: vi.fn(),
         close: vi.fn(async () => undefined),
       } as never,
-      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
       { reconcileIntervalMs: 60_000 },
     );
     try {
@@ -452,11 +440,162 @@ describe("RunRuntimeCoordinator", () => {
       expect(operations).toEqual([
         "run:start",
         "status:stopping",
-        "adapter:stop",
         "ttyd:stop",
         "view:remove",
         "run:stop",
         "membership:remove",
+      ]);
+    } finally {
+      await coordinator.close();
+    }
+  });
+
+  it("stops desired and active group runs before deleting the group and replays deletion", async () => {
+    const operations: string[] = [];
+    const runs = new Map<string, AgentRun>([
+      ["alpha", runningRun],
+      [
+        "beta",
+        {
+          ...runningRun,
+          id: "run-beta",
+          memberId: "beta",
+          status: "failed",
+          recoveryPhase: "failed",
+        },
+      ],
+    ]);
+    const result = {
+      groupId: "group-one",
+      deletedMemberships: 2,
+      deletedRuns: 2,
+      deletedMessages: 0,
+      deletedDeliveries: 0,
+    };
+    let replay: typeof result | undefined;
+    const store = {
+      getDeleteGroupResult: vi.fn(() => replay),
+      listGroupRunsRequiringStop: vi.fn(() => [...runs.values()]),
+      getActiveRun: vi.fn((_groupId: string, memberId: string) =>
+        runs.get(memberId)?.status === "running" ? runs.get(memberId) : undefined,
+      ),
+      getLatestRunForMembership: vi.fn((_groupId: string, memberId: string) => runs.get(memberId)),
+      updateRunStatus: vi.fn((runId: string, status: AgentRun["status"]) => {
+        operations.push(`${runId}:${status}`);
+        const memberId = runId === "run-beta" ? "beta" : "alpha";
+        const updated = { ...runs.get(memberId)!, status };
+        runs.set(memberId, updated);
+        return updated;
+      }),
+      stopDesiredRun: vi.fn((runId: string) => {
+        operations.push(`${runId}:desired-stopped`);
+        const updated = { ...runs.get("beta")!, desiredState: "stopped" as const };
+        runs.set("beta", updated);
+        return updated;
+      }),
+      deleteGroup: vi.fn(() => {
+        operations.push("group:delete");
+        replay = result;
+        return result;
+      }),
+    };
+    const runtime = {
+      removeViewSession: vi.fn(async (runId: string) => operations.push(`${runId}:view-remove`)),
+      stopRun: vi.fn(async () => {
+        operations.push("run-alpha:runtime-stop");
+        return { ...runningRun, status: "stopped" as const };
+      }),
+      close: vi.fn(async () => undefined),
+    };
+    const coordinator = new RunRuntimeCoordinator(
+      store as never,
+      runtime as never,
+      {
+        stop: vi.fn(async (runId: string) => operations.push(`${runId}:ttyd-stop`)),
+        close: vi.fn(async () => undefined),
+      } as never,
+      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
+      { reconcileIntervalMs: 60_000 },
+    );
+    try {
+      expect(await coordinator.deleteGroup("group-one", "delete-key")).toEqual(result);
+      expect(await coordinator.deleteGroup("group-one", "delete-key")).toEqual(result);
+      expect(operations).toEqual([
+        "run-alpha:stopping",
+        "run-alpha:ttyd-stop",
+        "run-alpha:view-remove",
+        "run-alpha:runtime-stop",
+        "run-beta:desired-stopped",
+        "group:delete",
+      ]);
+      expect(store.deleteGroup).toHaveBeenCalledTimes(1);
+    } finally {
+      await coordinator.close();
+    }
+  });
+
+  it("aborts group deletion on a stop failure and converges on retry", async () => {
+    const operations: string[] = [];
+    const desiredRuns = new Map<string, AgentRun>([
+      ["alpha", { ...runningRun, status: "failed", recoveryPhase: "failed" }],
+      [
+        "beta",
+        {
+          ...runningRun,
+          id: "run-beta",
+          memberId: "beta",
+          status: "failed",
+          recoveryPhase: "failed",
+        },
+      ],
+    ]);
+    let betaFails = true;
+    const result = {
+      groupId: "group-one",
+      deletedMemberships: 2,
+      deletedRuns: 2,
+      deletedMessages: 0,
+      deletedDeliveries: 0,
+    };
+    const store = {
+      getDeleteGroupResult: vi.fn(() => undefined),
+      listGroupRunsRequiringStop: vi.fn(() => [...desiredRuns.values()]),
+      getActiveRun: vi.fn(() => undefined),
+      getLatestRunForMembership: vi.fn((_groupId: string, memberId: string) =>
+        desiredRuns.get(memberId),
+      ),
+      stopDesiredRun: vi.fn((runId: string) => {
+        operations.push(`${runId}:stop`);
+        if (runId === "run-beta" && betaFails) {
+          betaFails = false;
+          throw new Error("stop_failed");
+        }
+        desiredRuns.delete(runId === "run-beta" ? "beta" : "alpha");
+        return { ...runningRun, id: runId, desiredState: "stopped" as const };
+      }),
+      deleteGroup: vi.fn(() => {
+        operations.push("group:delete");
+        return result;
+      }),
+    };
+    const coordinator = new RunRuntimeCoordinator(
+      store as never,
+      { close: vi.fn(async () => undefined) } as never,
+      { close: vi.fn(async () => undefined) } as never,
+      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
+      { reconcileIntervalMs: 60_000 },
+    );
+    try {
+      await expect(coordinator.deleteGroup("group-one", "delete-key")).rejects.toThrow(
+        "stop_failed",
+      );
+      expect(store.deleteGroup).not.toHaveBeenCalled();
+      await expect(coordinator.deleteGroup("group-one", "delete-key")).resolves.toEqual(result);
+      expect(operations).toEqual([
+        "run-alpha:stop",
+        "run-beta:stop",
+        "run-beta:stop",
+        "group:delete",
       ]);
     } finally {
       await coordinator.close();

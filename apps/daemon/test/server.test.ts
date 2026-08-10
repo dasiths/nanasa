@@ -20,6 +20,96 @@ afterEach(() => {
 });
 
 describe("daemon REST API", () => {
+  it("renames and removes groups and memberships while preserving profiles", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const group = (
+      await daemon.app.inject({
+        method: "POST",
+        url: "/api/groups",
+        payload: { name: "Original group" },
+      })
+    ).json<{ id: string }>();
+    const profile = (
+      await daemon.app.inject({
+        method: "POST",
+        url: "/api/agent-profiles",
+        payload: { name: "Reusable", agentType: "copilot" },
+      })
+    ).json<{ id: string }>();
+    await daemon.app.inject({
+      method: "POST",
+      url: `/api/groups/${group.id}/memberships`,
+      payload: { memberId: "reviewer", agentProfileId: profile.id, alias: "Original alias" },
+    });
+
+    const renamedGroup = await daemon.app.inject({
+      method: "PATCH",
+      url: `/api/groups/${group.id}`,
+      headers: { "idempotency-key": "rename-group" },
+      payload: { name: "Renamed group" },
+    });
+    expect(renamedGroup.statusCode).toBe(200);
+    expect(renamedGroup.json()).toMatchObject({
+      id: group.id,
+      name: "Renamed group",
+      membershipRevision: 1,
+    });
+    const renamedMembership = await daemon.app.inject({
+      method: "PATCH",
+      url: `/api/groups/${group.id}/memberships/reviewer`,
+      headers: { "idempotency-key": "rename-member" },
+      payload: { alias: "Renamed alias" },
+    });
+    expect(renamedMembership.statusCode).toBe(200);
+    expect(renamedMembership.json()).toMatchObject({
+      memberId: "reviewer",
+      alias: "Renamed alias",
+    });
+
+    const removedMembership = await daemon.app.inject({
+      method: "DELETE",
+      url: `/api/groups/${group.id}/memberships/reviewer`,
+      headers: { "idempotency-key": "remove-member" },
+    });
+    expect(removedMembership.statusCode).toBe(200);
+    expect(removedMembership.json()).toMatchObject({ memberId: "reviewer", state: "removed" });
+    expect(daemon.store.getSnapshot()).toMatchObject({
+      groups: [{ id: group.id, membershipRevision: 2 }],
+      agentProfiles: [{ id: profile.id }],
+      memberships: [],
+      runs: [],
+    });
+
+    const deleted = await daemon.app.inject({
+      method: "DELETE",
+      url: `/api/groups/${group.id}`,
+      headers: { "idempotency-key": "delete-group" },
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json()).toEqual({
+      groupId: group.id,
+      deletedMemberships: 1,
+      deletedRuns: 0,
+      deletedMessages: 0,
+      deletedDeliveries: 0,
+    });
+    expect(
+      (
+        await daemon.app.inject({
+          method: "DELETE",
+          url: `/api/groups/${group.id}`,
+          headers: { "idempotency-key": "delete-group" },
+        })
+      ).json(),
+    ).toEqual(deleted.json());
+    expect(daemon.store.getSnapshot()).toMatchObject({
+      groups: [],
+      memberships: [],
+      agentProfiles: [{ id: profile.id }],
+    });
+    await daemon.app.close();
+  });
+
   it("exposes group Start All with validated idempotency outcomes", async () => {
     const daemon = await createDaemon({ dataPath: ":memory:" });
     const startAll = vi.spyOn(daemon.coordinator, "startAll").mockResolvedValue({
@@ -50,110 +140,32 @@ describe("daemon REST API", () => {
     await daemon.app.close();
   });
 
-  it("exposes adapter status, effective modes, interrupt, and settlement", async () => {
-    let settle!: (value: { status: "processed" }) => void;
-    const settlement = new Promise<{ status: "processed" }>((resolve) => {
-      settle = resolve;
-    });
-    const interrupt = vi.fn(async () => undefined);
-    const deliver = vi.fn(
-      async (delivery: { mode: "queue" | "steer"; message: { id: string } }) => ({
-        appliedMode: delivery.mode,
-        adapterMessageId: delivery.message.id,
-        settlement,
-      }),
-    );
-    const daemon = await createDaemon({
-      dataPath: ":memory:",
-      adapterFactories: {
-        "pi-rpc": () => ({
-          kind: "pi-rpc",
-          capabilities: new Set(["queue", "steer"]),
-          state: { readiness: "ready" },
-          start: async () => undefined,
-          reconcile: async () => undefined,
-          deliver,
-          interrupt,
-          close: async () => undefined,
-        }),
-      },
-    });
-    const group = daemon.store.createGroup({ name: "Native adapters" });
-    const profile = daemon.store.createInternalAgentProfile({
-      name: "Pi fixture",
-      agentType: "pi",
-      kind: "pi",
-      adapter: "pi-rpc",
-      capabilities: ["queue", "steer"],
-      command: "pi",
-      args: [],
-      environment: {},
-    });
-    const membership = daemon.store.addMembership(group.id, {
-      memberId: "pi",
-      agentProfileId: profile.id,
-      alias: "Pi",
-    });
-    const run = daemon.store.createRun({
-      id: "run_pi",
-      groupId: group.id,
-      memberId: membership.memberId,
-      agentProfileId: profile.id,
-      generation: 1,
-      status: "running",
-      startedAt: "2026-08-10T12:00:00.000Z",
-    });
-    await daemon.agentSupervisor.start(run, profile);
+  it("removes semantic routes and keeps interrupt as a terminal lifecycle command", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const interrupt = vi.spyOn(daemon.coordinator, "interrupt").mockResolvedValue(undefined);
 
     expect(
-      (await daemon.app.inject({ method: "GET", url: `/api/runs/${run.id}/adapter` })).json(),
-    ).toMatchObject({
-      runId: run.id,
-      adapter: "pi-rpc",
-      capabilities: ["queue", "steer"],
-      readiness: "ready",
-    });
+      (await daemon.app.inject({ method: "GET", url: "/api/runs/run-one/adapter" })).statusCode,
+    ).toBe(404);
     expect(
       (
         await daemon.app.inject({
           method: "POST",
-          url: `/api/groups/${group.id}/delivery-modes`,
-          payload: { memberIds: [membership.memberId] },
+          url: "/api/groups/group-one/delivery-modes",
+          payload: { memberIds: ["member-one"] },
         })
-      ).json(),
-    ).toEqual({ memberIds: [membership.memberId], modes: ["queue", "steer"] });
+      ).statusCode,
+    ).toBe(404);
     expect(
       (
         await daemon.app.inject({
           method: "POST",
-          url: `/api/runs/${run.id}/interrupt`,
+          url: "/api/runs/run-one/interrupt",
           payload: { operatorId: "operator", reason: "Stop current work" },
         })
       ).statusCode,
     ).toBe(204);
-    expect(interrupt).toHaveBeenCalledOnce();
-
-    const response = await daemon.app.inject({
-      method: "POST",
-      url: `/api/groups/${group.id}/messages`,
-      payload: {
-        intent: "request",
-        sender: { kind: "operator", operatorId: "operator" },
-        audience: { kind: "dm", memberId: membership.memberId },
-        body: { contentType: "text/plain", text: "Native delivery" },
-        delivery: { mode: "steer" },
-        hop: 0,
-      },
-    });
-    const messageId = response.json<{ message: { id: string } }>().message.id;
-    await vi.waitFor(() =>
-      expect(daemon.store.listDeliveries(messageId)).toMatchObject([{ status: "consumed" }]),
-    );
-    settle({ status: "processed" });
-    await vi.waitFor(() =>
-      expect(daemon.store.listDeliveries(messageId)).toMatchObject([{ status: "processed" }]),
-    );
-    expect(deliver).toHaveBeenCalledOnce();
+    expect(interrupt).toHaveBeenCalledWith("run-one");
     await daemon.app.close();
   });
 
@@ -185,8 +197,9 @@ describe("daemon REST API", () => {
       },
     });
     expect(profileResponse.statusCode).toBe(201);
-    const profile = profileResponse.json<{ id: string; command: string; adapter: string }>();
-    expect(profile).toMatchObject({ command: "copilot", adapter: "copilot-cli" });
+    const profile = profileResponse.json<{ id: string; command: string }>();
+    expect(profile).toMatchObject({ command: "copilot" });
+    expect(profile).not.toHaveProperty("adapter");
 
     for (const memberId of ["reviewer", "tester"]) {
       const membershipResponse = await first.app.inject({
@@ -236,9 +249,10 @@ describe("daemon REST API", () => {
     expect(snapshot.messages).toHaveLength(1);
     expect(snapshot.deliveryOutcomes).toHaveLength(2);
     expect(snapshot).toMatchObject({
-      config: { version: 1, agentTypes: { copilot: { adapter: "copilot-cli" } } },
+      config: { version: 1, agentTypes: { copilot: { command: ["copilot"] } } },
       configStatus: { state: "ready" },
     });
+    expect(snapshot.config.agentTypes.copilot).not.toHaveProperty("adapter");
     await reopened.app.close();
   });
 

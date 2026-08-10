@@ -2,10 +2,9 @@ import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { discoverAndLoadNanasaConfig, loadNanasaConfig } from "./config.js";
+import { isLoopbackHost, validateMcpEndpointConfiguration } from "./mcp-config.js";
 import { createDaemon } from "./server.js";
 
-export type { AgentAdapter, AgentAdapterFactory } from "./agent-adapter.js";
-export { AdapterRegistry, AgentRuntimeSupervisor } from "./agent-runtime-supervisor.js";
 export {
   ConfigLoadError,
   discoverAndLoadNanasaConfig,
@@ -58,6 +57,38 @@ function configuredRepositoryRoot(value: string | undefined): string | undefined
   return realpathSync(path);
 }
 
+function hostForUrl(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
+export function validateMcpStartupConfiguration(options: {
+  enabled: boolean;
+  listenHost: string;
+  endpointUrl: string;
+  operatorToken?: string;
+}): void {
+  if (!options.enabled) {
+    return;
+  }
+  if (!isLoopbackHost(options.listenHost)) {
+    throw new Error(
+      "NANASA_HOST must remain loopback when MCP is enabled; expose only /mcp through a trusted reverse proxy",
+    );
+  }
+  try {
+    validateMcpEndpointConfiguration(options);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      message
+        .replace("External MCP endpoint URLs", "External NANASA_MCP_URL endpoints")
+        .replace("An MCP operator token", "NANASA_MCP_OPERATOR_TOKEN")
+        .replace("The MCP operator token", "NANASA_MCP_OPERATOR_TOKEN"),
+      { cause: error },
+    );
+  }
+}
+
 async function start(): Promise<void> {
   const configuredRoot = configuredRepositoryRoot(process.env.NANASA_REPO_ROOT);
   const loadedConfig =
@@ -72,6 +103,17 @@ async function start(): Promise<void> {
     loadedConfig.runtimeDirectory;
   const tmuxServerName = process.env.NANASA_TMUX_SERVER ?? "nanasa";
   const ttydPath = process.env.NANASA_TTYD_PATH ?? "ttyd";
+  const mcpEnabled = configuredBoolean("NANASA_MCP_ENABLED", process.env.NANASA_MCP_ENABLED, false);
+  const mcpPath = process.env.NANASA_MCP_PATH ?? "/mcp";
+  const mcpOperatorToken = process.env.NANASA_MCP_OPERATOR_TOKEN;
+  const mcpEndpointUrl =
+    process.env.NANASA_MCP_URL ?? `http://${hostForUrl(host)}:${port}${mcpPath}`;
+  validateMcpStartupConfiguration({
+    enabled: mcpEnabled,
+    listenHost: host,
+    endpointUrl: mcpEndpointUrl,
+    ...(mcpOperatorToken === undefined ? {} : { operatorToken: mcpOperatorToken }),
+  });
   const servePortal = configuredBoolean(
     "NANASA_SERVE_PORTAL",
     process.env.NANASA_SERVE_PORTAL,
@@ -89,6 +131,13 @@ async function start(): Promise<void> {
     ttydPath,
     servePortal,
     portalAssetsPath,
+    mcp: {
+      enabled: mcpEnabled,
+      path: mcpPath,
+      endpointUrl: mcpEndpointUrl,
+      ...(mcpOperatorToken === undefined ? {} : { operatorToken: mcpOperatorToken }),
+      allowedHostnames: [new URL(mcpEndpointUrl).hostname],
+    },
   });
 
   const close = async () => {

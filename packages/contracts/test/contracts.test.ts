@@ -2,16 +2,21 @@ import { describe, expect, it } from "vitest";
 
 import {
   AgentCapabilitySchema,
+  AgentProfileSchema,
   AgentRunSchema,
   ConfigStatusSchema,
   CreateAgentProfileCommandSchema,
+  DeleteGroupResultSchema,
   DeliveryModeSchema,
+  DeliveryOutcomeSchema,
   InterruptAgentRunCommandSchema,
   MessageSchema,
   NanasaConfigSchema,
   StartAgentRunCommandSchema,
   SubmitMessageCommandSchema,
   TerminalEndpointStatusSchema,
+  UpdateGroupCommandSchema,
+  UpdateGroupMembershipCommandSchema,
 } from "../src/index.js";
 
 const baseMessage = {
@@ -41,24 +46,34 @@ const baseMessage = {
 } as const;
 
 describe("message policy contracts", () => {
-  it("accepts queue, steer, and terminal delivery without a caller-selected fallback", () => {
-    expect(MessageSchema.safeParse(baseMessage).success).toBe(true);
+  it("accepts legacy modes but projects delivery as implicit terminal injection", () => {
+    expect(MessageSchema.parse(baseMessage).delivery).toEqual({});
     expect(DeliveryModeSchema.parse("terminal")).toBe("terminal");
     expect(
-      MessageSchema.safeParse({
+      MessageSchema.parse({
         ...baseMessage,
-        delivery: { mode: "terminal" },
-      }).success,
-    ).toBe(true);
+        delivery: { mode: "terminal", expiresAt: "2026-08-10T15:00:00Z" },
+      }).delivery,
+    ).toEqual({ expiresAt: "2026-08-10T15:00:00Z" });
     expect(
-      SubmitMessageCommandSchema.safeParse({
+      SubmitMessageCommandSchema.parse({
         ...baseMessage,
         id: undefined,
         groupId: undefined,
         groupSeq: undefined,
         createdAt: undefined,
-      }).success,
-    ).toBe(true);
+      }).delivery,
+    ).toEqual({});
+    expect(
+      SubmitMessageCommandSchema.parse({
+        ...baseMessage,
+        id: undefined,
+        groupId: undefined,
+        groupSeq: undefined,
+        createdAt: undefined,
+        delivery: {},
+      }).delivery,
+    ).toEqual({});
   });
 
   it("defines interrupt as a separate privileged run command", () => {
@@ -189,7 +204,7 @@ describe("agent run contracts", () => {
     expect(StartAgentRunCommandSchema.parse({})).toEqual({ cols: 120, rows: 40 });
   });
 
-  it("tracks desired state, recovery phase, and adapter session metadata", () => {
+  it("tracks desired state and recovery phase without exposing adapter sessions", () => {
     expect(
       AgentRunSchema.parse({
         id: "run_1",
@@ -207,7 +222,36 @@ describe("agent run contracts", () => {
         },
         startedAt: "2026-08-10T12:00:00Z",
       }),
-    ).toMatchObject({ desiredState: "running", recoveryPhase: "recovered" });
+    ).toEqual({
+      id: "run_1",
+      groupId: "group_1",
+      memberId: "member_1",
+      agentProfileId: "profile_1",
+      generation: 1,
+      status: "running",
+      desiredState: "running",
+      recoveryPhase: "recovered",
+      recoveryAttempts: 0,
+      startedAt: "2026-08-10T12:00:00Z",
+    });
+  });
+
+  it("projects legacy profile metadata out of canonical profiles", () => {
+    expect(
+      AgentProfileSchema.parse({
+        id: "profile_1",
+        name: "Reviewer",
+        agentType: "copilot",
+        kind: "copilot",
+        adapter: "copilot-cli",
+        capabilities: ["queue"],
+        command: "copilot",
+        args: [],
+        environment: {},
+        createdAt: "2026-08-10T12:00:00Z",
+        updatedAt: "2026-08-10T12:00:00Z",
+      }),
+    ).not.toMatchObject({ adapter: expect.anything(), capabilities: expect.anything() });
   });
 });
 
@@ -238,9 +282,27 @@ describe("configuration contracts", () => {
     },
   } as const;
 
-  it("accepts normalized agent types and rejects unsafe capability combinations", () => {
+  it("accepts legacy agent fields but emits terminal-only canonical configuration", () => {
     expect(AgentCapabilitySchema.safeParse("terminal").success).toBe(false);
-    expect(NanasaConfigSchema.parse(config)).toEqual(config);
+    expect(NanasaConfigSchema.parse(config)).toEqual({
+      version: 1,
+      agentTypes: {
+        copilot: {
+          key: "copilot",
+          name: "GitHub Copilot",
+          kind: "copilot",
+          command: ["copilot"],
+          environment: {},
+        },
+        opencode: {
+          key: "opencode",
+          name: "OpenCode",
+          kind: "opencode",
+          command: ["opencode"],
+          environment: {},
+        },
+      },
+    });
     expect(
       NanasaConfigSchema.safeParse({
         ...config,
@@ -267,6 +329,33 @@ describe("configuration contracts", () => {
     ).toBe(false);
   });
 
+  it("accepts minimal terminal-only agent configuration", () => {
+    expect(
+      NanasaConfigSchema.parse({
+        version: 1,
+        agentTypes: {
+          pi: {
+            key: "pi",
+            name: "Pi",
+            kind: "pi",
+            command: ["pi"],
+          },
+        },
+      }),
+    ).toEqual({
+      version: 1,
+      agentTypes: {
+        pi: {
+          key: "pi",
+          name: "Pi",
+          kind: "pi",
+          command: ["pi"],
+          environment: {},
+        },
+      },
+    });
+  });
+
   it("validates source-aware config status", () => {
     expect(
       ConfigStatusSchema.parse({
@@ -277,5 +366,66 @@ describe("configuration contracts", () => {
         diagnostics: [],
       }),
     ).toMatchObject({ state: "ready", revision: "a".repeat(64) });
+  });
+});
+
+describe("group CRUD contracts", () => {
+  it("trims group and membership rename commands", () => {
+    expect(UpdateGroupCommandSchema.parse({ name: "  Builders  " })).toEqual({
+      name: "Builders",
+    });
+    expect(UpdateGroupMembershipCommandSchema.parse({ alias: "  Reviewer  " })).toEqual({
+      alias: "Reviewer",
+    });
+  });
+
+  it.each([
+    [UpdateGroupCommandSchema, { name: "" }],
+    [UpdateGroupCommandSchema, { name: "x".repeat(101) }],
+    [UpdateGroupCommandSchema, { name: "Builders", unknown: true }],
+    [UpdateGroupMembershipCommandSchema, { alias: "" }],
+    [UpdateGroupMembershipCommandSchema, { alias: "x".repeat(101) }],
+    [UpdateGroupMembershipCommandSchema, { alias: "Reviewer", unknown: true }],
+  ])("rejects invalid or unknown rename fields", (schema, value) => {
+    expect(schema.safeParse(value).success).toBe(false);
+  });
+
+  it("validates strict delete counts", () => {
+    const result = {
+      groupId: "group_1",
+      deletedMemberships: 2,
+      deletedRuns: 1,
+      deletedMessages: 3,
+      deletedDeliveries: 4,
+    };
+    expect(DeleteGroupResultSchema.parse(result)).toEqual(result);
+    expect(DeleteGroupResultSchema.safeParse({ ...result, deletedRuns: -1 }).success).toBe(false);
+    expect(DeleteGroupResultSchema.safeParse({ ...result, unknown: 0 }).success).toBe(false);
+  });
+
+  it("projects legacy delivery outcomes to status-only canonical records", () => {
+    expect(
+      DeliveryOutcomeSchema.parse({
+        messageId: "message_1",
+        recipientMemberId: "member_1",
+        requestedMode: "steer",
+        appliedMode: "queue",
+        fallbackApplied: true,
+        adapter: "pi-rpc",
+        adapterSessionId: "session_1",
+        adapterMessageId: "adapter_message_1",
+        reason: "requested_mode_not_supported",
+        status: "queued",
+        attempts: 0,
+        updatedAt: "2026-08-10T12:00:00Z",
+      }),
+    ).toEqual({
+      messageId: "message_1",
+      recipientMemberId: "member_1",
+      reason: "requested_mode_not_supported",
+      status: "queued",
+      attempts: 0,
+      updatedAt: "2026-08-10T12:00:00Z",
+    });
   });
 });

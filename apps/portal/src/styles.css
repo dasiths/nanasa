@@ -414,6 +414,26 @@ h2 {
   background: transparent;
 }
 
+.tree-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 1px;
+}
+
+.member-actions {
+  padding-right: 2px;
+}
+
+.danger-action {
+  color: var(--danger-text);
+}
+
+.danger-action:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
 .group-action {
   width: 28px;
   height: 28px;
@@ -422,6 +442,28 @@ h2 {
   margin-right: 4px;
   border-color: transparent;
   background: transparent;
+}
+
+.inline-rename {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 3px 3px 1px;
+}
+
+.inline-rename input {
+  min-width: 0;
+  height: 29px;
+  flex: 1;
+  padding: 4px 6px;
+}
+
+.inline-rename .icon-button {
+  width: 27px;
+  height: 27px;
+  flex-basis: 27px;
 }
 
 .tree-empty {
@@ -517,6 +559,51 @@ textarea {
 .form-error {
   color: var(--red);
   font-size: 0.78rem;
+}
+
+.confirmation-dialog {
+  width: min(430px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  padding: 0;
+  color: var(--text);
+  box-shadow: 0 18px 48px var(--panel-shadow);
+}
+
+.confirmation-dialog::backdrop {
+  background: rgb(12 20 17 / 58%);
+}
+
+.confirmation-dialog-body {
+  display: grid;
+  gap: 13px;
+  padding: 19px;
+}
+
+.confirmation-dialog-body p {
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.danger-button {
+  border-color: var(--danger-border);
+  background: var(--red-soft);
+  color: var(--danger-text);
+}
+
+.danger-button:hover {
+  border-color: var(--red);
+  color: var(--red);
 }
 
 .workspace {
@@ -650,6 +737,21 @@ textarea {
 
 .workspace-body {
   flex: 1;
+}
+
+.unified-workspace {
+  display: grid;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.terminal-surface {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .start-all-results {
@@ -890,73 +992,109 @@ textarea {
   padding: 24px;
 }
 
+.message-drawer {
+  min-width: 0;
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--surface);
+}
+
+.message-toolbar {
+  display: flex;
+  min-width: 0;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 10px 5px 13px;
+}
+
+.message-toolbar-title,
+.message-toolbar-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.message-toolbar-title svg {
+  flex: 0 0 auto;
+  color: var(--green);
+}
+
+.message-toolbar-title strong {
+  font-size: 0.86rem;
+}
+
+.message-toolbar-title span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-toolbar-actions .icon-button:disabled {
+  opacity: 0.4;
+}
+
 .message-workspace {
   display: grid;
-  height: 100%;
-  grid-template-columns: minmax(360px, 1.3fr) minmax(300px, 0.8fr);
-  overflow: auto;
+  min-width: 0;
+  height: clamp(210px, 31vh, 310px);
+  grid-template-columns: minmax(390px, 1.15fr) minmax(300px, 0.85fr);
+  overflow: hidden;
+  border-top: 1px solid var(--line);
   background: var(--surface);
 }
 
 .message-composer,
-.delivery-panel {
+.message-history {
   min-width: 0;
   overflow: auto;
-  padding: 18px;
+  padding: 10px 12px;
 }
 
 .message-composer {
-  display: flex;
-  flex-direction: column;
-  gap: 15px;
+  display: grid;
+  align-content: start;
+  gap: 9px;
   border-right: 1px solid var(--line);
 }
 
-.composer-heading svg {
-  color: var(--green);
-}
-
-.form-row-triple {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.audience-panel {
+.message-routing-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.8fr) minmax(130px, 0.7fr);
-  align-items: end;
-  gap: 12px;
-  border-block: 1px solid var(--line);
-  background: var(--surface-muted);
-  padding: 12px;
-}
-
-.delivery-mode-status {
-  color: var(--text-muted);
-  font-size: 0.78rem;
-}
-
-.terminal-delivery-warning {
-  display: flex;
-  align-items: flex-start;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
   gap: 8px;
-  border-left: 3px solid var(--amber);
-  background: var(--warning-surface);
-  padding: 9px 11px;
-  color: var(--warning-text);
-  font-size: 0.78rem;
-  line-height: 1.4;
 }
 
-.terminal-delivery-warning svg {
-  flex: 0 0 auto;
-  margin-top: 1px;
+.message-routing-row label,
+.message-body-label {
+  display: grid;
+  gap: 4px;
 }
 
-.audience-panel fieldset {
+.message-routing-row label,
+.message-body-label > span,
+.recipient-fieldset legend {
+  color: var(--text-muted);
+  font-size: 0.69rem;
+  font-weight: 600;
+}
+
+.message-routing-row select {
+  min-height: 31px;
+  padding-block: 4px;
+}
+
+.recipient-fieldset {
   min-width: 0;
   margin: 0;
-  border: 0;
-  padding: 0;
+  border: 1px solid var(--line);
+  padding: 6px 9px 8px;
+}
+
+.recipient-fieldset legend {
+  padding-inline: 4px;
 }
 
 .recipient-list {
@@ -979,9 +1117,11 @@ textarea {
 }
 
 .broadcast-summary {
-  min-height: 36px;
+  min-height: 31px;
   justify-content: flex-start;
   gap: 8px;
+  border: 1px solid var(--line);
+  padding: 4px 8px;
   color: var(--text-muted);
 }
 
@@ -993,22 +1133,68 @@ textarea {
 
 .message-body-label {
   min-height: 0;
-  flex: 1;
 }
 
 .message-body-label textarea {
-  min-height: 160px;
-  flex: 1;
+  min-height: 72px;
+  max-height: 110px;
   line-height: 1.45;
+  resize: vertical;
 }
 
 .composer-actions {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: flex-end;
   gap: 12px;
 }
 
-.composer-actions p {
+.composer-actions .form-error {
+  min-width: 0;
+  margin-right: auto;
+}
+
+.message-history {
+  background: var(--surface-muted);
+}
+
+.message-history-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.message-history-item {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  padding: 8px 9px;
+}
+
+.message-history-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: 0.7rem;
+}
+
+.message-history-heading strong {
+  color: var(--text);
+}
+
+.message-history-item > p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 6px 0 4px;
+  font-size: 0.77rem;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .primary-button {
@@ -1046,9 +1232,9 @@ textarea {
   grid-template-columns: 18px minmax(90px, 1fr) auto auto auto;
   align-items: center;
   gap: 7px;
-  min-height: 41px;
+  min-height: 30px;
   border-bottom: 1px solid var(--line);
-  padding: 6px;
+  padding: 4px 3px;
   font-size: 0.76rem;
 }
 
@@ -1092,16 +1278,14 @@ textarea {
   }
 
   .message-workspace {
+    height: min(410px, 46vh);
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(120px, 1fr);
   }
 
   .message-composer {
     border-right: 0;
     border-bottom: 1px solid var(--line);
-  }
-
-  .delivery-panel {
-    overflow: visible;
   }
 }
 
@@ -1165,16 +1349,6 @@ textarea {
     display: none;
   }
 
-  .mode-switch button {
-    width: 35px;
-    padding: 0;
-    font-size: 0;
-  }
-
-  .mode-switch button svg {
-    flex: 0 0 auto;
-  }
-
   .start-all-button {
     width: 34px;
     padding: 0;
@@ -1195,16 +1369,15 @@ textarea {
   }
 
   .message-workspace {
-    display: block;
+    height: min(340px, 36vh);
   }
 
   .message-composer,
-  .delivery-panel {
-    padding: 13px;
+  .message-history {
+    padding: 9px;
   }
 
-  .form-row-triple,
-  .audience-panel {
+  .message-routing-row {
     grid-template-columns: 1fr;
   }
 
@@ -1242,5 +1415,18 @@ textarea {
 
   .outcome-row > span:not(.outcome-recipient) {
     grid-column: 2 / -1;
+  }
+
+  .confirmation-dialog-body {
+    padding: 15px;
+  }
+
+  .confirmation-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .confirmation-actions button {
+    width: 100%;
   }
 }

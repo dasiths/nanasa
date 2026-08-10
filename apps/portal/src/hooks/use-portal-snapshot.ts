@@ -83,6 +83,7 @@ export function useDomainEvents(
       socket.onopen = () => {
         attempt = 0;
         setStatus("connected");
+        callbackRef.current();
       };
       socket.onmessage = (event) => {
         try {

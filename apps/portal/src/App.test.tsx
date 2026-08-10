@@ -7,14 +7,18 @@ import type {
   PortalSnapshot,
   StartGroupRunsResult,
 } from "@nanasa/contracts";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App.js";
 import type { PortalClient } from "./api.js";
 import { GroupTree } from "./components/group-tree.js";
-import { buildMessageCommand } from "./components/message-workspace.js";
+import {
+  buildMessageCommand,
+  MESSAGE_HISTORY_KEY,
+  MessageWorkspace,
+} from "./components/message-workspace.js";
 import { PORTAL_PREFERENCES_KEY } from "./hooks/use-portal-preferences.js";
 
 vi.mock("./components/terminal-workspace.js", () => ({
@@ -30,31 +34,22 @@ const config: NanasaConfig = {
       key: "copilot",
       name: "GitHub Copilot",
       kind: "copilot",
-      adapter: "copilot-cli",
       command: ["copilot", "--acp", "--stdio"],
       environment: {},
-      recovery: "resume-or-restart",
-      capabilities: ["queue"],
     },
     "claude-copilot": {
       key: "claude-copilot",
       name: "Claude through Copilot",
       kind: "claude-code",
-      adapter: "terminal",
       command: ["make", "claude-copilot"],
       environment: {},
-      recovery: "restart",
-      capabilities: ["queue"],
     },
     "custom-agent": {
       key: "custom-agent",
       name: "Custom reviewer",
       kind: "opencode",
-      adapter: "terminal",
       command: ["custom-reviewer"],
       environment: {},
-      recovery: "restart",
-      capabilities: ["queue"],
     },
   },
 };
@@ -64,8 +59,6 @@ const profile: AgentProfile = {
   name: "Copilot default",
   agentType: "copilot",
   kind: "copilot",
-  adapter: "copilot-cli",
-  capabilities: ["queue"],
   command: "copilot",
   args: [],
   environment: {},
@@ -159,8 +152,18 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     loadSnapshot: vi.fn().mockResolvedValue(snapshot),
     loadConfig: vi.fn().mockResolvedValue(config),
     createGroup: vi.fn().mockResolvedValue(snapshot.groups[0]),
+    updateGroup: vi.fn().mockResolvedValue(snapshot.groups[0]),
+    deleteGroup: vi.fn().mockResolvedValue({
+      groupId: "group-backend",
+      deletedMemberships: 2,
+      deletedRuns: 0,
+      deletedMessages: 0,
+      deletedDeliveries: 0,
+    }),
     createAgentProfile: vi.fn().mockResolvedValue(profile),
     addMembership: vi.fn().mockResolvedValue(memberships[0]),
+    updateMembership: vi.fn().mockResolvedValue(memberships[0]),
+    removeMembership: vi.fn().mockResolvedValue({ ...memberships[0], state: "removed" }),
     startRun: vi.fn().mockResolvedValue(run),
     startAllRuns: vi.fn().mockResolvedValue({ groupId: "group-backend", outcomes: [] }),
     stopRun: vi.fn().mockResolvedValue(run),
@@ -168,12 +171,6 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
       if (submission === undefined) throw new Error("No submission fixture configured");
       return submission;
     }),
-    getEffectiveDeliveryModes: vi.fn<PortalClient["getEffectiveDeliveryModes"]>(
-      async (_groupId, command) => ({
-        memberIds: command.memberIds,
-        modes: ["queue", "steer", "terminal"],
-      }),
-    ),
     getTerminalEndpointStatus: vi.fn(),
     createEventsSocket: vi.fn().mockImplementation(inertSocket),
   };
@@ -190,7 +187,7 @@ function submissionResult(): MessageSubmissionResult {
       sender: { kind: "operator", operatorId: "portal-operator" },
       audience: { kind: "dm", memberId: "builder" },
       body: { contentType: "text/markdown", text: "Review the API" },
-      delivery: { mode: "steer" },
+      delivery: {},
       hop: 0,
       createdAt: timestamp,
     },
@@ -198,10 +195,6 @@ function submissionResult(): MessageSubmissionResult {
       {
         messageId: "message-1",
         recipientMemberId: "builder",
-        requestedMode: "steer",
-        appliedMode: "queue",
-        fallbackApplied: true,
-        reason: "adapter_does_not_support_steering",
         status: "queued",
         attempts: 0,
         updatedAt: timestamp,
@@ -211,6 +204,140 @@ function submissionResult(): MessageSubmissionResult {
 }
 
 describe("portal application", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("refreshes the snapshot when the domain event socket connects", async () => {
+    const client = createClient();
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+    expect(client.loadSnapshot).toHaveBeenCalledTimes(1);
+
+    const socket = vi.mocked(client.createEventsSocket).mock.results[0]?.value;
+    await act(async () => socket?.onopen?.(new Event("open")));
+
+    await waitFor(() => expect(client.loadSnapshot).toHaveBeenCalledTimes(2));
+  });
+
+  it("renames groups and agents inline with Enter and cancels edits with Escape", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    await user.click(screen.getByRole("button", { name: "Rename group Backend" }));
+    const groupName = screen.getByRole("textbox", { name: "group name for Backend" });
+    await user.clear(groupName);
+    await user.type(groupName, "Platform{Enter}");
+    await waitFor(() =>
+      expect(client.updateGroup).toHaveBeenCalledWith("group-backend", { name: "Platform" }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Rename group Backend" })).toHaveFocus(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Rename agent Reviewer" }));
+    const alias = screen.getByRole("textbox", { name: "agent alias for Reviewer" });
+    await user.clear(alias);
+    await user.type(alias, "Quality reviewer{Escape}");
+    expect(client.updateMembership).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("textbox", { name: "agent alias for Reviewer" }),
+    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Rename agent Reviewer" })).toHaveFocus(),
+    );
+  });
+
+  it("prevents concurrent inline rename submissions", async () => {
+    const user = userEvent.setup();
+    let resolveRename: () => void = () => undefined;
+    const onRenameGroup = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRename = resolve;
+        }),
+    );
+    render(
+      <GroupTree
+        snapshot={snapshot}
+        config={config}
+        selectedGroupId="group-backend"
+        unreadCounts={new Map()}
+        onSelectGroup={vi.fn()}
+        onCreateGroup={vi.fn()}
+        onRenameGroup={onRenameGroup}
+        onDeleteGroup={vi.fn()}
+        onAddAgent={vi.fn()}
+        onRenameAgent={vi.fn()}
+        onRemoveAgent={vi.fn()}
+        onStartRun={vi.fn()}
+        onStopRun={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Rename group Backend" }));
+    const input = screen.getByRole("textbox", { name: "group name for Backend" });
+    await user.clear(input);
+    await user.type(input, "Platform");
+    const form = input.closest("form");
+    expect(form).not.toBeNull();
+    fireEvent.submit(form!);
+    fireEvent.submit(form!);
+
+    expect(onRenameGroup).toHaveBeenCalledTimes(1);
+    expect(input).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save group name for Backend" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel group name for Backend" })).toBeDisabled();
+
+    resolveRename();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Rename group Backend" })).toHaveFocus(),
+    );
+  });
+
+  it("requires a dialog confirmation before removing a membership", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    await user.click(screen.getByRole("button", { name: "Remove agent Reviewer" }));
+    const dialog = screen.getByRole("dialog", { name: "Remove Reviewer?" });
+    expect(dialog).toHaveTextContent("reusable agent profile remains available");
+    expect(client.removeMembership).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Remove agent" }));
+
+    await waitFor(() =>
+      expect(client.removeMembership).toHaveBeenCalledWith("group-backend", "reviewer"),
+    );
+    expect(screen.queryByRole("dialog", { name: "Remove Reviewer?" })).not.toBeInTheDocument();
+  });
+
+  it("falls back to the first remaining group after confirmed selected-group deletion", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const remainingSnapshot = {
+      ...snapshot,
+      groups: snapshot.groups.slice(1),
+      memberships: memberships.filter((member) => member.groupId !== "group-backend"),
+    };
+    vi.mocked(client.loadSnapshot)
+      .mockResolvedValueOnce(snapshot)
+      .mockResolvedValue(remainingSnapshot);
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    await user.click(screen.getByRole("button", { name: "Delete group Backend" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete Backend?" });
+    expect(dialog).toHaveTextContent("0 runs will stop before 2 memberships and 0 messages");
+    await user.click(screen.getByRole("button", { name: "Delete group" }));
+
+    expect(await screen.findByRole("heading", { name: "Review" })).toHaveFocus();
+    expect(client.deleteGroup).toHaveBeenCalledWith("group-backend");
+  });
+
   it("opens the add-agent form from the selected group row", async () => {
     const user = userEvent.setup();
     render(<App client={createClient()} />);
@@ -231,7 +358,11 @@ describe("portal application", () => {
       unreadCounts: new Map<string, number>(),
       onSelectGroup: vi.fn(),
       onCreateGroup: vi.fn().mockResolvedValue(undefined),
+      onRenameGroup: vi.fn().mockResolvedValue(undefined),
+      onDeleteGroup: vi.fn().mockResolvedValue(undefined),
       onAddAgent,
+      onRenameAgent: vi.fn().mockResolvedValue(undefined),
+      onRemoveAgent: vi.fn().mockResolvedValue(undefined),
       onStartRun: vi.fn().mockResolvedValue(undefined),
       onStopRun: vi.fn().mockResolvedValue(undefined),
     };
@@ -352,7 +483,11 @@ describe("portal application", () => {
           unreadCounts={new Map()}
           onSelectGroup={vi.fn()}
           onCreateGroup={vi.fn()}
+          onRenameGroup={vi.fn()}
+          onDeleteGroup={vi.fn()}
           onAddAgent={vi.fn()}
+          onRenameAgent={vi.fn()}
+          onRemoveAgent={vi.fn()}
           onStartRun={vi.fn()}
           onStopRun={vi.fn()}
         />,
@@ -389,7 +524,11 @@ describe("portal application", () => {
         unreadCounts={new Map()}
         onSelectGroup={vi.fn()}
         onCreateGroup={vi.fn()}
+        onRenameGroup={vi.fn()}
+        onDeleteGroup={vi.fn()}
         onAddAgent={vi.fn()}
+        onRenameAgent={vi.fn()}
+        onRemoveAgent={vi.fn()}
         onStartRun={vi.fn()}
         onStopRun={vi.fn()}
       />,
@@ -436,17 +575,21 @@ describe("portal application", () => {
     expect(screen.getByText(/1 members/)).toBeInTheDocument();
   });
 
-  it("keeps Terminal Mode and Message Mode as separate surfaces", async () => {
+  it("keeps terminals visible below the collapsible message toolbar", async () => {
     const user = userEvent.setup();
     render(<App client={createClient()} />);
 
     expect(await screen.findByTestId("terminal-surface")).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Message composer" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Messages" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Message body")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Workspace input mode" })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Message Mode" }));
+    await user.click(screen.getByRole("button", { name: "Collapse messages" }));
+    expect(screen.queryByLabelText("Message body")).not.toBeInTheDocument();
+    expect(screen.getByTestId("terminal-surface")).toBeInTheDocument();
 
-    expect(screen.getByRole("heading", { name: "Message composer" })).toBeInTheDocument();
-    expect(screen.queryByTestId("terminal-surface")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Expand messages" }));
+    expect(screen.getByLabelText("Message body")).toBeInTheDocument();
   });
 
   it("builds a broadcast payload with the current membership revision", () => {
@@ -454,7 +597,6 @@ describe("portal application", () => {
       audienceKind: "group",
       recipientIds: [],
       intent: "inform",
-      deliveryMode: "queue",
       body: "Deployment is complete",
     });
 
@@ -462,7 +604,7 @@ describe("portal application", () => {
       sender: { kind: "operator", operatorId: "portal-operator" },
       audience: { kind: "group", membershipRevision: 4 },
       intent: "inform",
-      delivery: { mode: "queue" },
+      delivery: {},
       body: { contentType: "text/markdown", text: "Deployment is complete" },
     });
   });
@@ -472,81 +614,168 @@ describe("portal application", () => {
     const client = createClient(submissionResult());
     render(<App client={client} />);
     await screen.findByRole("heading", { name: "Backend" });
-    await user.click(screen.getByRole("button", { name: "Message Mode" }));
-    await screen.findByRole("option", { name: "Steer current work" });
-    await user.selectOptions(screen.getByLabelText("Delivery mode"), "steer");
     await user.type(screen.getByLabelText("Message body"), "Review the API");
     await user.click(screen.getByRole("button", { name: "Send message" }));
 
-    expect(await screen.findByText("requested steer")).toBeInTheDocument();
-    expect(screen.getByText("applied queue")).toBeInTheDocument();
-    expect(screen.getByText("queued")).toBeInTheDocument();
-    expect(screen.getByText("adapter_does_not_support_steering")).toBeInTheDocument();
+    expect(await screen.findByText("queued")).toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem(MESSAGE_HISTORY_KEY) ?? "[]")).toMatchObject([
+      { submission: { message: { id: "message-1", body: { text: "Review the API" } } } },
+    ]);
     expect(client.submitMessage).toHaveBeenCalledWith(
       "group-backend",
       expect.objectContaining({
         audience: { kind: "dm", memberId: "builder" },
-        delivery: { mode: "steer" },
+        delivery: {},
       }),
     );
   });
 
-  it("submits terminal input for a DM and shows the direct TUI warning", async () => {
+  it("restores browser message history and clears all saved entries", async () => {
     const user = userEvent.setup();
-    const client = createClient(submissionResult());
-    render(<App client={client} />);
+    const first = render(<App client={createClient(submissionResult())} />);
     await screen.findByRole("heading", { name: "Backend" });
-    await user.click(screen.getByRole("button", { name: "Message Mode" }));
-    await screen.findByRole("option", { name: "Terminal input" });
-
-    await user.selectOptions(screen.getByLabelText("Delivery mode"), "terminal");
-    expect(
-      screen.getByText(/pastes this message directly into each selected TUI and sends Enter/),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/no semantic completion acknowledgement/)).toBeInTheDocument();
-    expect(
-      screen.getByText(/Terminal Mode remains the separate direct keyboard workspace/),
-    ).toBeInTheDocument();
-
-    await user.type(screen.getByLabelText("Message body"), "Run the focused checks");
+    await user.type(screen.getByLabelText("Message body"), "Review the API");
     await user.click(screen.getByRole("button", { name: "Send message" }));
-    expect(client.submitMessage).toHaveBeenCalledWith(
-      "group-backend",
-      expect.objectContaining({
-        audience: { kind: "dm", memberId: "builder" },
-        delivery: { mode: "terminal" },
-      }),
+    expect(await screen.findByText("message #1")).toBeInTheDocument();
+    first.unmount();
+
+    render(<App client={createClient()} />);
+    await screen.findByRole("heading", { name: "Backend" });
+    expect(screen.getByText("message #1")).toBeInTheDocument();
+    expect(screen.getByText("Review the API")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Clear all message history" }));
+    const dialog = screen.getByRole("dialog", { name: "Clear all message history?" });
+    expect(screen.getByText("message #1")).toBeInTheDocument();
+    expect(window.localStorage.getItem(MESSAGE_HISTORY_KEY)).not.toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(
+      screen.queryByRole("dialog", { name: "Clear all message history?" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Clear all message history" }));
+    await user.click(
+      within(screen.getByRole("dialog", { name: "Clear all message history?" })).getByRole(
+        "button",
+        { name: "Clear history" },
+      ),
+    );
+    expect(screen.queryByText("message #1")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem(MESSAGE_HISTORY_KEY)).toBeNull();
+  });
+
+  it("reconciles recipients and outcomes when the selected group changes", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(submissionResult());
+    const { rerender } = render(
+      <MessageWorkspace
+        group={snapshot.groups[0]!}
+        members={memberships.slice(0, 2)}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await user.type(screen.getByLabelText("Message body"), "Backend message");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(await screen.findByText("queued")).toBeInTheDocument();
+
+    rerender(
+      <MessageWorkspace
+        group={snapshot.groups[1]!}
+        members={[memberships[2]!]}
+        onSubmit={onSubmit}
+      />,
+    );
+    await waitFor(() => expect(screen.queryByText("queued")).not.toBeInTheDocument());
+    expect(screen.getByLabelText("Recipient")).toHaveValue("auditor");
+
+    await user.type(screen.getByLabelText("Message body"), "Review message");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ audience: { kind: "dm", memberId: "auditor" } }),
     );
   });
 
-  it("resolves common modes again for multicast and group audiences", async () => {
+  it("reconciles stale recipients and errors when active members change", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("stale delivery failure"))
+      .mockResolvedValue(submissionResult());
+    const { rerender } = render(
+      <MessageWorkspace
+        group={snapshot.groups[0]!}
+        members={memberships.slice(0, 2)}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await user.selectOptions(screen.getByLabelText("Recipient"), "reviewer");
+    await user.type(screen.getByLabelText("Message body"), "First attempt");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("stale delivery failure");
+
+    rerender(
+      <MessageWorkspace
+        group={snapshot.groups[0]!}
+        members={[memberships[0]!]}
+        onSubmit={onSubmit}
+      />,
+    );
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.getByLabelText("Recipient")).toHaveValue("builder");
+
+    await user.clear(screen.getByLabelText("Message body"));
+    await user.type(screen.getByLabelText("Message body"), "Second attempt");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ audience: { kind: "dm", memberId: "builder" } }),
+    );
+  });
+
+  it("ignores an in-flight submission after the message context changes", async () => {
+    const user = userEvent.setup();
+    let resolveSubmission: (submission: MessageSubmissionResult) => void = () => undefined;
+    const onSubmit = vi.fn(
+      () =>
+        new Promise<MessageSubmissionResult>((resolve) => {
+          resolveSubmission = resolve;
+        }),
+    );
+    const { rerender } = render(
+      <MessageWorkspace
+        group={snapshot.groups[0]!}
+        members={memberships.slice(0, 2)}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    await user.type(screen.getByLabelText("Message body"), "Pending message");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(screen.getByRole("button", { name: "Sending..." })).toBeDisabled();
+
+    rerender(
+      <MessageWorkspace
+        group={snapshot.groups[1]!}
+        members={[memberships[2]!]}
+        onSubmit={onSubmit}
+      />,
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled());
+    resolveSubmission(submissionResult());
+    await act(async () => undefined);
+    expect(screen.queryByText("queued")).not.toBeInTheDocument();
+  });
+
+  it("requires valid recipients for multicast and group audiences", async () => {
     const user = userEvent.setup();
     const client = createClient();
     render(<App client={client} />);
     await screen.findByRole("heading", { name: "Backend" });
-    await user.click(screen.getByRole("button", { name: "Message Mode" }));
-    await waitFor(() =>
-      expect(client.getEffectiveDeliveryModes).toHaveBeenCalledWith("group-backend", {
-        memberIds: ["builder"],
-      }),
-    );
-
     await user.selectOptions(screen.getByLabelText("Audience"), "multicast");
-    await waitFor(() =>
-      expect(client.getEffectiveDeliveryModes).toHaveBeenCalledWith("group-backend", {
-        memberIds: ["builder", "reviewer"],
-      }),
-    );
-
     await user.click(screen.getByLabelText("Reviewer"));
-    expect(
-      await screen.findByText("No common delivery mode is available for the selected recipients."),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
     await user.selectOptions(screen.getByLabelText("Audience"), "group");
-    await waitFor(() =>
-      expect(client.getEffectiveDeliveryModes).toHaveBeenLastCalledWith("group-backend", {
-        memberIds: ["builder", "reviewer"],
-      }),
-    );
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
   });
 });

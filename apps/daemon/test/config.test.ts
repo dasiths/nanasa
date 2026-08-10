@@ -34,6 +34,16 @@ agentTypes:
 ${extra}`;
 }
 
+function minimalConfig(extra = ""): string {
+  return `version: 1
+agentTypes:
+  opencode:
+    name: OpenCode
+    kind: opencode
+    command: [opencode]
+${extra}`;
+}
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
@@ -48,14 +58,37 @@ describe("Nanasa configuration", () => {
 
     expect(first.config.agentTypes.copilot).toMatchObject({
       key: "copilot",
-      adapter: "copilot-cli",
       command: ["copilot"],
       cwd: repository,
+    });
+    expect(Object.keys(first.config.agentTypes.copilot)).not.toEqual(
+      expect.arrayContaining(["adapter", "capabilities", "recovery"]),
+    );
+    expect(JSON.parse(JSON.stringify(first.config))).not.toMatchObject({
+      agentTypes: { copilot: { adapter: expect.anything() } },
     });
     expect(first.status.revision).toBe(second.status.revision);
     expect(first.status.revision).toMatch(/^[0-9a-f]{64}$/);
     expect(first.dataPath).toBe(join(repository, ".nanasa", "state", "nanasa.sqlite"));
     expect(first.runtimeDirectory).toBe(join(repository, ".nanasa", "runtime"));
+  });
+
+  it("loads minimal terminal-only YAML with canonical defaults", () => {
+    const repository = temporaryRepository(minimalConfig());
+
+    expect(loadNanasaConfig(repository).config).toEqual({
+      version: 1,
+      agentTypes: {
+        opencode: {
+          key: "opencode",
+          name: "OpenCode",
+          kind: "opencode",
+          command: ["opencode"],
+          cwd: repository,
+          environment: {},
+        },
+      },
+    });
   });
 
   it("discovers the nearest config before falling back to a Git root", () => {
@@ -104,6 +137,7 @@ agentTypes:
     ["multiple documents", `${validConfig()}---\n${validConfig()}`],
     ["unknown properties", validConfig("    unknown: true\n")],
     ["empty argv", validConfig().replace("command: [copilot]", "command: []")],
+    ["legacy adapter-kind mismatch", validConfig().replace("kind: copilot", "kind: opencode")],
     [
       "terminal steer",
       validConfig()

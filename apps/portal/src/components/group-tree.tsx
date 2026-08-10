@@ -7,16 +7,20 @@ import type {
   PortalSnapshot,
 } from "@nanasa/contracts";
 import {
+  Check,
   ChevronDown,
   ChevronRight,
   CircleAlert,
   CircleStop,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
+  Trash2,
   UserPlus,
+  X,
 } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 
 export interface AddAgentInput {
   groupId: string;
@@ -33,9 +37,168 @@ interface GroupTreeProps {
   busyAction?: string;
   onSelectGroup(groupId: string): void;
   onCreateGroup(name: string): Promise<void>;
+  onRenameGroup(groupId: string, name: string): Promise<void>;
+  onDeleteGroup(groupId: string): Promise<void>;
   onAddAgent(input: AddAgentInput): Promise<void>;
+  onRenameAgent(groupId: string, memberId: string, alias: string): Promise<void>;
+  onRemoveAgent(groupId: string, memberId: string): Promise<void>;
   onStartRun(groupId: string, memberId: string): Promise<void>;
   onStopRun(groupId: string, memberId: string): Promise<void>;
+}
+
+type EditTarget =
+  | { kind: "group"; groupId: string; name: string }
+  | { kind: "member"; groupId: string; memberId: string; name: string };
+
+type DestructiveTarget =
+  | {
+      kind: "group";
+      groupId: string;
+      name: string;
+      memberCount: number;
+      runCount: number;
+      messageCount: number;
+    }
+  | { kind: "member"; groupId: string; memberId: string; name: string };
+
+function InlineRename({
+  label,
+  initialValue,
+  onCancel,
+  onRestoreFocus,
+  onSave,
+}: {
+  label: string;
+  initialValue: string;
+  onCancel(): void;
+  onRestoreFocus(): void;
+  onSave(value: string): Promise<void>;
+}) {
+  const [value, setValue] = useState(initialValue);
+  const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const close = () => {
+    onCancel();
+    requestAnimationFrame(onRestoreFocus);
+  };
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+    try {
+      await onSave(value);
+      close();
+    } catch (error) {
+      submittingRef.current = false;
+      setSubmitting(false);
+      throw error;
+    }
+  };
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Escape" && !submittingRef.current) {
+      event.preventDefault();
+      close();
+    }
+  };
+
+  return (
+    <form className="inline-rename" onSubmit={(event) => void submit(event).catch(() => undefined)}>
+      <input
+        aria-label={label}
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={handleKeyDown}
+        required
+        autoFocus
+        disabled={submitting}
+      />
+      <button
+        type="submit"
+        className="icon-button"
+        aria-label={`Save ${label}`}
+        title="Save"
+        disabled={submitting}
+      >
+        <Check aria-hidden="true" size={14} />
+      </button>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={`Cancel ${label}`}
+        title="Cancel"
+        disabled={submitting}
+        onClick={close}
+      >
+        <X aria-hidden="true" size={14} />
+      </button>
+    </form>
+  );
+}
+
+function ConfirmRemovalDialog({
+  target,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  target: DestructiveTarget;
+  busy: boolean;
+  onCancel(): void;
+  onConfirm(): Promise<void>;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const titleId = `confirm-${target.kind}-removal-title`;
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    return () => {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+    };
+  }, []);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="confirmation-dialog"
+      aria-labelledby={titleId}
+      onCancel={(event) => {
+        event.preventDefault();
+        onCancel();
+      }}
+    >
+      <div className="confirmation-dialog-body">
+        <h2 id={titleId}>
+          {target.kind === "group" ? `Delete ${target.name}?` : `Remove ${target.name}?`}
+        </h2>
+        <p>
+          {target.kind === "group"
+            ? `${target.runCount} runs will stop before ${target.memberCount} memberships and ${target.messageCount} messages are deleted with this group. Reusable agent profiles and event history remain.`
+            : "This agent run will stop, queued deliveries will be revoked, and the membership will be removed. Its reusable agent profile remains available."}
+        </p>
+        <div className="confirmation-actions">
+          <button type="button" className="compact-button" disabled={busy} onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="compact-button danger-button"
+            disabled={busy}
+            onClick={() =>
+              void onConfirm()
+                .then(onCancel)
+                .catch(() => undefined)
+            }
+          >
+            <Trash2 aria-hidden="true" size={15} />
+            {target.kind === "group" ? "Delete group" : "Remove agent"}
+          </button>
+        </div>
+      </div>
+    </dialog>
+  );
 }
 
 function currentRun(runs: AgentRun[], member: GroupMembership): AgentRun | undefined {
@@ -215,7 +378,11 @@ export function GroupTree({
   busyAction,
   onSelectGroup,
   onCreateGroup,
+  onRenameGroup,
+  onDeleteGroup,
   onAddAgent,
+  onRenameAgent,
+  onRemoveAgent,
   onStartRun,
   onStopRun,
 }: GroupTreeProps) {
@@ -224,6 +391,8 @@ export function GroupTree({
   );
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [showAddAgent, setShowAddAgent] = useState(false);
+  const [editTarget, setEditTarget] = useState<EditTarget>();
+  const [destructiveTarget, setDestructiveTarget] = useState<DestructiveTarget>();
   const failedMemberIds = new Set(
     snapshot.deliveryOutcomes
       .filter((outcome) => ["failed", "dead-letter", "rejected"].includes(outcome.status))
@@ -288,33 +457,81 @@ export function GroupTree({
                     <ChevronRight aria-hidden="true" size={16} />
                   )}
                 </button>
-                <button
-                  type="button"
-                  className="tree-select"
-                  aria-current={selectedGroupId === group.id ? "page" : undefined}
-                  onClick={() => {
-                    onSelectGroup(group.id);
-                    setExpandedGroups((current) => new Set(current).add(group.id));
-                  }}
-                >
-                  <span>{group.name}</span>
-                  <span className="tree-count">{members.length}</span>
-                  {unread > 0 && (
-                    <span className="unread-badge" aria-label={`${unread} unread`}>
-                      {unread}
-                    </span>
-                  )}
-                </button>
-                {selectedGroupId === group.id && (
+                {editTarget?.kind === "group" && editTarget.groupId === group.id ? (
+                  <InlineRename
+                    label={`group name for ${group.name}`}
+                    initialValue={editTarget.name}
+                    onCancel={() => setEditTarget(undefined)}
+                    onRestoreFocus={() =>
+                      document.getElementById(`rename-group-${group.id}`)?.focus()
+                    }
+                    onSave={(name) => onRenameGroup(group.id, name)}
+                  />
+                ) : (
                   <button
                     type="button"
-                    className="icon-button group-action"
-                    aria-label={`Add agent to ${group.name}`}
-                    title={`Add agent to ${group.name}`}
-                    onClick={() => setShowAddAgent(true)}
+                    className="tree-select"
+                    aria-current={selectedGroupId === group.id ? "page" : undefined}
+                    onClick={() => {
+                      onSelectGroup(group.id);
+                      setExpandedGroups((current) => new Set(current).add(group.id));
+                    }}
                   >
-                    <UserPlus aria-hidden="true" size={15} />
+                    <span>{group.name}</span>
+                    <span className="tree-count">{members.length}</span>
+                    {unread > 0 && (
+                      <span className="unread-badge" aria-label={`${unread} unread`}>
+                        {unread}
+                      </span>
+                    )}
                   </button>
+                )}
+                {selectedGroupId === group.id && editTarget?.groupId !== group.id && (
+                  <div className="tree-actions">
+                    <button
+                      type="button"
+                      className="icon-button group-action"
+                      aria-label={`Add agent to ${group.name}`}
+                      title={`Add agent to ${group.name}`}
+                      onClick={() => setShowAddAgent(true)}
+                    >
+                      <UserPlus aria-hidden="true" size={15} />
+                    </button>
+                    <button
+                      id={`rename-group-${group.id}`}
+                      type="button"
+                      className="icon-button group-action"
+                      aria-label={`Rename group ${group.name}`}
+                      title={`Rename ${group.name}`}
+                      onClick={() =>
+                        setEditTarget({ kind: "group", groupId: group.id, name: group.name })
+                      }
+                    >
+                      <Pencil aria-hidden="true" size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button group-action danger-action"
+                      aria-label={`Delete group ${group.name}`}
+                      title={`Delete ${group.name}`}
+                      onClick={() =>
+                        setDestructiveTarget({
+                          kind: "group",
+                          groupId: group.id,
+                          name: group.name,
+                          memberCount: snapshot.memberships.filter(
+                            (member) => member.groupId === group.id,
+                          ).length,
+                          runCount: snapshot.runs.filter((run) => run.groupId === group.id).length,
+                          messageCount: snapshot.messages.filter(
+                            (message) => message.groupId === group.id,
+                          ).length,
+                        })
+                      }
+                    >
+                      <Trash2 aria-hidden="true" size={14} />
+                    </button>
+                  </div>
                 )}
               </div>
               {expanded && (
@@ -336,20 +553,36 @@ export function GroupTree({
                           className={`status-dot status-${statusLabel(run)}`}
                           aria-hidden="true"
                         />
-                        <button
-                          type="button"
-                          className="member-select"
-                          onClick={() => onSelectGroup(group.id)}
-                        >
-                          <span>{member.alias}</span>
-                          <small title={recoveryDetail}>
-                            {statusLabel(run)}
-                            {configuredType !== undefined &&
-                              ` · ${configuredType.name} (${configuredType.key})`}
-                            {run?.recoveryNotBefore !== undefined &&
-                              ` · retry ${new Date(run.recoveryNotBefore).toLocaleTimeString()}`}
-                          </small>
-                        </button>
+                        {editTarget?.kind === "member" &&
+                        editTarget.groupId === group.id &&
+                        editTarget.memberId === member.memberId ? (
+                          <InlineRename
+                            label={`agent alias for ${member.alias}`}
+                            initialValue={editTarget.name}
+                            onCancel={() => setEditTarget(undefined)}
+                            onRestoreFocus={() =>
+                              document
+                                .getElementById(`rename-member-${group.id}-${member.memberId}`)
+                                ?.focus()
+                            }
+                            onSave={(alias) => onRenameAgent(group.id, member.memberId, alias)}
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            className="member-select"
+                            onClick={() => onSelectGroup(group.id)}
+                          >
+                            <span>{member.alias}</span>
+                            <small title={recoveryDetail}>
+                              {statusLabel(run)}
+                              {configuredType !== undefined &&
+                                ` · ${configuredType.name} (${configuredType.key})`}
+                              {run?.recoveryNotBefore !== undefined &&
+                                ` · retry ${new Date(run.recoveryNotBefore).toLocaleTimeString()}`}
+                            </small>
+                          </button>
+                        )}
                         {failedMemberIds.has(member.memberId) && (
                           <CircleAlert
                             className="attention-icon"
@@ -357,29 +590,66 @@ export function GroupTree({
                             size={15}
                           />
                         )}
-                        {action !== "none" && (
-                          <button
-                            type="button"
-                            className="icon-button member-action"
-                            aria-label={`${action === "retry" ? "Retry" : action === "stop" ? "Stop" : "Start"} ${member.alias}`}
-                            title={`${action === "retry" ? "Retry recovery for" : action === "stop" ? "Stop" : "Start"} ${member.alias}`}
-                            disabled={busyAction === actionKey}
-                            onClick={() => {
-                              const operation =
-                                action === "stop"
-                                  ? onStopRun(group.id, member.memberId)
-                                  : onStartRun(group.id, member.memberId);
-                              void operation.catch(() => undefined);
-                            }}
-                          >
-                            {action === "stop" ? (
-                              <CircleStop aria-hidden="true" size={15} />
-                            ) : action === "retry" ? (
-                              <RefreshCw aria-hidden="true" size={15} />
-                            ) : (
-                              <Play aria-hidden="true" size={15} />
+                        {editTarget?.kind !== "member" && (
+                          <div className="tree-actions member-actions">
+                            {action !== "none" && (
+                              <button
+                                type="button"
+                                className="icon-button member-action"
+                                aria-label={`${action === "retry" ? "Retry" : action === "stop" ? "Stop" : "Start"} ${member.alias}`}
+                                title={`${action === "retry" ? "Retry recovery for" : action === "stop" ? "Stop" : "Start"} ${member.alias}`}
+                                disabled={busyAction === actionKey}
+                                onClick={() => {
+                                  const operation =
+                                    action === "stop"
+                                      ? onStopRun(group.id, member.memberId)
+                                      : onStartRun(group.id, member.memberId);
+                                  void operation.catch(() => undefined);
+                                }}
+                              >
+                                {action === "stop" ? (
+                                  <CircleStop aria-hidden="true" size={15} />
+                                ) : action === "retry" ? (
+                                  <RefreshCw aria-hidden="true" size={15} />
+                                ) : (
+                                  <Play aria-hidden="true" size={15} />
+                                )}
+                              </button>
                             )}
-                          </button>
+                            <button
+                              id={`rename-member-${group.id}-${member.memberId}`}
+                              type="button"
+                              className="icon-button member-action"
+                              aria-label={`Rename agent ${member.alias}`}
+                              title={`Rename ${member.alias}`}
+                              onClick={() =>
+                                setEditTarget({
+                                  kind: "member",
+                                  groupId: group.id,
+                                  memberId: member.memberId,
+                                  name: member.alias,
+                                })
+                              }
+                            >
+                              <Pencil aria-hidden="true" size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              className="icon-button member-action danger-action"
+                              aria-label={`Remove agent ${member.alias}`}
+                              title={`Remove ${member.alias}`}
+                              onClick={() =>
+                                setDestructiveTarget({
+                                  kind: "member",
+                                  groupId: group.id,
+                                  memberId: member.memberId,
+                                  name: member.alias,
+                                })
+                              }
+                            >
+                              <Trash2 aria-hidden="true" size={14} />
+                            </button>
+                          </div>
                         )}
                       </div>
                     );
@@ -409,6 +679,23 @@ export function GroupTree({
             />
           )}
         </div>
+      )}
+      {destructiveTarget !== undefined && (
+        <ConfirmRemovalDialog
+          target={destructiveTarget}
+          busy={
+            busyAction ===
+            (destructiveTarget.kind === "group"
+              ? `${destructiveTarget.groupId}:delete`
+              : `${destructiveTarget.groupId}:${destructiveTarget.memberId}:remove`)
+          }
+          onCancel={() => setDestructiveTarget(undefined)}
+          onConfirm={() =>
+            destructiveTarget.kind === "group"
+              ? onDeleteGroup(destructiveTarget.groupId)
+              : onRemoveAgent(destructiveTarget.groupId, destructiveTarget.memberId)
+          }
+        />
       )}
     </>
   );

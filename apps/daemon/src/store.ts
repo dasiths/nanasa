@@ -15,7 +15,8 @@ import {
   CreateAgentProfileCommandSchema,
   type CreateGroupCommand,
   CreateGroupCommandSchema,
-  type DeliveryMode,
+  type DeleteGroupResult,
+  DeleteGroupResultSchema,
   type DeliveryOutcome,
   DeliveryOutcomeSchema,
   type DeliveryStatus,
@@ -35,13 +36,16 @@ import {
   type PortalSnapshot,
   PortalSnapshotSchema,
   type RecoveryPhase,
-  type RecoveryPolicy,
   type RunStatus,
   type StartGroupRunsResult,
   StartGroupRunsResultSchema,
   type SubmitMessageCommand,
   SubmitMessageCommandSchema,
   type TerminalBinding,
+  type UpdateGroupCommand,
+  UpdateGroupCommandSchema,
+  type UpdateGroupMembershipCommand,
+  UpdateGroupMembershipCommandSchema,
 } from "@nanasa/contracts";
 
 interface Parser<T> {
@@ -153,6 +157,8 @@ interface DeliveryRow {
   updated_at: string;
 }
 
+const DATABASE_SCHEMA_VERSION = 1;
+
 export interface DeliveryClaim {
   delivery: DeliveryOutcome;
   message: Message;
@@ -245,6 +251,92 @@ export class NanasaStore {
     });
   }
 
+  public updateGroup(groupId: string, command: UpdateGroupCommand, idempotencyKey?: string): Group {
+    const input = UpdateGroupCommandSchema.parse(command);
+    return this.#executeIdempotent(`group.${groupId}.update`, idempotencyKey, GroupSchema, () => {
+      const existing = this.#requireGroup(groupId);
+      const timestamp = new Date().toISOString();
+      this.#database
+        .prepare("UPDATE groups SET name = ?, updated_at = ? WHERE id = ?")
+        .run(input.name, timestamp, groupId);
+      const group = GroupSchema.parse({
+        ...existing,
+        name: input.name,
+        updatedAt: timestamp,
+      });
+      return {
+        result: group,
+        event: this.#appendEvent("group.updated", "group", groupId, {
+          group,
+          previousName: existing.name,
+        }),
+      };
+    });
+  }
+
+  public getDeleteGroupResult(
+    groupId: string,
+    idempotencyKey: string | undefined,
+  ): DeleteGroupResult | undefined {
+    if (idempotencyKey === undefined) return undefined;
+    const existing = this.#database
+      .prepare("SELECT response_json FROM idempotency_keys WHERE scope = ? AND key = ?")
+      .get(`group.${groupId}.delete`, idempotencyKey) as { response_json: string } | undefined;
+    return existing === undefined
+      ? undefined
+      : DeleteGroupResultSchema.parse(JSON.parse(existing.response_json));
+  }
+
+  public deleteGroup(groupId: string, idempotencyKey?: string): DeleteGroupResult {
+    return this.#executeIdempotent(
+      `group.${groupId}.delete`,
+      idempotencyKey,
+      DeleteGroupResultSchema,
+      () => {
+        this.#requireGroup(groupId);
+        for (const column of ["reply_to", "root_id", "causation_id"] as const) {
+          this.#database
+            .prepare(
+              `UPDATE messages SET ${column} = NULL
+               WHERE group_id <> ?
+                 AND ${column} IN (SELECT id FROM messages WHERE group_id = ?)`,
+            )
+            .run(groupId, groupId);
+        }
+        const deletedDeliveries = this.#database
+          .prepare(
+            "DELETE FROM deliveries WHERE message_id IN (SELECT id FROM messages WHERE group_id = ?)",
+          )
+          .run(groupId);
+        const deletedMessages = this.#database
+          .prepare("DELETE FROM messages WHERE group_id = ?")
+          .run(groupId);
+        const deletedRuns = this.#database
+          .prepare("DELETE FROM runs WHERE group_id = ?")
+          .run(groupId);
+        const deletedMemberships = this.#database
+          .prepare("DELETE FROM memberships WHERE group_id = ?")
+          .run(groupId);
+        const escapedScopePrefix = `group.${groupId}.`.replace(/[\\%_]/g, "\\$&");
+        this.#database
+          .prepare("DELETE FROM idempotency_keys WHERE scope LIKE ? ESCAPE '\\'")
+          .run(`${escapedScopePrefix}%`);
+        this.#database.prepare("DELETE FROM groups WHERE id = ?").run(groupId);
+        const result = DeleteGroupResultSchema.parse({
+          groupId,
+          deletedMemberships: Number(deletedMemberships.changes),
+          deletedRuns: Number(deletedRuns.changes),
+          deletedMessages: Number(deletedMessages.changes),
+          deletedDeliveries: Number(deletedDeliveries.changes),
+        });
+        return {
+          result,
+          event: this.#appendEvent("group.deleted", "group", groupId, result),
+        };
+      },
+    );
+  }
+
   public createAgentProfile(
     command: CreateAgentProfileCommand,
     idempotencyKey?: string,
@@ -256,11 +348,9 @@ export class NanasaStore {
         name: input.name,
         agentType: agentType.key,
         kind: agentType.kind,
-        adapter: agentType.adapter,
-        capabilities: agentType.capabilities,
         command: agentType.command[0] as string,
         args: agentType.command.slice(1),
-        workingDirectory: agentType.cwd,
+        ...(agentType.cwd === undefined ? {} : { workingDirectory: agentType.cwd }),
         environment: agentType.environment,
       },
       idempotencyKey,
@@ -306,8 +396,8 @@ export class NanasaStore {
             profile.name,
             profile.agentType,
             profile.kind,
-            profile.adapter,
-            JSON.stringify(profile.capabilities),
+            "terminal",
+            "[]",
             profile.command,
             JSON.stringify(profile.args),
             profile.workingDirectory ?? null,
@@ -382,6 +472,43 @@ export class NanasaStore {
         event: this.#appendEvent("membership.added", "group", groupId, {
           membership,
           membershipRevision: revision,
+        }),
+      };
+    });
+  }
+
+  public updateMembership(
+    groupId: string,
+    memberId: string,
+    command: UpdateGroupMembershipCommand,
+    idempotencyKey?: string,
+  ): GroupMembership {
+    const input = UpdateGroupMembershipCommandSchema.parse(command);
+    const scope = `group.${groupId}.membership.${memberId}.update`;
+    return this.#executeIdempotent(scope, idempotencyKey, GroupMembershipSchema, () => {
+      this.#requireGroup(groupId);
+      const existing = this.#getMembershipRow(groupId, memberId);
+      if (existing === undefined || existing.state !== "active") {
+        throw new DomainError("membership_not_active", "The member is not active", 404);
+      }
+
+      this.#database
+        .prepare("UPDATE memberships SET alias = ? WHERE id = ?")
+        .run(input.alias, existing.id);
+      const membership = GroupMembershipSchema.parse({
+        id: existing.id,
+        groupId: existing.group_id,
+        memberId: existing.member_id,
+        agentProfileId: existing.agent_profile_id,
+        alias: input.alias,
+        state: existing.state,
+        joinedAt: existing.joined_at,
+      });
+      return {
+        result: membership,
+        event: this.#appendEvent("membership.updated", "group", groupId, {
+          membership,
+          previousAlias: existing.alias,
         }),
       };
     });
@@ -469,8 +596,8 @@ export class NanasaStore {
           input.recoveryAttempts,
           input.recoveryNotBefore ?? null,
           input.recoveryReason ?? null,
-          input.adapterSessionId ?? null,
-          input.adapterSession === undefined ? null : JSON.stringify(input.adapterSession),
+          null,
+          null,
           input.terminal === undefined ? null : JSON.stringify(input.terminal),
           input.startedAt,
           input.stoppedAt ?? null,
@@ -489,7 +616,6 @@ export class NanasaStore {
     memberId: string,
     options: {
       recoveryFrom?: AgentRun;
-      preserveAdapterSession?: boolean;
     } = {},
   ): {
     run: AgentRun;
@@ -518,21 +644,10 @@ export class NanasaStore {
       generation: generationRow.generation,
       status: "starting",
       desiredState: "running",
-      recoveryPhase:
-        options.recoveryFrom === undefined
-          ? "idle"
-          : options.preserveAdapterSession === true
-            ? "resuming"
-            : "restarting",
+      recoveryPhase: options.recoveryFrom === undefined ? "idle" : "restarting",
       recoveryAttempts: options.recoveryFrom?.recoveryAttempts ?? 0,
       recoveryNotBefore: options.recoveryFrom?.recoveryNotBefore,
       recoveryReason: options.recoveryFrom?.recoveryReason,
-      adapterSessionId:
-        options.preserveAdapterSession === true
-          ? options.recoveryFrom?.adapterSessionId
-          : undefined,
-      adapterSession:
-        options.preserveAdapterSession === true ? options.recoveryFrom?.adapterSession : undefined,
       startedAt: new Date().toISOString(),
     });
     return { run, profile: this.#requireAgentProfile(membership.agent_profile_id) };
@@ -552,23 +667,8 @@ export class NanasaStore {
     return this.#requireAgentProfile(profileId);
   }
 
-  public getRecoveryPolicy(profileId: string): RecoveryPolicy {
-    const profile = this.#requireAgentProfile(profileId);
-    return (
-      this.#config?.agentTypes[profile.agentType]?.recovery ??
-      (profile.adapter === "terminal" ? "restart" : "resume-or-restart")
-    );
-  }
-
-  public getActiveDeliveryTarget(
-    groupId: string,
-    memberId: string,
-  ): { run: AgentRun; profile: AgentProfile } | undefined {
-    const membership = this.#getMembershipRow(groupId, memberId);
-    if (membership === undefined || membership.state !== "active") return undefined;
-    const run = this.getActiveRun(groupId, memberId);
-    if (run === undefined || run.status !== "running") return undefined;
-    return { run, profile: this.#requireAgentProfile(membership.agent_profile_id) };
+  public getGroup(groupId: string): Group {
+    return this.#requireGroup(groupId);
   }
 
   public getActiveRun(groupId: string, memberId: string): AgentRun | undefined {
@@ -617,6 +717,23 @@ export class NanasaStore {
          ORDER BY r.started_at, r.id`,
       )
       .all() as unknown as RunRow[];
+    return rows.map((row) => this.#hydrateRun(row));
+  }
+
+  public listGroupRunsRequiringStop(groupId: string): AgentRun[] {
+    this.#requireGroup(groupId);
+    const rows = this.#database
+      .prepare(
+        `SELECT r.* FROM runs r
+         WHERE r.group_id = ?
+           AND (r.status IN ('starting', 'running', 'stopping') OR r.desired_state = 'running')
+           AND r.generation = (
+             SELECT MAX(newer.generation) FROM runs newer
+             WHERE newer.group_id = r.group_id AND newer.member_id = r.member_id
+           )
+         ORDER BY r.started_at, r.id`,
+      )
+      .all(groupId) as unknown as RunRow[];
     return rows.map((row) => this.#hydrateRun(row));
   }
 
@@ -790,101 +907,6 @@ export class NanasaStore {
     return result;
   }
 
-  public updateRunAdapterSession(
-    runId: string,
-    generation: number,
-    session: {
-      adapterSessionId: string;
-      adapter?: "copilot-cli" | "pi-rpc";
-      sessionFile?: string;
-    },
-  ): AgentRun {
-    const current = this.getRun(runId);
-    if (current.generation !== generation || current.status !== "running") {
-      throw new DomainError(
-        "adapter_generation_unavailable",
-        "The adapter run generation is unavailable",
-        409,
-      );
-    }
-    const metadata = {
-      adapter: session.adapter ?? ("pi-rpc" as const),
-      sessionId: session.adapterSessionId,
-      ...(session.sessionFile === undefined ? {} : { sessionFile: session.sessionFile }),
-      updatedAt: new Date().toISOString(),
-    };
-    const { result, event } = this.#transaction(() => {
-      const updated = this.#database
-        .prepare(
-          `UPDATE runs SET adapter_session_id = ?, adapter_session_json = ?
-           WHERE id = ? AND generation = ? AND status = 'running'`,
-        )
-        .run(session.adapterSessionId, JSON.stringify(metadata), runId, generation);
-      if (Number(updated.changes) !== 1) {
-        throw new DomainError(
-          "adapter_generation_unavailable",
-          "The adapter run generation is unavailable",
-          409,
-        );
-      }
-      const run = this.getRun(runId);
-      return {
-        result: run,
-        event: this.#appendEvent("run.adapter-session-changed", "run", runId, {
-          generation,
-          adapterSession: metadata,
-        }),
-      };
-    });
-    this.#publish(event);
-    return result;
-  }
-
-  public settleRunDeliveries(
-    runId: string,
-    generation: number,
-    adapterMessageIds: readonly string[],
-    settlement: { status: "processed" | "failed"; reason?: string } = {
-      status: "processed",
-    },
-  ): number {
-    if (adapterMessageIds.length === 0) return 0;
-    const timestamp = new Date().toISOString();
-    let changed = 0;
-    const events: DomainEvent[] = [];
-    this.#transaction(() => {
-      for (const adapterMessageId of new Set(adapterMessageIds)) {
-        const result = this.#database
-          .prepare(
-            `UPDATE deliveries SET status = ?, reason = ?, updated_at = ?
-             WHERE run_id = ? AND run_generation = ? AND adapter_message_id = ?
-               AND status = 'consumed'`,
-          )
-          .run(
-            settlement.status,
-            settlement.reason ?? null,
-            timestamp,
-            runId,
-            generation,
-            adapterMessageId,
-          );
-        changed += Number(result.changes);
-      }
-      if (changed > 0) {
-        events.push(
-          this.#appendEvent("delivery.adapter-settled", "run", runId, {
-            generation,
-            adapterMessageIds,
-            settlement,
-            changed,
-          }),
-        );
-      }
-    });
-    for (const event of events) this.#publish(event);
-    return changed;
-  }
-
   public submitMessage(
     groupId: string,
     command: SubmitMessageCommand,
@@ -1029,12 +1051,7 @@ export class NanasaStore {
     });
   }
 
-  public beginDelivery(
-    claim: DeliveryClaim,
-    owner: string,
-    appliedMode: DeliveryMode,
-    fallbackApplied: boolean,
-  ): boolean {
+  public beginDelivery(claim: DeliveryClaim, owner: string): boolean {
     if (claim.run === undefined) return false;
     const timestamp = new Date().toISOString();
     const result = this.#database
@@ -1054,10 +1071,10 @@ export class NanasaStore {
            )`,
       )
       .run(
-        appliedMode,
-        fallbackApplied ? 1 : 0,
-        fallbackApplied ? "requested_mode_not_supported" : null,
-        appliedMode === "terminal" ? "terminal" : claim.profile.adapter,
+        "terminal",
+        0,
+        null,
+        "terminal",
         claim.run.id,
         claim.run.generation,
         timestamp,
@@ -1072,57 +1089,37 @@ export class NanasaStore {
     return Number(result.changes) === 1;
   }
 
-  public markDeliveryConsumed(
-    claim: DeliveryClaim,
-    owner: string,
-    result: {
-      adapterSessionId?: string;
-      adapterMessageId?: string;
-    },
-  ): boolean {
+  public markDeliveryConsumed(claim: DeliveryClaim, owner: string): boolean {
     const timestamp = new Date().toISOString();
-    const updated = this.#database
-      .prepare(
-        `UPDATE deliveries
-         SET status = 'consumed', adapter_session_id = ?, adapter_message_id = ?,
-             lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
-         WHERE message_id = ? AND recipient_member_id = ? AND status = 'delivering'
-           AND lease_owner = ? AND run_id = ? AND run_generation = ?`,
-      )
-      .run(
-        result.adapterSessionId ?? null,
-        result.adapterMessageId ?? null,
-        timestamp,
-        claim.message.id,
-        claim.delivery.recipientMemberId,
-        owner,
-        claim.run?.id ?? "",
-        claim.run?.generation ?? 0,
-      );
-    return Number(updated.changes) === 1;
-  }
-
-  public settleDelivery(
-    claim: DeliveryClaim,
-    status: "processed" | "failed",
-    reason?: string,
-  ): boolean {
-    const updated = this.#database
-      .prepare(
-        `UPDATE deliveries SET status = ?, reason = ?, updated_at = ?
-         WHERE message_id = ? AND recipient_member_id = ? AND status = 'consumed'
-           AND run_id = ? AND run_generation = ?`,
-      )
-      .run(
-        status,
-        reason ?? null,
-        new Date().toISOString(),
-        claim.message.id,
-        claim.delivery.recipientMemberId,
-        claim.run?.id ?? "",
-        claim.run?.generation ?? 0,
-      );
-    return Number(updated.changes) === 1;
+    const event = this.#transaction(() => {
+      const updated = this.#database
+        .prepare(
+          `UPDATE deliveries
+           SET status = 'consumed', adapter_session_id = ?, adapter_message_id = ?,
+               lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+           WHERE message_id = ? AND recipient_member_id = ? AND status = 'delivering'
+             AND lease_owner = ? AND run_id = ? AND run_generation = ?`,
+        )
+        .run(
+          null,
+          null,
+          timestamp,
+          claim.message.id,
+          claim.delivery.recipientMemberId,
+          owner,
+          claim.run?.id ?? "",
+          claim.run?.generation ?? 0,
+        );
+      if (Number(updated.changes) !== 1) return undefined;
+      return this.#appendEvent("delivery.status-changed", "message", claim.message.id, {
+        messageId: claim.message.id,
+        recipientMemberId: claim.delivery.recipientMemberId,
+        status: "consumed",
+      });
+    });
+    if (event === undefined) return false;
+    this.#publish(event);
+    return true;
   }
 
   public failDeliveryAttempt(
@@ -1277,12 +1274,21 @@ export class NanasaStore {
     ).map((row) => this.#hydrateAgentProfile(row));
     const memberships = (
       this.#database
-        .prepare("SELECT * FROM memberships ORDER BY joined_at, id")
+        .prepare("SELECT * FROM memberships WHERE state = 'active' ORDER BY joined_at, id")
         .all() as unknown as MembershipRow[]
     ).map((row) => this.#hydrateMembership(row));
     const runs = (
       this.#database
-        .prepare("SELECT * FROM runs ORDER BY started_at, id")
+        .prepare(
+          `SELECT r.* FROM runs r
+           WHERE EXISTS (
+             SELECT 1 FROM memberships m
+             WHERE m.group_id = r.group_id
+               AND m.member_id = r.member_id
+               AND m.state = 'active'
+           )
+           ORDER BY r.started_at, r.id`,
+        )
         .all() as unknown as RunRow[]
     ).map((row) => this.#hydrateRun(row));
     const messages = (
@@ -1405,34 +1411,12 @@ export class NanasaStore {
     recipientMemberId: string,
     timestamp: string,
   ): DeliveryOutcome {
-    const requestedMode = message.delivery.mode;
-    let appliedMode: DeliveryMode | undefined;
-    let fallbackApplied = false;
-    let reason: string | undefined;
     const status: DeliveryOutcome["status"] = "queued";
-
-    const membership = this.#getMembershipRow(message.groupId, recipientMemberId);
-    const profile = this.#requireAgentProfile(membership?.agent_profile_id ?? "");
-    if (requestedMode === "terminal") {
-      appliedMode = "terminal";
-    } else if (profile.capabilities.includes(requestedMode)) {
-      appliedMode = requestedMode;
-    } else {
-      appliedMode = "queue";
-      fallbackApplied = true;
-      reason = "requested_mode_not_supported";
-    }
-
     return DeliveryOutcomeSchema.parse({
       messageId: message.id,
       recipientMemberId,
-      requestedMode,
-      appliedMode,
-      fallbackApplied,
-      reason,
       status,
       attempts: 0,
-      adapter: requestedMode === "terminal" ? "terminal" : profile.adapter,
       updatedAt: timestamp,
     });
   }
@@ -1448,15 +1432,15 @@ export class NanasaStore {
       .run(
         outcome.messageId,
         outcome.recipientMemberId,
-        outcome.requestedMode,
-        outcome.appliedMode ?? null,
-        outcome.fallbackApplied ? 1 : 0,
+        "terminal",
+        "terminal",
+        0,
         outcome.reason ?? null,
         outcome.status,
         outcome.attempts,
-        outcome.adapter ?? null,
-        outcome.adapterSessionId ?? null,
-        outcome.adapterMessageId ?? null,
+        "terminal",
+        null,
+        null,
         outcome.updatedAt,
       );
   }
@@ -1553,17 +1537,11 @@ export class NanasaStore {
 
   #hydrateAgentProfile(row: AgentProfileRow): AgentProfile {
     const agentType = row.agent_type ?? this.#inferAgentType(row.kind, row.command, row.args_json);
-    const configured = this.#config?.agentTypes[agentType];
     return AgentProfileSchema.parse({
       id: row.id,
       name: row.name,
       agentType,
       kind: row.kind,
-      adapter: row.adapter ?? configured?.adapter ?? this.#inferAdapter(row.kind),
-      capabilities:
-        row.capabilities_json === null
-          ? (configured?.capabilities ?? this.#inferCapabilities(row.kind))
-          : JSON.parse(row.capabilities_json),
       command: row.command,
       args: JSON.parse(row.args_json),
       workingDirectory: row.working_directory ?? undefined,
@@ -1599,9 +1577,6 @@ export class NanasaStore {
       recoveryAttempts: row.recovery_attempts ?? 0,
       recoveryNotBefore: row.recovery_not_before ?? undefined,
       recoveryReason: row.recovery_reason ?? undefined,
-      adapterSessionId: row.adapter_session_id ?? undefined,
-      adapterSession:
-        row.adapter_session_json === null ? undefined : JSON.parse(row.adapter_session_json),
       terminal: row.terminal_json === null ? undefined : JSON.parse(row.terminal_json),
       startedAt: row.started_at,
       stoppedAt: row.stopped_at ?? undefined,
@@ -1613,12 +1588,6 @@ export class NanasaStore {
       mode?: string;
       expiresAt?: string;
     };
-    const mode =
-      storedDelivery.mode === "terminal"
-        ? "terminal"
-        : storedDelivery.mode === "steer" || storedDelivery.mode === "interrupt"
-          ? "steer"
-          : "queue";
     return MessageSchema.parse({
       id: row.id,
       groupId: row.group_id,
@@ -1629,7 +1598,6 @@ export class NanasaStore {
       audience: JSON.parse(row.audience_json),
       body: JSON.parse(row.body_json),
       delivery: {
-        mode,
         ...(storedDelivery.expiresAt === undefined ? {} : { expiresAt: storedDelivery.expiresAt }),
       },
       replyTo: row.reply_to ?? undefined,
@@ -1641,32 +1609,12 @@ export class NanasaStore {
   }
 
   #hydrateDelivery(row: DeliveryRow): DeliveryOutcome {
-    const requestedMode =
-      row.requested_mode === "terminal"
-        ? "terminal"
-        : row.requested_mode === "steer" || row.requested_mode === "interrupt"
-          ? "steer"
-          : "queue";
-    const appliedMode =
-      row.applied_mode === null
-        ? undefined
-        : row.applied_mode === "terminal"
-          ? "terminal"
-          : row.applied_mode === "steer" || row.applied_mode === "interrupt"
-            ? "steer"
-            : "queue";
     return DeliveryOutcomeSchema.parse({
       messageId: row.message_id,
       recipientMemberId: row.recipient_member_id,
-      requestedMode,
-      appliedMode,
-      fallbackApplied: row.fallback_applied === 1,
       reason: row.reason ?? undefined,
       status: row.status,
       attempts: row.attempts,
-      adapter: row.adapter ?? undefined,
-      adapterSessionId: row.adapter_session_id ?? undefined,
-      adapterMessageId: row.adapter_message_id ?? undefined,
       updatedAt: row.updated_at,
     });
   }
@@ -1701,16 +1649,6 @@ export class NanasaStore {
       return command === "make" && args[0] === "claude-copilot" ? "claude-copilot" : "claude-code";
     }
     return kind;
-  }
-
-  #inferAdapter(kind: string): "copilot-cli" | "pi-rpc" | "terminal" {
-    if (kind === "copilot") return "copilot-cli";
-    if (kind === "pi") return "pi-rpc";
-    return "terminal";
-  }
-
-  #inferCapabilities(kind: string): Array<"queue" | "steer"> {
-    return kind === "pi" ? ["queue", "steer"] : ["queue"];
   }
 
   #migrate(): void {
@@ -1835,6 +1773,7 @@ export class NanasaStore {
         ON domain_events (aggregate_type, aggregate_id, sequence);
     `);
     this.#migrateLegacyColumns();
+    this.#migrateTerminalRuntime();
   }
 
   #migrateLegacyColumns(): void {
@@ -1908,5 +1847,62 @@ export class NanasaStore {
       CREATE INDEX IF NOT EXISTS deliveries_dispatch
         ON deliveries (status, next_attempt_at, lease_expires_at, updated_at);
     `);
+  }
+
+  #migrateTerminalRuntime(): void {
+    const version = this.#database.prepare("PRAGMA user_version").get() as unknown as {
+      user_version: number;
+    };
+    if (version.user_version === DATABASE_SCHEMA_VERSION) return;
+    if (version.user_version > DATABASE_SCHEMA_VERSION) {
+      throw new Error(`Unsupported database schema version ${version.user_version}`);
+    }
+
+    this.#transaction(() => {
+      this.#database.exec(`
+        UPDATE runs
+        SET recovery_reason = 'terminal_runtime_migration',
+            recovery_phase = 'reconciling',
+            recovery_attempts = 0,
+            recovery_not_before = NULL
+        WHERE desired_state = 'running'
+          AND status IN ('starting', 'running')
+          AND agent_profile_id IN (
+            SELECT id FROM agent_profiles
+            WHERE adapter IN ('copilot-cli', 'pi-rpc', 'copilot-sdk')
+          );
+
+        UPDATE agent_profiles
+        SET adapter = 'terminal', capabilities_json = '[]';
+
+        UPDATE runs
+        SET recovery_phase = 'restarting'
+        WHERE recovery_phase = 'resuming';
+
+        UPDATE deliveries
+        SET requested_mode = 'terminal',
+            applied_mode = 'terminal',
+            fallback_applied = 0,
+            adapter = 'terminal',
+            adapter_session_id = NULL,
+            adapter_message_id = NULL,
+            status = CASE
+              WHEN status IN ('received', 'delivering') THEN 'queued'
+              ELSE status
+            END,
+            reason = CASE
+              WHEN status IN ('received', 'delivering') THEN NULL
+              ELSE reason
+            END,
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            next_attempt_at = NULL,
+            run_id = NULL,
+            run_generation = NULL
+        WHERE status IN ('queued', 'retrying', 'received', 'delivering');
+
+        PRAGMA user_version = 1;
+      `);
+    });
   }
 }

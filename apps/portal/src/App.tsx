@@ -1,16 +1,5 @@
 import type { StartGroupRunsResult, SubmitMessageCommand } from "@nanasa/contracts";
-import {
-  Cable,
-  CircleAlert,
-  Laptop,
-  MessageSquareText,
-  Moon,
-  Play,
-  RefreshCw,
-  Sun,
-  TerminalSquare,
-  X,
-} from "lucide-react";
+import { Cable, CircleAlert, Laptop, Moon, Play, RefreshCw, Sun, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { api, type PortalClient } from "./api.js";
@@ -19,8 +8,6 @@ import { MessageWorkspace } from "./components/message-workspace.js";
 import { TerminalWorkspace } from "./components/terminal-workspace.js";
 import { useAppliedTheme, usePortalPreferences } from "./hooks/use-portal-preferences.js";
 import { useDomainEvents, usePortalSnapshot } from "./hooks/use-portal-snapshot.js";
-
-type WorkspaceMode = "terminal" | "message";
 
 export interface AppProps {
   client?: PortalClient;
@@ -31,14 +18,18 @@ export function App({ client = api }: AppProps) {
   const eventStatus = useDomainEvents(client, snapshot, () => void refresh());
   const { preferences, setTheme } = usePortalPreferences();
   useAppliedTheme(preferences.theme);
-  const [mode, setMode] = useState<WorkspaceMode>("terminal");
   const [requestedGroupId, setRequestedGroupId] = useState<string>();
   const [seenMessageSequence, setSeenMessageSequence] = useState<Map<string, number>>(new Map());
   const [busyAction, setBusyAction] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const [startAllResult, setStartAllResult] = useState<StartGroupRunsResult>();
   const [startingAllGroupId, setStartingAllGroupId] = useState<string>();
+  const [focusSelectedGroupAfterDelete, setFocusSelectedGroupAfterDelete] = useState(false);
+  const [terminalConnectionRevision, setTerminalConnectionRevision] = useState(0);
+  const [terminalDeliverySuspended, setTerminalDeliverySuspended] = useState(false);
   const startAllInFlight = useRef(new Map<string, Promise<void>>());
+  const previousEventStatus = useRef(eventStatus);
+  const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const selectedGroupId =
     snapshot?.groups.some((group) => group.id === requestedGroupId) === true
@@ -77,6 +68,19 @@ export function App({ client = api }: AppProps) {
     });
   }, [selectedGroupId, selectedLatestMessageSequence]);
 
+  useEffect(() => {
+    if (!focusSelectedGroupAfterDelete || selectedGroup === undefined) return;
+    workspaceHeadingRef.current?.focus();
+    setFocusSelectedGroupAfterDelete(false);
+  }, [focusSelectedGroupAfterDelete, selectedGroup]);
+
+  useEffect(() => {
+    if (eventStatus === "connected" && previousEventStatus.current !== "connected") {
+      setTerminalConnectionRevision((current) => current + 1);
+    }
+    previousEventStatus.current = eventStatus;
+  }, [eventStatus]);
+
   const runAction = async (key: string, operation: () => Promise<unknown>) => {
     setBusyAction(key);
     setActionError(undefined);
@@ -100,6 +104,20 @@ export function App({ client = api }: AppProps) {
     setRequestedGroupId(groupId);
   };
 
+  const renameGroup = (groupId: string, name: string) =>
+    runAction(`${groupId}:rename`, () => client.updateGroup(groupId, { name }));
+  const deleteGroup = async (groupId: string) => {
+    const groupIndex = snapshot?.groups.findIndex((group) => group.id === groupId) ?? -1;
+    const fallbackGroupId =
+      groupIndex < 0
+        ? undefined
+        : (snapshot?.groups[groupIndex + 1]?.id ?? snapshot?.groups[groupIndex - 1]?.id);
+    await runAction(`${groupId}:delete`, () => client.deleteGroup(groupId));
+    setStartAllResult((current) => (current?.groupId === groupId ? undefined : current));
+    setRequestedGroupId((current) => (current === groupId ? fallbackGroupId : current));
+    if (fallbackGroupId !== undefined) setFocusSelectedGroupAfterDelete(true);
+  };
+
   const addAgent = async (input: AddAgentInput) => {
     await runAction(`${input.groupId}:add-agent`, async () => {
       let profileId = input.profileId;
@@ -119,6 +137,13 @@ export function App({ client = api }: AppProps) {
       });
     });
   };
+
+  const renameAgent = (groupId: string, memberId: string, alias: string) =>
+    runAction(`${groupId}:${memberId}:rename`, () =>
+      client.updateMembership(groupId, memberId, { alias }),
+    );
+  const removeAgent = (groupId: string, memberId: string) =>
+    runAction(`${groupId}:${memberId}:remove`, () => client.removeMembership(groupId, memberId));
 
   const startRun = (groupId: string, memberId: string) =>
     runAction(`${groupId}:${memberId}`, () => client.startRun(groupId, memberId));
@@ -140,9 +165,16 @@ export function App({ client = api }: AppProps) {
   };
   const submitMessage = async (command: SubmitMessageCommand) => {
     if (selectedGroup === undefined) throw new Error("Select a group before sending a message");
-    const result = await client.submitMessage(selectedGroup.id, command);
-    await refresh();
-    return result;
+    setTerminalDeliverySuspended(true);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    try {
+      const result = await client.submitMessage(selectedGroup.id, command);
+      await refresh();
+      return result;
+    } finally {
+      setTerminalDeliverySuspended(false);
+      setTerminalConnectionRevision((current) => current + 1);
+    }
   };
 
   if (status === "loading") {
@@ -192,7 +224,11 @@ export function App({ client = api }: AppProps) {
           {...(busyAction === undefined ? {} : { busyAction })}
           onSelectGroup={setRequestedGroupId}
           onCreateGroup={createGroup}
+          onRenameGroup={renameGroup}
+          onDeleteGroup={deleteGroup}
           onAddAgent={addAgent}
+          onRenameAgent={renameAgent}
+          onRemoveAgent={removeAgent}
           onStartRun={startRun}
           onStopRun={stopRun}
         />
@@ -201,7 +237,9 @@ export function App({ client = api }: AppProps) {
         <header className="workspace-header">
           <div className="workspace-identity">
             <span className="eyebrow">Group workspace</span>
-            <h1>{selectedGroup?.name ?? "No group selected"}</h1>
+            <h1 ref={workspaceHeadingRef} tabIndex={-1}>
+              {selectedGroup?.name ?? "No group selected"}
+            </h1>
             {selectedGroup !== undefined && (
               <p>
                 {members.length} members <span aria-hidden="true">/</span> {runningCount} running
@@ -231,24 +269,6 @@ export function App({ client = api }: AppProps) {
               <Cable aria-hidden="true" size={14} />
               {eventStatus}
             </span>
-            <div className="mode-switch" role="group" aria-label="Workspace input mode">
-              <button
-                type="button"
-                aria-pressed={mode === "terminal"}
-                onClick={() => setMode("terminal")}
-              >
-                <TerminalSquare aria-hidden="true" size={16} />
-                Terminal Mode
-              </button>
-              <button
-                type="button"
-                aria-pressed={mode === "message"}
-                onClick={() => setMode("message")}
-              >
-                <MessageSquareText aria-hidden="true" size={16} />
-                Message Mode
-              </button>
-            </div>
             <div className="theme-switch" role="group" aria-label="Color theme">
               <button
                 type="button"
@@ -341,19 +361,24 @@ export function App({ client = api }: AppProps) {
               <h2>Create a group to begin</h2>
               <p>Groups contain agent profiles, active runs, terminals, and routed messages.</p>
             </div>
-          ) : mode === "terminal" ? (
-            <section className="mode-surface" aria-label="Terminal Mode">
-              <TerminalWorkspace client={client} members={members} runs={runs} />
-            </section>
           ) : (
-            <section className="mode-surface" aria-label="Message Mode">
+            <div className="unified-workspace">
               <MessageWorkspace
-                client={client}
                 group={selectedGroup}
                 members={members}
+                deliveryOutcomes={snapshot.deliveryOutcomes}
                 onSubmit={submitMessage}
               />
-            </section>
+              <section className="terminal-surface" aria-label="Agent terminals">
+                <TerminalWorkspace
+                  client={client}
+                  members={members}
+                  runs={runs}
+                  connectionRevision={terminalConnectionRevision}
+                  suspended={terminalDeliverySuspended}
+                />
+              </section>
+            </div>
           )}
         </div>
       </section>

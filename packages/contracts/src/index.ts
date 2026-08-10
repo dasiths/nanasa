@@ -9,6 +9,26 @@ export const CreateGroupCommandSchema = z.object({
 
 export type CreateGroupCommand = z.infer<typeof CreateGroupCommandSchema>;
 
+export const UpdateGroupCommandSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100),
+  })
+  .strict();
+
+export type UpdateGroupCommand = z.infer<typeof UpdateGroupCommandSchema>;
+
+export const DeleteGroupResultSchema = z
+  .object({
+    groupId: IdentifierSchema,
+    deletedMemberships: z.number().int().nonnegative(),
+    deletedRuns: z.number().int().nonnegative(),
+    deletedMessages: z.number().int().nonnegative(),
+    deletedDeliveries: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export type DeleteGroupResult = z.infer<typeof DeleteGroupResultSchema>;
+
 export const GroupSchema = z.object({
   id: IdentifierSchema,
   name: z.string().trim().min(1).max(100),
@@ -43,35 +63,38 @@ const EnvironmentSchema = z.record(
   z.string().max(16_384),
 );
 
-export const AgentTypeConfigSchema = z
+const AgentTypeConfigInputSchema = z
   .object({
     key: AgentTypeKeySchema,
     name: z.string().trim().min(1).max(100),
     kind: AgentKindSchema,
-    adapter: AdapterKindSchema,
+    adapter: AdapterKindSchema.optional(),
     command: z.array(z.string().min(1).max(4_096)).min(1).max(64),
     cwd: z.string().min(1).max(4_096).optional(),
     environment: EnvironmentSchema.default({}),
-    recovery: RecoveryPolicySchema,
-    capabilities: z.array(AgentCapabilitySchema).min(1).max(2),
+    recovery: RecoveryPolicySchema.optional(),
+    capabilities: z.array(AgentCapabilitySchema).min(1).max(2).optional(),
   })
   .strict()
   .superRefine((agentType, context) => {
-    if (new Set(agentType.capabilities).size !== agentType.capabilities.length) {
+    if (
+      agentType.capabilities !== undefined &&
+      new Set(agentType.capabilities).size !== agentType.capabilities.length
+    ) {
       context.addIssue({
         code: "custom",
         message: "Agent capabilities must be unique",
         path: ["capabilities"],
       });
     }
-    if (agentType.adapter === "terminal" && agentType.capabilities.includes("steer")) {
+    if (agentType.adapter === "terminal" && agentType.capabilities?.includes("steer") === true) {
       context.addIssue({
         code: "custom",
         message: "Terminal adapters support queue delivery only",
         path: ["capabilities"],
       });
     }
-    if (agentType.adapter === "copilot-cli" && agentType.capabilities.includes("steer")) {
+    if (agentType.adapter === "copilot-cli" && agentType.capabilities?.includes("steer") === true) {
       context.addIssue({
         code: "custom",
         message: "Copilot CLI ACP supports queue delivery only",
@@ -85,9 +108,21 @@ export const AgentTypeConfigSchema = z
         path: ["recovery"],
       });
     }
-  });
+  })
+  .transform((config) => ({
+    key: config.key,
+    name: config.name,
+    kind: config.kind,
+    command: config.command,
+    ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
+    environment: config.environment,
+  }));
 
-export type AgentTypeConfig = z.infer<typeof AgentTypeConfigSchema>;
+type CanonicalAgentTypeConfig = z.output<typeof AgentTypeConfigInputSchema>;
+
+export type AgentTypeConfig = CanonicalAgentTypeConfig;
+
+export const AgentTypeConfigSchema = AgentTypeConfigInputSchema;
 
 export const NanasaConfigSchema = z
   .object({
@@ -136,13 +171,11 @@ export const ConfigStatusSchema = z
 export type ConfigDiagnostic = z.infer<typeof ConfigDiagnosticSchema>;
 export type ConfigStatus = z.infer<typeof ConfigStatusSchema>;
 
-export const AgentProfileSchema = z.object({
+const CanonicalAgentProfileSchema = z.object({
   id: IdentifierSchema,
   name: z.string().trim().min(1).max(100),
   agentType: AgentTypeKeySchema,
   kind: AgentKindSchema,
-  adapter: AdapterKindSchema,
-  capabilities: z.array(AgentCapabilitySchema).min(1).max(2),
   command: z.string().trim().min(1),
   args: z.array(z.string()).default([]),
   workingDirectory: z.string().min(1).optional(),
@@ -151,7 +184,11 @@ export const AgentProfileSchema = z.object({
   updatedAt: TimestampSchema,
 });
 
-export type AgentProfile = z.infer<typeof AgentProfileSchema>;
+type CanonicalAgentProfile = z.infer<typeof CanonicalAgentProfileSchema>;
+
+export type AgentProfile = CanonicalAgentProfile;
+
+export const AgentProfileSchema = CanonicalAgentProfileSchema;
 
 export const CreateAgentProfileCommandSchema = z
   .object({
@@ -162,15 +199,34 @@ export const CreateAgentProfileCommandSchema = z
 
 export type CreateAgentProfileCommand = z.infer<typeof CreateAgentProfileCommandSchema>;
 
-export const InternalCreateAgentProfileCommandSchema = AgentProfileSchema.omit({
+const CanonicalInternalCreateAgentProfileCommandSchema = CanonicalAgentProfileSchema.omit({
   id: true,
   createdAt: true,
   updatedAt: true,
-}).strict();
+})
+  .extend({
+    adapter: AdapterKindSchema.optional(),
+    capabilities: z.array(AgentCapabilitySchema).min(1).max(2).optional(),
+  })
+  .strict()
+  .transform((profile) => ({
+    name: profile.name,
+    agentType: profile.agentType,
+    kind: profile.kind,
+    command: profile.command,
+    args: profile.args,
+    ...(profile.workingDirectory === undefined
+      ? {}
+      : { workingDirectory: profile.workingDirectory }),
+    environment: profile.environment,
+  }));
 
 export type InternalCreateAgentProfileCommand = z.infer<
-  typeof InternalCreateAgentProfileCommandSchema
+  typeof CanonicalInternalCreateAgentProfileCommandSchema
 >;
+
+export const InternalCreateAgentProfileCommandSchema =
+  CanonicalInternalCreateAgentProfileCommandSchema;
 
 export const MembershipStateSchema = z.enum(["active", "removed"]);
 
@@ -195,6 +251,14 @@ export const AddGroupMembershipCommandSchema = z.object({
 
 export type AddGroupMembershipCommand = z.infer<typeof AddGroupMembershipCommandSchema>;
 
+export const UpdateGroupMembershipCommandSchema = z
+  .object({
+    alias: z.string().trim().min(1).max(100),
+  })
+  .strict();
+
+export type UpdateGroupMembershipCommand = z.infer<typeof UpdateGroupMembershipCommandSchema>;
+
 export const RunStatusSchema = z.enum(["starting", "running", "stopping", "stopped", "failed"]);
 
 export type RunStatus = z.infer<typeof RunStatusSchema>;
@@ -211,18 +275,6 @@ export const RecoveryPhaseSchema = z.enum([
 
 export type DesiredRunState = z.infer<typeof DesiredRunStateSchema>;
 export type RecoveryPhase = z.infer<typeof RecoveryPhaseSchema>;
-
-export const AdapterSessionMetadataSchema = z
-  .object({
-    adapter: AdapterKindSchema,
-    sessionId: z.string().min(1).optional(),
-    sessionFile: z.string().min(1).optional(),
-    adapterMessageId: z.string().min(1).optional(),
-    updatedAt: TimestampSchema,
-  })
-  .strict();
-
-export type AdapterSessionMetadata = z.infer<typeof AdapterSessionMetadataSchema>;
 
 export const TerminalBindingSchema = z.object({
   serverName: z.string().trim().min(1),
@@ -281,7 +333,7 @@ export const TerminalEndpointStatusSchema = z.discriminatedUnion("state", [
 
 export type TerminalEndpointStatus = z.infer<typeof TerminalEndpointStatusSchema>;
 
-export const AgentRunSchema = z.object({
+const CanonicalAgentRunSchema = z.object({
   id: IdentifierSchema,
   groupId: IdentifierSchema,
   memberId: IdentifierSchema,
@@ -293,14 +345,16 @@ export const AgentRunSchema = z.object({
   recoveryAttempts: z.number().int().nonnegative().default(0),
   recoveryNotBefore: TimestampSchema.optional(),
   recoveryReason: z.string().min(1).optional(),
-  adapterSessionId: z.string().min(1).optional(),
-  adapterSession: AdapterSessionMetadataSchema.optional(),
   terminal: TerminalBindingSchema.optional(),
   startedAt: TimestampSchema,
   stoppedAt: TimestampSchema.optional(),
 });
 
-export type AgentRun = z.infer<typeof AgentRunSchema>;
+type CanonicalAgentRun = z.infer<typeof CanonicalAgentRunSchema>;
+
+export type AgentRun = CanonicalAgentRun;
+
+export const AgentRunSchema = CanonicalAgentRunSchema;
 
 export const StartAgentRunCommandSchema = z.object({
   cols: z.number().int().min(20).max(1000).default(120),
@@ -349,23 +403,6 @@ export const InterruptAgentRunCommandSchema = z
 
 export type InterruptAgentRunCommand = z.infer<typeof InterruptAgentRunCommandSchema>;
 
-export const AdapterReadinessSchema = z.enum(["starting", "ready", "unavailable", "closed"]);
-
-export type AdapterReadiness = z.infer<typeof AdapterReadinessSchema>;
-
-export const AgentAdapterStatusSchema = z
-  .object({
-    runId: IdentifierSchema,
-    generation: z.number().int().positive(),
-    adapter: AdapterKindSchema,
-    capabilities: z.array(AgentCapabilitySchema).max(2),
-    readiness: AdapterReadinessSchema,
-    reason: z.string().min(1).optional(),
-  })
-  .strict();
-
-export type AgentAdapterStatus = z.infer<typeof AgentAdapterStatusSchema>;
-
 export const MessageIntentSchema = z.enum(["inform", "request", "response", "control"]);
 
 export type MessageIntent = z.infer<typeof MessageIntentSchema>;
@@ -410,39 +447,19 @@ export const DeliveryModeSchema = z.enum(["queue", "steer", "terminal"]);
 
 export type DeliveryMode = z.infer<typeof DeliveryModeSchema>;
 
-export const EffectiveDeliveryModesCommandSchema = z
+const DeliveryPolicyInputSchema = z
   .object({
-    memberIds: z.array(IdentifierSchema).min(1),
-  })
-  .strict()
-  .superRefine((command, context) => {
-    if (new Set(command.memberIds).size !== command.memberIds.length) {
-      context.addIssue({
-        code: "custom",
-        message: "Member IDs must be unique",
-        path: ["memberIds"],
-      });
-    }
-  });
-
-export const EffectiveDeliveryModesSchema = z
-  .object({
-    memberIds: z.array(IdentifierSchema).min(1),
-    modes: z.array(DeliveryModeSchema).max(3),
-  })
-  .strict();
-
-export type EffectiveDeliveryModesCommand = z.infer<typeof EffectiveDeliveryModesCommandSchema>;
-export type EffectiveDeliveryModes = z.infer<typeof EffectiveDeliveryModesSchema>;
-
-export const DeliveryPolicySchema = z
-  .object({
-    mode: DeliveryModeSchema,
+    mode: DeliveryModeSchema.optional(),
     expiresAt: TimestampSchema.optional(),
   })
-  .strict();
+  .strict()
+  .transform((delivery) =>
+    delivery.expiresAt === undefined ? {} : { expiresAt: delivery.expiresAt },
+  );
 
-export type DeliveryPolicy = z.infer<typeof DeliveryPolicySchema>;
+export type DeliveryPolicy = z.output<typeof DeliveryPolicyInputSchema>;
+
+export const DeliveryPolicySchema = DeliveryPolicyInputSchema;
 
 export const MessageSenderSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -531,22 +548,20 @@ export const DeliveryStatusSchema = z.enum([
 
 export type DeliveryStatus = z.infer<typeof DeliveryStatusSchema>;
 
-export const DeliveryOutcomeSchema = z.object({
+const CanonicalDeliveryOutcomeSchema = z.object({
   messageId: IdentifierSchema,
   recipientMemberId: IdentifierSchema,
-  requestedMode: DeliveryModeSchema,
-  appliedMode: DeliveryModeSchema.optional(),
-  fallbackApplied: z.boolean().default(false),
   reason: z.string().min(1).optional(),
   status: DeliveryStatusSchema,
   attempts: z.number().int().nonnegative(),
-  adapter: AdapterKindSchema.optional(),
-  adapterSessionId: z.string().min(1).optional(),
-  adapterMessageId: z.string().min(1).optional(),
   updatedAt: TimestampSchema,
 });
 
-export type DeliveryOutcome = z.infer<typeof DeliveryOutcomeSchema>;
+type CanonicalDeliveryOutcome = z.infer<typeof CanonicalDeliveryOutcomeSchema>;
+
+export type DeliveryOutcome = CanonicalDeliveryOutcome;
+
+export const DeliveryOutcomeSchema = CanonicalDeliveryOutcomeSchema;
 
 export const MessageSubmissionResultSchema = z.object({
   message: MessageSchema,

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawn, spawnSync } from "node:child_process";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const configRelativePath = join(".nanasa", "config.yaml");
@@ -17,8 +17,9 @@ Commands:
   init               Create .nanasa/config.yaml when absent
 
 Options:
-  --host <host>       Listen host (default: NANASA_HOST or 127.0.0.1)
+  --host <host>       Listen host; MCP requires loopback (default: 127.0.0.1)
   --port <port>       Listen port (default: NANASA_PORT or 3210)
+  --mcp               Enable authenticated MCP (default path: /mcp)
   --ttyd-path <path>  ttyd executable (default: NANASA_TTYD_PATH or ttyd)
   -h, --help          Show this help
   -v, --version       Show the installed version`;
@@ -90,6 +91,8 @@ function parseStartOptions(args) {
     } else if (argument === "--port") {
       environment.NANASA_PORT = optionValue(args, index, argument);
       index += 1;
+    } else if (argument === "--mcp") {
+      environment.NANASA_MCP_ENABLED = "true";
     } else if (argument === "--ttyd-path") {
       environment.NANASA_TTYD_PATH = optionValue(args, index, argument);
       index += 1;

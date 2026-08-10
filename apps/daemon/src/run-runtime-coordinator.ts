@@ -1,13 +1,11 @@
 import type {
   AgentRun,
-  DeliveryMode,
-  EffectiveDeliveryModes,
+  DeleteGroupResult,
   GroupMembership,
   StartGroupRunsCommand,
   StartGroupRunsResult,
 } from "@nanasa/contracts";
 
-import { AgentRuntimeSupervisor } from "./agent-runtime-supervisor.js";
 import { DeliveryDispatcher } from "./delivery-dispatcher.js";
 import { DomainError, NanasaStore } from "./store.js";
 import { TmuxRuntime } from "./tmux-runtime.js";
@@ -26,7 +24,6 @@ export class RunRuntimeCoordinator {
   readonly #store: NanasaStore;
   readonly #runtime: TmuxRuntime;
   readonly #supervisor: TtydSupervisor;
-  readonly #agentSupervisor: AgentRuntimeSupervisor;
   readonly #dispatcher: DeliveryDispatcher;
   readonly #reconcileTimer: NodeJS.Timeout;
   readonly #recoveryMaxAttempts: number;
@@ -39,14 +36,12 @@ export class RunRuntimeCoordinator {
     store: NanasaStore,
     runtime: TmuxRuntime,
     supervisor: TtydSupervisor,
-    agentSupervisor: AgentRuntimeSupervisor,
     dispatcher: DeliveryDispatcher,
     options: RunRuntimeCoordinatorOptions = {},
   ) {
     this.#store = store;
     this.#runtime = runtime;
     this.#supervisor = supervisor;
-    this.#agentSupervisor = agentSupervisor;
     this.#dispatcher = dispatcher;
     this.#recoveryMaxAttempts = options.recoveryMaxAttempts ?? 3;
     this.#recoveryCooldownMs = options.recoveryCooldownMs ?? [1_000, 5_000, 30_000];
@@ -134,10 +129,24 @@ export class RunRuntimeCoordinator {
     idempotencyKey?: string,
   ): Promise<GroupMembership> {
     return this.#serialize(async () => {
-      if (this.#store.getActiveRun(groupId, memberId) !== undefined) {
+      const active = this.#store.getActiveRun(groupId, memberId);
+      const latest =
+        active === undefined ? this.#store.getLatestRunForMembership(groupId, memberId) : undefined;
+      if (active !== undefined || latest?.desiredState === "running") {
         await this.#stopRun(groupId, memberId);
       }
       return this.#store.removeMembership(groupId, memberId, idempotencyKey);
+    });
+  }
+
+  public deleteGroup(groupId: string, idempotencyKey?: string): Promise<DeleteGroupResult> {
+    return this.#serialize(async () => {
+      const replay = this.#store.getDeleteGroupResult(groupId, idempotencyKey);
+      if (replay !== undefined) return replay;
+      for (const run of this.#store.listGroupRunsRequiringStop(groupId)) {
+        await this.#stopRun(groupId, run.memberId);
+      }
+      return this.#store.deleteGroup(groupId, idempotencyKey);
     });
   }
 
@@ -151,39 +160,16 @@ export class RunRuntimeCoordinator {
       if (run.status !== "running") {
         throw new DomainError("run_not_running", "The run is not running", 409);
       }
-      const profile = this.#store.getAgentProfile(run.agentProfileId);
-      if (this.#agentSupervisor.status(run, profile).readiness !== "ready") {
-        throw new DomainError("adapter_unavailable", "The run adapter is unavailable", 503);
+      try {
+        await this.#runtime.interruptRun(run);
+      } catch (error) {
+        throw new DomainError(
+          "terminal_unavailable",
+          error instanceof Error ? error.message : "The run terminal is unavailable",
+          503,
+        );
       }
-      await this.#agentSupervisor.interrupt(run);
     });
-  }
-
-  public adapterStatus(runId: string) {
-    const run = this.#store.getRun(runId);
-    const profile = this.#store.getAgentProfile(run.agentProfileId);
-    return this.#agentSupervisor.status(run, profile);
-  }
-
-  public async effectiveDeliveryModes(
-    groupId: string,
-    memberIds: string[],
-  ): Promise<EffectiveDeliveryModes> {
-    let modes = new Set<DeliveryMode>(["queue", "steer"]);
-    let terminalAvailable = true;
-    for (const memberId of memberIds) {
-      const target = this.#store.getActiveDeliveryTarget(groupId, memberId);
-      if (target === undefined) {
-        return { memberIds, modes: [] };
-      }
-      const status = this.#agentSupervisor.status(target.run, target.profile);
-      const supported =
-        status.readiness === "ready" ? new Set<DeliveryMode>(status.capabilities) : new Set();
-      modes = new Set([...modes].filter((mode) => supported.has(mode)));
-      terminalAvailable =
-        terminalAvailable && (await this.#agentSupervisor.terminalAvailable(target.run));
-    }
-    return { memberIds, modes: [...modes, ...(terminalAvailable ? (["terminal"] as const) : [])] };
   }
 
   public reconcile(markOrphanedStarting = false): Promise<void> {
@@ -200,7 +186,10 @@ export class RunRuntimeCoordinator {
       }
       const recoveredRuns: AgentRun[] = [];
       for (const persisted of this.#store.listDesiredRunningRuns()) {
-        if (await this.#runtime.isCurrentRun(persisted)) {
+        if (
+          persisted.recoveryReason !== "terminal_runtime_migration" &&
+          (await this.#runtime.isCurrentRun(persisted))
+        ) {
           let current = persisted;
           if (markOrphanedStarting || persisted.recoveryPhase !== "recovered") {
             current = this.#store.transitionRunRecovery(
@@ -219,12 +208,6 @@ export class RunRuntimeCoordinator {
       const running = recoveredRuns.filter(
         (run) => run.status === "running" && run.terminal !== undefined,
       );
-      await this.#agentSupervisor.reconcile(
-        running.map((run) => ({
-          run,
-          profile: this.#store.getAgentProfile(run.agentProfileId),
-        })),
-      );
       await this.#runtime.removeStaleViewSessions(new Set(running.map((run) => run.id)));
       const readyForTtyd: AgentRun[] = [];
       for (const run of running) {
@@ -238,23 +221,11 @@ export class RunRuntimeCoordinator {
       }
       await this.#supervisor.reconcile(readyForTtyd);
       for (const run of readyForTtyd) {
-        const profile = this.#store.getAgentProfile(run.agentProfileId);
-        const adapter = this.#agentSupervisor.status(run, profile);
-        if (run.recoveryPhase === "recovered" && adapter.readiness !== "unavailable") {
-          continue;
-        }
+        if (run.recoveryPhase === "recovered") continue;
         try {
-          this.#store.transitionRunRecovery(
-            run.id,
-            run.generation,
-            adapter.readiness === "unavailable" ? "failed" : "recovered",
-            {
-              reason:
-                adapter.readiness === "unavailable"
-                  ? (adapter.reason ?? "adapter_unavailable")
-                  : "runtime_recovered",
-            },
-          );
+          this.#store.transitionRunRecovery(run.id, run.generation, "recovered", {
+            reason: "runtime_recovered",
+          });
         } catch (error) {
           if (!(error instanceof DomainError && error.code === "recovery_generation_fenced")) {
             throw error;
@@ -269,7 +240,6 @@ export class RunRuntimeCoordinator {
     clearInterval(this.#reconcileTimer);
     await this.#pending;
     await this.#dispatcher.close();
-    await this.#agentSupervisor.close();
     await this.#supervisor.close();
     await this.#runtime.close();
   }
@@ -289,8 +259,6 @@ export class RunRuntimeCoordinator {
     size: { cols: number; rows: number },
   ): Promise<AgentRun> {
     const run = await this.#runtime.startRun(groupId, memberId, size);
-    const profile = this.#store.getAgentProfile(run.agentProfileId);
-    await this.#agentSupervisor.start(run, profile).catch(() => undefined);
     try {
       await this.#runtime.ensureViewSession(run);
       this.#supervisor.start(run);
@@ -312,7 +280,6 @@ export class RunRuntimeCoordinator {
     if (run.status !== "stopping") {
       this.#store.updateRunStatus(run.id, "stopping");
     }
-    await this.#agentSupervisor.shutdownRun(run.id);
     await this.#supervisor.stop(run.id);
     await this.#runtime.removeViewSession(run.id);
     return this.#runtime.stopRun(groupId, memberId);
@@ -331,12 +298,6 @@ export class RunRuntimeCoordinator {
     if (run.recoveryNotBefore !== undefined && Date.parse(run.recoveryNotBefore) > now.getTime()) {
       return undefined;
     }
-    const profile = this.#store.getAgentProfile(run.agentProfileId);
-    const policy = this.#store.getRecoveryPolicy(profile.id);
-    const preserveAdapterSession =
-      policy === "resume-or-restart" &&
-      profile.adapter !== "terminal" &&
-      run.adapterSession !== undefined;
     let current = run;
     if (run.recoveryPhase !== "reconciling") {
       current = this.#store.transitionRunRecovery(run.id, run.generation, "reconciling", {
@@ -347,25 +308,18 @@ export class RunRuntimeCoordinator {
     const cooldown =
       this.#recoveryCooldownMs[Math.min(nextAttempt - 1, this.#recoveryCooldownMs.length - 1)] ??
       30_000;
-    current = this.#store.transitionRunRecovery(
-      current.id,
-      current.generation,
-      preserveAdapterSession ? "resuming" : "restarting",
-      {
-        incrementAttempt: true,
-        recoveryNotBefore: new Date(now.getTime() + cooldown).toISOString(),
-        reason: preserveAdapterSession ? "adapter_session_resume" : "process_restart",
-      },
-    );
+    current = this.#store.transitionRunRecovery(current.id, current.generation, "restarting", {
+      incrementAttempt: true,
+      recoveryNotBefore: new Date(now.getTime() + cooldown).toISOString(),
+      reason:
+        current.recoveryReason === "terminal_runtime_migration"
+          ? "terminal_runtime_migration"
+          : "process_restart",
+    });
     try {
-      await this.#agentSupervisor.closeRun(current.id);
       await this.#supervisor.stop(current.id);
       await this.#runtime.removeViewSession(current.id);
-      return await this.#runtime.recoverRun(
-        current,
-        preserveAdapterSession,
-        RECOVERY_TERMINAL_SIZE,
-      );
+      return await this.#runtime.recoverRun(current, RECOVERY_TERMINAL_SIZE);
     } catch (error) {
       const reason = error instanceof Error ? error.message : "recovery_launch_failed";
       this.#store.recordRuntimeEvent("run.recovery-failed", "run", current.id, {

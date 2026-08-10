@@ -34,14 +34,12 @@ iframe removes only ttyd's disposable tmux client; the owner pane and agent
 process continue in the daemon's private tmux server. Starting, retrying,
 unavailable, and stopped states render outside the iframe.
 
-The portal displays structured message records and adapter capabilities.
-GitHub Copilot CLI supports queue delivery through ACP, with steer requests
-falling back to queue. Pi supports queue and steer. OpenCode and Claude Code use
-terminal queue delivery. The message composer intersects native modes across
-the selected recipients and also offers Terminal input when every recipient has
-a verified running tmux pane. Terminal input pastes into each TUI and sends
-Enter without a semantic completion acknowledgement. It remains separate from
-the direct keyboard controls in Terminal Mode.
+The portal displays structured message records and durable delivery outcomes.
+Message Mode sends every message through the same terminal transport. The daemon
+pastes text into each verified recipient pane with bracketed paste enabled, then
+sends Enter separately. A successful outcome confirms injection, not semantic
+completion by the agent CLI. Message Mode remains separate from the direct
+keyboard controls in Terminal Mode.
 
 ## Operations and preferences
 
@@ -52,9 +50,10 @@ hardcoded launch choices.
 
 The selected group header exposes Start all. One in-flight idempotency key is
 used until completion, then a live status panel lists started, already-running,
-and failed outcomes. Member rows show recovery phase, reason, and scheduled
-retry time. Start is hidden during continuation; Retry appears only after
-continuation can no longer proceed.
+and failed outcomes. Group and member menus support inline rename and confirmed
+removal; removing an active member stops its run first. Member rows show
+recovery phase, reason, and scheduled retry time. Start is hidden during
+continuation; Retry appears only after continuation can no longer proceed.
 
 Light, dark, and system themes and the terminal tab or grid layout persist in
 `localStorage` under `nanasa.portal.preferences.v1`. Storage events synchronize

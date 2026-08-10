@@ -16,6 +16,8 @@
     "@fastify/http-proxy": "11.6.0",
     "@fastify/static": "^10.1.2",
     "@fastify/websocket": "^11.3.0",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
     "@nanasa/contracts": "workspace:*",
     "fastify": "^5.11.0",
     "ws": "8.21.1",

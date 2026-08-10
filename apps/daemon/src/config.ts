@@ -6,7 +6,6 @@ import {
   AdapterKindSchema,
   AgentCapabilitySchema,
   AgentKindSchema,
-  type AgentTypeConfig,
   AgentTypeConfigSchema,
   type ConfigDiagnostic,
   type ConfigStatus,
@@ -28,16 +27,18 @@ const RawAgentTypeConfigSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
     kind: AgentKindSchema,
-    adapter: AdapterKindSchema,
+    adapter: AdapterKindSchema.optional(),
     command: z.array(z.string().min(1).max(4_096)).min(1).max(64),
     cwd: z.string().min(1).max(4_096).optional(),
     environment: z
       .record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string().max(16_384))
       .default({}),
-    recovery: RecoveryPolicySchema,
-    capabilities: z.array(AgentCapabilitySchema).min(1).max(2),
+    recovery: RecoveryPolicySchema.optional(),
+    capabilities: z.array(AgentCapabilitySchema).min(1).max(2).optional(),
   })
   .strict();
+
+type RawAgentTypeConfig = z.infer<typeof RawAgentTypeConfigSchema>;
 
 const RawNanasaConfigSchema = z
   .object({
@@ -159,7 +160,7 @@ function assertInsideRepository(repoRoot: string, configuredPath: string): strin
   return realCandidate;
 }
 
-function validateAgentType(agentType: AgentTypeConfig): string | undefined {
+function validateAgentType(agentType: RawAgentTypeConfig): string | undefined {
   if (agentType.command.some((argument) => argument.includes("\0"))) {
     return "Command arguments may not contain NUL characters";
   }
@@ -279,6 +280,14 @@ function parseConfig(source: string, paths: NanasaPaths): NanasaConfig {
           ]),
         );
       }
+      const invalidReason = validateAgentType(rawAgentType);
+      if (invalidReason !== undefined) {
+        throw new ConfigLoadError(
+          errorStatus(paths, [
+            diagnostic("invalid_agent_type", invalidReason, ["agentTypes", key]),
+          ]),
+        );
+      }
       const normalized = AgentTypeConfigSchema.safeParse({ ...rawAgentType, key, cwd });
       if (!normalized.success) {
         throw new ConfigLoadError(
@@ -296,16 +305,7 @@ function parseConfig(source: string, paths: NanasaPaths): NanasaConfig {
           ),
         );
       }
-      const agentType = normalized.data;
-      const invalidReason = validateAgentType(agentType);
-      if (invalidReason !== undefined) {
-        throw new ConfigLoadError(
-          errorStatus(paths, [
-            diagnostic("invalid_agent_type", invalidReason, ["agentTypes", key]),
-          ]),
-        );
-      }
-      return [key, agentType];
+      return [key, normalized.data];
     }),
   );
   return NanasaConfigSchema.parse({ version: parsed.data.version, agentTypes });

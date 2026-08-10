@@ -44,45 +44,83 @@ describe("terminal endpoint API", () => {
   });
 });
 
-describe("effective delivery modes API", () => {
-  it("posts encoded recipient selection and validates terminal in the response", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ memberIds: ["member/one"], modes: ["queue", "terminal"] }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(
-      api.getEffectiveDeliveryModes("group/one", { memberIds: ["member/one"] }),
-    ).resolves.toEqual({ memberIds: ["member/one"], modes: ["queue", "terminal"] });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/groups/group%2Fone/delivery-modes",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ memberIds: ["member/one"] }),
-      }),
-    );
-  });
-
-  it("rejects duplicate recipients before request and invalid response modes after request", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ memberIds: ["member-one"], modes: ["inbox"] }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    expect(() =>
-      api.getEffectiveDeliveryModes("group-one", {
-        memberIds: ["member-one", "member-one"],
-      }),
-    ).toThrow();
-    await expect(
-      api.getEffectiveDeliveryModes("group-one", { memberIds: ["member-one"] }),
-    ).rejects.toThrow();
-  });
-});
-
 describe("portal operations API", () => {
+  it("sends encoded group and membership CRUD commands", async () => {
+    const responses = [
+      {
+        id: "group/one",
+        name: "Renamed group",
+        membershipRevision: 2,
+        createdAt: "2026-08-10T08:00:00.000Z",
+        updatedAt: "2026-08-10T08:01:00.000Z",
+      },
+      {
+        id: "membership-one",
+        groupId: "group/one",
+        memberId: "member/one",
+        agentProfileId: "profile-one",
+        alias: "Renamed member",
+        state: "active",
+        joinedAt: "2026-08-10T08:00:00.000Z",
+      },
+      {
+        id: "membership-one",
+        groupId: "group/one",
+        memberId: "member/one",
+        agentProfileId: "profile-one",
+        alias: "Renamed member",
+        state: "removed",
+        joinedAt: "2026-08-10T08:00:00.000Z",
+        removedAt: "2026-08-10T08:02:00.000Z",
+      },
+      {
+        groupId: "group/one",
+        deletedMemberships: 1,
+        deletedRuns: 1,
+        deletedMessages: 0,
+        deletedDeliveries: 0,
+      },
+    ];
+    const fetchMock = vi.fn().mockImplementation(async () => ({
+      ok: true,
+      json: async () => responses.shift(),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.updateGroup("group/one", { name: "  Renamed group  " });
+    await api.updateMembership("group/one", "member/one", { alias: " Renamed member " });
+    await api.removeMembership("group/one", "member/one");
+    await api.deleteGroup("group/one");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/groups/group%2Fone",
+      expect.objectContaining({ method: "PATCH", body: '{"name":"Renamed group"}' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/groups/group%2Fone/memberships/member%2Fone",
+      expect.objectContaining({ method: "PATCH", body: '{"alias":"Renamed member"}' }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/groups/group%2Fone/memberships/member%2Fone",
+      expect.objectContaining({ method: "DELETE", body: "{}" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/groups/group%2Fone",
+      expect.objectContaining({ method: "DELETE", body: "{}" }),
+    );
+    for (const call of fetchMock.mock.calls) {
+      expect(call[1]).toEqual(
+        expect.objectContaining({
+          headers: expect.objectContaining({ "Idempotency-Key": expect.any(String) }),
+        }),
+      );
+    }
+  });
+
   it("loads and validates configured agent types", async () => {
     vi.stubGlobal(
       "fetch",

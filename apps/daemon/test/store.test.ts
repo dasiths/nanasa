@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -83,84 +83,6 @@ describe("NanasaStore persistence", () => {
       "run.created",
       "message.submitted",
     ]);
-    reopened.close();
-  });
-
-  it("persists Pi session identity and replays worker settlement after reopen", () => {
-    const directory = mkdtempSync(join(tmpdir(), "nanasa-pi-store-"));
-    temporaryDirectories.push(directory);
-    const databasePath = join(directory, "nanasa.sqlite");
-    const sessionFile = join(directory, ".nanasa", "state", "pi", "session.jsonl");
-    const store = new NanasaStore(databasePath);
-    const group = store.createGroup({ name: "Pi persistence" });
-    const profile = store.createInternalAgentProfile({
-      name: "Pi",
-      agentType: "pi",
-      kind: "pi",
-      adapter: "pi-rpc",
-      capabilities: ["queue", "steer"],
-      command: "pi",
-      args: [],
-      environment: {},
-    });
-    const membership = store.addMembership(group.id, {
-      memberId: "pi-worker",
-      agentProfileId: profile.id,
-      alias: "Pi",
-    });
-    const run = store.createRun({
-      id: "run_pi",
-      groupId: group.id,
-      memberId: membership.memberId,
-      agentProfileId: profile.id,
-      generation: 2,
-      status: "running",
-      startedAt: "2026-08-10T12:00:00.000Z",
-    });
-    const submission = store.submitMessage(group.id, {
-      intent: "request",
-      sender: { kind: "operator", operatorId: "operator" },
-      audience: { kind: "dm", memberId: membership.memberId },
-      body: { contentType: "text/plain", text: "Continue." },
-      delivery: { mode: "queue" },
-      hop: 0,
-    });
-    const claim = store.claimDeliveries({
-      owner: "test",
-      now: new Date("2026-08-10T12:00:01.000Z"),
-      leaseMs: 30_000,
-      limit: 1,
-    })[0]!;
-    expect(store.beginDelivery(claim, "test", "queue", false)).toBe(true);
-    expect(
-      store.markDeliveryConsumed(claim, "test", {
-        adapterSessionId: "session-persisted",
-        adapterMessageId: submission.message.id,
-      }),
-    ).toBe(true);
-    store.updateRunAdapterSession(run.id, run.generation, {
-      adapterSessionId: "session-persisted",
-      sessionFile,
-    });
-    store.close();
-
-    const reopened = new NanasaStore(databasePath);
-    expect(reopened.getRun(run.id)).toMatchObject({
-      adapterSessionId: "session-persisted",
-      adapterSession: {
-        adapter: "pi-rpc",
-        sessionId: "session-persisted",
-        sessionFile,
-      },
-    });
-    expect(reopened.settleRunDeliveries(run.id, run.generation, [submission.message.id])).toBe(1);
-    expect(reopened.listDeliveries(submission.message.id)).toMatchObject([
-      { status: "processed", adapterMessageId: submission.message.id },
-    ]);
-    expect(reopened.listEvents().map((event) => event.type)).toContain(
-      "run.adapter-session-changed",
-    );
-    expect(reopened.listEvents().map((event) => event.type)).toContain("delivery.adapter-settled");
     reopened.close();
   });
 
@@ -255,6 +177,132 @@ describe("NanasaStore persistence", () => {
   });
 });
 
+describe("NanasaStore group and membership updates", () => {
+  it("renames groups and active memberships idempotently without changing recipient revisions", () => {
+    const store = new NanasaStore(":memory:");
+    const group = store.createGroup({ name: "Original group" });
+    const profile = store.createInternalAgentProfile({
+      name: "Reusable profile",
+      agentType: "opencode",
+      kind: "opencode",
+      command: "opencode",
+      args: [],
+      environment: {},
+    });
+    const membership = store.addMembership(group.id, {
+      memberId: "builder",
+      agentProfileId: profile.id,
+      alias: "Original alias",
+    });
+
+    const renamedGroup = store.updateGroup(group.id, { name: "Renamed group" }, "group-rename");
+    expect(store.updateGroup(group.id, { name: "Ignored replay" }, "group-rename")).toEqual(
+      renamedGroup,
+    );
+    const renamedMembership = store.updateMembership(
+      group.id,
+      membership.memberId,
+      { alias: "Renamed alias" },
+      "member-rename",
+    );
+    expect(
+      store.updateMembership(
+        group.id,
+        membership.memberId,
+        { alias: "Ignored replay" },
+        "member-rename",
+      ),
+    ).toEqual(renamedMembership);
+
+    expect(store.getSnapshot()).toMatchObject({
+      groups: [{ id: group.id, name: "Renamed group", membershipRevision: 1 }],
+      agentProfiles: [profile],
+      memberships: [{ memberId: "builder", alias: "Renamed alias", state: "active" }],
+    });
+    expect(store.listEvents().map((event) => event.type)).toEqual([
+      "group.created",
+      "agent-profile.created",
+      "membership.added",
+      "group.updated",
+      "membership.updated",
+    ]);
+
+    store.removeMembership(group.id, membership.memberId);
+    expect(() =>
+      store.updateMembership(group.id, membership.memberId, { alias: "Too late" }),
+    ).toThrowError(expect.objectContaining({ code: "membership_not_active" }));
+    expect(store.getSnapshot().groups[0]?.membershipRevision).toBe(2);
+    store.close();
+  });
+
+  it("deletes the group graph idempotently while retaining profiles and append-only events", () => {
+    const store = new NanasaStore(":memory:");
+    const fixture = createRoutingFixture(store);
+    store.updateGroup(fixture.groupId, { name: "Renamed before deletion" }, "stale-group-update");
+    const submission = store.submitMessage(fixture.groupId, {
+      intent: "request",
+      sender: { kind: "operator", operatorId: "operator" },
+      audience: { kind: "multicast", memberIds: ["alpha", "beta"] },
+      body: { contentType: "text/plain", text: "Before deletion" },
+      delivery: {},
+      hop: 0,
+    });
+    const linkedGroup = store.createGroup({ name: "Linked group" });
+    store.addMembership(linkedGroup.id, {
+      memberId: "linked-member",
+      agentProfileId: fixture.profileId,
+      alias: "Linked member",
+    });
+    const linkedSubmission = store.submitMessage(linkedGroup.id, {
+      intent: "response",
+      sender: { kind: "operator", operatorId: "operator" },
+      audience: { kind: "dm", memberId: "linked-member" },
+      body: { contentType: "text/plain", text: "Cross-group reply" },
+      delivery: {},
+      replyTo: submission.message.id,
+      rootId: submission.message.id,
+      causationId: submission.message.id,
+      hop: 0,
+    });
+
+    expect(store.listGroupRunsRequiringStop(fixture.groupId)).toMatchObject([
+      { id: "run_alpha", memberId: "alpha", desiredState: "running" },
+    ]);
+    store.updateRunStatus("run_alpha", "stopping");
+    store.updateRunStatus("run_alpha", "stopped");
+    const deleted = store.deleteGroup(fixture.groupId, "delete-group");
+    expect(deleted).toEqual({
+      groupId: fixture.groupId,
+      deletedMemberships: 3,
+      deletedRuns: 1,
+      deletedMessages: 1,
+      deletedDeliveries: 2,
+    });
+    expect(store.deleteGroup(fixture.groupId, "delete-group")).toEqual(deleted);
+    expect(store.getSnapshot()).toMatchObject({
+      groups: [{ id: linkedGroup.id }],
+      memberships: [{ memberId: "linked-member" }],
+      runs: [],
+      messages: [{ id: linkedSubmission.message.id }],
+      deliveryOutcomes: [{ messageId: linkedSubmission.message.id }],
+      agentProfiles: [{ id: fixture.profileId }],
+    });
+    expect(store.getSnapshot().messages[0]).toMatchObject({
+      replyTo: undefined,
+      rootId: undefined,
+      causationId: undefined,
+    });
+    expect(() =>
+      store.updateGroup(fixture.groupId, { name: "Stale replay" }, "stale-group-update"),
+    ).toThrowError(expect.objectContaining({ code: "group_not_found" }));
+    expect(store.listEvents().map((event) => event.type)).toContain("group.deleted");
+    expect(store.listEvents().find((event) => event.type === "message.submitted")).toMatchObject({
+      aggregateId: submission.message.id,
+    });
+    store.close();
+  });
+});
+
 function createRoutingFixture(store: NanasaStore) {
   const group = store.createGroup({ name: "Builders" });
   const profile = store.createInternalAgentProfile({
@@ -324,21 +372,14 @@ describe("NanasaStore message routing", () => {
     expect(broadcast.deliveryOutcomes).toMatchObject([
       {
         recipientMemberId: "beta",
-        requestedMode: "steer",
-        appliedMode: "queue",
-        fallbackApplied: true,
-        reason: "requested_mode_not_supported",
-        adapter: "terminal",
+        status: "queued",
       },
       {
         recipientMemberId: "gamma",
-        requestedMode: "steer",
-        appliedMode: "queue",
-        fallbackApplied: true,
-        reason: "requested_mode_not_supported",
-        adapter: "terminal",
+        status: "queued",
       },
     ]);
+    expect(broadcast.deliveryOutcomes[0]).not.toHaveProperty("requestedMode");
 
     const terminal = store.submitMessage(fixture.groupId, {
       ...common,
@@ -348,16 +389,12 @@ describe("NanasaStore message routing", () => {
     });
     expect(terminal.deliveryOutcomes).toMatchObject([
       {
-        requestedMode: "terminal",
-        appliedMode: "terminal",
-        fallbackApplied: false,
-        adapter: "terminal",
+        recipientMemberId: "alpha",
+        status: "queued",
       },
       {
-        requestedMode: "terminal",
-        appliedMode: "terminal",
-        fallbackApplied: false,
-        adapter: "terminal",
+        recipientMemberId: "beta",
+        status: "queued",
       },
     ]);
 
@@ -370,15 +407,11 @@ describe("NanasaStore message routing", () => {
     expect(agentTerminalBroadcast.deliveryOutcomes).toMatchObject([
       {
         recipientMemberId: "beta",
-        requestedMode: "terminal",
-        appliedMode: "terminal",
-        fallbackApplied: false,
+        status: "queued",
       },
       {
         recipientMemberId: "gamma",
-        requestedMode: "terminal",
-        appliedMode: "terminal",
-        fallbackApplied: false,
+        status: "queued",
       },
     ]);
     store.close();
@@ -430,7 +463,244 @@ describe("NanasaStore message routing", () => {
 });
 
 describe("NanasaStore schema migration", () => {
-  it("migrates persisted Copilot SDK adapter rows to queue-only Copilot CLI", () => {
+  it("performs the terminal-only schema migration once without replacing persisted state", () => {
+    const directory = mkdtempSync(join(tmpdir(), "nanasa-terminal-migration-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "nanasa.sqlite");
+    const sessionDirectory = join(directory, "pi");
+    const sessionFile = join(sessionDirectory, "session.jsonl");
+    mkdirSync(sessionDirectory);
+    writeFileSync(sessionFile, '{"type":"session"}\n');
+
+    const store = new NanasaStore(databasePath);
+    const group = store.createGroup({ name: "Migration fixture" });
+    const profile = store.createInternalAgentProfile(
+      {
+        name: "Legacy Pi",
+        agentType: "pi",
+        kind: "pi",
+        adapter: "pi-rpc",
+        capabilities: ["queue", "steer"],
+        command: "pi",
+        args: [],
+        environment: {},
+      },
+      "profile-key",
+    );
+    store.addMembership(group.id, {
+      memberId: "worker",
+      agentProfileId: profile.id,
+      alias: "Worker",
+    });
+    const terminal = {
+      serverName: "nanasa-test",
+      sessionId: "nanasa-group",
+      windowId: "@1",
+      paneId: "%1",
+    };
+    store.createRun({
+      id: "run_active",
+      groupId: group.id,
+      memberId: "worker",
+      agentProfileId: profile.id,
+      generation: 1,
+      status: "running",
+      desiredState: "running",
+      recoveryPhase: "resuming",
+      recoveryAttempts: 2,
+      recoveryNotBefore: "2026-08-10T13:00:00.000Z",
+      adapterSessionId: "active-session",
+      adapterSession: {
+        adapter: "pi-rpc",
+        sessionId: "active-session",
+        sessionFile,
+        updatedAt: "2026-08-10T12:00:00.000Z",
+      },
+      terminal,
+      startedAt: "2026-08-10T12:00:00.000Z",
+    });
+    store.createRun({
+      id: "run_historical",
+      groupId: group.id,
+      memberId: "worker",
+      agentProfileId: profile.id,
+      generation: 2,
+      status: "failed",
+      desiredState: "stopped",
+      recoveryPhase: "resuming",
+      recoveryAttempts: 4,
+      startedAt: "2026-08-10T12:30:00.000Z",
+      stoppedAt: "2026-08-10T12:31:00.000Z",
+    });
+    const pending = store.submitMessage(group.id, {
+      intent: "request",
+      sender: { kind: "operator", operatorId: "operator" },
+      audience: { kind: "dm", memberId: "worker" },
+      body: { contentType: "text/plain", text: "Pending" },
+      delivery: { mode: "steer" },
+      hop: 0,
+    });
+    const completed = store.submitMessage(group.id, {
+      intent: "request",
+      sender: { kind: "operator", operatorId: "operator" },
+      audience: { kind: "dm", memberId: "worker" },
+      body: { contentType: "text/plain", text: "Completed" },
+      delivery: { mode: "queue" },
+      hop: 0,
+    });
+    const eventIds = store.listEvents().map((event) => event.id);
+    store.close();
+
+    const legacy = new DatabaseSync(databasePath);
+    legacy
+      .prepare(
+        "UPDATE agent_profiles SET adapter = 'pi-rpc', capabilities_json = '[\"queue\",\"steer\"]' WHERE id = ?",
+      )
+      .run(profile.id);
+    legacy
+      .prepare(
+        `UPDATE runs
+         SET recovery_phase = 'resuming', recovery_attempts = 2,
+             recovery_not_before = '2026-08-10T13:00:00.000Z',
+             adapter_session_id = 'active-session',
+             adapter_session_json = ?
+         WHERE id = 'run_active'`,
+      )
+      .run(
+        JSON.stringify({
+          adapter: "pi-rpc",
+          sessionId: "active-session",
+          sessionFile,
+          updatedAt: "2026-08-10T12:00:00.000Z",
+        }),
+      );
+    legacy.prepare("UPDATE runs SET recovery_phase = 'resuming' WHERE id = 'run_historical'").run();
+    legacy
+      .prepare(
+        `UPDATE deliveries
+         SET requested_mode = 'steer', applied_mode = 'steer', fallback_applied = 0,
+             status = 'delivering', adapter = 'pi-rpc',
+             adapter_session_id = 'pending-session', adapter_message_id = 'pending-message',
+             lease_owner = 'legacy-worker', lease_expires_at = '2099-01-01T00:00:00.000Z',
+             next_attempt_at = '2099-01-01T00:00:00.000Z',
+             run_id = 'run_active', run_generation = 1
+         WHERE message_id = ?`,
+      )
+      .run(pending.message.id);
+    legacy
+      .prepare(
+        `UPDATE deliveries
+         SET requested_mode = 'queue', applied_mode = 'steer', fallback_applied = 1,
+             status = 'processed', adapter = 'pi-rpc',
+             adapter_session_id = 'completed-session', adapter_message_id = 'completed-message'
+         WHERE message_id = ?`,
+      )
+      .run(completed.message.id);
+    legacy
+      .prepare(
+        `UPDATE idempotency_keys
+         SET response_json = json_set(
+           response_json,
+           '$.adapter', 'pi-rpc',
+           '$.capabilities', json('["queue","steer"]')
+         )
+         WHERE scope = 'agent-profile.create' AND key = 'profile-key'`,
+      )
+      .run();
+    legacy.exec("PRAGMA user_version = 0");
+    legacy.close();
+
+    const migrated = new NanasaStore(databasePath);
+    const snapshot = migrated.getSnapshot();
+    expect(snapshot.groups.map((item) => item.id)).toEqual([group.id]);
+    expect(snapshot.agentProfiles.map((item) => item.id)).toEqual([profile.id]);
+    expect(snapshot.agentProfiles[0]).not.toHaveProperty("adapter");
+    expect(snapshot.agentProfiles[0]).not.toHaveProperty("capabilities");
+    expect(snapshot.runs.find((run) => run.id === "run_active")).toMatchObject({
+      generation: 1,
+      recoveryPhase: "reconciling",
+      recoveryAttempts: 0,
+      recoveryReason: "terminal_runtime_migration",
+      terminal,
+    });
+    expect(snapshot.runs.find((run) => run.id === "run_active")).not.toHaveProperty(
+      "adapterSession",
+    );
+    expect(snapshot.runs.find((run) => run.id === "run_historical")).toMatchObject({
+      generation: 2,
+      recoveryPhase: "restarting",
+    });
+    expect(snapshot.deliveryOutcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ messageId: pending.message.id, status: "queued" }),
+        expect.objectContaining({ messageId: completed.message.id, status: "processed" }),
+      ]),
+    );
+    expect(snapshot.deliveryOutcomes[0]).not.toHaveProperty("requestedMode");
+    expect(migrated.listEvents().map((event) => event.id)).toEqual(eventIds);
+    expect(
+      migrated.createInternalAgentProfile(
+        {
+          name: "Legacy Pi",
+          agentType: "pi",
+          kind: "pi",
+          adapter: "pi-rpc",
+          capabilities: ["queue", "steer"],
+          command: "pi",
+          args: [],
+          environment: {},
+        },
+        "profile-key",
+      ),
+    ).not.toHaveProperty("adapter");
+    migrated.close();
+
+    const inspected = new DatabaseSync(databasePath);
+    expect(
+      (inspected.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
+    ).toBe(1);
+    expect(
+      inspected
+        .prepare("SELECT adapter, capabilities_json FROM agent_profiles WHERE id = ?")
+        .get(profile.id),
+    ).toEqual({ adapter: "terminal", capabilities_json: "[]" });
+    expect(
+      inspected.prepare("SELECT * FROM deliveries WHERE message_id = ?").get(pending.message.id),
+    ).toMatchObject({
+      requested_mode: "terminal",
+      applied_mode: "terminal",
+      fallback_applied: 0,
+      status: "queued",
+      adapter: "terminal",
+      adapter_session_id: null,
+      adapter_message_id: null,
+      lease_owner: null,
+      lease_expires_at: null,
+      next_attempt_at: null,
+      run_id: null,
+      run_generation: null,
+    });
+    expect(
+      inspected.prepare("SELECT * FROM deliveries WHERE message_id = ?").get(completed.message.id),
+    ).toMatchObject({
+      requested_mode: "queue",
+      applied_mode: "steer",
+      fallback_applied: 1,
+      status: "processed",
+      adapter: "pi-rpc",
+      adapter_session_id: "completed-session",
+      adapter_message_id: "completed-message",
+    });
+    inspected.prepare("UPDATE runs SET recovery_attempts = 2 WHERE id = 'run_active'").run();
+    inspected.close();
+
+    const reopened = new NanasaStore(databasePath);
+    expect(reopened.getRun("run_active").recoveryAttempts).toBe(2);
+    reopened.close();
+    expect(existsSync(sessionFile)).toBe(true);
+  });
+
+  it("projects persisted adapter compatibility rows out of canonical snapshots", () => {
     const directory = mkdtempSync(join(tmpdir(), "nanasa-copilot-adapter-migration-"));
     temporaryDirectories.push(directory);
     const databasePath = join(directory, "nanasa.sqlite");
@@ -454,10 +724,12 @@ describe("NanasaStore schema migration", () => {
     historical.close();
 
     const migrated = new NanasaStore(databasePath);
-    expect(migrated.getAgentProfile(profile.id)).toMatchObject({
-      adapter: "copilot-cli",
-      capabilities: ["queue"],
-    });
+    const migratedProfile = migrated
+      .getSnapshot()
+      .agentProfiles.find((candidate) => candidate.id === profile.id);
+    expect(migratedProfile).toBeDefined();
+    expect(migratedProfile).not.toHaveProperty("adapter");
+    expect(migratedProfile).not.toHaveProperty("capabilities");
     migrated.close();
   });
 
@@ -516,10 +788,10 @@ describe("NanasaStore schema migration", () => {
       {
         id: "legacy_claude",
         agentType: "claude-copilot",
-        adapter: "terminal",
-        capabilities: ["queue"],
       },
     ]);
+    expect(store.getSnapshot().agentProfiles[0]).not.toHaveProperty("adapter");
+    expect(store.getSnapshot().agentProfiles[0]).not.toHaveProperty("capabilities");
     store.close();
 
     const migrated = new DatabaseSync(databasePath, { readOnly: true });
@@ -596,9 +868,11 @@ describe("NanasaStore schema migration", () => {
 
     const reopened = new NanasaStore(databasePath);
     expect(reopened.getSnapshot()).toMatchObject({
-      messages: [{ delivery: { mode: "queue" } }],
-      deliveryOutcomes: [{ requestedMode: "steer", appliedMode: "terminal" }],
+      messages: [{ delivery: {} }],
+      deliveryOutcomes: [{ status: "queued" }],
     });
+    expect(reopened.getSnapshot().deliveryOutcomes[0]).not.toHaveProperty("requestedMode");
+    expect(reopened.getSnapshot().deliveryOutcomes[0]).not.toHaveProperty("appliedMode");
     reopened.close();
   });
 });

@@ -1,12 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { DeliveryMode } from "@nanasa/contracts";
 
-import type { AdapterDeliveryResult } from "./agent-adapter.js";
 import { type DeliveryClaim, NanasaStore } from "./store.js";
 
-export interface DeliveryTarget {
-  capabilities(claim: DeliveryClaim): ReadonlySet<DeliveryMode>;
-  deliver(claim: DeliveryClaim, mode: DeliveryMode): Promise<AdapterDeliveryResult>;
+export interface TerminalDeliveryTarget {
+  deliver(claim: DeliveryClaim): Promise<void>;
 }
 
 export interface DeliveryDispatcherOptions {
@@ -22,7 +19,7 @@ export interface DeliveryDispatcherOptions {
 
 export class DeliveryDispatcher {
   readonly #store: NanasaStore;
-  readonly #target: DeliveryTarget;
+  readonly #target: TerminalDeliveryTarget;
   readonly #owner: string;
   readonly #pollIntervalMs: number;
   readonly #leaseMs: number;
@@ -38,7 +35,7 @@ export class DeliveryDispatcher {
 
   public constructor(
     store: NanasaStore,
-    target: DeliveryTarget,
+    target: TerminalDeliveryTarget,
     options: DeliveryDispatcherOptions = {},
   ) {
     this.#store = store;
@@ -111,38 +108,11 @@ export class DeliveryDispatcher {
     }
 
     try {
-      const requestedMode = claim.delivery.requestedMode;
-      const capabilities = this.#target.capabilities(claim);
-      const appliedMode =
-        requestedMode === "terminal"
-          ? "terminal"
-          : capabilities.has(requestedMode)
-            ? requestedMode
-            : "queue";
-      if (!capabilities.has(appliedMode)) {
-        this.#store.rejectClaim(claim, this.#owner, "adapter_capability_unsupported");
-        return;
-      }
-      const fallbackApplied = appliedMode !== requestedMode;
-      if (!this.#store.beginDelivery(claim, this.#owner, appliedMode, fallbackApplied)) return;
-      const result = await this.#target.deliver(claim, appliedMode);
-      if (result.appliedMode !== appliedMode) {
-        throw new Error("adapter_applied_mode_mismatch");
-      }
-      if (!this.#store.markDeliveryConsumed(claim, this.#owner, result)) return;
-      if (result.settlement !== undefined) {
-        void result.settlement.then(
-          (settlement) => this.#store.settleDelivery(claim, settlement.status, settlement.reason),
-          (error: unknown) =>
-            this.#store.settleDelivery(
-              claim,
-              "failed",
-              error instanceof Error ? error.message : "adapter_settlement_failed",
-            ),
-        );
-      }
+      if (!this.#store.beginDelivery(claim, this.#owner)) return;
+      await this.#target.deliver(claim);
+      this.#store.markDeliveryConsumed(claim, this.#owner);
     } catch (error) {
-      this.#retry(claim, error instanceof Error ? error.message : "adapter_delivery_failed");
+      this.#retry(claim, error instanceof Error ? error.message : "terminal_delivery_failed");
     }
   }
 

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { DeliveryTarget } from "../src/delivery-dispatcher.js";
+import type { TerminalDeliveryTarget } from "../src/delivery-dispatcher.js";
 import { DeliveryDispatcher } from "../src/delivery-dispatcher.js";
 import { NanasaStore } from "../src/store.js";
 
@@ -15,10 +15,7 @@ afterEach(() => {
   }
 });
 
-function createFixture(
-  store = new NanasaStore(":memory:"),
-  mode: "queue" | "steer" | "terminal" = "steer",
-) {
+function createFixture(store = new NanasaStore(":memory:"), delivery: { expiresAt?: string } = {}) {
   const group = store.createGroup({ name: "Dispatchers" });
   const profile = store.createInternalAgentProfile({
     name: "Native",
@@ -49,27 +46,19 @@ function createFixture(
     sender: { kind: "operator", operatorId: "operator" },
     audience: { kind: "dm", memberId: membership.memberId },
     body: { contentType: "text/plain", text: "Review this." },
-    delivery: { mode },
+    delivery,
     hop: 0,
   });
   return { store, group, membership, submission };
 }
 
 describe("DeliveryDispatcher", () => {
-  it("leases a delivery once across concurrent ticks and records settlement", async () => {
+  it("leases a delivery once across concurrent ticks and records terminal injection", async () => {
     const { store, submission } = createFixture();
-    let settle!: (value: { status: "processed" }) => void;
-    const settlement = new Promise<{ status: "processed" }>((resolve) => {
-      settle = resolve;
-    });
-    const target: DeliveryTarget = {
-      capabilities: () => new Set(["queue", "steer"]),
-      deliver: vi.fn(async (_claim, mode) => ({
-        appliedMode: mode,
-        adapterSessionId: "session-1",
-        adapterMessageId: submission.message.id,
-        settlement,
-      })),
+    const publishedEventTypes: string[] = [];
+    const unsubscribe = store.onEvent((event) => publishedEventTypes.push(event.type));
+    const target: TerminalDeliveryTarget = {
+      deliver: vi.fn(async () => undefined),
     };
     const dispatcher = new DeliveryDispatcher(store, target, { owner: "test-owner" });
 
@@ -80,18 +69,20 @@ describe("DeliveryDispatcher", () => {
       {
         status: "consumed",
         attempts: 1,
-        appliedMode: "steer",
-        adapterSessionId: "session-1",
-        adapterMessageId: submission.message.id,
       },
     ]);
-
-    settle({ status: "processed" });
-    await vi.waitFor(() =>
-      expect(store.listDeliveries(submission.message.id)).toMatchObject([
-        { status: "processed", attempts: 1 },
-      ]),
-    );
+    expect(publishedEventTypes).toContain("delivery.status-changed");
+    expect(store.listEvents().at(-1)).toMatchObject({
+      type: "delivery.status-changed",
+      aggregateType: "message",
+      aggregateId: submission.message.id,
+      payload: {
+        messageId: submission.message.id,
+        recipientMemberId: "worker",
+        status: "consumed",
+      },
+    });
+    unsubscribe();
     await dispatcher.close();
     store.close();
   });
@@ -107,11 +98,9 @@ describe("DeliveryDispatcher", () => {
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const target: DeliveryTarget = {
-      capabilities: () => new Set(["queue", "steer"]),
-      deliver: vi.fn(async (_claim, mode) => {
+    const target: TerminalDeliveryTarget = {
+      deliver: vi.fn(async () => {
         await blocked;
-        return { appliedMode: mode };
       }),
     };
     const first = new DeliveryDispatcher(primary, target, { owner: "first" });
@@ -131,89 +120,12 @@ describe("DeliveryDispatcher", () => {
     primary.close();
   });
 
-  it("falls back from steer to queue using the adapter's current capabilities", async () => {
-    const { store, submission } = createFixture();
-    const target: DeliveryTarget = {
-      capabilities: () => new Set(["queue"]),
-      deliver: vi.fn(async (_claim, mode) => ({ appliedMode: mode })),
-    };
-    const dispatcher = new DeliveryDispatcher(store, target);
-
-    await dispatcher.tick();
-
-    expect(target.deliver).toHaveBeenCalledWith(expect.any(Object), "queue");
-    expect(store.listDeliveries(submission.message.id)).toMatchObject([
-      {
-        status: "consumed",
-        requestedMode: "steer",
-        appliedMode: "queue",
-        fallbackApplied: true,
-        reason: "requested_mode_not_supported",
-      },
-    ]);
-    await dispatcher.close();
-    store.close();
-  });
-
-  it("keeps explicit terminal delivery on the terminal transport without fallback", async () => {
-    const { store, submission } = createFixture(new NanasaStore(":memory:"), "terminal");
-    const target: DeliveryTarget = {
-      capabilities: () => new Set(["terminal"]),
-      deliver: vi.fn(async (_claim, mode) => ({
-        appliedMode: mode,
-        adapterMessageId: submission.message.id,
-      })),
-    };
-    const dispatcher = new DeliveryDispatcher(store, target);
-
-    await dispatcher.tick();
-
-    expect(target.deliver).toHaveBeenCalledWith(expect.any(Object), "terminal");
-    expect(store.listDeliveries(submission.message.id)).toMatchObject([
-      {
-        status: "consumed",
-        requestedMode: "terminal",
-        appliedMode: "terminal",
-        fallbackApplied: false,
-        adapter: "terminal",
-        adapterMessageId: submission.message.id,
-      },
-    ]);
-    await dispatcher.close();
-    store.close();
-  });
-
-  it("rejects unavailable terminal delivery instead of converting it to queue", async () => {
-    const { store, submission } = createFixture(new NanasaStore(":memory:"), "terminal");
-    const target: DeliveryTarget = {
-      capabilities: () => new Set(["queue"]),
-      deliver: vi.fn(async (_claim, mode) => ({ appliedMode: mode })),
-    };
-    const dispatcher = new DeliveryDispatcher(store, target);
-
-    await dispatcher.tick();
-
-    expect(target.deliver).not.toHaveBeenCalled();
-    expect(store.listDeliveries(submission.message.id)).toMatchObject([
-      {
-        status: "rejected",
-        requestedMode: "terminal",
-        appliedMode: "terminal",
-        fallbackApplied: false,
-        reason: "adapter_capability_unsupported",
-      },
-    ]);
-    await dispatcher.close();
-    store.close();
-  });
-
-  it("retries adapter failures with capped attempts and then dead-letters", async () => {
+  it("retries terminal failures with capped attempts and then dead-letters", async () => {
     const { store, submission } = createFixture();
     let now = new Date("2026-08-10T12:00:00.000Z");
-    const target: DeliveryTarget = {
-      capabilities: () => new Set(["queue", "steer"]),
+    const target: TerminalDeliveryTarget = {
       deliver: vi.fn(async () => {
-        throw new Error("fake_adapter_failure");
+        throw new Error("terminal_owner_pane_unavailable");
       }),
     };
     const dispatcher = new DeliveryDispatcher(store, target, {
@@ -224,24 +136,43 @@ describe("DeliveryDispatcher", () => {
 
     await dispatcher.tick();
     expect(store.listDeliveries(submission.message.id)).toMatchObject([
-      { status: "retrying", attempts: 1, reason: "fake_adapter_failure" },
+      { status: "retrying", attempts: 1, reason: "terminal_owner_pane_unavailable" },
     ]);
 
     now = new Date(now.getTime() + 100);
     await dispatcher.tick();
     expect(store.listDeliveries(submission.message.id)).toMatchObject([
-      { status: "dead-letter", attempts: 2, reason: "fake_adapter_failure" },
+      { status: "dead-letter", attempts: 2, reason: "terminal_owner_pane_unavailable" },
     ]);
     expect(target.deliver).toHaveBeenCalledTimes(2);
     await dispatcher.close();
     store.close();
   });
 
+  it("rejects expired delivery without injecting it", async () => {
+    const now = new Date("2026-08-10T12:00:00.000Z");
+    const { store, submission } = createFixture(new NanasaStore(":memory:"), {
+      expiresAt: "2026-08-10T11:59:59.000Z",
+    });
+    const target: TerminalDeliveryTarget = {
+      deliver: vi.fn(async () => undefined),
+    };
+    const dispatcher = new DeliveryDispatcher(store, target, { now: () => now });
+
+    await dispatcher.tick();
+
+    expect(target.deliver).not.toHaveBeenCalled();
+    expect(store.listDeliveries(submission.message.id)).toMatchObject([
+      { status: "rejected", attempts: 1, reason: "delivery_expired" },
+    ]);
+    await dispatcher.close();
+    store.close();
+  });
+
   it("retries terminal writer conflicts and dead-letters without duplicate acceptance", async () => {
-    const { store, submission } = createFixture(new NanasaStore(":memory:"), "terminal");
+    const { store, submission } = createFixture();
     let now = new Date("2026-08-10T12:00:00.000Z");
-    const target: DeliveryTarget = {
-      capabilities: () => new Set(["terminal"]),
+    const target: TerminalDeliveryTarget = {
       deliver: vi.fn(async () => {
         throw new Error("terminal_writer_conflict");
       }),
@@ -257,9 +188,6 @@ describe("DeliveryDispatcher", () => {
       {
         status: "retrying",
         attempts: 1,
-        requestedMode: "terminal",
-        appliedMode: "terminal",
-        fallbackApplied: false,
         reason: "terminal_writer_conflict",
       },
     ]);
@@ -274,38 +202,15 @@ describe("DeliveryDispatcher", () => {
     store.close();
   });
 
-  it("marks authoritative settlement rejection as failed", async () => {
-    const { store, submission } = createFixture();
-    const target: DeliveryTarget = {
-      capabilities: () => new Set(["queue", "steer"]),
-      deliver: async (_claim, mode) => ({
-        appliedMode: mode,
-        settlement: Promise.reject(new Error("settlement_lost")),
-      }),
-    };
-    const dispatcher = new DeliveryDispatcher(store, target);
-
-    await dispatcher.tick();
-    await vi.waitFor(() =>
-      expect(store.listDeliveries(submission.message.id)).toMatchObject([
-        { status: "failed", reason: "settlement_lost" },
-      ]),
-    );
-    await dispatcher.close();
-    store.close();
-  });
-
-  it("keeps a delivery revoked when membership is removed during adapter acceptance", async () => {
+  it("keeps a delivery revoked when membership is removed during terminal injection", async () => {
     const { store, group, membership, submission } = createFixture();
     let accept!: () => void;
     const acceptance = new Promise<void>((resolve) => {
       accept = resolve;
     });
-    const target: DeliveryTarget = {
-      capabilities: () => new Set(["queue", "steer"]),
-      deliver: vi.fn(async (_claim, mode) => {
+    const target: TerminalDeliveryTarget = {
+      deliver: vi.fn(async () => {
         await acceptance;
-        return { appliedMode: mode };
       }),
     };
     const dispatcher = new DeliveryDispatcher(store, target);
@@ -332,9 +237,8 @@ describe("DeliveryDispatcher", () => {
     original.close();
 
     const reopened = new NanasaStore(databasePath);
-    const target: DeliveryTarget = {
-      capabilities: () => new Set(["queue", "steer"]),
-      deliver: vi.fn(async (_claim, mode) => ({ appliedMode: mode })),
+    const target: TerminalDeliveryTarget = {
+      deliver: vi.fn(async () => undefined),
     };
     const dispatcher = new DeliveryDispatcher(reopened, target);
     await dispatcher.tick();

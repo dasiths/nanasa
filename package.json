@@ -1,7 +1,7 @@
 {
   "name": "nanasa",
   "version": "0.0.0",
-  "description": "Local tmux-backed coding-agent pool with a Fastify daemon and React portal",
+  "description": "Local terminal-only coding-agent pool with tmux, a web portal, and authenticated MCP messaging",
   "license": "MIT",
   "homepage": "https://github.com/dasiths/nanasa#readme",
   "bugs": {
@@ -13,6 +13,7 @@
   },
   "keywords": [
     "coding-agent",
+    "mcp",
     "tmux",
     "ttyd"
   ],
@@ -33,10 +34,12 @@
   },
   "scripts": {
     "dev": "pnpm --parallel --filter @nanasa/daemon --filter @nanasa/portal dev",
+    "prestart": "pnpm build",
     "start": "NODE_ENV=production pnpm --filter @nanasa/daemon start",
     "build": "pnpm --filter @nanasa/contracts build && pnpm --filter @nanasa/daemon build && pnpm --filter @nanasa/portal build",
     "package:build": "node scripts/build-package.mjs",
-    "package:test": "node --test test/package-cli.test.mjs",
+    "package:test": "pnpm package:build && node --test test/package-cli.test.mjs",
+    "acceptance": "pnpm package:build && playwright test",
     "prepack": "pnpm package:build",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "eslint .",
@@ -49,6 +52,8 @@
     "@fastify/http-proxy": "11.6.0",
     "@fastify/static": "^10.1.2",
     "@fastify/websocket": "^11.3.0",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
     "fastify": "^5.11.0",
     "ws": "8.21.1",
     "yaml": "2.9.0",
@@ -57,6 +62,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.5.6",
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.55.0",
     "esbuild": "^0.28.1",
     "eslint": "^10.8.0",
     "globals": "^17.9.0",

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
 import { afterEach, test } from "node:test";
 
 const root = resolve(import.meta.dirname, "..");
@@ -38,6 +38,15 @@ function runLinkedCli(directory, args) {
   return spawnSync(linkedCli, args, { cwd: directory, encoding: "utf8" });
 }
 
+function listFiles(directory, prefix = "") {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const relativePath = join(prefix, entry.name);
+    return entry.isDirectory()
+      ? listFiles(join(directory, entry.name), relativePath)
+      : [relativePath];
+  });
+}
+
 test("init creates one repository-local config without runtime state", () => {
   const repository = temporaryRepository();
   const nested = join(repository, "nested", "directory");
@@ -52,7 +61,9 @@ test("init creates one repository-local config without runtime state", () => {
   assert.equal(existsSync(join(repository, ".nanasa", "state")), false);
   const original = readFileSync(configPath, "utf8");
   assert.match(original, /^version: 1$/m);
-  assert.match(original, /adapter: copilot-cli/);
+  assert.match(original, /command: \[copilot\]/);
+  assert.match(original, /command: \[pi\]/);
+  assert.doesNotMatch(original, /^\s+(adapter|capabilities|recovery):/m);
   assert.doesNotMatch(original, /packagefeedproxy|pkgs\.visualstudio|\/workspaces\/nanasa/);
 
   writeFileSync(configPath, `${original}# operator-owned\n`);
@@ -83,4 +94,67 @@ test("start explains the ttyd system prerequisite before daemon launch", () => {
   assert.match(result.stderr, /NANASA_TTYD_PATH/);
   assert.equal(existsSync(join(repository, ".nanasa", "state")), false);
   assert.equal(existsSync(join(nested, ".nanasa")), false);
+});
+
+test("help documents authenticated MCP enablement", () => {
+  const result = runCli(temporaryRepository(), ["--help"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /--host <host>\s+Listen host; MCP requires loopback/);
+  assert.match(result.stdout, /--mcp\s+Enable authenticated MCP \(default path: \/mcp\)/);
+});
+
+test("package build contains one terminal-only daemon entry", () => {
+  const daemonDirectory = join(root, "dist", "daemon");
+  assert.deepEqual(listFiles(daemonDirectory), ["index.js"]);
+  const daemonBundle = readFileSync(join(daemonDirectory, "index.js"), "utf8");
+  assert.doesNotMatch(
+    daemonBundle,
+    /copilot-cli-worker|copilot-acp-process|pi-rpc-worker|pi-rpc-process/,
+  );
+});
+
+test("packed package installs cleanly and initializes terminal-only config", () => {
+  const archiveDirectory = mkdtempSync(join(tmpdir(), "nanasa-pack-"));
+  const installDirectory = mkdtempSync(join(tmpdir(), "nanasa-install-"));
+  temporaryDirectories.push(archiveDirectory, installDirectory);
+
+  const packed = spawnSync(
+    "npm",
+    ["pack", "--ignore-scripts", "--json", "--pack-destination", archiveDirectory],
+    { cwd: root, encoding: "utf8" },
+  );
+  assert.equal(packed.status, 0, packed.stderr);
+  const [manifest] = JSON.parse(packed.stdout);
+  const publishedFiles = manifest.files.map((file) => file.path);
+  assert.ok(publishedFiles.includes("dist/daemon/index.js"));
+  assert.ok(publishedFiles.includes("templates/config.yaml"));
+  assert.equal(
+    publishedFiles.some((path) => /worker|\.map$|^test\//.test(path)),
+    false,
+  );
+
+  writeFileSync(join(installDirectory, "package.json"), '{"private":true}\n');
+  const installed = spawnSync(
+    "npm",
+    [
+      "install",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      join(archiveDirectory, manifest.filename),
+    ],
+    { cwd: installDirectory, encoding: "utf8" },
+  );
+  assert.equal(installed.status, 0, installed.stderr);
+
+  const repository = join(installDirectory, "repository");
+  mkdirGit(repository);
+  const installedCli = join(installDirectory, "node_modules", ".bin", "nanasa");
+  const initialized = spawnSync(installedCli, ["init"], { cwd: repository, encoding: "utf8" });
+  assert.equal(initialized.status, 0, initialized.stderr);
+  const configPath = join(repository, ".nanasa", "config.yaml");
+  const config = readFileSync(configPath, "utf8");
+  assert.match(config, /command: \[copilot\]/);
+  assert.doesNotMatch(config, /^\s+(adapter|capabilities|recovery):/m);
+  assert.equal(existsSync(join(repository, ".nanasa", "state")), false);
 });

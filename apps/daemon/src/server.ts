@@ -1,31 +1,29 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import {
-  AgentAdapterStatusSchema,
-  EffectiveDeliveryModesCommandSchema,
-  EffectiveDeliveryModesSchema,
+  DeleteGroupResultSchema,
   InterruptAgentRunCommandSchema,
   StartAgentRunCommandSchema,
   StartGroupRunsCommandSchema,
   StartGroupRunsResultSchema,
   StopAgentRunCommandSchema,
   TerminalEndpointStatusSchema,
+  UpdateGroupCommandSchema,
+  UpdateGroupMembershipCommandSchema,
 } from "@nanasa/contracts";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 
-import { AgentRuntimeSupervisor, type AgentAdapterFactories } from "./agent-runtime-supervisor.js";
 import { discoverAndLoadNanasaConfig, type LoadedNanasaConfig } from "./config.js";
-import { CopilotCliAdapter } from "./copilot-cli-adapter.js";
-import { copilotCliWorkerSocketPath } from "./copilot-cli-worker-protocol.js";
 import { DeliveryDispatcher } from "./delivery-dispatcher.js";
-import { PiRpcAdapter } from "./pi-rpc-adapter.js";
-import { piSessionDirectory, piWorkerSocketPath } from "./pi-rpc-worker-protocol.js";
+import { McpCredentialIssuer } from "./mcp-auth.js";
+import { validateMcpEndpointConfiguration } from "./mcp-config.js";
+import { registerMcpRoutes } from "./mcp-server.js";
+import { MessageCommandService } from "./message-command-service.js";
 import { RunRuntimeCoordinator } from "./run-runtime-coordinator.js";
 import { DomainError, NanasaStore } from "./store.js";
-import { TerminalAdapter, TmuxTerminalDelivery } from "./terminal-adapter.js";
+import { TmuxTerminalDelivery } from "./terminal-delivery.js";
 import { TerminalEndpointRegistry } from "./terminal-endpoint-registry.js";
 import { registerTerminalProxy } from "./terminal-proxy.js";
 import { TmuxRuntime } from "./tmux-runtime.js";
@@ -43,7 +41,14 @@ export interface DaemonOptions {
   reconcileIntervalMs?: number;
   servePortal?: boolean;
   portalAssetsPath?: string;
-  adapterFactories?: AgentAdapterFactories;
+  mcp?: {
+    enabled: boolean;
+    path?: string;
+    endpointUrl?: string;
+    operatorToken?: string;
+    allowedHostnames?: string[];
+    secretPath?: string;
+  };
 }
 
 export interface DaemonContext {
@@ -53,8 +58,8 @@ export interface DaemonContext {
   coordinator: RunRuntimeCoordinator;
   terminalEndpoints: TerminalEndpointRegistry;
   ttydSupervisor: TtydSupervisor;
-  agentSupervisor: AgentRuntimeSupervisor;
   dispatcher: DeliveryDispatcher;
+  messageCommands: MessageCommandService;
   loadedConfig: LoadedNanasaConfig;
   runtimePath: string;
 }
@@ -114,27 +119,43 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     config: loadedConfig.config,
     configStatus: loadedConfig.status,
   });
-  const compiledWorkerPath = fileURLToPath(new URL("./pi-rpc-worker.js", import.meta.url));
-  const sourceWorkerPath = fileURLToPath(new URL("./pi-rpc-worker.ts", import.meta.url));
-  const piWorkerCommand = existsSync(compiledWorkerPath)
-    ? [process.execPath, compiledWorkerPath]
-    : [process.execPath, ...process.execArgv, sourceWorkerPath];
-  const compiledCopilotWorkerPath = fileURLToPath(
-    new URL("./copilot-cli-worker.js", import.meta.url),
-  );
-  const sourceCopilotWorkerPath = fileURLToPath(
-    new URL("./copilot-cli-worker.ts", import.meta.url),
-  );
-  const copilotCliWorkerCommand = existsSync(compiledCopilotWorkerPath)
-    ? [process.execPath, compiledCopilotWorkerPath]
-    : [process.execPath, ...process.execArgv, sourceCopilotWorkerPath];
+  const mcpPath = options.mcp?.path ?? "/mcp";
+  if (!/^\/[A-Za-z0-9/_-]*$/.test(mcpPath) || mcpPath.includes("//")) {
+    throw new Error("MCP path must be an absolute URL path");
+  }
+  const mcpEndpointUrl = options.mcp?.endpointUrl ?? `http://127.0.0.1:3210${mcpPath}`;
+  const mcpEndpoint = validateMcpEndpointConfiguration({
+    enabled: options.mcp?.enabled === true,
+    endpointUrl: mcpEndpointUrl,
+    ...(options.mcp?.operatorToken === undefined
+      ? {}
+      : { operatorToken: options.mcp.operatorToken }),
+  });
+  if (options.mcp?.enabled === true && mcpEndpoint.pathname !== mcpPath) {
+    throw new Error("The MCP endpoint URL path must match the configured MCP path");
+  }
+  const mcpCredentials =
+    options.mcp?.enabled === true
+      ? new McpCredentialIssuer(store, {
+          secretPath:
+            options.mcp.secretPath ??
+            join(dataPath === ":memory:" ? runtimePath : dirname(dataPath), "mcp-secret"),
+          ...(options.mcp.operatorToken === undefined
+            ? {}
+            : { operatorToken: options.mcp.operatorToken }),
+        })
+      : undefined;
   const runtime = new TmuxRuntime(store, {
     ...(options.tmuxServerName === undefined ? {} : { serverName: options.tmuxServerName }),
     ...(options.tmuxPath === undefined ? {} : { tmuxPath: options.tmuxPath }),
-    runtimePath,
-    statePath: loadedConfig.stateDirectory,
-    piWorkerCommand,
-    copilotCliWorkerCommand,
+    ...(mcpCredentials === undefined
+      ? {}
+      : {
+          runtimeEnvironment: (run) => ({
+            NANASA_MCP_URL: mcpEndpointUrl,
+            NANASA_MCP_TOKEN: mcpCredentials.issueAgent(run),
+          }),
+        }),
   });
   const terminalEndpoints = new TerminalEndpointRegistry(store);
   const terminalDelivery = new TmuxTerminalDelivery(runtime, terminalEndpoints);
@@ -146,60 +167,13 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       store.recordRuntimeEvent(type, "run", runId, payload);
     },
   });
-  const agentSupervisor = new AgentRuntimeSupervisor(
-    {
-      terminal: (context) => new TerminalAdapter(context, terminalDelivery),
-      "pi-rpc": (context) => {
-        const sessionDirectory = piSessionDirectory(
-          loadedConfig.stateDirectory,
-          context.run.memberId,
-        );
-        return new PiRpcAdapter(context, {
-          socketPath: piWorkerSocketPath(runtimePath, context.run),
-          sessionDirectory,
-          persistSession: (session) => {
-            store.updateRunAdapterSession(context.run.id, context.run.generation, session);
-          },
-          settleDeliveries: (adapterMessageIds) => {
-            store.settleRunDeliveries(context.run.id, context.run.generation, adapterMessageIds);
-          },
-        });
-      },
-      "copilot-cli": (context) =>
-        new CopilotCliAdapter(context, {
-          socketPath: copilotCliWorkerSocketPath(runtimePath, context.run),
-          persistSession: (adapterSessionId) => {
-            store.updateRunAdapterSession(context.run.id, context.run.generation, {
-              adapter: "copilot-cli",
-              adapterSessionId,
-            });
-          },
-          settleDeliveries: (adapterMessageIds, settlement) => {
-            store.settleRunDeliveries(
-              context.run.id,
-              context.run.generation,
-              adapterMessageIds,
-              settlement,
-            );
-          },
-        }),
-      ...options.adapterFactories,
-    },
-    terminalDelivery,
-  );
-  const dispatcher = new DeliveryDispatcher(store, agentSupervisor);
-  const coordinator = new RunRuntimeCoordinator(
-    store,
-    runtime,
-    ttydSupervisor,
-    agentSupervisor,
-    dispatcher,
-    {
-      ...(options.reconcileIntervalMs === undefined
-        ? {}
-        : { reconcileIntervalMs: options.reconcileIntervalMs }),
-    },
-  );
+  const dispatcher = new DeliveryDispatcher(store, terminalDelivery);
+  const messageCommands = new MessageCommandService(store);
+  const coordinator = new RunRuntimeCoordinator(store, runtime, ttydSupervisor, dispatcher, {
+    ...(options.reconcileIntervalMs === undefined
+      ? {}
+      : { reconcileIntervalMs: options.reconcileIntervalMs }),
+  });
 
   await app.register(websocket);
   await coordinator.reconcile(true);
@@ -229,14 +203,21 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
   });
 
   app.get("/health", async () => ({ status: "ok" }));
+  if (mcpCredentials !== undefined) {
+    registerMcpRoutes(app, {
+      path: mcpPath,
+      endpointUrl: mcpEndpointUrl,
+      allowedHostnames: options.mcp?.allowedHostnames ?? [mcpEndpoint.hostname],
+      credentials: mcpCredentials,
+      store,
+      messages: messageCommands,
+    });
+  }
   app.get("/api/config", async () => loadedConfig.config);
   app.get("/api/config/status", async () => loadedConfig.status);
   app.get("/api/snapshot", async () => store.getSnapshot());
   app.get<{ Params: { runId: string } }>("/api/runs/:runId/terminal", async (request) =>
     TerminalEndpointStatusSchema.parse(terminalEndpoints.status(request.params.runId)),
-  );
-  app.get<{ Params: { runId: string } }>("/api/runs/:runId/adapter", async (request) =>
-    AgentAdapterStatusSchema.parse(coordinator.adapterStatus(request.params.runId)),
   );
   app.post<{ Params: { runId: string } }>("/api/runs/:runId/interrupt", async (request, reply) => {
     InterruptAgentRunCommandSchema.parse(request.body);
@@ -248,6 +229,20 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     const group = store.createGroup(request.body as never, idempotencyKey(request.headers));
     return reply.status(201).send(group);
   });
+
+  app.patch<{ Params: { groupId: string } }>("/api/groups/:groupId", async (request) =>
+    store.updateGroup(
+      request.params.groupId,
+      UpdateGroupCommandSchema.parse(request.body),
+      idempotencyKey(request.headers),
+    ),
+  );
+
+  app.delete<{ Params: { groupId: string } }>("/api/groups/:groupId", async (request) =>
+    DeleteGroupResultSchema.parse(
+      await coordinator.deleteGroup(request.params.groupId, idempotencyKey(request.headers)),
+    ),
+  );
 
   app.post("/api/agent-profiles", async (request, reply) => {
     const profile = store.createAgentProfile(
@@ -275,6 +270,17 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       coordinator.removeMembership(
         request.params.groupId,
         request.params.memberId,
+        idempotencyKey(request.headers),
+      ),
+  );
+
+  app.patch<{ Params: { groupId: string; memberId: string } }>(
+    "/api/groups/:groupId/memberships/:memberId",
+    async (request) =>
+      store.updateMembership(
+        request.params.groupId,
+        request.params.memberId,
+        UpdateGroupMembershipCommandSchema.parse(request.body),
         idempotencyKey(request.headers),
       ),
   );
@@ -317,22 +323,12 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
   app.post<{ Params: { groupId: string } }>(
     "/api/groups/:groupId/messages",
     async (request, reply) => {
-      const result = store.submitMessage(
+      const result = messageCommands.submit(
         request.params.groupId,
         request.body as never,
         idempotencyKey(request.headers),
       );
       return reply.status(201).send(result);
-    },
-  );
-
-  app.post<{ Params: { groupId: string } }>(
-    "/api/groups/:groupId/delivery-modes",
-    async (request) => {
-      const command = EffectiveDeliveryModesCommandSchema.parse(request.body);
-      return EffectiveDeliveryModesSchema.parse(
-        await coordinator.effectiveDeliveryModes(request.params.groupId, command.memberIds),
-      );
     },
   );
 
@@ -391,8 +387,8 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     coordinator,
     terminalEndpoints,
     ttydSupervisor,
-    agentSupervisor,
     dispatcher,
+    messageCommands,
     loadedConfig,
     runtimePath,
   };

@@ -1,22 +1,15 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import type { AgentProfile, AgentRun, TerminalBinding } from "@nanasa/contracts";
 
-import {
-  copilotCliSessionDirectory,
-  copilotCliWorkerSocketPath,
-} from "./copilot-cli-worker-protocol.js";
-import { piSessionDirectory, piWorkerSocketPath } from "./pi-rpc-worker-protocol.js";
 import { DomainError, NanasaStore } from "./store.js";
 import { ttydViewSessionName } from "./ttyd-supervisor.js";
 
 export interface TmuxRuntimeOptions {
   serverName?: string;
   tmuxPath?: string;
-  runtimePath?: string;
-  statePath?: string;
-  piWorkerCommand?: string[];
-  copilotCliWorkerCommand?: string[];
+  runtimeEnvironment?: (run: AgentRun) => Record<string, string>;
 }
 
 interface CommandOutput {
@@ -31,6 +24,8 @@ interface OwnedPaneStatus {
   currentCommand: string;
 }
 
+const TERMINAL_SUBMIT_DELAY_MS = 500;
+
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
@@ -41,6 +36,10 @@ function sessionName(groupId: string): string {
 
 function windowName(run: AgentRun): string {
   return `run-${run.generation}-${createHash("sha256").update(run.id).digest("hex").slice(0, 8)}`;
+}
+
+function terminalInputTarget(binding: TerminalBinding): string {
+  return `${binding.sessionId}:${binding.windowId}.0`;
 }
 
 function parseBinding(serverName: string, output: string): TerminalBinding {
@@ -64,10 +63,7 @@ export class TmuxRuntime {
   public readonly serverName: string;
   readonly #store: NanasaStore;
   readonly #tmuxPath: string;
-  readonly #runtimePath: string | undefined;
-  readonly #statePath: string | undefined;
-  readonly #piWorkerCommand: string[] | undefined;
-  readonly #copilotCliWorkerCommand: string[] | undefined;
+  readonly #runtimeEnvironment: (run: AgentRun) => Record<string, string>;
   readonly #reconciliations = new Set<Promise<void>>();
   #closing = false;
 
@@ -75,10 +71,7 @@ export class TmuxRuntime {
     this.#store = store;
     this.serverName = options.serverName ?? "nanasa";
     this.#tmuxPath = options.tmuxPath ?? "tmux";
-    this.#runtimePath = options.runtimePath;
-    this.#statePath = options.statePath;
-    this.#piWorkerCommand = options.piWorkerCommand;
-    this.#copilotCliWorkerCommand = options.copilotCliWorkerCommand;
+    this.#runtimeEnvironment = options.runtimeEnvironment ?? (() => ({}));
     if (!/^[A-Za-z0-9_.-]+$/.test(this.serverName)) {
       throw new Error(
         "tmux server name may contain only letters, numbers, dot, underscore, and dash",
@@ -97,7 +90,6 @@ export class TmuxRuntime {
 
   public async recoverRun(
     previous: AgentRun,
-    preserveAdapterSession: boolean,
     size: { cols: number; rows: number },
   ): Promise<AgentRun> {
     const current = this.#store.getRun(previous.id);
@@ -112,12 +104,24 @@ export class TmuxRuntime {
         409,
       );
     }
+    if (
+      current.recoveryReason === "terminal_runtime_migration" &&
+      (current.status === "starting" || current.status === "running")
+    ) {
+      try {
+        await this.#ownedPaneStatus(current, true, true);
+        await this.#tmux(["kill-pane", "-t", current.terminal!.paneId]);
+      } catch (error) {
+        if (!(error instanceof Error && error.message.startsWith("terminal_owner_pane_"))) {
+          throw error;
+        }
+      }
+    }
     if (current.status !== "failed") {
       this.#store.updateRunStatus(current.id, "failed", { reason: "recovery_replaced" });
     }
     const { run, profile } = this.#store.createRunForMembership(current.groupId, current.memberId, {
       recoveryFrom: current,
-      preserveAdapterSession,
     });
     return this.#launchCreatedRun(run, profile, size);
   }
@@ -149,6 +153,20 @@ export class TmuxRuntime {
     }
     const stopping = this.#store.updateRunStatus(run.id, "stopping");
     if (stopping.terminal !== undefined) {
+      try {
+        await this.#ownedPaneStatus(stopping, true, true);
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          (error.message === "terminal_run_unavailable" ||
+            error.message.startsWith("terminal_owner_pane_"))
+        ) {
+          return this.#store.updateRunStatus(run.id, "stopped", {
+            reason: "terminal_binding_not_owned",
+          });
+        }
+        throw error;
+      }
       const result = await this.#tmux(["kill-pane", "-t", stopping.terminal.paneId], true);
       if (result.exitCode !== 0 && !result.stderr.includes("can't find pane")) {
         this.#store.updateRunStatus(run.id, "failed", { reason: result.stderr.trim() });
@@ -227,11 +245,16 @@ export class TmuxRuntime {
     if (Buffer.byteLength(text, "utf8") > 1_048_576) {
       throw new Error("terminal_delivery_too_large");
     }
+    const target = terminalInputTarget(run.terminal!);
+    const submitInput =
+      this.#store.getAgentProfile(run.agentProfileId).kind === "copilot" ? "\u001b[I\r" : "\r";
     const bufferName = `nanasa-${randomUUID()}`;
     await this.#tmux(["load-buffer", "-b", bufferName, "-"], false, text);
     try {
-      await this.#tmux(["paste-buffer", "-b", bufferName, "-d", "-p", "-t", run.terminal!.paneId]);
-      await this.#tmux(["send-keys", "-t", run.terminal!.paneId, "Enter"]);
+      await this.#tmux(["paste-buffer", "-b", bufferName, "-d", "-p", "-t", target]);
+      await delay(TERMINAL_SUBMIT_DELAY_MS);
+      await this.#tmux(["load-buffer", "-b", bufferName, "-"], false, submitInput);
+      await this.#tmux(["paste-buffer", "-b", bufferName, "-d", "-t", target]);
     } finally {
       await this.#tmux(["delete-buffer", "-b", bufferName], true);
     }
@@ -248,7 +271,7 @@ export class TmuxRuntime {
 
   public async interruptRun(run: AgentRun): Promise<void> {
     await this.#ownedPaneStatus(run);
-    await this.#tmux(["send-keys", "-t", run.terminal!.paneId, "C-c"]);
+    await this.#tmux(["send-keys", "-t", terminalInputTarget(run.terminal!), "C-c"]);
   }
 
   public reconcile(markOrphanedStarting = false): Promise<void> {
@@ -331,24 +354,18 @@ export class TmuxRuntime {
     size: { cols: number; rows: number },
   ): Promise<TerminalBinding> {
     const environmentArguments: string[] = [];
-    if (profile.adapter === "terminal") {
-      for (const [name, value] of Object.entries(profile.environment)) {
-        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-          throw new DomainError(
-            "invalid_profile_environment",
-            `Invalid environment name ${name}`,
-            400,
-          );
-        }
-        environmentArguments.push("-e", `${name}=${value}`);
+    const environment = { ...profile.environment, ...this.#runtimeEnvironment(run) };
+    for (const [name, value] of Object.entries(environment)) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+        throw new DomainError(
+          "invalid_profile_environment",
+          `Invalid environment name ${name}`,
+          400,
+        );
       }
+      environmentArguments.push("-e", `${name}=${value}`);
     }
-    const launchArguments =
-      profile.adapter === "pi-rpc"
-        ? this.#piWorkerLaunchArguments(run)
-        : profile.adapter === "copilot-cli"
-          ? this.#copilotCliWorkerLaunchArguments(run)
-          : [profile.command, ...profile.args];
+    const launchArguments = [profile.command, ...profile.args];
     const launchCommand = launchArguments.map(shellQuote).join(" ");
     const session = sessionName(run.groupId);
     const exists = (await this.#tmux(["has-session", "-t", `=${session}`], true)).exitCode === 0;
@@ -423,50 +440,6 @@ export class TmuxRuntime {
     }
   }
 
-  #piWorkerLaunchArguments(run: AgentRun): string[] {
-    if (
-      this.#piWorkerCommand === undefined ||
-      this.#piWorkerCommand.length === 0 ||
-      this.#runtimePath === undefined ||
-      this.#statePath === undefined
-    ) {
-      throw new Error("pi_worker_runtime_unavailable");
-    }
-    return [
-      ...this.#piWorkerCommand,
-      "--socket",
-      piWorkerSocketPath(this.#runtimePath, run),
-      "--session-dir",
-      piSessionDirectory(this.#statePath, run.memberId),
-      "--run-id",
-      run.id,
-      "--generation",
-      String(run.generation),
-    ];
-  }
-
-  #copilotCliWorkerLaunchArguments(run: AgentRun): string[] {
-    if (
-      this.#copilotCliWorkerCommand === undefined ||
-      this.#copilotCliWorkerCommand.length === 0 ||
-      this.#runtimePath === undefined ||
-      this.#statePath === undefined
-    ) {
-      throw new Error("copilot_cli_worker_runtime_unavailable");
-    }
-    return [
-      ...this.#copilotCliWorkerCommand,
-      "--socket",
-      copilotCliWorkerSocketPath(this.#runtimePath, run),
-      "--state-dir",
-      copilotCliSessionDirectory(this.#statePath, run.memberId),
-      "--run-id",
-      run.id,
-      "--generation",
-      String(run.generation),
-    ];
-  }
-
   async #tmux(args: string[], allowFailure = false, stdin?: string): Promise<CommandOutput> {
     const result = await new Promise<CommandOutput>((resolve, reject) => {
       const child = spawn(this.#tmuxPath, ["-L", this.serverName, "-f", "/dev/null", ...args], {
@@ -496,10 +469,15 @@ export class TmuxRuntime {
     return result;
   }
 
-  async #ownedPaneStatus(run: AgentRun, allowCopyMode = false): Promise<OwnedPaneStatus> {
+  async #ownedPaneStatus(
+    run: AgentRun,
+    allowCopyMode = false,
+    allowStarting = false,
+  ): Promise<OwnedPaneStatus> {
     const binding = run.terminal;
     if (
-      run.status !== "running" ||
+      (run.status !== "running" &&
+        !(allowStarting && (run.status === "starting" || run.status === "stopping"))) ||
       binding === undefined ||
       binding.serverName !== this.serverName
     ) {
@@ -507,19 +485,24 @@ export class TmuxRuntime {
     }
     const result = await this.#tmux(
       [
-        "display-message",
-        "-p",
+        "list-panes",
         "-t",
-        binding.paneId,
+        `${binding.sessionId}:${binding.windowId}`,
+        "-F",
         "#{session_id}\t#{window_id}\t#{pane_id}\t#{pane_dead}\t#{pane_in_mode}\t#{pane_current_command}\t#{@nanasa-run-id}\t#{@nanasa-generation}",
       ],
       true,
     );
     if (result.exitCode !== 0) throw new Error("terminal_owner_pane_unavailable");
-    const [, windowId, paneId, dead, inMode, currentCommand, runId, generation] = result.stdout
+    const pane = result.stdout
       .trimEnd()
-      .split("\t");
+      .split("\n")
+      .map((line) => line.split("\t"))
+      .find(([, , paneId]) => paneId === binding.paneId);
+    if (pane === undefined) throw new Error("terminal_owner_pane_mismatch");
+    const [sessionId, windowId, paneId, dead, inMode, currentCommand, runId, generation] = pane;
     if (
+      sessionId !== binding.sessionId ||
       windowId !== binding.windowId ||
       paneId !== binding.paneId ||
       runId !== run.id ||

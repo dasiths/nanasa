@@ -17,12 +17,16 @@ function TerminalPane({
   client,
   run,
   alias,
+  connectionRevision,
+  suspended,
 }: {
   client: PortalClient;
   run: AgentRun;
   alias: string;
+  connectionRevision: number;
+  suspended: boolean;
 }) {
-  const runRevision = `${run.generation}:${run.status}:${run.terminal?.paneId ?? "pending"}`;
+  const runRevision = `${run.generation}:${run.status}:${run.terminal?.paneId ?? "pending"}:${connectionRevision}`;
   const { status, loading, error, retry } = useTerminalEndpoint(client, run.id, runRevision);
   const endpointState = status?.state;
   const detail = status?.error?.message ?? error;
@@ -42,7 +46,12 @@ function TerminalPane({
         <span className="status-separator" aria-hidden="true" />
         <span>{endpointState ?? (loading ? "loading" : "unavailable")}</span>
       </div>
-      {status?.state === "ready" ? (
+      {suspended ? (
+        <div className="terminal-state" role="status">
+          <LoaderCircle className="spin" aria-hidden="true" size={22} />
+          <strong>Routing message</strong>
+        </div>
+      ) : status?.state === "ready" ? (
         <iframe
           className="ttyd-frame"
           src={status.url}
@@ -80,9 +89,17 @@ interface TerminalWorkspaceProps {
   client: PortalClient;
   members: GroupMembership[];
   runs: AgentRun[];
+  connectionRevision?: number;
+  suspended?: boolean;
 }
 
-export function TerminalWorkspace({ client, members, runs }: TerminalWorkspaceProps) {
+export function TerminalWorkspace({
+  client,
+  members,
+  runs,
+  connectionRevision = 0,
+  suspended = false,
+}: TerminalWorkspaceProps) {
   const availableRuns = members
     .map(
       (member) =>
@@ -154,7 +171,14 @@ export function TerminalWorkspace({ client, members, runs }: TerminalWorkspacePr
         {availableRuns
           .filter((run) => layout === "grid" || run.id === activeRunId)
           .map((run) => (
-            <TerminalPane key={run.id} client={client} run={run} alias={memberAlias(run)} />
+            <TerminalPane
+              key={run.id}
+              client={client}
+              run={run}
+              alias={memberAlias(run)}
+              connectionRevision={connectionRevision}
+              suspended={suspended}
+            />
           ))}
       </div>
       <div className="terminal-mode-note">

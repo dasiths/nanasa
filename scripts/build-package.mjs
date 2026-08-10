@@ -1,5 +1,5 @@
-import { cpSync, mkdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { cpSync, mkdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,10 +32,8 @@ await build({
   bundle: true,
   entryPoints: {
     index: "apps/daemon/src/index.ts",
-    "pi-rpc-worker": "apps/daemon/src/pi-rpc-worker.ts",
-    "copilot-cli-worker": "apps/daemon/src/copilot-cli-worker.ts",
   },
-  external: ["@fastify/*", "fastify", "ws", "yaml", "zod"],
+  external: ["@fastify/*", "@modelcontextprotocol/*", "fastify", "ws", "yaml", "zod"],
   format: "esm",
   outdir: daemonOutputDirectory,
   platform: "node",

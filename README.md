@@ -1,6 +1,6 @@
 ---
 title: Nanasa
-description: Local tmux-backed coding-agent pool with a Fastify daemon and React portal
+description: Local terminal-only coding-agent pool with a Fastify daemon, React portal, and authenticated MCP messaging
 author: Nanasa
 ms.date: 2026-08-10
 ms.topic: overview
@@ -15,11 +15,11 @@ Nanasa is in early development. The current vertical slice manages groups,
 agent profiles, memberships, tmux-backed runs, terminal access, and structured
 message records. Interfaces and configuration may change.
 
-Native structured adapters are implemented for GitHub Copilot CLI and Pi.
-OpenCode and Claude Code profiles continue to use terminal queue delivery.
-Every running agent with a verified tmux pane also supports explicit Terminal
-input delivery, independent of its native adapter. Use a harmless shell or
-Node.js fixture when evaluating the runtime without an agent account.
+Every configured agent launches as its command directly in a tmux pane. Nanasa
+does not start model-specific subprocess protocols. Portal and MCP messages use
+the same durable terminal transport: bracketed paste followed by a separate
+Enter key. Use a harmless shell or Node.js fixture when evaluating the runtime
+without an agent account.
 
 ## Architecture
 
@@ -51,11 +51,9 @@ and verifies its published checksum. The npm package does not bundle ttyd becaus
 it is a native executable. `nanasa start` checks `ttyd --version` before starting
 and explains how to configure a nonstandard executable path.
 
-GitHub Copilot profiles require an authenticated GitHub Copilot CLI with ACP
-support. Pi profiles require an authenticated Pi installation and configured
-provider. OpenCode and Claude Code require their own installed and authenticated
-CLIs. Nanasa does not initiate interactive authentication or send a model prompt
-during startup.
+Each profile requires its command to be installed and authenticated as required
+by that CLI. Nanasa does not initiate interactive authentication or send a model
+prompt during startup.
 
 ## Setup
 
@@ -71,7 +69,7 @@ npx nanasa start
 `.nanasa/config.yaml` only when it is absent. It never overwrites configuration
 or runtime state. Edit the generated agent commands for the CLIs available in
 your environment, then commit `.nanasa/config.yaml`. Ignore `.nanasa/state/` and
-`.nanasa/runtime/`; they contain SQLite state, adapter sessions, sockets, and ttyd
+`.nanasa/runtime/`; they contain SQLite state, the MCP signing secret, and ttyd
 manifests for one checkout.
 
 Running `nanasa` without a command is equivalent to `nanasa start`. The daemon
@@ -81,8 +79,9 @@ durable state beneath that repository, and serves the portal at
 
 The installed command accepts these options:
 
-* `--host <host>` overrides `NANASA_HOST`
+* `--host <host>` overrides `NANASA_HOST`; MCP requires a loopback host
 * `--port <port>` overrides `NANASA_PORT`
+* `--mcp` enables authenticated MCP at `NANASA_MCP_PATH` (default `/mcp`)
 * `--ttyd-path <path>` overrides `NANASA_TTYD_PATH`
 
 ### Workspace development
@@ -120,7 +119,7 @@ origin.
 
 The daemon accepts these environment variables:
 
-* `NANASA_HOST`, default `127.0.0.1`
+* `NANASA_HOST`, default `127.0.0.1`; it must remain loopback when MCP is enabled
 * `NANASA_PORT`, default `3210`
 * `NANASA_REPO_ROOT`, default discovered upward from the current directory
 * `NANASA_DATA_PATH`, default `.nanasa/state/nanasa.sqlite`
@@ -129,6 +128,12 @@ The daemon accepts these environment variables:
 * `NANASA_TTYD_PATH`, default `ttyd`
 * `NANASA_SERVE_PORTAL`, default enabled only when `NODE_ENV=production`
 * `NANASA_PORTAL_PATH`, set automatically by the installed command
+* `NANASA_MCP_ENABLED`, default `false`
+* `NANASA_MCP_PATH`, default `/mcp`
+* `NANASA_MCP_URL`, default derived from the daemon host, port, and MCP path;
+  external advertised URLs must use HTTPS
+* `NANASA_MCP_OPERATOR_TOKEN`, optional for local agent-only MCP and required
+  for an external advertised URL; it must contain at least 32 characters
 
 ## Validation
 
@@ -167,26 +172,72 @@ daemon allows only the endpoint index, token, and WebSocket paths, validates
 same-origin upgrades, strips credentials before forwarding, and never exposes
 the loopback upstream address.
 
-GitHub Copilot runs use one durable worker in the owner tmux pane. The worker
-owns the authoritative `copilot --acp --stdio` process and communicates through
-bounded ACP NDJSON on standard input and output. Queue delivery is supported;
-steer requests deterministically fall back to queue. Interrupt sends
-`session/cancel` only while a prompt is active. ACP permission requests are
-cancelled because peer messages cannot grant operator consent.
+Every profile command runs directly in its verified owner pane. Interrupt sends
+Ctrl+C to that pane. Message delivery loads text into the pane, enables bracketed
+paste, pastes the content, and sends Enter separately. A successful outcome
+means terminal injection completed; it does not claim that the CLI processed or
+completed the request. Delivery retries when a live ttyd browser writer owns the
+pane or when tmux is temporarily unavailable.
 
-Pi runs use the corresponding durable JSONL worker and support queue and steer.
-OpenCode and Claude Code remain terminal adapters with queue delivery only.
-Regardless of profile adapter, explicit Terminal input delivery loads the
-message into the verified owner pane, pastes it with bracketed paste enabled,
-and sends Enter separately. This transport records successful injection but
-does not claim semantic processing. Delivery retries when a live ttyd browser
-writer owns the pane.
+Terminal input is also the agent-to-agent message channel. The authenticated MCP
+tools submit through the same in-process message service as the portal REST API.
+The durable dispatcher then uses the guarded tmux paste-and-Enter path for every
+active recipient.
 
-Terminal input is also a supported agent-to-agent channel. A future Nanasa MCP
-server can expose `message.send` and `message.broadcast` tools that submit the
-same message contract with `delivery.mode: terminal`. The daemon authenticates
-the sending member and run, excludes the sender from group broadcasts, and then
-uses the same guarded tmux paste-and-Enter path for each active recipient.
+## MCP messaging
+
+Enable Streamable HTTP MCP at `/mcp` with `nanasa start --mcp` or
+`NANASA_MCP_ENABLED=true`. The endpoint supports the MCP 2026-07-28 per-request
+protocol and the legacy initialization handshake through the official MCP
+TypeScript server and Node packages.
+
+Nanasa exposes these tools:
+
+* `nanasa.send_dm` requires `recipientMemberId` and sends to one active member
+* `nanasa.send_multicast` requires `recipientMemberIds` with at least two unique
+  active members
+* `nanasa.broadcast_group` sends to every active member and excludes the
+  authenticated agent caller
+
+All three tools require `text`, limited to 1 MiB of UTF-8 content. Optional
+fields are `intent` (`inform`, `request`, or `response`), `contentType`
+(`text/plain` or `text/markdown`), `conversationId`, and `replyTo`. The defaults
+are `request` and `text/markdown`. Operator calls must also provide `groupId`.
+Agent calls derive the group from their credential and cannot select a different
+group.
+
+Every tool uses terminal delivery. Agent tool arguments never choose the sender.
+Nanasa signs a capability for the run's group, member, run ID, and generation,
+then injects `NANASA_MCP_URL` and `NANASA_MCP_TOKEN` into the direct tmux CLI
+environment. The signing key is stored at `.nanasa/state/mcp-secret`. Nanasa
+requires the key to be a current-user-owned regular file with mode `0600` and
+protects its directory with mode `0700`. Stopping or replacing a run, changing
+its desired state, or removing its membership revokes the capability during the
+next request.
+
+Agent commands receive two non-persisted environment variables when MCP is
+enabled:
+
+* `NANASA_MCP_URL` is the configured Streamable HTTP endpoint
+* `NANASA_MCP_TOKEN` is a signed capability bound to the run, generation,
+  member, and group
+
+Operator clients authenticate with `Authorization: Bearer <token>`. Configure
+that token with `NANASA_MCP_OPERATOR_TOKEN`; it must contain at least 32
+characters. The setting is optional for a loopback daemon that serves only
+agent capabilities, but it is required for operator calls and whenever
+`NANASA_MCP_URL` advertises an external host. Tokens are not accepted in query
+strings. The endpoint validates `Host` and `Origin` before bearer authentication
+and limits each principal to 30 requests per minute.
+
+Nanasa must remain bound to a loopback host whenever MCP is enabled. For remote
+MCP access, terminate TLS at a trusted reverse proxy and configure the proxy to
+publish only the exact MCP path, `/mcp` by default. Do not proxy portal, REST,
+event, or terminal routes. Set `NANASA_MCP_URL` to the external HTTPS URL,
+including the configured path, and configure a strong
+`NANASA_MCP_OPERATOR_TOKEN`. The proxy must preserve a `Host` value matching the
+advertised URL and should restrict accepted origins. Never expose the Nanasa
+listener directly to the network.
 
 ## Portal operations
 
@@ -199,8 +250,8 @@ is not already running. The result panel reports each member as started, already
 running, or failed. Repeated clicks while the operation is pending reuse one
 idempotent request.
 
-Member rows distinguish reconciling, resuming, restarting, recovered, and failed
-recovery states. Active recovery can be stopped but not started again. Retry is
+Member rows distinguish reconciling, restarting, recovered, and failed recovery
+states. Active recovery can be stopped but not started again. Retry is
 offered only when recovery cannot continue; a normally stopped member retains
 the standard Start action.
 
@@ -218,27 +269,25 @@ tab layout without blocking portal controls.
 | Agent profile | Reusable command, arguments, working directory, and environment configuration  |
 | Membership    | A stable agent identity and alias within a group                                |
 | Run           | One process generation with a tmux terminal binding                             |
-| Message       | Structured content with audience, intent, and delivery policy                   |
+| Message       | Structured content and audience delivered through terminal injection            |
 
 ## Roadmap
 
 * [x] Tmux-backed groups, runs, terminal transport, and operational portal
-* [x] Native structured adapters for GitHub Copilot CLI and Pi
-* [ ] Native structured adapters beyond terminal queue delivery for OpenCode
-  and Claude Code
+* [x] Direct terminal execution for configured coding-agent CLIs
+* [x] Authenticated MCP direct, multicast, and group messaging
+* [x] Group and member rename and removal operations
 * [ ] Per-agent worktrees and artifact handoff
 * [ ] Authentication, authorization, and remote runner isolation
 * [ ] Delivery retries, dead letters, and cost controls
 
 ## Known limitations
 
-* GitHub Copilot CLI ACP remains a preview integration and may change between CLI
-  releases
 * ttyd 1.7.7 is the validated version; other system versions are not guaranteed
-* Terminal input delivery confirms guarded paste and Enter injection, not semantic
+* Terminal delivery confirms guarded paste and Enter injection, not semantic
   model processing
-* OpenCode and Claude Code currently use terminal delivery; native structured
-  adapters are pending
+* Remote MCP access requires operator-managed TLS termination and network access
+  controls
 
 ## Contributing
 
