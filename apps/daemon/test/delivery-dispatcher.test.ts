@@ -138,12 +138,20 @@ describe("DeliveryDispatcher", () => {
     expect(store.listDeliveries(submission.message.id)).toMatchObject([
       { status: "retrying", attempts: 1, reason: "terminal_owner_pane_unavailable" },
     ]);
+    expect(store.listEvents().at(-1)).toMatchObject({
+      type: "delivery.status-changed",
+      payload: { status: "retrying", reason: "terminal_owner_pane_unavailable", attempts: 1 },
+    });
 
     now = new Date(now.getTime() + 100);
     await dispatcher.tick();
     expect(store.listDeliveries(submission.message.id)).toMatchObject([
       { status: "dead-letter", attempts: 2, reason: "terminal_owner_pane_unavailable" },
     ]);
+    expect(store.listEvents().at(-1)).toMatchObject({
+      type: "delivery.status-changed",
+      payload: { status: "dead-letter", reason: "terminal_owner_pane_unavailable", attempts: 2 },
+    });
     expect(target.deliver).toHaveBeenCalledTimes(2);
     await dispatcher.close();
     store.close();
@@ -165,6 +173,10 @@ describe("DeliveryDispatcher", () => {
     expect(store.listDeliveries(submission.message.id)).toMatchObject([
       { status: "rejected", attempts: 1, reason: "delivery_expired" },
     ]);
+    expect(store.listEvents().at(-1)).toMatchObject({
+      type: "delivery.status-changed",
+      payload: { status: "rejected", reason: "delivery_expired", attempts: 1 },
+    });
     await dispatcher.close();
     store.close();
   });
@@ -225,6 +237,26 @@ describe("DeliveryDispatcher", () => {
       { status: "revoked", reason: "membership_removed" },
     ]);
     await dispatcher.close();
+    store.close();
+  });
+
+  it("publishes revoked delivery status changes", () => {
+    const { store, submission } = createFixture();
+    const claim = store.claimDeliveries({
+      owner: "revocation-test",
+      now: new Date(),
+      leaseMs: 30_000,
+      limit: 1,
+    })[0]!;
+
+    expect(store.revokeClaim(claim, "revocation-test", "operator_revoked")).toBe(true);
+    expect(store.listDeliveries(submission.message.id)).toMatchObject([
+      { status: "revoked", attempts: 1, reason: "operator_revoked" },
+    ]);
+    expect(store.listEvents().at(-1)).toMatchObject({
+      type: "delivery.status-changed",
+      payload: { status: "revoked", reason: "operator_revoked", attempts: 1 },
+    });
     store.close();
   });
 

@@ -29,6 +29,9 @@ ms.topic: reference
 * PageUp, PageDown, wheel, and scrollback routing: complete
 * Vertical history pane and responsive stacking: complete
 * Destructive reset of existing state: complete
+* Group-row and terminal-tab copy controls: complete
+* Live retrying, rejected, revoked, and dead-letter events: complete
+* Portal-created three-agent group: complete
 
 ## Placement and quality
 
@@ -40,12 +43,13 @@ ms.topic: reference
 
 ## Validation evidence
 
-* 36 contract tests, 94 daemon tests, 42 portal tests, and 6 package tests passed.
+* 36 contract tests, 95 daemon tests, 44 portal tests, and 6 package tests passed.
 * All 5 packaged Playwright scenarios passed.
 * Real packaged acceptance listed tools with an agent capability, sent an agent DM, delivered it to the recipient terminal, and rendered `From: Alpha` with consumed status.
 * Typecheck, lint, formatting, diagnostics, builds, and diff checks passed.
 * Desktop and mobile live screenshots showed no overflow, visible terminals, and correct message collapse behavior.
 * Live Copilot, Claude, and Pi diagnostics found Nanasa MCP.
+* Playwright created Agent Team with the requested profiles, copied a live member ID, and started all three agents.
 
 ## Residual risk
 

@@ -1149,65 +1149,78 @@ export class NanasaStore {
     const deadLetter = claim.delivery.attempts >= options.maxAttempts;
     const status = deadLetter ? "dead-letter" : "retrying";
     const nextAttemptAt = deadLetter ? undefined : options.retryAt.toISOString();
-    const result = this.#database
-      .prepare(
-        `UPDATE deliveries
-         SET status = ?, reason = ?, next_attempt_at = ?, lease_owner = NULL,
-             lease_expires_at = NULL, updated_at = ?
-         WHERE message_id = ? AND recipient_member_id = ?
-           AND status IN ('received', 'delivering') AND lease_owner = ?`,
-      )
-      .run(
+    const timestamp = new Date().toISOString();
+    const event = this.#transaction(() => {
+      const result = this.#database
+        .prepare(
+          `UPDATE deliveries
+           SET status = ?, reason = ?, next_attempt_at = ?, lease_owner = NULL,
+               lease_expires_at = NULL, updated_at = ?
+           WHERE message_id = ? AND recipient_member_id = ?
+             AND status IN ('received', 'delivering') AND lease_owner = ?`,
+        )
+        .run(
+          status,
+          reason,
+          nextAttemptAt ?? null,
+          timestamp,
+          claim.message.id,
+          claim.delivery.recipientMemberId,
+          owner,
+        );
+      if (Number(result.changes) !== 1) return undefined;
+      return this.#appendEvent("delivery.status-changed", "message", claim.message.id, {
+        messageId: claim.message.id,
+        recipientMemberId: claim.delivery.recipientMemberId,
         status,
         reason,
-        nextAttemptAt ?? null,
-        new Date().toISOString(),
-        claim.message.id,
-        claim.delivery.recipientMemberId,
-        owner,
-      );
-    if (Number(result.changes) !== 1) {
+        attempts: claim.delivery.attempts,
+      });
+    });
+    if (event === undefined) {
       return { status: "revoked", reason: "delivery_claim_lost" };
     }
+    this.#publish(event);
     return { status, reason, ...(nextAttemptAt === undefined ? {} : { nextAttemptAt }) };
   }
 
   public revokeClaim(claim: DeliveryClaim, owner: string, reason: string): boolean {
-    const result = this.#database
-      .prepare(
-        `UPDATE deliveries
-         SET status = 'revoked', reason = ?, lease_owner = NULL, lease_expires_at = NULL,
-             updated_at = ?
-         WHERE message_id = ? AND recipient_member_id = ?
-           AND status IN ('received', 'delivering') AND lease_owner = ?`,
-      )
-      .run(
-        reason,
-        new Date().toISOString(),
-        claim.message.id,
-        claim.delivery.recipientMemberId,
-        owner,
-      );
-    return Number(result.changes) === 1;
+    return this.#completeDeliveryStatus(claim, owner, "revoked", reason);
   }
 
   public rejectClaim(claim: DeliveryClaim, owner: string, reason: string): boolean {
-    const result = this.#database
-      .prepare(
-        `UPDATE deliveries
-         SET status = 'rejected', reason = ?, lease_owner = NULL, lease_expires_at = NULL,
-             updated_at = ?
-         WHERE message_id = ? AND recipient_member_id = ?
-           AND status IN ('received', 'delivering') AND lease_owner = ?`,
-      )
-      .run(
+    return this.#completeDeliveryStatus(claim, owner, "rejected", reason);
+  }
+
+  #completeDeliveryStatus(
+    claim: DeliveryClaim,
+    owner: string,
+    status: "rejected" | "revoked",
+    reason: string,
+  ): boolean {
+    const timestamp = new Date().toISOString();
+    const event = this.#transaction(() => {
+      const result = this.#database
+        .prepare(
+          `UPDATE deliveries
+           SET status = ?, reason = ?, lease_owner = NULL, lease_expires_at = NULL,
+               updated_at = ?
+           WHERE message_id = ? AND recipient_member_id = ?
+             AND status IN ('received', 'delivering') AND lease_owner = ?`,
+        )
+        .run(status, reason, timestamp, claim.message.id, claim.delivery.recipientMemberId, owner);
+      if (Number(result.changes) !== 1) return undefined;
+      return this.#appendEvent("delivery.status-changed", "message", claim.message.id, {
+        messageId: claim.message.id,
+        recipientMemberId: claim.delivery.recipientMemberId,
+        status,
         reason,
-        new Date().toISOString(),
-        claim.message.id,
-        claim.delivery.recipientMemberId,
-        owner,
-      );
-    return Number(result.changes) === 1;
+        attempts: claim.delivery.attempts,
+      });
+    });
+    if (event === undefined) return false;
+    this.#publish(event);
+    return true;
   }
 
   public listEvents(afterSequence = 0): DomainEvent[] {

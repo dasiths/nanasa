@@ -12,6 +12,7 @@ import {
   ChevronRight,
   CircleAlert,
   CircleStop,
+  Copy,
   Pencil,
   Play,
   Plus,
@@ -21,6 +22,8 @@ import {
   X,
 } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
+
+import { copyToClipboard } from "../copy-to-clipboard.js";
 
 export interface AddAgentInput {
   groupId: string;
@@ -574,6 +577,7 @@ export function GroupTree({
                             onClick={() => onSelectGroup(group.id)}
                           >
                             <span>{member.alias}</span>
+                            <code title={member.memberId}>{member.memberId}</code>
                             <small title={recoveryDetail}>
                               {statusLabel(run)}
                               {configuredType !== undefined &&
@@ -592,6 +596,17 @@ export function GroupTree({
                         )}
                         {editTarget?.kind !== "member" && (
                           <div className="tree-actions member-actions">
+                            <button
+                              type="button"
+                              className="icon-button member-action"
+                              aria-label={`Copy member ID ${member.memberId}`}
+                              title={`Copy ${member.memberId}`}
+                              onClick={() =>
+                                void copyToClipboard(member.memberId).catch(() => undefined)
+                              }
+                            >
+                              <Copy aria-hidden="true" size={14} />
+                            </button>
                             {action !== "none" && (
                               <button
                                 type="button"

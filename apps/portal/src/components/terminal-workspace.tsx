@@ -1,8 +1,9 @@
 import type { AgentRun, GroupMembership, TerminalEndpointState } from "@nanasa/contracts";
-import { CircleAlert, Grid2X2, LoaderCircle, Monitor, RefreshCw, Rows3 } from "lucide-react";
+import { CircleAlert, Copy, Grid2X2, LoaderCircle, Monitor, RefreshCw, Rows3 } from "lucide-react";
 import { useState } from "react";
 
 import type { PortalClient } from "../api.js";
+import { copyToClipboard } from "../copy-to-clipboard.js";
 import { usePortalPreferences } from "../hooks/use-portal-preferences.js";
 import { useTerminalEndpoint } from "../hooks/use-terminal-endpoint.js";
 
@@ -137,17 +138,28 @@ export function TerminalWorkspace({
       <div className="terminal-toolbar">
         <div className="terminal-tabs" role="tablist" aria-label="Agent terminals">
           {availableRuns.map((run) => (
-            <button
-              type="button"
-              role="tab"
-              aria-selected={run.id === activeRunId}
-              key={run.id}
-              onClick={() => setSelectedRunId(run.id)}
-            >
-              <span className={`status-dot status-${run.status}`} aria-hidden="true" />
-              <span>{memberAlias(run)}</span>
-              <small title={run.memberId}>{run.memberId}</small>
-            </button>
+            <div className="terminal-tab-item" role="presentation" key={run.id}>
+              <button
+                type="button"
+                className="terminal-tab-select"
+                role="tab"
+                aria-selected={run.id === activeRunId}
+                onClick={() => setSelectedRunId(run.id)}
+              >
+                <span className={`status-dot status-${run.status}`} aria-hidden="true" />
+                <span>{memberAlias(run)}</span>
+                <small title={run.memberId}>{run.memberId}</small>
+              </button>
+              <button
+                type="button"
+                className="icon-button terminal-tab-copy"
+                aria-label={`Copy member ID ${run.memberId}`}
+                title={`Copy ${run.memberId}`}
+                onClick={() => void copyToClipboard(run.memberId).catch(() => undefined)}
+              >
+                <Copy aria-hidden="true" size={13} />
+              </button>
+            </div>
           ))}
         </div>
         <div className="segmented-control" role="group" aria-label="Terminal layout">

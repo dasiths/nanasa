@@ -298,6 +298,21 @@ describe("portal application", () => {
     );
   });
 
+  it("copies member IDs from group rows", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    render(<App client={createClient()} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    await user.click(screen.getByRole("button", { name: "Copy member ID builder" }));
+
+    expect(writeText).toHaveBeenCalledWith("builder");
+  });
+
   it("requires a dialog confirmation before removing a membership", async () => {
     const user = userEvent.setup();
     const client = createClient();

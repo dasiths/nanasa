@@ -25,6 +25,9 @@ ms.topic: reference
 * Added member IDs to terminal labels and enabled PageUp, PageDown, wheel, and scrollback routing.
 * Changed desktop Messages to a horizontal composer with a vertical history pane.
 * Removed all existing live domain and runtime state at the user's request.
+* Added clipboard copy controls beside group-row and terminal-tab member IDs.
+* Published retrying, rejected, revoked, and dead-letter transitions as `delivery.status-changed` events.
+* Created Agent Team through Playwright with GitHub Copilot, Claude Copilot, and PI, then started all three.
 
 ## Added
 
@@ -42,13 +45,14 @@ ms.topic: reference
 ## Validation
 
 * Contract tests: 36 passed
-* Daemon tests: 94 passed
-* Portal tests: 42 passed
+* Daemon tests: 95 passed
+* Portal tests: 44 passed
 * Package tests: 6 passed
 * Playwright acceptance: 5 passed
 * Typecheck, ESLint, Biome, diagnostics, build, package build, and diff checks passed
 * Live Copilot `/mcp` lists Nanasa
 * Live Claude `mcp list` reports Nanasa connected
 * Live Pi reports one connected MCP server and the configured Nanasa tools
-* Live agent capabilities list all three Nanasa tools
+* Live agent capabilities list all four Nanasa tools
 * Three private agent roots contain no expanded run capability
+* Live Agent Team has three active readable IDs and three running generation-1 agents

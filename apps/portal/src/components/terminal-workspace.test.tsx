@@ -107,6 +107,20 @@ describe("TerminalWorkspace", () => {
     expect(reviewerFrame).toHaveAttribute("src", endpointPaths["run-reviewer"]);
   });
 
+  it("copies member IDs from terminal tabs", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
+    render(<TerminalWorkspace client={client} members={members} runs={runs} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy member ID builder" }));
+
+    expect(writeText).toHaveBeenCalledWith("builder");
+  });
+
   it("mounts one isolated ready iframe per run in grid layout", async () => {
     const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
     render(<TerminalWorkspace client={client} members={members} runs={runs} />);

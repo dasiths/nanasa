@@ -20,6 +20,9 @@ applyTo: "**"
 * Route PageUp, PageDown, and wheel input through ttyd and tmux to agent TUIs.
 * Display message history as a vertical pane beside the horizontal composer.
 * Delete all existing groups, profiles, runs, messages, and agent state.
+* Add copy controls beside member IDs in group rows and terminal tabs.
+* Publish retrying, rejected, revoked, and dead-letter delivery transitions live.
+* Recreate GitHub Copilot, Claude Copilot, and PI through the portal using Playwright.
 
 ## Context Summary
 
@@ -74,6 +77,9 @@ Research is recorded in `.copilot-tracking/research/2026-08-10/chat-history-agen
 * [x] Enable tmux mouse, xterm scrollback, and browser acceptance for PageUp, PageDown, and wheel.
 * [x] Make history a vertical desktop pane beside the composer with responsive stacking.
 * [x] Reset repository runtime and domain state, preserving only configuration.
+* [x] Add and test copy-ID controls in group rows and terminal tabs.
+* [x] Publish all requested delivery status transitions as domain events.
+* [x] Create Agent Team and its three requested agents through Playwright portal workflows.
 
 ## Success Criteria
 
@@ -87,4 +93,5 @@ Research is recorded in `.copilot-tracking/research/2026-08-10/chat-history-agen
 * New memberships use readable stable IDs and active agents can discover them through MCP.
 * Recipients receive trusted sender identity, and agent broadcasts never loop back to the caller.
 * Browser PageUp, PageDown, and wheel events reach raw-mode, mouse-aware terminal applications.
-* Final live state contains no groups, profiles, memberships, runs, messages, or deliveries.
+* Legacy groups, profiles, memberships, runs, messages, deliveries, and agent state were removed before recreation.
+* The final recreated group contains exactly three readable-ID members and three running agents.

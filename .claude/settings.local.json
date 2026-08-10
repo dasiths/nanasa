@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(python3 -m json.tool)",
-      "Bash(claude mcp *)"
+      "Bash(claude mcp *)",
+      "mcp__nanasa__nanasa_list_members",
+      "mcp__nanasa__nanasa_send_dm"
     ]
   }
 }
