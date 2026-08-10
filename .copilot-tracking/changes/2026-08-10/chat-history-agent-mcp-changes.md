@@ -28,6 +28,12 @@ ms.topic: reference
 * Added clipboard copy controls beside group-row and terminal-tab member IDs.
 * Published retrying, rejected, revoked, and dead-letter transitions as `delivery.status-changed` events.
 * Created Agent Team through Playwright with GitHub Copilot, Claude Copilot, and PI, then started all three.
+* Integrated Messages into terminal tabs and grid, selected by default in tabbed mode.
+* Replaced the always-visible routing form with a compact prompt and modal composer.
+* Added intent descriptions, visible sender IDs, avatar ID tooltips, and retry-focused outcome copy.
+* Removed the visible membership revision and capped grid layout at three responsive columns.
+* Replaced the Messages terminal tab/grid panel with a persistent bottom-right launcher and overlay.
+* Added closed-state unread counts, scoped Escape handling, focus restoration, and a mobile sheet.
 
 ## Added
 
@@ -46,10 +52,15 @@ ms.topic: reference
 
 * Contract tests: 36 passed
 * Daemon tests: 95 passed
-* Portal tests: 44 passed
+* Portal tests: 45 passed
 * Package tests: 6 passed
-* Playwright acceptance: 5 passed
-* Typecheck, ESLint, Biome, diagnostics, build, package build, and diff checks passed
+* Playwright acceptance: selectors migrated; packaged execution blocked before page launch because this container lacks Chromium's `libnspr4.so`
+* Live browser inspection passed at desktop and 390 px mobile widths with no horizontal overflow or control overlap
+* Contract tests: 36 passed
+* Daemon tests: 95 passed
+* Portal tests: 45 passed
+* Package tests: 6 passed
+* Typecheck, ESLint, Biome, diagnostics, package build, and diff checks passed
 * Live Copilot `/mcp` lists Nanasa
 * Live Claude `mcp list` reports Nanasa connected
 * Live Pi reports one connected MCP server and the configured Nanasa tools

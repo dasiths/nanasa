@@ -254,7 +254,6 @@ export function App({ client = api }: AppProps) {
             {selectedGroup !== undefined && (
               <p>
                 {members.length} members <span aria-hidden="true">/</span> {runningCount} running
-                <span aria-hidden="true"> / </span> revision {selectedGroup.membershipRevision}
               </p>
             )}
           </div>
@@ -374,14 +373,6 @@ export function App({ client = api }: AppProps) {
             </div>
           ) : (
             <div className="unified-workspace">
-              <MessageWorkspace
-                group={selectedGroup}
-                members={members}
-                historyMembers={groupMemberships}
-                messages={snapshot.messages}
-                deliveryOutcomes={snapshot.deliveryOutcomes}
-                onSubmit={submitMessage}
-              />
               <section className="terminal-surface" aria-label="Agent terminals">
                 <TerminalWorkspace
                   client={client}
@@ -391,6 +382,14 @@ export function App({ client = api }: AppProps) {
                   suspended={terminalDeliverySuspended}
                 />
               </section>
+              <MessageWorkspace
+                group={selectedGroup}
+                members={members}
+                historyMembers={groupMemberships}
+                messages={snapshot.messages}
+                deliveryOutcomes={snapshot.deliveryOutcomes}
+                onSubmit={submitMessage}
+              />
             </div>
           )}
         </div>

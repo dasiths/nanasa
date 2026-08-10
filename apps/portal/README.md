@@ -42,16 +42,22 @@ TUIs own their visible history, so browser scrollbars can remain stationary even
 while the application scrolls internally.
 
 The portal displays every persisted group message as a shared chronological chat
-timeline. Portal senders appear as Human; authenticated MCP senders use their
-membership alias, so agent-to-agent messages are visible alongside operator
-messages. Each message exposes a collapsed recipient and delivery summary with
-live outcomes.
+timeline in a bottom-right floating overlay. Portal senders appear as Human;
+authenticated MCP senders show their membership alias and stable ID, so
+agent-to-agent messages are visible alongside operator messages. Hovering an
+initials badge shows the sender or recipient ID. Each message exposes a collapsed
+recipient and delivery summary with live outcomes. A claimed delivery count of
+two means one retry followed by success and is displayed as `Retried once`.
 
-Desktop layouts place history in a vertical pane beside the horizontal composer.
-Tablet and mobile layouts stack the composer above the history pane.
+The overlay keeps a compact `Type a message...` prompt below history. Activating
+it opens a modal for audience, recipients, intent, intent description, and body.
+Its launcher persists open state and reports unread messages while closed. On
+narrow screens, the overlay becomes an inset full-screen sheet. Terminal tab and
+grid layout remain independent, with grid rendering up to three agent columns,
+then two and one at smaller breakpoints.
 
-The composer and terminal views remain mounted in one workspace. Before any
-portal or agent-originated delivery, the portal temporarily disconnects writable
+Messages floats over the terminal workspace. Before any portal or agent-originated
+delivery, the portal temporarily disconnects writable
 ttyd clients so the daemon can paste text into each verified recipient pane and
 send Enter separately. A consumed outcome confirms terminal injection, not
 semantic completion by the agent CLI.
@@ -69,6 +75,9 @@ and failed outcomes. Group and member menus support inline rename and confirmed
 removal; removing an active member stops its run first. Member rows show
 recovery phase, reason, and scheduled retry time. Start is hidden during
 continuation; Retry appears only after continuation can no longer proceed.
+
+The workspace header reports member and running counts. Membership revision is
+kept internal for safe broadcasts and is not displayed.
 
 Light, dark, and system themes and the terminal tab or grid layout persist in
 `localStorage` under `nanasa.portal.preferences.v1`. Storage events synchronize

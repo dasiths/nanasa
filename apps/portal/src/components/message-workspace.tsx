@@ -13,12 +13,13 @@ import {
 import {
   ChevronDown,
   ChevronRight,
-  ChevronUp,
   CircleArrowDown,
+  MessageCircle,
   MessageSquareText,
   Send,
   Trash2,
   Users,
+  X,
 } from "lucide-react";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 
@@ -26,7 +27,14 @@ type AudienceKind = Audience["kind"];
 
 export const MESSAGE_HISTORY_KEY = "nanasa.message-history.v1";
 export const MESSAGE_HISTORY_CLEARED_KEY = "nanasa.message-history-cleared.v1";
+export const MESSAGE_OVERLAY_OPEN_KEY = "nanasa.message-overlay-open.v1";
 const MAX_MESSAGE_HISTORY = 100;
+const intentDescriptions: Record<MessageIntent, string> = {
+  inform: "Share context or a status update. No response is required.",
+  request: "Ask an agent to perform work or provide an answer.",
+  response: "Reply to an earlier request or message.",
+  control: "Send a Human operator instruction for coordination or execution.",
+};
 
 interface MessageHistoryEntry {
   storedAt: string;
@@ -72,6 +80,14 @@ function loadClearedHistory(): Record<string, number> {
   }
 }
 
+function loadOverlayOpen(): boolean {
+  try {
+    return window.localStorage.getItem(MESSAGE_OVERLAY_OPEN_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 export interface MessageDraft {
   audienceKind: AudienceKind;
   recipientIds: string[];
@@ -111,10 +127,14 @@ function OutcomeRow({
     outcome.recipientMemberId;
   return (
     <li className={`outcome-row outcome-${outcome.status}`}>
-      <ActorAvatar name={alias} />
+      <ActorAvatar name={alias} memberId={outcome.recipientMemberId} />
       <span className="outcome-recipient">{alias}</span>
       <strong>{outcome.status}</strong>
-      <span>{outcome.attempts === 1 ? "1 attempt" : `${outcome.attempts} attempts`}</span>
+      {outcome.attempts > 1 && (
+        <span>
+          {outcome.attempts === 2 ? "Retried once" : `Retried ${outcome.attempts - 1} times`}
+        </span>
+      )}
       {outcome.reason !== undefined && <small>{outcome.reason}</small>}
     </li>
   );
@@ -127,9 +147,22 @@ function initials(name: string): string {
   return `${words[0]![0] ?? ""}${words[1]![0] ?? ""}`.toUpperCase();
 }
 
-function ActorAvatar({ name, human = false }: { name: string; human?: boolean }) {
+function ActorAvatar({
+  name,
+  memberId,
+  human = false,
+}: {
+  name: string;
+  memberId?: string;
+  human?: boolean;
+}) {
+  const title = human ? "Human via portal" : `${name} · ${memberId ?? "unknown member"}`;
   return (
-    <span className={`actor-avatar${human ? " actor-avatar-human" : ""}`} aria-hidden="true">
+    <span
+      className={`actor-avatar${human ? " actor-avatar-human" : ""}`}
+      aria-hidden="true"
+      title={title}
+    >
       {human ? "H" : initials(name)}
     </span>
   );
@@ -205,10 +238,22 @@ function ChatMessage({
       : (members.find((member) => member.memberId === senderMemberId)?.alias ?? senderMemberId);
   return (
     <li className={`chat-message${human ? " chat-message-human" : ""}`}>
-      <ActorAvatar name={actorName} human={human} />
+      <ActorAvatar
+        name={actorName}
+        {...(senderMemberId === undefined ? {} : { memberId: senderMemberId })}
+        human={human}
+      />
       <article className="chat-bubble">
         <header className="chat-message-heading">
-          <strong>From: {actorName}</strong>
+          <strong>
+            From: {actorName}
+            {senderMemberId !== undefined && (
+              <>
+                <span> · </span>
+                <code>{senderMemberId}</code>
+              </>
+            )}
+          </strong>
           <span className="chat-intent">{message.intent}</span>
           <time dateTime={message.createdAt}>
             {new Date(message.createdAt).toLocaleTimeString([], {
@@ -297,10 +342,14 @@ export function MessageWorkspace({
   deliveryOutcomes = [],
   onSubmit,
 }: MessageWorkspaceProps) {
-  const [expanded, setExpanded] = useState(
-    () =>
-      typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 720px)").matches,
+  const initialMessageSequence = Math.max(
+    0,
+    ...messages
+      .filter((message) => message.groupId === group.id)
+      .map((message) => message.groupSeq),
   );
+  const [open, setOpen] = useState(loadOverlayOpen);
+  const [composing, setComposing] = useState(false);
   const [audienceKind, setAudienceKind] = useState<AudienceKind>("dm");
   const [recipientIds, setRecipientIds] = useState<string[]>(
     members[0] === undefined ? [] : [members[0].memberId],
@@ -316,7 +365,10 @@ export function MessageWorkspace({
   const contextKey = `${group.id}:${members.map((member) => member.memberId).join(",")}`;
   const contextVersionRef = useRef(0);
   const historyRef = useRef<HTMLElement>(null);
+  const composerDialogRef = useRef<HTMLDialogElement>(null);
+  const launcherRef = useRef<HTMLButtonElement>(null);
   const nearBottomRef = useRef(true);
+  const [seenSequence, setSeenSequence] = useState(initialMessageSequence);
   const previousTimelineRef = useRef<{ groupId: string; latestId: string | undefined }>({
     groupId: group.id,
     latestId: undefined,
@@ -360,6 +412,45 @@ export function MessageWorkspace({
   useEffect(() => {
     if (history.length > 0) saveMessageHistory(history);
   }, [history]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(MESSAGE_OVERLAY_OPEN_KEY, String(open));
+    } catch {
+      // The overlay remains usable when browser storage is blocked.
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || composing || confirmingClear) return;
+      const overlay = document.getElementById("message-overlay");
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        target !== launcherRef.current &&
+        overlay?.contains(target) !== true
+      ) {
+        return;
+      }
+      event.preventDefault();
+      setOpen(false);
+      requestAnimationFrame(() => launcherRef.current?.focus());
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [composing, confirmingClear, open]);
+
+  useEffect(() => {
+    const dialog = composerDialogRef.current;
+    if (!composing || dialog === null) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    return () => {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+    };
+  }, [composing]);
 
   useEffect(() => {
     setHistory((current) => {
@@ -410,6 +501,16 @@ export function MessageWorkspace({
     )
     .filter((entry) => entry.submission.message.groupSeq > (clearedHistory[group.id] ?? 0));
   const latestMessageId = groupHistory.at(-1)?.submission.message.id;
+  const latestMessageSequence = groupHistory.at(-1)?.submission.message.groupSeq ?? 0;
+  const unreadCount = Math.max(0, latestMessageSequence - seenSequence);
+
+  useEffect(() => {
+    setSeenSequence(latestMessageSequence);
+  }, [group.id]);
+
+  useEffect(() => {
+    if (open) setSeenSequence(latestMessageSequence);
+  }, [latestMessageSequence, open]);
 
   const scrollToLatest = () => {
     const viewport = historyRef.current;
@@ -491,6 +592,7 @@ export function MessageWorkspace({
       });
       setBody("");
       setError(undefined);
+      setComposing(false);
     } catch (cause) {
       if (contextVersionRef.current !== submittedContextVersion) return;
       setError(cause instanceof Error ? cause.message : "Unable to send message");
@@ -511,77 +613,140 @@ export function MessageWorkspace({
   };
 
   return (
-    <section className="message-drawer" aria-label="Messages">
-      <header className="message-toolbar">
-        <div className="message-toolbar-title">
-          <MessageSquareText aria-hidden="true" size={17} />
-          <strong>Messages</strong>
-          <span>
-            {groupHistory.length === 0
-              ? "No history"
-              : `${groupHistory.length} ${groupHistory.length === 1 ? "message" : "messages"}`}
+    <>
+      <button
+        ref={launcherRef}
+        type="button"
+        className="message-launcher"
+        aria-label="Messages"
+        aria-expanded={open}
+        aria-controls="message-overlay"
+        title={open ? "Close messages" : "Open messages"}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <MessageCircle aria-hidden="true" size={20} />
+        {unreadCount > 0 && (
+          <span className="message-launcher-badge" aria-label={`${unreadCount} unread messages`}>
+            {unreadCount > 99 ? "99+" : unreadCount}
           </span>
-        </div>
-        <div className="message-toolbar-actions">
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="Clear all message history"
-            title="Clear browser message cache"
-            disabled={groupHistory.length === 0}
-            onClick={() => setConfirmingClear(true)}
-          >
-            <Trash2 aria-hidden="true" size={15} />
-          </button>
-          <button
-            type="button"
-            className="icon-button"
-            aria-expanded={expanded}
-            aria-controls="message-drawer-content"
-            aria-label={expanded ? "Collapse messages" : "Expand messages"}
-            title={expanded ? "Collapse messages" : "Expand messages"}
-            onClick={() => setExpanded((current) => !current)}
-          >
-            {expanded ? (
-              <ChevronUp aria-hidden="true" size={16} />
-            ) : (
-              <ChevronDown aria-hidden="true" size={16} />
-            )}
-          </button>
-        </div>
-      </header>
-      {expanded && (
-        <div id="message-drawer-content" className="message-workspace">
-          <section
-            ref={historyRef}
-            className="message-history"
-            aria-label="Message history"
-            onScroll={trackHistoryScroll}
-          >
-            {groupHistory.length === 0 ? (
-              <div className="empty-state compact-empty">
-                <p>Group messages will appear here.</p>
+        )}
+      </button>
+      {open && (
+        <section id="message-overlay" className="message-overlay" aria-label="Messages overlay">
+          <section className="message-panel" aria-label="Messages">
+            <header className="message-panel-header">
+              <div className="message-toolbar-title">
+                <MessageSquareText aria-hidden="true" size={17} />
+                <strong>Messages</strong>
+                <span>
+                  {groupHistory.length === 0
+                    ? "No history"
+                    : `${groupHistory.length} ${groupHistory.length === 1 ? "message" : "messages"}`}
+                </span>
               </div>
-            ) : (
-              <ol className="message-history-list">
-                {groupHistory.map(({ submission }) => (
-                  <ChatMessage
-                    key={submission.message.id}
-                    message={submission.message}
-                    outcomes={submission.deliveryOutcomes}
-                    members={historyMembers}
-                  />
-                ))}
-              </ol>
-            )}
-            {showJumpToLatest && (
-              <button type="button" className="jump-to-latest" onClick={scrollToLatest}>
-                <CircleArrowDown aria-hidden="true" size={15} />
-                New messages
+              <div className="message-toolbar-actions">
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Clear all message history"
+                  title="Clear browser message cache"
+                  disabled={groupHistory.length === 0}
+                  onClick={() => setConfirmingClear(true)}
+                >
+                  <Trash2 aria-hidden="true" size={15} />
+                </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Close messages"
+                  title="Close messages"
+                  onClick={() => {
+                    setOpen(false);
+                    requestAnimationFrame(() => launcherRef.current?.focus());
+                  }}
+                >
+                  <X aria-hidden="true" size={15} />
+                </button>
+              </div>
+            </header>
+            <section
+              ref={historyRef}
+              className="message-history"
+              aria-label="Message history"
+              onScroll={trackHistoryScroll}
+            >
+              {groupHistory.length === 0 ? (
+                <div className="empty-state compact-empty">
+                  <p>Group messages will appear here.</p>
+                </div>
+              ) : (
+                <ol className="message-history-list">
+                  {groupHistory.map(({ submission }) => (
+                    <ChatMessage
+                      key={submission.message.id}
+                      message={submission.message}
+                      outcomes={submission.deliveryOutcomes}
+                      members={historyMembers}
+                    />
+                  ))}
+                </ol>
+              )}
+              {showJumpToLatest && (
+                <button type="button" className="jump-to-latest" onClick={scrollToLatest}>
+                  <CircleArrowDown aria-hidden="true" size={15} />
+                  New messages
+                </button>
+              )}
+            </section>
+            <div className="message-prompt">
+              <input
+                aria-label="Compose message"
+                placeholder="Type a message..."
+                readOnly
+                disabled={members.length === 0}
+                onClick={() => setComposing(true)}
+                onFocus={() => setComposing(true)}
+              />
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Open message composer"
+                title="New message"
+                disabled={members.length === 0}
+                onClick={() => setComposing(true)}
+              >
+                <Send aria-hidden="true" size={15} />
               </button>
-            )}
+            </div>
           </section>
+        </section>
+      )}
+      {composing && (
+        <dialog
+          ref={composerDialogRef}
+          className="message-compose-dialog"
+          aria-labelledby="new-message-title"
+          onCancel={(event) => {
+            event.preventDefault();
+            if (!submitting) setComposing(false);
+          }}
+        >
           <form className="message-composer" onSubmit={(event) => void submit(event)}>
+            <header className="message-compose-header">
+              <div>
+                <span className="eyebrow">Group message</span>
+                <h2 id="new-message-title">New message</h2>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Close message composer"
+                disabled={submitting}
+                onClick={() => setComposing(false)}
+              >
+                <X aria-hidden="true" size={16} />
+              </button>
+            </header>
             <div className="message-routing-row">
               <label>
                 Audience
@@ -596,18 +761,21 @@ export function MessageWorkspace({
                   <option value="group">Group broadcast</option>
                 </select>
               </label>
-              <label>
-                Intent
-                <select
-                  value={intent}
-                  onChange={(event) => setIntent(event.target.value as MessageIntent)}
-                >
-                  <option value="inform">Inform</option>
-                  <option value="request">Request</option>
-                  <option value="response">Response</option>
-                  <option value="control">Control</option>
-                </select>
-              </label>
+              <div className="intent-field">
+                <label>
+                  Intent
+                  <select
+                    value={intent}
+                    onChange={(event) => setIntent(event.target.value as MessageIntent)}
+                  >
+                    <option value="inform">Inform</option>
+                    <option value="request">Request</option>
+                    <option value="response">Response</option>
+                    <option value="control">Control</option>
+                  </select>
+                </label>
+                <small className="intent-description">{intentDescriptions[intent]}</small>
+              </div>
               {audienceKind === "dm" && (
                 <label>
                   Recipient
@@ -649,7 +817,6 @@ export function MessageWorkspace({
               <div className="broadcast-summary">
                 <Users aria-hidden="true" size={16} />
                 <span>{members.length} eligible members</span>
-                <strong>revision {group.membershipRevision}</strong>
               </div>
             )}
             <label className="message-body-label">
@@ -669,6 +836,14 @@ export function MessageWorkspace({
                 </p>
               )}
               <button
+                type="button"
+                className="compact-button"
+                disabled={submitting}
+                onClick={() => setComposing(false)}
+              >
+                Cancel
+              </button>
+              <button
                 type="submit"
                 className="primary-button"
                 disabled={submitting || members.length === 0 || !audienceIsValid}
@@ -678,7 +853,7 @@ export function MessageWorkspace({
               </button>
             </div>
           </form>
-        </div>
+        </dialog>
       )}
       {confirmingClear && (
         <ConfirmClearHistoryDialog
@@ -686,6 +861,6 @@ export function MessageWorkspace({
           onConfirm={clearHistory}
         />
       )}
-    </section>
+    </>
   );
 }

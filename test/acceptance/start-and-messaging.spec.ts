@@ -14,9 +14,13 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
     "3 started",
   );
   await expect(page.getByRole("region", { name: /terminal$/ })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Messages", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Messages overlay" })).toHaveCount(0);
   await page.getByRole("button", { name: "Grid terminal layout" }).click();
   await expect(page.getByRole("region", { name: /terminal$/ })).toHaveCount(3);
-  await expect(page.getByRole("region", { name: "Messages" })).toBeVisible();
+  await page.getByRole("button", { name: "Messages", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Messages overlay" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Messages", exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "Agent terminals" })).toBeVisible();
   await expect(page.getByRole("group", { name: "Workspace input mode" })).toHaveCount(0);
 
@@ -53,13 +57,19 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
   await nanasa.waitForPaneText(paneByMember.get(members[0]!.memberId)!, "SAFE_MOUSE:WheelUp");
   await nanasa.waitForPaneText(paneByMember.get(members[0]!.memberId)!, "SAFE_MOUSE:WheelDown");
 
-  const audience = page.getByLabel("Audience");
-  const body = page.getByLabel("Message body");
+  const openComposer = async () => {
+    await page.getByLabel("Compose message").click();
+    return page.getByRole("dialog", { name: "New message" });
+  };
 
+  let composer = await openComposer();
+  let audience = composer.getByLabel("Audience");
+  let body = composer.getByLabel("Message body");
+  await expect(composer).toContainText("Ask an agent to perform work or provide an answer.");
   await audience.selectOption("dm");
-  await page.getByLabel("Recipient").selectOption(members[0]?.memberId);
+  await composer.getByLabel("Recipient").selectOption(members[0]?.memberId);
   await body.fill("acceptance-dm");
-  await page.getByRole("button", { name: "Send message" }).click();
+  await composer.getByRole("button", { name: "Send message" }).click();
   const history = page.getByRole("region", { name: "Message history" });
   await expect(history).toContainText("From: Human");
   await history.getByRole("button", { name: /Sent to 1/ }).click();
@@ -146,18 +156,24 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
     "acceptance-agent-broadcast",
   );
 
+  composer = await openComposer();
+  audience = composer.getByLabel("Audience");
+  body = composer.getByLabel("Message body");
   await audience.selectOption("multicast");
   await body.fill("acceptance-multicast");
-  await page.getByRole("button", { name: "Send message" }).click();
+  await composer.getByRole("button", { name: "Send message" }).click();
   await nanasa.waitForPaneText(paneByMember.get(members[0]!.memberId)!, "acceptance-multicast");
   await nanasa.waitForPaneText(paneByMember.get(members[1]!.memberId)!, "acceptance-multicast");
   expect(nanasa.capturePane(paneByMember.get(members[2]!.memberId)!)).not.toContain(
     "acceptance-multicast",
   );
 
+  composer = await openComposer();
+  audience = composer.getByLabel("Audience");
+  body = composer.getByLabel("Message body");
   await audience.selectOption("group");
   await body.fill("acceptance-broadcast");
-  await page.getByRole("button", { name: "Send message" }).click();
+  await composer.getByRole("button", { name: "Send message" }).click();
   for (const member of members) {
     await nanasa.waitForPaneText(paneByMember.get(member.memberId)!, "acceptance-broadcast");
   }

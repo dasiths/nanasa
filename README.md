@@ -112,6 +112,8 @@ enables portal serving and resolves the built assets from
 for managed agents. Installed-package users retain explicit opt-in through
 `nanasa start --mcp`.
 
+![Screenshot of portal](screenshot.png)
+
 ## Development
 
 Start the daemon watcher and Vite development server together:
@@ -294,23 +296,30 @@ states. Active recovery can be stopped but not started again. Retry is
 offered only when recovery cannot continue; a normally stopped member retains
 the standard Start action.
 
-The message drawer is a shared group-chat timeline backed by daemon messages.
+The floating Messages overlay is a shared group-chat timeline backed by daemon messages.
 Portal submissions appear as **Human**; MCP messages use the authenticated
 agent's membership alias. Agent-to-agent direct messages, multicasts, and
 broadcasts appear in the same oldest-to-newest timeline. Each message has an
 actor-initial badge and a collapsed delivery summary that expands to resolved
-recipients, attempts, statuses, and failure reasons. The newest message remains
-at the bottom, while a new-message control preserves position when older history
-is being read.
+recipients, retry information, statuses, and failure reasons. Agent messages
+show both alias and stable member ID; hovering an initials badge shows that ID.
+The newest message remains at the bottom, while a new-message control preserves
+position when older history is being read.
 
 Browser storage caches immediate portal submissions and records local Clear All
 markers. Clearing history hides current messages only in that browser; the
 authoritative daemon records remain available for operational history.
 
-On desktop, the horizontal composer and vertical history pane sit side by side
-inside the same collapsible Messages section. Narrow layouts stack the composer
-above history. Terminal tabs, status bars, iframe titles, and accessible names
-show both the editable alias and stable member ID.
+The bottom-right Messages launcher opens independently of terminal tabs and grid
+layout. It remembers its open state and shows an unread badge while closed. Its
+compact bottom prompt opens a modal containing audience, recipients, intent
+descriptions, and the full message body. On narrow screens, Messages becomes an
+inset full-screen sheet and hides the launcher until closed from the header.
+Terminal grid mode renders up to three agent columns, stepping down to two and
+one at narrower widths.
+Terminal tabs, status bars, iframe titles, and accessible names show both the
+editable alias and stable member ID. Membership revision remains an internal
+broadcast concurrency token and is not shown in the workspace header.
 
 Browser terminals configure 10,000 lines of xterm scrollback and enable tmux
 mouse routing. PageUp and PageDown pass through ttyd and tmux to raw-mode coding

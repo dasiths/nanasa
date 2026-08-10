@@ -32,6 +32,10 @@ ms.topic: reference
 * Group-row and terminal-tab copy controls: complete
 * Live retrying, rejected, revoked, and dead-letter events: complete
 * Portal-created three-agent group: complete
+* Floating persistent Messages launcher and responsive overlay: complete
+* Modal composer and intent descriptions: complete
+* Sender IDs, avatar tooltips, retry wording, and revision removal: complete
+* Three-column responsive grid cap and modal alignment: complete
 
 ## Placement and quality
 
@@ -43,7 +47,7 @@ ms.topic: reference
 
 ## Validation evidence
 
-* 36 contract tests, 95 daemon tests, 44 portal tests, and 6 package tests passed.
+* 36 contract tests, 95 daemon tests, 45 portal tests, and 6 package tests passed.
 * All 5 packaged Playwright scenarios passed.
 * Real packaged acceptance listed tools with an agent capability, sent an agent DM, delivered it to the recipient terminal, and rendered `From: Alpha` with consumed status.
 * Typecheck, lint, formatting, diagnostics, builds, and diff checks passed.

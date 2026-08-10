@@ -198,11 +198,13 @@ export function TerminalWorkspace({
             />
           ))}
       </div>
-      <div className="terminal-mode-note">
-        <CircleAlert aria-hidden="true" size={14} />
-        One live terminal client is allowed per run. If ttyd asks to reconnect, close the other open
-        terminal view first.
-      </div>
+      {availableRuns.length > 0 && (
+        <div className="terminal-mode-note">
+          <CircleAlert aria-hidden="true" size={14} />
+          One live terminal client is allowed per run. If ttyd asks to reconnect, close the other
+          open terminal view first.
+        </div>
+      )}
     </div>
   );
 }

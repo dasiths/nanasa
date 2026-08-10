@@ -18,6 +18,7 @@ import { GroupTree } from "./components/group-tree.js";
 import {
   buildMessageCommand,
   MESSAGE_HISTORY_KEY,
+  MESSAGE_OVERLAY_OPEN_KEY,
   MessageWorkspace,
 } from "./components/message-workspace.js";
 import { PORTAL_PREFERENCES_KEY } from "./hooks/use-portal-preferences.js";
@@ -204,9 +205,15 @@ function submissionResult(): MessageSubmissionResult {
   };
 }
 
+async function openMessageComposer(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByLabelText("Compose message"));
+  return screen.getByRole("dialog", { name: "New message" });
+}
+
 describe("portal application", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    window.localStorage.setItem(MESSAGE_OVERLAY_OPEN_KEY, "true");
   });
 
   it("refreshes the snapshot when the domain event socket connects", async () => {
@@ -591,21 +598,70 @@ describe("portal application", () => {
     expect(screen.getByText(/1 members/)).toBeInTheDocument();
   });
 
-  it("keeps terminals visible below the collapsible message toolbar", async () => {
+  it("keeps floating Messages open across the workspace and restores launcher focus", async () => {
     const user = userEvent.setup();
     render(<App client={createClient()} />);
 
     expect(await screen.findByTestId("terminal-surface")).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Messages" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Message body")).toBeInTheDocument();
+    expect(screen.getByLabelText("Compose message")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Message body")).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Workspace input mode" })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Collapse messages" }));
-    expect(screen.queryByLabelText("Message body")).not.toBeInTheDocument();
-    expect(screen.getByTestId("terminal-surface")).toBeInTheDocument();
+    await user.click(
+      within(screen.getByRole("region", { name: "Messages overlay" })).getByRole("button", {
+        name: "Close messages",
+      }),
+    );
+    expect(screen.queryByRole("region", { name: "Messages" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Messages" })).toHaveFocus());
+    await user.click(screen.getByRole("button", { name: "Messages" }));
+    expect(window.localStorage.getItem(MESSAGE_OVERLAY_OPEN_KEY)).toBe("true");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("region", { name: "Messages" })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Messages" })).toHaveFocus());
+    expect(window.localStorage.getItem(MESSAGE_OVERLAY_OPEN_KEY)).toBe("false");
+    await user.click(screen.getByRole("button", { name: "Messages" }));
 
-    await user.click(screen.getByRole("button", { name: "Expand messages" }));
-    expect(screen.getByLabelText("Message body")).toBeInTheDocument();
+    const dialog = await openMessageComposer(user);
+    expect(within(dialog).getByLabelText("Message body")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("Ask an agent to perform work or provide an answer."),
+    ).toBeInTheDocument();
+    await user.selectOptions(within(dialog).getByLabelText("Intent"), "inform");
+    expect(
+      within(dialog).getByText("Share context or a status update. No response is required."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows unread messages on the closed launcher and marks them seen when opened", async () => {
+    window.localStorage.setItem(MESSAGE_OVERLAY_OPEN_KEY, "false");
+    const onSubmit = vi.fn().mockResolvedValue(submissionResult());
+    const { rerender } = render(
+      <MessageWorkspace
+        group={snapshot.groups[0]!}
+        members={memberships.slice(0, 2)}
+        messages={[]}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    expect(screen.queryByRole("region", { name: "Messages" })).not.toBeInTheDocument();
+    rerender(
+      <MessageWorkspace
+        group={snapshot.groups[0]!}
+        members={memberships.slice(0, 2)}
+        messages={[submissionResult().message]}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    expect(await screen.findByLabelText("1 unread messages")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Messages" }));
+    expect(screen.getByRole("region", { name: "Messages" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByLabelText("1 unread messages")).not.toBeInTheDocument(),
+    );
   });
 
   it("builds a broadcast payload with the current membership revision", () => {
@@ -630,6 +686,7 @@ describe("portal application", () => {
     const client = createClient(submissionResult());
     render(<App client={client} />);
     await screen.findByRole("heading", { name: "Backend" });
+    await openMessageComposer(user);
     await user.type(screen.getByLabelText("Message body"), "Review the API");
     await user.click(screen.getByRole("button", { name: "Send message" }));
 
@@ -654,6 +711,7 @@ describe("portal application", () => {
     const user = userEvent.setup();
     const first = render(<App client={createClient(submissionResult())} />);
     await screen.findByRole("heading", { name: "Backend" });
+    await openMessageComposer(user);
     await user.type(screen.getByLabelText("Message body"), "Review the API");
     await user.click(screen.getByRole("button", { name: "Send message" }));
     expect(await screen.findByText("Review the API")).toBeInTheDocument();
@@ -706,7 +764,7 @@ describe("portal application", () => {
           messageId: agentMessage.id,
           recipientMemberId: "builder",
           status: "consumed",
-          attempts: 1,
+          attempts: 2,
           updatedAt: agentMessage.createdAt,
         },
       ],
@@ -719,19 +777,24 @@ describe("portal application", () => {
 
     expect(screen.getAllByText(/^From:/).map((heading) => heading.textContent)).toEqual([
       "From: Human",
-      "From: Reviewer",
+      "From: Reviewer · reviewer",
     ]);
     expect(container.querySelectorAll(".actor-avatar")).toHaveLength(2);
     expect(container.querySelectorAll(".actor-avatar")[0]).toHaveTextContent("H");
     expect(container.querySelectorAll(".actor-avatar")[1]).toHaveTextContent("RE");
-    const agentBubble = screen.getByText("From: Reviewer").closest("article");
+    expect(container.querySelectorAll(".actor-avatar")[1]).toHaveAttribute(
+      "title",
+      "Reviewer · reviewer",
+    );
+    const agentBubble = screen.getByText(/^From: Reviewer/).closest("article");
     expect(agentBubble).not.toBeNull();
     const agentDelivery = within(agentBubble!).getByRole("button", {
       name: "Sent to 1 · 1 consumed",
     });
     await user.click(agentDelivery);
     expect(within(agentBubble!).getByText("Builder")).toBeInTheDocument();
-    expect(within(agentBubble!).getByText("1 attempt")).toBeInTheDocument();
+    expect(within(agentBubble!).getByText("Retried once")).toBeInTheDocument();
+    expect(within(agentBubble!).queryByText("2 attempts")).not.toBeInTheDocument();
   });
 
   it("reconciles recipients and outcomes when the selected group changes", async () => {
@@ -745,6 +808,7 @@ describe("portal application", () => {
       />,
     );
 
+    await openMessageComposer(user);
     await user.type(screen.getByLabelText("Message body"), "Backend message");
     await user.click(screen.getByRole("button", { name: "Send message" }));
     expect(await screen.findByRole("button", { name: "Sent to 1 · 1 queued" })).toBeInTheDocument();
@@ -761,6 +825,7 @@ describe("portal application", () => {
         screen.queryByRole("button", { name: "Sent to 1 · 1 queued" }),
       ).not.toBeInTheDocument(),
     );
+    await openMessageComposer(user);
     expect(screen.getByLabelText("Recipient")).toHaveValue("auditor");
 
     await user.type(screen.getByLabelText("Message body"), "Review message");
@@ -784,6 +849,7 @@ describe("portal application", () => {
       />,
     );
 
+    await openMessageComposer(user);
     await user.selectOptions(screen.getByLabelText("Recipient"), "reviewer");
     await user.type(screen.getByLabelText("Message body"), "First attempt");
     await user.click(screen.getByRole("button", { name: "Send message" }));
@@ -799,6 +865,7 @@ describe("portal application", () => {
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
     expect(screen.getByLabelText("Recipient")).toHaveValue("builder");
 
+    await openMessageComposer(user);
     await user.clear(screen.getByLabelText("Message body"));
     await user.type(screen.getByLabelText("Message body"), "Second attempt");
     await user.click(screen.getByRole("button", { name: "Send message" }));
@@ -824,6 +891,7 @@ describe("portal application", () => {
       />,
     );
 
+    await openMessageComposer(user);
     await user.type(screen.getByLabelText("Message body"), "Pending message");
     await user.click(screen.getByRole("button", { name: "Send message" }));
     expect(screen.getByRole("button", { name: "Sending..." })).toBeDisabled();
@@ -846,6 +914,7 @@ describe("portal application", () => {
     const client = createClient();
     render(<App client={client} />);
     await screen.findByRole("heading", { name: "Backend" });
+    await openMessageComposer(user);
     await user.selectOptions(screen.getByLabelText("Audience"), "multicast");
     await user.click(screen.getByLabelText("Reviewer"));
     expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();

@@ -47,20 +47,19 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
   expect(desktopRail).not.toBeNull();
   expect(desktopWorkspace).not.toBeNull();
   expect(desktopWorkspace!.x).toBeGreaterThanOrEqual(desktopRail!.x + desktopRail!.width - 1);
-  const desktopMessages = await page.getByRole("region", { name: "Messages" }).boundingBox();
-  const desktopTerminals = await page
-    .getByRole("region", { name: "Agent terminals" })
+  await page.getByRole("button", { name: "Messages", exact: true }).click();
+  const desktopMessages = await page
+    .getByRole("region", { name: "Messages overlay" })
     .boundingBox();
   expect(desktopMessages).not.toBeNull();
-  expect(desktopTerminals).not.toBeNull();
-  expect(desktopTerminals!.y).toBeGreaterThanOrEqual(
-    desktopMessages!.y + desktopMessages!.height - 1,
-  );
+  expect(desktopMessages!.x).toBeGreaterThan(desktopWorkspace!.x);
+  expect(desktopMessages!.y).toBeGreaterThan(0);
+  expect(desktopMessages!.x + desktopMessages!.width).toBeLessThanOrEqual(1280);
+  expect(desktopMessages!.y + desktopMessages!.height).toBeLessThanOrEqual(800);
 
-  await page.getByRole("button", { name: "Collapse messages" }).click();
   await expect(page.getByLabel("Message body")).toHaveCount(0);
+  await expect(page.getByLabel("Compose message")).toBeVisible();
   await expect(page.getByRole("region", { name: "Agent terminals" })).toBeVisible();
-  await page.getByRole("button", { name: "Expand messages" }).click();
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
@@ -72,9 +71,11 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
   expect(mobileWorkspace).not.toBeNull();
   expect(mobileWorkspace!.y).toBeGreaterThanOrEqual(mobileRail!.y + mobileRail!.height - 1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-  await expect(page.getByRole("region", { name: "Messages" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Messages overlay" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Messages", exact: true })).toBeHidden();
+  await expect(page.getByRole("region", { name: "Messages", exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "Agent terminals" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Expand messages" })).toBeVisible();
+  await expect(page.getByLabel("Compose message")).toBeVisible();
   await expect(page.getByLabel("Message body")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Start all non-running agents in Responsive team" }),

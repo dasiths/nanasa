@@ -23,6 +23,10 @@ applyTo: "**"
 * Add copy controls beside member IDs in group rows and terminal tabs.
 * Publish retrying, rejected, revoked, and dead-letter delivery transitions live.
 * Recreate GitHub Copilot, Claude Copilot, and PI through the portal using Playwright.
+* Integrate Messages into the terminal tab and grid workspace.
+* Open detailed message controls from a compact bottom prompt.
+* Describe each intent, show sender IDs in chat and avatar tooltips, and clarify retries.
+* Hide the internal membership revision and cap grid mode at three columns.
 
 ## Context Summary
 
@@ -80,6 +84,10 @@ Research is recorded in `.copilot-tracking/research/2026-08-10/chat-history-agen
 * [x] Add and test copy-ID controls in group rows and terminal tabs.
 * [x] Publish all requested delivery status transitions as domain events.
 * [x] Create Agent Team and its three requested agents through Playwright portal workflows.
+* [x] Make Messages the default workspace tab and include it in grid mode.
+* [x] Move routing controls into a modal opened from the compact message prompt.
+* [x] Add intent descriptions, sender IDs, initials tooltips, and retry wording.
+* [x] Remove visible membership revision and cap grid at three responsive columns.
 
 ## Success Criteria
 
