@@ -789,7 +789,7 @@ export function MessageWorkspace({
                     </option>
                     {members.map((member) => (
                       <option key={member.id} value={member.memberId}>
-                        {member.alias}
+                        {member.alias} ({member.memberId})
                       </option>
                     ))}
                   </select>
@@ -807,7 +807,7 @@ export function MessageWorkspace({
                         checked={recipientIds.includes(member.memberId)}
                         onChange={() => toggleRecipient(member.memberId)}
                       />
-                      {member.alias}
+                      {member.alias} ({member.memberId})
                     </label>
                   ))}
                 </div>

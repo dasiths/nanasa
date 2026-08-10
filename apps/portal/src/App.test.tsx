@@ -625,6 +625,8 @@ describe("portal application", () => {
 
     const dialog = await openMessageComposer(user);
     expect(within(dialog).getByLabelText("Message body")).toBeInTheDocument();
+    expect(within(dialog).getByRole("option", { name: "Builder (builder)" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("option", { name: "Reviewer (reviewer)" })).toBeInTheDocument();
     expect(
       within(dialog).getByText("Ask an agent to perform work or provide an answer."),
     ).toBeInTheDocument();
@@ -916,7 +918,9 @@ describe("portal application", () => {
     await screen.findByRole("heading", { name: "Backend" });
     await openMessageComposer(user);
     await user.selectOptions(screen.getByLabelText("Audience"), "multicast");
-    await user.click(screen.getByLabelText("Reviewer"));
+    expect(screen.getByLabelText("Builder (builder)")).toBeChecked();
+    expect(screen.getByLabelText("Reviewer (reviewer)")).toBeChecked();
+    await user.click(screen.getByLabelText("Reviewer (reviewer)"));
     expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
     await user.selectOptions(screen.getByLabelText("Audience"), "group");
     expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
