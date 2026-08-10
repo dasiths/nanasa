@@ -1,0 +1,42 @@
+version: 1
+agentTypes:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+    adapter: copilot-cli
+    command: [copilot]
+    cwd: .
+    recovery: resume-or-restart
+    capabilities: [queue]
+  pi:
+    name: Pi
+    kind: pi
+    adapter: pi-rpc
+    command: [pi]
+    cwd: .
+    recovery: resume-or-restart
+    capabilities: [queue, steer]
+  opencode:
+    name: OpenCode
+    kind: opencode
+    adapter: terminal
+    command: [opencode]
+    cwd: .
+    recovery: restart
+    capabilities: [queue]
+  claude-code:
+    name: Claude Code
+    kind: claude-code
+    adapter: terminal
+    command: [claude]
+    cwd: .
+    recovery: restart
+    capabilities: [queue]
+  claude-copilot:
+    name: Claude Code via Copilot
+    kind: claude-code
+    adapter: terminal
+    command: [make, claude-copilot]
+    cwd: .
+    recovery: restart
+    capabilities: [queue]

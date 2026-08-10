@@ -143,3 +143,10 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# app data
+apps/daemon/data
+
+# Nanasa repository-local runtime data. Commit .nanasa/config.yaml.
+.nanasa/state/
+.nanasa/runtime/

@@ -1,0 +1,38 @@
+{
+  "files": {
+    "ignoreUnknown": true,
+    "includes": [
+      "package.json",
+      "pnpm-workspace.yaml",
+      "pnpm-lock.yaml",
+      "tsconfig.base.json",
+      "eslint.config.js",
+      "biome.json",
+      "bin/**",
+      "scripts/**",
+      "test/**",
+      "templates/**",
+      "apps/**",
+      "packages/**",
+      "!!**/dist",
+      "!!**/node_modules"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": false
+  },
+  "overrides": [
+    {
+      "includes": ["apps/daemon/tsconfig.json"],
+      "formatter": {
+        "enabled": false
+      }
+    }
+  ]
+}

@@ -19,6 +19,10 @@ readonly PNPM_DEFAULT_VERSION="10.34.5"
 echo "==> Configuring git"
 git config --global --add safe.directory "${PWD}"
 
+echo "==> Installing tmux"
+sudo apt-get update
+sudo apt-get install --yes --no-install-recommends tmux
+
 echo "==> Pointing every npm client at the package registry"
 # npm's builtin npmrc is read by npm, npx and pnpm for every user, including root
 # via sudo, which strips NPM_CONFIG_REGISTRY from the environment.
@@ -74,6 +78,7 @@ done
 echo "==> Versions"
 node --version
 pnpm --version
+tmux -V
 docker --version || echo "docker socket not mounted"
 gh --version | head -1
 copilot --version
