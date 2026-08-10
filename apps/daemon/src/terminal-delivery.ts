@@ -12,6 +12,14 @@ interface TerminalWriterRegistry {
   hasWriter(runId: string): boolean;
 }
 
+export function formatTerminalDelivery(claim: DeliveryClaim): string {
+  const sender =
+    claim.message.sender.kind === "agent"
+      ? `${claim.senderAlias} | Member: ${claim.message.sender.memberId}`
+      : "Human";
+  return `[From: ${sender} | Intent: ${claim.message.intent}]\n${claim.message.body.text}`;
+}
+
 export class TmuxTerminalDelivery {
   readonly #runtime: TerminalDeliveryRuntime;
   readonly #endpoints: TerminalWriterRegistry;
@@ -36,6 +44,6 @@ export class TmuxTerminalDelivery {
     if (this.#endpoints.hasWriter(claim.run.id)) {
       throw new Error("terminal_writer_conflict");
     }
-    await this.#runtime.pasteToRun(claim.run, claim.message.body.text);
+    await this.#runtime.pasteToRun(claim.run, formatTerminalDelivery(claim));
   }
 }

@@ -29,6 +29,7 @@ const MulticastMessageSchema = MessageFieldsSchema.extend({
     .min(2)
     .refine((ids) => new Set(ids).size === ids.length),
 });
+const ListMembersSchema = z.object({ groupId: IdentifierSchema.optional() }).strict();
 
 export interface McpRouteOptions {
   path: string;
@@ -110,8 +111,64 @@ function commandBase(principal: McpPrincipal, input: z.infer<typeof MessageField
   };
 }
 
+function listMembersResult(
+  principal: McpPrincipal,
+  options: McpRouteOptions,
+  input: z.infer<typeof ListMembersSchema>,
+) {
+  const groupId = targetGroup(principal, input.groupId);
+  const snapshot = options.store.getSnapshot();
+  const members = snapshot.memberships
+    .filter((membership) => membership.groupId === groupId && membership.state === "active")
+    .sort((left, right) => left.memberId.localeCompare(right.memberId))
+    .map((membership) => {
+      const profile = snapshot.agentProfiles.find(
+        (candidate) => candidate.id === membership.agentProfileId,
+      );
+      const run = snapshot.runs
+        .filter(
+          (candidate) =>
+            candidate.groupId === groupId && candidate.memberId === membership.memberId,
+        )
+        .sort((left, right) => right.generation - left.generation)[0];
+      return {
+        memberId: membership.memberId,
+        alias: membership.alias,
+        agentType: profile?.agentType ?? "unknown",
+        runStatus:
+          run !== undefined && ["starting", "running", "stopping"].includes(run.status)
+            ? run.status
+            : "offline",
+        isCaller: principal.kind === "agent" && principal.memberId === membership.memberId,
+      };
+    });
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: members
+          .map(
+            (member) =>
+              `${member.alias} (${member.memberId}) · ${member.agentType} · ${member.runStatus}${member.isCaller ? " · you" : ""}`,
+          )
+          .join("\n"),
+      },
+    ],
+    structuredContent: { groupId, members },
+  };
+}
+
 function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): McpServer {
   const server = new McpServer({ name: "nanasa", version: "0.0.0" });
+  server.registerTool(
+    "nanasa.list_members",
+    {
+      description:
+        "List active members in the caller's group with recipient IDs, aliases, agent types, and run status",
+      inputSchema: ListMembersSchema,
+    },
+    async (input) => listMembersResult(principal, options, input),
+  );
   server.registerTool(
     "nanasa.send_dm",
     {

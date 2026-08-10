@@ -150,6 +150,10 @@ test("packed package installs cleanly and initializes terminal-only config", () 
   const repository = join(installDirectory, "repository");
   mkdirGit(repository);
   const installedCli = join(installDirectory, "node_modules", ".bin", "nanasa");
+  assert.equal(
+    existsSync(join(installDirectory, "node_modules", "pi-mcp-adapter", "index.ts")),
+    true,
+  );
   const initialized = spawnSync(installedCli, ["init"], { cwd: repository, encoding: "utf8" });
   assert.equal(initialized.status, 0, initialized.stderr);
   const configPath = join(repository, ".nanasa", "config.yaml");

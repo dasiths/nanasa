@@ -26,7 +26,8 @@ VITE_DAEMON_URL=http://127.0.0.1:4210 pnpm --filter @nanasa/portal dev
 ttyd is the portal's only terminal provider. Tab layout mounts one iframe for
 the selected run. Grid layout mounts one iframe for each visible run. Every
 iframe uses the daemon-provided same-origin URL, a descriptive title, and a
-same-origin referrer policy.
+same-origin referrer policy. Tabs, status bars, iframe titles, and accessible
+terminal names include both the member alias and stable member ID.
 
 Each ttyd endpoint permits one live client. If ttyd asks to reconnect, close any
 other tab, grid, or browser showing that run before retrying. Unmounting an
@@ -34,12 +35,26 @@ iframe removes only ttyd's disposable tmux client; the owner pane and agent
 process continue in the daemon's private tmux server. Starting, retrying,
 unavailable, and stopped states render outside the iframe.
 
-The portal displays structured message records and durable delivery outcomes.
-Message Mode sends every message through the same terminal transport. The daemon
-pastes text into each verified recipient pane with bracketed paste enabled, then
-sends Enter separately. A successful outcome confirms injection, not semantic
-completion by the agent CLI. Message Mode remains separate from the direct
-keyboard controls in Terminal Mode.
+ttyd provides 10,000 lines of xterm scrollback. PageUp and PageDown remain input
+for the active TUI, and tmux mouse mode forwards wheel events to mouse-aware
+applications or uses them for copy-mode scrollback. Full-screen alternate-screen
+TUIs own their visible history, so browser scrollbars can remain stationary even
+while the application scrolls internally.
+
+The portal displays every persisted group message as a shared chronological chat
+timeline. Portal senders appear as Human; authenticated MCP senders use their
+membership alias, so agent-to-agent messages are visible alongside operator
+messages. Each message exposes a collapsed recipient and delivery summary with
+live outcomes.
+
+Desktop layouts place history in a vertical pane beside the horizontal composer.
+Tablet and mobile layouts stack the composer above the history pane.
+
+The composer and terminal views remain mounted in one workspace. Before any
+portal or agent-originated delivery, the portal temporarily disconnects writable
+ttyd clients so the daemon can paste text into each verified recipient pane and
+send Enter separately. A consumed outcome confirms terminal injection, not
+semantic completion by the agent CLI.
 
 ## Operations and preferences
 
@@ -58,8 +73,9 @@ continuation; Retry appears only after continuation can no longer proceed.
 Light, dark, and system themes and the terminal tab or grid layout persist in
 `localStorage` under `nanasa.portal.preferences.v1`. Storage events synchronize
 open tabs. Malformed values and unavailable storage use system theme and tab
-layout while controls remain usable. Preferences are independent of group
-selection and Terminal Mode remains separate from Message Mode.
+layout while controls remain usable. Browser-local message cache and clear
+markers use separate versioned keys. Preferences are independent of group
+selection.
 
 ## Production build
 

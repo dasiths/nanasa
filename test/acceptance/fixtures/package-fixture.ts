@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -40,6 +41,16 @@ interface Snapshot {
   agentProfiles: { id: string }[];
   memberships: Membership[];
   runs: Run[];
+}
+
+interface McpResponse {
+  result?: {
+    tools?: { name: string }[];
+    structuredContent?: unknown;
+    isError?: boolean;
+    content?: { type: string; text?: string }[];
+  };
+  error?: { message: string };
 }
 
 export interface TerminalEndpointStatus {
@@ -142,7 +153,7 @@ export class PackageAcceptanceService {
         "agentTypes:",
         "  echo:",
         "    name: Safe Echo",
-        "    kind: copilot",
+        "    kind: opencode",
         `    command: [${JSON.stringify(process.execPath)}, ${JSON.stringify(echoAgentPath)}]`,
         "    cwd: .",
         "",
@@ -172,6 +183,7 @@ export class PackageAcceptanceService {
         String(this.port),
         "--ttyd-path",
         ttydPath(),
+        "--mcp",
       ],
       {
         cwd: this.repository,
@@ -231,7 +243,6 @@ export class PackageAcceptanceService {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            memberId: `member-${randomUUID()}`,
             agentProfileId: profile.id,
             alias,
           }),
@@ -243,6 +254,79 @@ export class PackageAcceptanceService {
 
   async snapshot(): Promise<Snapshot> {
     return this.request<Snapshot>("/api/snapshot");
+  }
+
+  async agentMcpRequest(
+    paneId: string,
+    method: string,
+    params: Record<string, unknown>,
+    toolName?: string,
+  ): Promise<McpResponse> {
+    const panePidResult = spawnSync(
+      "tmux",
+      [
+        "-L",
+        this.tmuxServer,
+        "-f",
+        "/dev/null",
+        "display-message",
+        "-p",
+        "-t",
+        paneId,
+        "#{pane_pid}",
+      ],
+      { encoding: "utf8" },
+    );
+    if (panePidResult.status !== 0) throw new Error(panePidResult.stderr);
+    const panePid = Number(panePidResult.stdout.trim());
+    const token = readFileSync(`/proc/${panePid}/environ`)
+      .toString("utf8")
+      .split("\0")
+      .find((entry) => entry.startsWith("NANASA_MCP_TOKEN="))
+      ?.slice("NANASA_MCP_TOKEN=".length);
+    if (token === undefined || token.length === 0) {
+      throw new Error(`Pane ${paneId} does not have an MCP capability`);
+    }
+    const response = await fetch(`${this.baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json, text/event-stream",
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "MCP-Protocol-Version": "2026-07-28",
+        "MCP-Method": method,
+        ...(toolName === undefined ? {} : { "MCP-Name": toolName }),
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: randomUUID(),
+        method,
+        params: {
+          ...params,
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientInfo": {
+              name: "nanasa-acceptance-agent",
+              version: "1.0.0",
+            },
+            "io.modelcontextprotocol/clientCapabilities": {},
+          },
+        },
+      }),
+    });
+    const payload = (await response.json()) as McpResponse;
+    if (!response.ok || payload.error !== undefined) {
+      throw new Error(payload.error?.message ?? `MCP ${method} failed with ${response.status}`);
+    }
+    if (payload.result?.isError === true) {
+      throw new Error(
+        payload.result.content
+          ?.map((item) => item.text)
+          .filter(Boolean)
+          .join("; ") || `MCP ${method} returned an error`,
+      );
+    }
+    return payload;
   }
 
   async waitForTerminalReady(runId: string): Promise<TerminalEndpointStatus & { url: string }> {

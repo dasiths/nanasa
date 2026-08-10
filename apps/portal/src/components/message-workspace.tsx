@@ -3,6 +3,7 @@ import {
   type DeliveryOutcome,
   type Group,
   type GroupMembership,
+  type Message,
   type MessageIntent,
   type MessageSubmissionResult,
   MessageSubmissionResultSchema,
@@ -10,19 +11,21 @@ import {
   SubmitMessageCommandSchema,
 } from "@nanasa/contracts";
 import {
-  CheckCircle2,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
+  CircleArrowDown,
   MessageSquareText,
   Send,
   Trash2,
   Users,
 } from "lucide-react";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 
 type AudienceKind = Audience["kind"];
 
 export const MESSAGE_HISTORY_KEY = "nanasa.message-history.v1";
+export const MESSAGE_HISTORY_CLEARED_KEY = "nanasa.message-history-cleared.v1";
 const MAX_MESSAGE_HISTORY = 100;
 
 interface MessageHistoryEntry {
@@ -50,6 +53,23 @@ function loadMessageHistory(): MessageHistoryEntry[] {
 
 function saveMessageHistory(history: MessageHistoryEntry[]): void {
   window.localStorage.setItem(MESSAGE_HISTORY_KEY, JSON.stringify(history));
+}
+
+function loadClearedHistory(): Record<string, number> {
+  try {
+    const value = window.localStorage.getItem(MESSAGE_HISTORY_CLEARED_KEY);
+    if (value === null) return {};
+    const parsed: unknown = JSON.parse(value);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, number] =>
+          typeof entry[1] === "number" && Number.isInteger(entry[1]) && entry[1] >= 0,
+      ),
+    );
+  } catch {
+    return {};
+  }
 }
 
 export interface MessageDraft {
@@ -91,10 +111,115 @@ function OutcomeRow({
     outcome.recipientMemberId;
   return (
     <li className={`outcome-row outcome-${outcome.status}`}>
-      <CheckCircle2 aria-hidden="true" size={16} />
+      <ActorAvatar name={alias} />
       <span className="outcome-recipient">{alias}</span>
       <strong>{outcome.status}</strong>
+      <span>{outcome.attempts === 1 ? "1 attempt" : `${outcome.attempts} attempts`}</span>
       {outcome.reason !== undefined && <small>{outcome.reason}</small>}
+    </li>
+  );
+}
+
+function initials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "?";
+  if (words.length === 1) return words[0]!.slice(0, 2).toUpperCase();
+  return `${words[0]![0] ?? ""}${words[1]![0] ?? ""}`.toUpperCase();
+}
+
+function ActorAvatar({ name, human = false }: { name: string; human?: boolean }) {
+  return (
+    <span className={`actor-avatar${human ? " actor-avatar-human" : ""}`} aria-hidden="true">
+      {human ? "H" : initials(name)}
+    </span>
+  );
+}
+
+function deliverySummary(outcomes: DeliveryOutcome[]): string {
+  if (outcomes.length === 0) return "No recipients";
+  const counts = new Map<string, number>();
+  for (const outcome of outcomes) {
+    counts.set(outcome.status, (counts.get(outcome.status) ?? 0) + 1);
+  }
+  const statuses = [...counts].map(([status, count]) => `${count} ${status}`).join(" · ");
+  return `Sent to ${outcomes.length} · ${statuses}`;
+}
+
+function DeliveryDetails({
+  messageId,
+  outcomes,
+  members,
+}: {
+  messageId: string;
+  outcomes: DeliveryOutcome[];
+  members: GroupMembership[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const generatedId = useId();
+  const detailsId = `delivery-${messageId.replaceAll(/[^A-Za-z0-9_-]/g, "-")}-${generatedId.replaceAll(":", "")}`;
+  return (
+    <div className="delivery-details">
+      <button
+        type="button"
+        className="delivery-summary"
+        aria-expanded={expanded}
+        aria-controls={detailsId}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        {expanded ? (
+          <ChevronDown aria-hidden="true" size={14} />
+        ) : (
+          <ChevronRight aria-hidden="true" size={14} />
+        )}
+        <span>{deliverySummary(outcomes)}</span>
+      </button>
+      {expanded && (
+        <ul id={detailsId} className="outcome-list">
+          {outcomes.map((outcome) => (
+            <OutcomeRow
+              key={`${outcome.messageId}:${outcome.recipientMemberId}`}
+              outcome={outcome}
+              members={members}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ChatMessage({
+  message,
+  outcomes,
+  members,
+}: {
+  message: Message;
+  outcomes: DeliveryOutcome[];
+  members: GroupMembership[];
+}) {
+  const senderMemberId = message.sender.kind === "agent" ? message.sender.memberId : undefined;
+  const human = senderMemberId === undefined;
+  const actorName =
+    senderMemberId === undefined
+      ? "Human"
+      : (members.find((member) => member.memberId === senderMemberId)?.alias ?? senderMemberId);
+  return (
+    <li className={`chat-message${human ? " chat-message-human" : ""}`}>
+      <ActorAvatar name={actorName} human={human} />
+      <article className="chat-bubble">
+        <header className="chat-message-heading">
+          <strong>From: {actorName}</strong>
+          <span className="chat-intent">{message.intent}</span>
+          <time dateTime={message.createdAt}>
+            {new Date(message.createdAt).toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </time>
+        </header>
+        <p>{message.body.text}</p>
+        <DeliveryDetails messageId={message.id} outcomes={outcomes} members={members} />
+      </article>
     </li>
   );
 }
@@ -102,6 +227,8 @@ function OutcomeRow({
 interface MessageWorkspaceProps {
   group: Group;
   members: GroupMembership[];
+  historyMembers?: GroupMembership[];
+  messages?: Message[];
   deliveryOutcomes?: DeliveryOutcome[];
   onSubmit(command: SubmitMessageCommand): Promise<MessageSubmissionResult>;
 }
@@ -137,7 +264,10 @@ function ConfirmClearHistoryDialog({
     >
       <div className="confirmation-dialog-body">
         <h2 id="confirm-clear-message-history-title">Clear all message history?</h2>
-        <p>This permanently removes all saved message history from this browser.</p>
+        <p>
+          This hides the current group history in this browser. Messages remain persisted by the
+          Nanasa daemon, and new messages will still appear.
+        </p>
         <div className="confirmation-actions">
           <button type="button" className="compact-button" onClick={onCancel}>
             Cancel
@@ -162,6 +292,8 @@ function ConfirmClearHistoryDialog({
 export function MessageWorkspace({
   group,
   members,
+  historyMembers = members,
+  messages = [],
   deliveryOutcomes = [],
   onSubmit,
 }: MessageWorkspaceProps) {
@@ -176,11 +308,19 @@ export function MessageWorkspace({
   const [intent, setIntent] = useState<MessageIntent>("request");
   const [body, setBody] = useState("");
   const [history, setHistory] = useState(loadMessageHistory);
+  const [clearedHistory, setClearedHistory] = useState(loadClearedHistory);
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const contextKey = `${group.id}:${members.map((member) => member.memberId).join(",")}`;
   const contextVersionRef = useRef(0);
+  const historyRef = useRef<HTMLElement>(null);
+  const nearBottomRef = useRef(true);
+  const previousTimelineRef = useRef<{ groupId: string; latestId: string | undefined }>({
+    groupId: group.id,
+    latestId: undefined,
+  });
 
   useEffect(() => {
     contextVersionRef.current += 1;
@@ -211,10 +351,15 @@ export function MessageWorkspace({
   useEffect(() => {
     const synchronize = (event: StorageEvent) => {
       if (event.key === MESSAGE_HISTORY_KEY) setHistory(loadMessageHistory());
+      if (event.key === MESSAGE_HISTORY_CLEARED_KEY) setClearedHistory(loadClearedHistory());
     };
     window.addEventListener("storage", synchronize);
     return () => window.removeEventListener("storage", synchronize);
   }, []);
+
+  useEffect(() => {
+    if (history.length > 0) saveMessageHistory(history);
+  }, [history]);
 
   useEffect(() => {
     setHistory((current) => {
@@ -234,12 +379,65 @@ export function MessageWorkspace({
         };
       });
       if (!changed) return current;
-      saveMessageHistory(next);
       return next;
     });
   }, [deliveryOutcomes]);
 
-  const groupHistory = history.filter((entry) => entry.submission.message.groupId === group.id);
+  const timelineById = new Map(
+    history
+      .filter((entry) => entry.submission.message.groupId === group.id)
+      .map((entry) => [entry.submission.message.id, entry] as const),
+  );
+  for (const message of messages.filter((candidate) => candidate.groupId === group.id)) {
+    const authoritativeOutcomes = deliveryOutcomes.filter(
+      (outcome) => outcome.messageId === message.id,
+    );
+    const localOutcomes = timelineById.get(message.id)?.submission.deliveryOutcomes ?? [];
+    timelineById.set(message.id, {
+      storedAt: message.createdAt,
+      submission: {
+        message,
+        deliveryOutcomes:
+          authoritativeOutcomes.length === 0 ? localOutcomes : authoritativeOutcomes,
+      },
+    });
+  }
+  const groupHistory = [...timelineById.values()]
+    .sort(
+      (left, right) =>
+        left.submission.message.groupSeq - right.submission.message.groupSeq ||
+        left.submission.message.createdAt.localeCompare(right.submission.message.createdAt),
+    )
+    .filter((entry) => entry.submission.message.groupSeq > (clearedHistory[group.id] ?? 0));
+  const latestMessageId = groupHistory.at(-1)?.submission.message.id;
+
+  const scrollToLatest = () => {
+    const viewport = historyRef.current;
+    if (viewport !== null) viewport.scrollTop = viewport.scrollHeight;
+    nearBottomRef.current = true;
+    setShowJumpToLatest(false);
+  };
+
+  useEffect(() => {
+    const previous = previousTimelineRef.current;
+    const groupChanged = previous.groupId !== group.id;
+    const messageChanged = previous.latestId !== latestMessageId;
+    previousTimelineRef.current = { groupId: group.id, latestId: latestMessageId };
+    if (!messageChanged && !groupChanged) return;
+    if (groupChanged || nearBottomRef.current) {
+      requestAnimationFrame(scrollToLatest);
+    } else {
+      setShowJumpToLatest(true);
+    }
+  }, [group.id, latestMessageId]);
+
+  const trackHistoryScroll = () => {
+    const viewport = historyRef.current;
+    if (viewport === null) return;
+    nearBottomRef.current =
+      viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 48;
+    if (nearBottomRef.current) setShowJumpToLatest(false);
+  };
 
   const targetMemberIds =
     audienceKind === "group" ? members.map((member) => member.memberId) : recipientIds;
@@ -289,7 +487,6 @@ export function MessageWorkspace({
           { storedAt: new Date().toISOString(), submission: resolvedSubmission },
           ...current,
         ].slice(0, MAX_MESSAGE_HISTORY);
-        saveMessageHistory(next);
         return next;
       });
       setBody("");
@@ -305,6 +502,12 @@ export function MessageWorkspace({
   const clearHistory = () => {
     window.localStorage.removeItem(MESSAGE_HISTORY_KEY);
     setHistory([]);
+    const next = {
+      ...clearedHistory,
+      [group.id]: Math.max(0, ...groupHistory.map((entry) => entry.submission.message.groupSeq)),
+    };
+    window.localStorage.setItem(MESSAGE_HISTORY_CLEARED_KEY, JSON.stringify(next));
+    setClearedHistory(next);
   };
 
   return (
@@ -313,15 +516,19 @@ export function MessageWorkspace({
         <div className="message-toolbar-title">
           <MessageSquareText aria-hidden="true" size={17} />
           <strong>Messages</strong>
-          <span>{groupHistory.length === 0 ? "No history" : `${groupHistory.length} saved`}</span>
+          <span>
+            {groupHistory.length === 0
+              ? "No history"
+              : `${groupHistory.length} ${groupHistory.length === 1 ? "message" : "messages"}`}
+          </span>
         </div>
         <div className="message-toolbar-actions">
           <button
             type="button"
             className="icon-button"
             aria-label="Clear all message history"
-            title="Clear all message history"
-            disabled={history.length === 0}
+            title="Clear browser message cache"
+            disabled={groupHistory.length === 0}
             onClick={() => setConfirmingClear(true)}
           >
             <Trash2 aria-hidden="true" size={15} />
@@ -345,6 +552,35 @@ export function MessageWorkspace({
       </header>
       {expanded && (
         <div id="message-drawer-content" className="message-workspace">
+          <section
+            ref={historyRef}
+            className="message-history"
+            aria-label="Message history"
+            onScroll={trackHistoryScroll}
+          >
+            {groupHistory.length === 0 ? (
+              <div className="empty-state compact-empty">
+                <p>Group messages will appear here.</p>
+              </div>
+            ) : (
+              <ol className="message-history-list">
+                {groupHistory.map(({ submission }) => (
+                  <ChatMessage
+                    key={submission.message.id}
+                    message={submission.message}
+                    outcomes={submission.deliveryOutcomes}
+                    members={historyMembers}
+                  />
+                ))}
+              </ol>
+            )}
+            {showJumpToLatest && (
+              <button type="button" className="jump-to-latest" onClick={scrollToLatest}>
+                <CircleArrowDown aria-hidden="true" size={15} />
+                New messages
+              </button>
+            )}
+          </section>
           <form className="message-composer" onSubmit={(event) => void submit(event)}>
             <div className="message-routing-row">
               <label>
@@ -442,39 +678,6 @@ export function MessageWorkspace({
               </button>
             </div>
           </form>
-          <section className="message-history" aria-label="Message history">
-            {groupHistory.length === 0 ? (
-              <div className="empty-state compact-empty">
-                <p>Sent messages and recipient outcomes will appear here.</p>
-              </div>
-            ) : (
-              <ol className="message-history-list">
-                {groupHistory.map(({ storedAt, submission }) => (
-                  <li key={submission.message.id} className="message-history-item">
-                    <div className="message-history-heading">
-                      <strong>message #{submission.message.groupSeq}</strong>
-                      <time dateTime={storedAt}>
-                        {new Date(storedAt).toLocaleTimeString([], {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </time>
-                    </div>
-                    <p>{submission.message.body.text}</p>
-                    <ul className="outcome-list">
-                      {submission.deliveryOutcomes.map((outcome) => (
-                        <OutcomeRow
-                          key={`${outcome.messageId}:${outcome.recipientMemberId}`}
-                          outcome={outcome}
-                          members={members}
-                        />
-                      ))}
-                    </ul>
-                  </li>
-                ))}
-              </ol>
-            )}
-          </section>
         </div>
       )}
       {confirmingClear && (

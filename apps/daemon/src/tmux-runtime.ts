@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import type { AgentProfile, AgentRun, TerminalBinding } from "@nanasa/contracts";
+import type { AgentProfile, AgentRun, GroupMembership, TerminalBinding } from "@nanasa/contracts";
 
+import type { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
 import { DomainError, NanasaStore } from "./store.js";
 import { ttydViewSessionName } from "./ttyd-supervisor.js";
 
@@ -10,6 +11,7 @@ export interface TmuxRuntimeOptions {
   serverName?: string;
   tmuxPath?: string;
   runtimeEnvironment?: (run: AgentRun) => Record<string, string>;
+  runtimeProvisioner?: AgentRuntimeProvisioner;
 }
 
 interface CommandOutput {
@@ -64,6 +66,7 @@ export class TmuxRuntime {
   readonly #store: NanasaStore;
   readonly #tmuxPath: string;
   readonly #runtimeEnvironment: (run: AgentRun) => Record<string, string>;
+  readonly #runtimeProvisioner: AgentRuntimeProvisioner | undefined;
   readonly #reconciliations = new Set<Promise<void>>();
   #closing = false;
 
@@ -72,6 +75,7 @@ export class TmuxRuntime {
     this.serverName = options.serverName ?? "nanasa";
     this.#tmuxPath = options.tmuxPath ?? "tmux";
     this.#runtimeEnvironment = options.runtimeEnvironment ?? (() => ({}));
+    this.#runtimeProvisioner = options.runtimeProvisioner;
     if (!/^[A-Za-z0-9_.-]+$/.test(this.serverName)) {
       throw new Error(
         "tmux server name may contain only letters, numbers, dot, underscore, and dash",
@@ -84,8 +88,8 @@ export class TmuxRuntime {
     memberId: string,
     size: { cols: number; rows: number },
   ): Promise<AgentRun> {
-    const { run, profile } = this.#store.createRunForMembership(groupId, memberId);
-    return this.#launchCreatedRun(run, profile, size);
+    const { run, profile, membership } = this.#store.createRunForMembership(groupId, memberId);
+    return this.#launchCreatedRun(run, profile, membership, size);
   }
 
   public async recoverRun(
@@ -120,20 +124,23 @@ export class TmuxRuntime {
     if (current.status !== "failed") {
       this.#store.updateRunStatus(current.id, "failed", { reason: "recovery_replaced" });
     }
-    const { run, profile } = this.#store.createRunForMembership(current.groupId, current.memberId, {
-      recoveryFrom: current,
-    });
-    return this.#launchCreatedRun(run, profile, size);
+    const { run, profile, membership } = this.#store.createRunForMembership(
+      current.groupId,
+      current.memberId,
+      { recoveryFrom: current },
+    );
+    return this.#launchCreatedRun(run, profile, membership, size);
   }
 
   async #launchCreatedRun(
     run: AgentRun,
     profile: AgentProfile,
+    membership: GroupMembership,
     size: { cols: number; rows: number },
   ): Promise<AgentRun> {
     let binding: TerminalBinding | undefined;
     try {
-      binding = await this.#launch(run, profile, size);
+      binding = await this.#launch(run, profile, membership, size);
       return this.#store.updateRunStatus(run.id, "running", { terminal: binding });
     } catch (error) {
       if (binding !== undefined) {
@@ -216,6 +223,7 @@ export class TmuxRuntime {
     await this.#tmux(["set-option", "-t", viewSession, "prefix2", "None"]);
     await this.#tmux(["set-option", "-t", viewSession, "status", "off"]);
     await this.#tmux(["set-option", "-t", viewSession, "destroy-unattached", "off"]);
+    await this.#tmux(["set-option", "-g", "mouse", "on"]);
     await this.#tmux(["set-option", "-w", "-t", `${viewSession}:1`, "window-size", "latest"]);
     if (!(await this.#viewMatches(viewSession, binding))) {
       throw new Error(`tmux view session ${viewSession} does not match its owner pane`);
@@ -351,10 +359,16 @@ export class TmuxRuntime {
   async #launch(
     run: AgentRun,
     profile: AgentProfile,
+    membership: GroupMembership,
     size: { cols: number; rows: number },
   ): Promise<TerminalBinding> {
     const environmentArguments: string[] = [];
-    const environment = { ...profile.environment, ...this.#runtimeEnvironment(run) };
+    const provisioned = this.#runtimeProvisioner?.provision(membership, profile);
+    const environment = {
+      ...profile.environment,
+      ...this.#runtimeEnvironment(run),
+      ...provisioned?.environment,
+    };
     for (const [name, value] of Object.entries(environment)) {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
         throw new DomainError(
@@ -365,7 +379,7 @@ export class TmuxRuntime {
       }
       environmentArguments.push("-e", `${name}=${value}`);
     }
-    const launchArguments = [profile.command, ...profile.args];
+    const launchArguments = provisioned?.command ?? [profile.command, ...profile.args];
     const launchCommand = launchArguments.map(shellQuote).join(" ");
     const session = sessionName(run.groupId);
     const exists = (await this.#tmux(["has-session", "-t", `=${session}`], true)).exitCode === 0;
@@ -392,6 +406,7 @@ export class TmuxRuntime {
     }
     try {
       await this.#tmux(["set-option", "-g", "remain-on-exit", "on"]);
+      await this.#tmux(["set-option", "-g", "mouse", "on"]);
       const args = [
         "new-window",
         "-d",

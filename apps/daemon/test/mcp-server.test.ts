@@ -112,6 +112,7 @@ describe("Streamable HTTP MCP", () => {
     const listed = await mcpRequest(daemon, operatorToken, "tools/list", {});
     expect(listed.statusCode).toBe(200);
     expect(listed.json().result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+      "nanasa.list_members",
       "nanasa.send_dm",
       "nanasa.send_multicast",
       "nanasa.broadcast_group",
@@ -180,6 +181,33 @@ describe("Streamable HTTP MCP", () => {
 
   it("derives agent identity, excludes its sender from broadcast, and rejects group override", async () => {
     const { daemon, run, agentToken } = await createFixture();
+    const members = await callTool(daemon, agentToken, "nanasa.list_members", {});
+    expect(members.json().result.structuredContent).toEqual({
+      groupId: run.groupId,
+      members: [
+        {
+          memberId: "alpha",
+          alias: "alpha",
+          agentType: "fixture",
+          runStatus: "offline",
+          isCaller: false,
+        },
+        {
+          memberId: "beta",
+          alias: "beta",
+          agentType: "fixture",
+          runStatus: "offline",
+          isCaller: false,
+        },
+        {
+          memberId: "sender",
+          alias: "sender",
+          agentType: "fixture",
+          runStatus: "starting",
+          isCaller: true,
+        },
+      ],
+    });
     const broadcast = await callTool(daemon, agentToken, "nanasa.broadcast_group", {
       text: "Review this together",
     });
@@ -208,6 +236,21 @@ describe("Streamable HTTP MCP", () => {
       text: "No impersonation",
     });
     expect(forbidden.json()).toMatchObject({ result: { isError: true } });
+    const selfDirect = await callTool(daemon, agentToken, "nanasa.send_dm", {
+      recipientMemberId: "sender",
+      text: "Do not loop this back",
+    });
+    expect(selfDirect.json()).toMatchObject({
+      result: {
+        isError: true,
+        content: [{ text: "Agents cannot send direct or multicast messages to themselves" }],
+      },
+    });
+    const selfMulticast = await callTool(daemon, agentToken, "nanasa.send_multicast", {
+      recipientMemberIds: ["sender", "alpha"],
+      text: "Do not include me",
+    });
+    expect(selfMulticast.json()).toMatchObject({ result: { isError: true } });
     const impersonated = await callTool(daemon, agentToken, "nanasa.send_dm", {
       recipientMemberId: "alpha",
       text: "No caller-selected sender",

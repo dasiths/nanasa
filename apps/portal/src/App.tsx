@@ -26,7 +26,7 @@ export function App({ client = api }: AppProps) {
   const [startingAllGroupId, setStartingAllGroupId] = useState<string>();
   const [focusSelectedGroupAfterDelete, setFocusSelectedGroupAfterDelete] = useState(false);
   const [terminalConnectionRevision, setTerminalConnectionRevision] = useState(0);
-  const [terminalDeliverySuspended, setTerminalDeliverySuspended] = useState(false);
+  const [portalSubmissionSuspended, setPortalSubmissionSuspended] = useState(false);
   const startAllInFlight = useRef(new Map<string, Promise<void>>());
   const previousEventStatus = useRef(eventStatus);
   const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -36,12 +36,23 @@ export function App({ client = api }: AppProps) {
       ? requestedGroupId
       : snapshot?.groups[0]?.id;
   const selectedGroup = snapshot?.groups.find((group) => group.id === selectedGroupId);
-  const members =
-    snapshot?.memberships.filter(
-      (member) => member.groupId === selectedGroupId && member.state === "active",
-    ) ?? [];
+  const groupMemberships =
+    snapshot?.memberships.filter((member) => member.groupId === selectedGroupId) ?? [];
+  const members = groupMemberships.filter((member) => member.state === "active");
   const runs = snapshot?.runs.filter((run) => run.groupId === selectedGroupId) ?? [];
   const runningCount = runs.filter((run) => run.status === "running").length;
+  const selectedMessageIds = new Set(
+    snapshot?.messages
+      .filter((message) => message.groupId === selectedGroupId)
+      .map((message) => message.id) ?? [],
+  );
+  const deliveryInProgress =
+    snapshot?.deliveryOutcomes.some(
+      (outcome) =>
+        selectedMessageIds.has(outcome.messageId) &&
+        ["queued", "received", "delivering", "retrying"].includes(outcome.status),
+    ) ?? false;
+  const terminalDeliverySuspended = portalSubmissionSuspended || deliveryInProgress;
 
   const latestMessageSequence = new Map<string, number>();
   for (const message of snapshot?.messages ?? []) {
@@ -165,14 +176,14 @@ export function App({ client = api }: AppProps) {
   };
   const submitMessage = async (command: SubmitMessageCommand) => {
     if (selectedGroup === undefined) throw new Error("Select a group before sending a message");
-    setTerminalDeliverySuspended(true);
+    setPortalSubmissionSuspended(true);
     await new Promise((resolve) => setTimeout(resolve, 100));
     try {
       const result = await client.submitMessage(selectedGroup.id, command);
       await refresh();
       return result;
     } finally {
-      setTerminalDeliverySuspended(false);
+      setPortalSubmissionSuspended(false);
       setTerminalConnectionRevision((current) => current + 1);
     }
   };
@@ -366,6 +377,8 @@ export function App({ client = api }: AppProps) {
               <MessageWorkspace
                 group={selectedGroup}
                 members={members}
+                historyMembers={groupMemberships}
+                messages={snapshot.messages}
                 deliveryOutcomes={snapshot.deliveryOutcomes}
                 onSubmit={submitMessage}
               />

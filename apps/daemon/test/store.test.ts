@@ -178,6 +178,41 @@ describe("NanasaStore persistence", () => {
 });
 
 describe("NanasaStore group and membership updates", () => {
+  it("generates readable member IDs and retries docker-name collisions", () => {
+    const generatedNames = ["calm_hopper", "calm_hopper", "bold_lovelace"];
+    const store = new NanasaStore(":memory:", {
+      memberNameGenerator: () => generatedNames.shift() ?? "unused_name",
+    });
+    const group = store.createGroup({ name: "Readable IDs" });
+    const profile = store.createInternalAgentProfile({
+      name: "Claude profile",
+      agentType: "claude-code",
+      kind: "claude-code",
+      command: "claude",
+      args: [],
+      environment: {},
+    });
+
+    const first = store.addMembership(group.id, {
+      agentProfileId: profile.id,
+      alias: "First",
+    });
+    const second = store.addMembership(group.id, {
+      agentProfileId: profile.id,
+      alias: "Second",
+    });
+    const explicit = store.addMembership(group.id, {
+      memberId: "fixture-member",
+      agentProfileId: profile.id,
+      alias: "Explicit",
+    });
+
+    expect(first.memberId).toBe("claude-code.calm-hopper");
+    expect(second.memberId).toBe("claude-code.bold-lovelace");
+    expect(explicit.memberId).toBe("fixture-member");
+    store.close();
+  });
+
   it("renames groups and active memberships idempotently without changing recipient revisions", () => {
     const store = new NanasaStore(":memory:");
     const group = store.createGroup({ name: "Original group" });

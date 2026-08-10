@@ -134,6 +134,7 @@ describeTmux("TmuxTerminalDelivery", () => {
     })[0]!;
 
     await delivery.deliver(claim);
+    await waitForPaneText(serverName, run.terminal!.paneId, "ECHO:[From: Human | Intent: request]");
     await waitForPaneText(serverName, run.terminal!.paneId, "ECHO:safe terminal delivery");
 
     endpoints.begin(run, 1);

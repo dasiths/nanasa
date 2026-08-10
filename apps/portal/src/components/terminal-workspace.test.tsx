@@ -95,14 +95,14 @@ describe("TerminalWorkspace", () => {
     const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
     render(<TerminalWorkspace client={client} members={members} runs={runs} />);
 
-    const builderFrame = await screen.findByTitle("Builder ttyd terminal");
+    const builderFrame = await screen.findByTitle("Builder (builder) ttyd terminal");
     expect(screen.getAllByTitle(/ttyd terminal$/)).toHaveLength(1);
     expect(builderFrame).toHaveAttribute("src", endpointPaths["run-builder"]);
     expect(builderFrame).not.toHaveAttribute("sandbox");
     expect(builderFrame).toHaveAttribute("referrerpolicy", "same-origin");
 
     fireEvent.click(screen.getByRole("tab", { name: /Reviewer/ }));
-    const reviewerFrame = await screen.findByTitle("Reviewer ttyd terminal");
+    const reviewerFrame = await screen.findByTitle("Reviewer (reviewer) ttyd terminal");
     expect(screen.getAllByTitle(/ttyd terminal$/)).toHaveLength(1);
     expect(reviewerFrame).toHaveAttribute("src", endpointPaths["run-reviewer"]);
   });
@@ -113,16 +113,16 @@ describe("TerminalWorkspace", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Grid terminal layout" }));
     await waitFor(() => expect(screen.getAllByTitle(/ttyd terminal$/)).toHaveLength(2));
-    expect(screen.getByTitle("Builder ttyd terminal")).toHaveAttribute(
+    expect(screen.getByTitle("Builder (builder) ttyd terminal")).toHaveAttribute(
       "src",
       endpointPaths["run-builder"],
     );
-    expect(screen.getByTitle("Builder ttyd terminal")).not.toHaveAttribute("sandbox");
-    expect(screen.getByTitle("Reviewer ttyd terminal")).toHaveAttribute(
+    expect(screen.getByTitle("Builder (builder) ttyd terminal")).not.toHaveAttribute("sandbox");
+    expect(screen.getByTitle("Reviewer (reviewer) ttyd terminal")).toHaveAttribute(
       "src",
       endpointPaths["run-reviewer"],
     );
-    expect(screen.getByTitle("Reviewer ttyd terminal")).not.toHaveAttribute("sandbox");
+    expect(screen.getByTitle("Reviewer (reviewer) ttyd terminal")).not.toHaveAttribute("sandbox");
   });
 
   it("releases hidden grid clients when returning to the selected tab", async () => {
@@ -130,17 +130,17 @@ describe("TerminalWorkspace", () => {
     render(<TerminalWorkspace client={client} members={members} runs={runs} />);
 
     fireEvent.click(screen.getByRole("tab", { name: /Reviewer/ }));
-    await screen.findByTitle("Reviewer ttyd terminal");
+    await screen.findByTitle("Reviewer (reviewer) ttyd terminal");
     fireEvent.click(screen.getByRole("button", { name: "Grid terminal layout" }));
     await waitFor(() => expect(screen.getAllByTitle(/ttyd terminal$/)).toHaveLength(2));
     fireEvent.click(screen.getByRole("button", { name: "Tabbed terminal layout" }));
 
     await waitFor(() => expect(screen.getAllByTitle(/ttyd terminal$/)).toHaveLength(1));
-    expect(screen.getByTitle("Reviewer ttyd terminal")).toHaveAttribute(
+    expect(screen.getByTitle("Reviewer (reviewer) ttyd terminal")).toHaveAttribute(
       "src",
       endpointPaths["run-reviewer"],
     );
-    expect(screen.queryByTitle("Builder ttyd terminal")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Builder (builder) ttyd terminal")).not.toBeInTheDocument();
   });
 
   it("persists layout and synchronizes storage changes across tabs", async () => {
@@ -237,7 +237,7 @@ describe("TerminalWorkspace", () => {
     await act(async () => Promise.resolve());
     expect(screen.getByText("Terminal retrying")).toBeInTheDocument();
     await act(async () => vi.advanceTimersByTimeAsync(100));
-    expect(screen.getByTitle("Builder ttyd terminal")).toHaveAttribute(
+    expect(screen.getByTitle("Builder (builder) ttyd terminal")).toHaveAttribute(
       "src",
       endpointPaths["run-builder"],
     );

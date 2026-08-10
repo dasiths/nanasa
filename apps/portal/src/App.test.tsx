@@ -2,6 +2,7 @@ import type {
   AgentProfile,
   AgentRun,
   GroupMembership,
+  Message,
   MessageSubmissionResult,
   NanasaConfig,
   PortalSnapshot,
@@ -617,7 +618,11 @@ describe("portal application", () => {
     await user.type(screen.getByLabelText("Message body"), "Review the API");
     await user.click(screen.getByRole("button", { name: "Send message" }));
 
-    expect(await screen.findByText("queued")).toBeInTheDocument();
+    expect(await screen.findByText("From: Human")).toBeInTheDocument();
+    const delivery = screen.getByRole("button", { name: "Sent to 1 · 1 queued" });
+    expect(delivery).toHaveAttribute("aria-expanded", "false");
+    await user.click(delivery);
+    expect(screen.getByText("queued")).toBeInTheDocument();
     expect(JSON.parse(window.localStorage.getItem(MESSAGE_HISTORY_KEY) ?? "[]")).toMatchObject([
       { submission: { message: { id: "message-1", body: { text: "Review the API" } } } },
     ]);
@@ -636,17 +641,18 @@ describe("portal application", () => {
     await screen.findByRole("heading", { name: "Backend" });
     await user.type(screen.getByLabelText("Message body"), "Review the API");
     await user.click(screen.getByRole("button", { name: "Send message" }));
-    expect(await screen.findByText("message #1")).toBeInTheDocument();
+    expect(await screen.findByText("Review the API")).toBeInTheDocument();
+    await waitFor(() => expect(window.localStorage.getItem(MESSAGE_HISTORY_KEY)).not.toBeNull());
     first.unmount();
+    expect(window.localStorage.getItem(MESSAGE_HISTORY_KEY)).not.toBeNull();
 
     render(<App client={createClient()} />);
     await screen.findByRole("heading", { name: "Backend" });
-    expect(screen.getByText("message #1")).toBeInTheDocument();
     expect(screen.getByText("Review the API")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Clear all message history" }));
     const dialog = screen.getByRole("dialog", { name: "Clear all message history?" });
-    expect(screen.getByText("message #1")).toBeInTheDocument();
+    expect(screen.getByText("Review the API")).toBeInTheDocument();
     expect(window.localStorage.getItem(MESSAGE_HISTORY_KEY)).not.toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(
@@ -660,8 +666,57 @@ describe("portal application", () => {
         { name: "Clear history" },
       ),
     );
-    expect(screen.queryByText("message #1")).not.toBeInTheDocument();
+    expect(screen.queryByText("Review the API")).not.toBeInTheDocument();
     expect(window.localStorage.getItem(MESSAGE_HISTORY_KEY)).toBeNull();
+  });
+
+  it("renders authoritative Human and agent-to-agent messages in chronological order", async () => {
+    const user = userEvent.setup();
+    const humanMessage = submissionResult().message;
+    const agentMessage: Message = {
+      ...humanMessage,
+      id: "message-2",
+      groupSeq: 2,
+      sender: { kind: "agent", memberId: "reviewer", runId: "run-reviewer" },
+      audience: { kind: "dm", memberId: "builder" },
+      body: { contentType: "text/markdown", text: "Builder, the review is complete." },
+      createdAt: "2026-08-09T12:01:00.000Z",
+    };
+    const authoritativeSnapshot: PortalSnapshot = {
+      ...snapshot,
+      messages: [humanMessage, agentMessage],
+      deliveryOutcomes: [
+        ...submissionResult().deliveryOutcomes,
+        {
+          messageId: agentMessage.id,
+          recipientMemberId: "builder",
+          status: "consumed",
+          attempts: 1,
+          updatedAt: agentMessage.createdAt,
+        },
+      ],
+    };
+    const client = createClient();
+    vi.mocked(client.loadSnapshot).mockResolvedValue(authoritativeSnapshot);
+
+    const { container } = render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+
+    expect(screen.getAllByText(/^From:/).map((heading) => heading.textContent)).toEqual([
+      "From: Human",
+      "From: Reviewer",
+    ]);
+    expect(container.querySelectorAll(".actor-avatar")).toHaveLength(2);
+    expect(container.querySelectorAll(".actor-avatar")[0]).toHaveTextContent("H");
+    expect(container.querySelectorAll(".actor-avatar")[1]).toHaveTextContent("RE");
+    const agentBubble = screen.getByText("From: Reviewer").closest("article");
+    expect(agentBubble).not.toBeNull();
+    const agentDelivery = within(agentBubble!).getByRole("button", {
+      name: "Sent to 1 · 1 consumed",
+    });
+    await user.click(agentDelivery);
+    expect(within(agentBubble!).getByText("Builder")).toBeInTheDocument();
+    expect(within(agentBubble!).getByText("1 attempt")).toBeInTheDocument();
   });
 
   it("reconciles recipients and outcomes when the selected group changes", async () => {
@@ -677,7 +732,7 @@ describe("portal application", () => {
 
     await user.type(screen.getByLabelText("Message body"), "Backend message");
     await user.click(screen.getByRole("button", { name: "Send message" }));
-    expect(await screen.findByText("queued")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Sent to 1 · 1 queued" })).toBeInTheDocument();
 
     rerender(
       <MessageWorkspace
@@ -686,7 +741,11 @@ describe("portal application", () => {
         onSubmit={onSubmit}
       />,
     );
-    await waitFor(() => expect(screen.queryByText("queued")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Sent to 1 · 1 queued" }),
+      ).not.toBeInTheDocument(),
+    );
     expect(screen.getByLabelText("Recipient")).toHaveValue("auditor");
 
     await user.type(screen.getByLabelText("Message body"), "Review message");
@@ -764,7 +823,7 @@ describe("portal application", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled());
     resolveSubmission(submissionResult());
     await act(async () => undefined);
-    expect(screen.queryByText("queued")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sent to 1 · 1 queued" })).not.toBeInTheDocument();
   });
 
   it("requires valid recipients for multicast and group audiences", async () => {

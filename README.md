@@ -39,6 +39,11 @@ production, the daemon serves the built portal from `apps/portal/dist` with an
 extensionless SPA fallback. API, event WebSocket, and terminal proxy routes keep
 precedence over static content.
 
+New memberships receive a readable stable ID in the form
+`<agent-type>.<adjective>-<surname>`, for example `pi.focused-hopper`. Nanasa
+generates the suffix with `docker-names`, normalizes it for use as an identifier,
+and retries collisions within the group. Aliases remain independently editable.
+
 ## Requirements
 
 * Node.js 22 or later
@@ -69,8 +74,9 @@ npx nanasa start
 `.nanasa/config.yaml` only when it is absent. It never overwrites configuration
 or runtime state. Edit the generated agent commands for the CLIs available in
 your environment, then commit `.nanasa/config.yaml`. Ignore `.nanasa/state/` and
-`.nanasa/runtime/`; they contain SQLite state, the MCP signing secret, and ttyd
-manifests for one checkout.
+`.nanasa/runtime/`, and `.nanasa/agents/`; they contain SQLite state, the MCP
+signing secret, ttyd manifests, and persistent per-membership agent
+configuration for one checkout.
 
 Running `nanasa` without a command is equivalent to `nanasa start`. The daemon
 walks upward from the current directory to find `.nanasa/config.yaml`, stores
@@ -102,7 +108,9 @@ pnpm start
 
 The portal is available at <http://127.0.0.1:3210> by default. Production mode
 enables portal serving and resolves the built assets from
-`apps/portal/dist`.
+`apps/portal/dist`. The repository start script also enables authenticated MCP
+for managed agents. Installed-package users retain explicit opt-in through
+`nanasa start --mcp`.
 
 ## Development
 
@@ -184,6 +192,12 @@ tools submit through the same in-process message service as the portal REST API.
 The durable dispatcher then uses the guarded tmux paste-and-Enter path for every
 active recipient.
 
+Before terminal injection, Nanasa prepends a trusted sender envelope derived
+from persisted message identity. Agents receive input such as
+`[From: Reviewer | Member: pi.focused-hopper | Intent: request]`; portal messages
+use `From: Human`. MCP callers cannot forge this envelope, and the stored message
+body remains unchanged.
+
 ## MCP messaging
 
 Enable Streamable HTTP MCP at `/mcp` with `nanasa start --mcp` or
@@ -193,18 +207,21 @@ TypeScript server and Node packages.
 
 Nanasa exposes these tools:
 
+* `nanasa.list_members` returns active member IDs, aliases, agent types, current
+  run status, and which member is the authenticated caller
 * `nanasa.send_dm` requires `recipientMemberId` and sends to one active member
 * `nanasa.send_multicast` requires `recipientMemberIds` with at least two unique
   active members
 * `nanasa.broadcast_group` sends to every active member and excludes the
   authenticated agent caller
 
-All three tools require `text`, limited to 1 MiB of UTF-8 content. Optional
+The three send tools require `text`, limited to 1 MiB of UTF-8 content. Optional
 fields are `intent` (`inform`, `request`, or `response`), `contentType`
 (`text/plain` or `text/markdown`), `conversationId`, and `replyTo`. The defaults
 are `request` and `text/markdown`. Operator calls must also provide `groupId`.
 Agent calls derive the group from their credential and cannot select a different
-group.
+group. Agent broadcasts always exclude the authenticated caller. Agent direct
+and multicast calls reject any recipient list containing that caller.
 
 Every tool uses terminal delivery. Agent tool arguments never choose the sender.
 Nanasa signs a capability for the run's group, member, run ID, and generation,
@@ -221,6 +238,28 @@ enabled:
 * `NANASA_MCP_URL` is the configured Streamable HTTP endpoint
 * `NANASA_MCP_TOKEN` is a signed capability bound to the run, generation,
   member, and group
+
+Nanasa also registers its MCP endpoint with each supported CLI before launch.
+Generated files live under `.nanasa/agents/<membership-id>/`, contain only an
+environment-variable placeholder for the bearer token, and use private file
+permissions. The generation capability remains only in the process environment.
+The same membership directory is reused after run and daemon restarts.
+
+Client integration follows each CLI's supported configuration contract:
+
+* GitHub Copilot CLI receives a generated HTTP MCP config through
+  `--additional-mcp-config`
+* Claude Code uses an isolated `CLAUDE_CONFIG_DIR` with a generated user MCP
+  entry; direct Claude and `make claude-copilot` launches use the same path
+* Pi uses `PI_CODING_AGENT_DIR` and the pinned `pi-mcp-adapter` extension, with
+  Nanasa tools registered directly
+* OpenCode receives a generated remote MCP entry through `OPENCODE_CONFIG`
+
+Nanasa does not copy provider credentials into generated configuration. It uses
+the CLI's existing credential store or inherited authentication environment.
+When Claude or Pi uses a regular current-user credential file, the persistent
+agent directory contains a narrow symlink to that file rather than a copied
+secret or linked configuration tree.
 
 Operator clients authenticate with `Authorization: Bearer <token>`. Configure
 that token with `NANASA_MCP_OPERATOR_TOKEN`; it must contain at least 32
@@ -254,6 +293,31 @@ Member rows distinguish reconciling, restarting, recovered, and failed recovery
 states. Active recovery can be stopped but not started again. Retry is
 offered only when recovery cannot continue; a normally stopped member retains
 the standard Start action.
+
+The message drawer is a shared group-chat timeline backed by daemon messages.
+Portal submissions appear as **Human**; MCP messages use the authenticated
+agent's membership alias. Agent-to-agent direct messages, multicasts, and
+broadcasts appear in the same oldest-to-newest timeline. Each message has an
+actor-initial badge and a collapsed delivery summary that expands to resolved
+recipients, attempts, statuses, and failure reasons. The newest message remains
+at the bottom, while a new-message control preserves position when older history
+is being read.
+
+Browser storage caches immediate portal submissions and records local Clear All
+markers. Clearing history hides current messages only in that browser; the
+authoritative daemon records remain available for operational history.
+
+On desktop, the horizontal composer and vertical history pane sit side by side
+inside the same collapsible Messages section. Narrow layouts stack the composer
+above history. Terminal tabs, status bars, iframe titles, and accessible names
+show both the editable alias and stable member ID.
+
+Browser terminals configure 10,000 lines of xterm scrollback and enable tmux
+mouse routing. PageUp and PageDown pass through ttyd and tmux to raw-mode coding
+agent TUIs. Wheel events reach TUIs that enable terminal mouse reporting; for
+ordinary shells, tmux can use the wheel for copy-mode scrollback. Full-screen
+alternate-screen TUIs own their visible history, so xterm cannot display normal
+shell scrollback while that mode is active.
 
 The header theme selector supports light, dark, and system modes. Theme and
 terminal tab or grid layout are stored under the versioned

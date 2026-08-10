@@ -14,7 +14,7 @@ import {
   UpdateGroupMembershipCommandSchema,
 } from "@nanasa/contracts";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
-
+import { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
 import { discoverAndLoadNanasaConfig, type LoadedNanasaConfig } from "./config.js";
 import { DeliveryDispatcher } from "./delivery-dispatcher.js";
 import { McpCredentialIssuer } from "./mcp-auth.js";
@@ -151,6 +151,10 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     ...(mcpCredentials === undefined
       ? {}
       : {
+          runtimeProvisioner: new AgentRuntimeProvisioner({
+            agentsDirectory: join(loadedConfig.repoRoot, ".nanasa", "agents"),
+            mcpEndpointUrl,
+          }),
           runtimeEnvironment: (run) => ({
             NANASA_MCP_URL: mcpEndpointUrl,
             NANASA_MCP_TOKEN: mcpCredentials.issueAgent(run),

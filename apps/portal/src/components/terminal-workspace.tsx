@@ -17,12 +17,14 @@ function TerminalPane({
   client,
   run,
   alias,
+  memberId,
   connectionRevision,
   suspended,
 }: {
   client: PortalClient;
   run: AgentRun;
   alias: string;
+  memberId: string;
   connectionRevision: number;
   suspended: boolean;
 }) {
@@ -36,13 +38,14 @@ function TerminalPane({
       : endpointLabels[endpointState];
 
   return (
-    <section className="terminal-pane" aria-label={`${alias} terminal`}>
+    <section className="terminal-pane" aria-label={`${alias} (${memberId}) terminal`}>
       <div className="terminal-statusbar">
         <span
           className={`connection-dot connection-${endpointState ?? "starting"}`}
           aria-hidden="true"
         />
         <strong>{alias}</strong>
+        <code title={memberId}>{memberId}</code>
         <span className="status-separator" aria-hidden="true" />
         <span>{endpointState ?? (loading ? "loading" : "unavailable")}</span>
       </div>
@@ -55,7 +58,7 @@ function TerminalPane({
         <iframe
           className="ttyd-frame"
           src={status.url}
-          title={`${alias} ttyd terminal`}
+          title={`${alias} (${memberId}) ttyd terminal`}
           referrerPolicy="same-origin"
         />
       ) : (
@@ -142,7 +145,8 @@ export function TerminalWorkspace({
               onClick={() => setSelectedRunId(run.id)}
             >
               <span className={`status-dot status-${run.status}`} aria-hidden="true" />
-              {memberAlias(run)}
+              <span>{memberAlias(run)}</span>
+              <small title={run.memberId}>{run.memberId}</small>
             </button>
           ))}
         </div>
@@ -176,6 +180,7 @@ export function TerminalWorkspace({
               client={client}
               run={run}
               alias={memberAlias(run)}
+              memberId={run.memberId}
               connectionRevision={connectionRevision}
               suspended={suspended}
             />

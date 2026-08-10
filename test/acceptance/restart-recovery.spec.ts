@@ -67,7 +67,7 @@ test("graceful daemon restart reconnects the portal and preserves tmux panes", a
   for (const member of members) {
     const marker = `post-restart-${member.memberId}`;
     const terminalInput = page
-      .frameLocator(`iframe[title="${member.alias} ttyd terminal"]`)
+      .frameLocator(`iframe[title="${member.alias} (${member.memberId}) ttyd terminal"]`)
       .locator(".xterm-helper-textarea");
     await terminalInput.focus();
     await page.keyboard.type(marker);

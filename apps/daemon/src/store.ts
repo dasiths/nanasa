@@ -48,6 +48,8 @@ import {
   UpdateGroupMembershipCommandSchema,
 } from "@nanasa/contracts";
 
+import { dockerMemberName, formatMemberId, type MemberNameGenerator } from "./member-id.js";
+
 interface Parser<T> {
   parse(value: unknown): T;
 }
@@ -162,6 +164,7 @@ const DATABASE_SCHEMA_VERSION = 1;
 export interface DeliveryClaim {
   delivery: DeliveryOutcome;
   message: Message;
+  senderAlias: string;
   profile: AgentProfile;
   run?: AgentRun;
   recipientActive: boolean;
@@ -183,6 +186,7 @@ export interface DeliveryAttemptResult {
 export interface NanasaStoreOptions {
   config?: NanasaConfig;
   configStatus?: ConfigStatus;
+  memberNameGenerator?: MemberNameGenerator;
 }
 
 export class DomainError extends Error {
@@ -203,6 +207,7 @@ export class NanasaStore {
   readonly #listeners = new Set<DomainEventListener>();
   readonly #config: NanasaConfig | undefined;
   readonly #configStatus: ConfigStatus | undefined;
+  readonly #memberNameGenerator: MemberNameGenerator;
 
   public constructor(path: string, options: NanasaStoreOptions = {}) {
     if (path !== ":memory:") {
@@ -212,6 +217,7 @@ export class NanasaStore {
     this.#database = new DatabaseSync(path);
     this.#config = options.config;
     this.#configStatus = options.configStatus;
+    this.#memberNameGenerator = options.memberNameGenerator ?? dockerMemberName;
     this.#database.exec("PRAGMA foreign_keys = ON");
     this.#database.exec("PRAGMA journal_mode = WAL");
     this.#migrate();
@@ -424,8 +430,8 @@ export class NanasaStore {
     const scope = `group.${groupId}.membership.add`;
     return this.#executeIdempotent(scope, idempotencyKey, GroupMembershipSchema, () => {
       this.#requireGroup(groupId);
-      this.#requireAgentProfile(input.agentProfileId);
-      const memberId = input.memberId ?? `member_${randomUUID()}`;
+      const profile = this.#requireAgentProfile(input.agentProfileId);
+      const memberId = input.memberId ?? this.#generateMemberId(groupId, profile.agentType);
       const existing = this.#getMembershipRow(groupId, memberId);
       if (existing?.state === "active") {
         throw new DomainError("membership_exists", "The member is already active", 409);
@@ -620,6 +626,7 @@ export class NanasaStore {
   ): {
     run: AgentRun;
     profile: AgentProfile;
+    membership: GroupMembership;
   } {
     this.#requireGroup(groupId);
     const membership = this.#getMembershipRow(groupId, memberId);
@@ -650,7 +657,11 @@ export class NanasaStore {
       recoveryReason: options.recoveryFrom?.recoveryReason,
       startedAt: new Date().toISOString(),
     });
-    return { run, profile: this.#requireAgentProfile(membership.agent_profile_id) };
+    return {
+      run,
+      profile: this.#requireAgentProfile(membership.agent_profile_id),
+      membership: this.#hydrateMembership(membership),
+    };
   }
 
   public getRun(runId: string): AgentRun {
@@ -1028,7 +1039,13 @@ export class NanasaStore {
         const messageRow = this.#database
           .prepare("SELECT * FROM messages WHERE id = ?")
           .get(row.message_id) as unknown as MessageRow;
+        const message = this.#hydrateMessage(messageRow);
         const membership = this.#getMembershipRow(messageRow.group_id, row.recipient_member_id);
+        const senderAlias =
+          message.sender.kind === "agent"
+            ? (this.#getMembershipRow(message.groupId, message.sender.memberId)?.alias ??
+              message.sender.memberId)
+            : "Human";
         const profile = this.#requireAgentProfile(membership?.agent_profile_id ?? "");
         const run = this.getActiveRun(messageRow.group_id, row.recipient_member_id);
         claims.push({
@@ -1041,7 +1058,8 @@ export class NanasaStore {
             next_attempt_at: null,
             updated_at: now,
           }),
-          message: this.#hydrateMessage(messageRow),
+          message,
+          senderAlias,
           profile,
           ...(run === undefined ? {} : { run }),
           recipientActive: membership?.state === "active",
@@ -1372,6 +1390,13 @@ export class NanasaStore {
 
     const requested =
       command.audience.kind === "dm" ? [command.audience.memberId] : command.audience.memberIds;
+    if (command.sender.kind === "agent" && requested.includes(command.sender.memberId)) {
+      throw new DomainError(
+        "self_recipient_forbidden",
+        "Agents cannot send direct or multicast messages to themselves",
+        409,
+      );
+    }
     for (const memberId of requested) {
       const membership = this.#getMembershipRow(group.id, memberId);
       if (membership === undefined || membership.state !== "active") {
@@ -1383,6 +1408,18 @@ export class NanasaStore {
       }
     }
     return requested;
+  }
+
+  #generateMemberId(groupId: string, agentType: string): string {
+    for (let attempt = 0; attempt < 32; attempt += 1) {
+      const memberId = formatMemberId(agentType, this.#memberNameGenerator());
+      if (this.#getMembershipRow(groupId, memberId) === undefined) return memberId;
+    }
+    throw new DomainError(
+      "member_id_generation_exhausted",
+      "Could not generate a unique member ID",
+      503,
+    );
   }
 
   #validateSender(groupId: string, sender: SubmitMessageCommand["sender"]): void {
