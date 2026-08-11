@@ -71,10 +71,10 @@ function provisioner(
   return new AgentRuntimeProvisioner({
     integrationsDirectory: join(root, "integrations"),
     agentConfigHomes: {
-      copilot: { scope: "agent-type" },
-      "claude-code": { scope: "agent-type" },
-      pi: { scope: "agent-type" },
-      opencode: { scope: "agent-type" },
+      copilot: { scope: "integration" },
+      "claude-code": { scope: "integration" },
+      pi: { scope: "integration" },
+      opencode: { scope: "integration" },
     },
     mcpEndpointUrl: "http://127.0.0.1:3210/mcp",
     ...options,
@@ -104,7 +104,7 @@ describe("AgentRuntimeProvisioner", () => {
   it("generates Copilot hooks and MCP config in its isolated home", () => {
     const root = temporaryDirectory();
     const runtimeProvisioner = provisioner(root);
-    const configHome = join(root, "integrations", "agent-types", "copilot");
+    const configHome = join(root, "integrations", "integrations", "copilot");
     const hooksDirectory = join(configHome, "hooks");
     mkdirSync(configHome, { recursive: true });
     writeFileSync(join(configHome, "settings.json"), JSON.stringify({ theme: "dim" }));
@@ -160,7 +160,7 @@ describe("AgentRuntimeProvisioner", () => {
     const root = temporaryDirectory();
     const runtimeProvisioner = provisioner(root);
     const wrappedProfile = { ...profile("claude-code", "make"), args: ["claude-copilot"] };
-    const configDirectory = join(root, "integrations", "agent-types", "claude-code");
+    const configDirectory = join(root, "integrations", "integrations", "claude-code");
     mkdirSync(configDirectory, { recursive: true });
     writeFileSync(
       join(configDirectory, ".claude.json"),
@@ -236,7 +236,7 @@ describe("AgentRuntimeProvisioner", () => {
     const runtimeProvisioner = provisioner(root, {
       piExtensionPath: "/runtime/pi-mcp-adapter/index.ts",
     });
-    const agentDirectory = join(root, "integrations", "agent-types", "pi");
+    const agentDirectory = join(root, "integrations", "integrations", "pi");
     mkdirSync(agentDirectory, { recursive: true });
     writeFileSync(
       join(agentDirectory, "mcp.json"),
@@ -285,7 +285,7 @@ describe("AgentRuntimeProvisioner", () => {
   it("selects a persistent OpenCode config without replacing provider state", () => {
     const root = temporaryDirectory();
     const runtimeProvisioner = provisioner(root);
-    const opencodeDirectory = join(root, "integrations", "agent-types", "opencode");
+    const opencodeDirectory = join(root, "integrations", "integrations", "opencode");
     const configPath = join(opencodeDirectory, "opencode.json");
     const configDirectory = join(opencodeDirectory, "nanasa-config");
     mkdirSync(opencodeDirectory, { recursive: true });
@@ -426,7 +426,7 @@ describe("AgentRuntimeProvisioner", () => {
     symlinkSync(outside, join(integrationsDirectory, "members", "membership_stable"), "dir");
     const runtimeProvisioner = new AgentRuntimeProvisioner({
       integrationsDirectory,
-      agentConfigHomes: { copilot: { scope: "member" } },
+      agentConfigHomes: { copilot: { scope: "agent" } },
       mcpEndpointUrl: "http://127.0.0.1:3210/mcp",
     });
 
@@ -435,7 +435,7 @@ describe("AgentRuntimeProvisioner", () => {
     );
   });
 
-  it("resolves member and custom homes without touching an external home", () => {
+  it("resolves agent and custom homes without touching an external home", () => {
     const root = temporaryDirectory();
     const externalHome = join(root, "external-home");
     mkdirSync(externalHome);
@@ -443,8 +443,8 @@ describe("AgentRuntimeProvisioner", () => {
     const runtimeProvisioner = new AgentRuntimeProvisioner({
       integrationsDirectory: join(root, "integrations"),
       agentConfigHomes: {
-        copilot: { scope: "member" },
-        pi: { scope: "custom", path: "custom/{agentType}/{membershipId}" },
+        copilot: { scope: "agent" },
+        pi: { scope: "custom", path: "custom/{integrationId}/{agentId}" },
       },
       mcpEndpointUrl: "http://127.0.0.1:3210/mcp",
       piExtensionPath: "/runtime/pi-mcp-adapter/index.ts",
@@ -454,7 +454,7 @@ describe("AgentRuntimeProvisioner", () => {
     const pi = runtimeProvisioner.provision(membership(), profile("pi"));
 
     expect(copilot.environment.COPILOT_HOME).toBe(
-      join(root, "integrations", "members", "membership_stable", "copilot"),
+      join(root, "integrations", "agents", "membership_stable", "copilot"),
     );
     expect(pi.environment.PI_CODING_AGENT_DIR).toBe(
       join(root, "integrations", "custom", "pi", "membership_stable"),

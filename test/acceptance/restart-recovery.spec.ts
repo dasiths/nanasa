@@ -4,7 +4,7 @@ test("graceful daemon restart reconnects the portal and preserves tmux panes", a
   page,
   nanasa,
 }) => {
-  const { group, members } = await nanasa.seedGroup("Recovery team", [
+  const { group, agents: members } = await nanasa.seedGroup("Recovery team", [
     "Survivor one",
     "Survivor two",
   ]);

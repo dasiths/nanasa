@@ -1,23 +1,21 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
-  AddGroupMembershipCommand,
-  AgentProfile,
-  CreateAgentProfileCommand,
+  CreateGroupAgentCommand,
   CreateGroupCommand,
   DeleteGroupResult,
   Group,
   GroupMembership,
-  ReorderGroupMembershipsCommand,
-  ReorderGroupMembershipsResult,
+  RemoveGroupAgentResult,
+  ReorderGroupAgentsCommand,
+  ReorderGroupAgentsResult,
   RoleDefinition,
-  UpdateAgentProfileCommand,
+  UpdateGroupAgentCommand,
   UpdateGroupCommand,
-  UpdateGroupMembershipCommand,
   UpdateRolePresentationCommand,
 } from "@nanasa/contracts";
 import { ConfigRepository } from "./config-repository.js";
 import { dockerMemberName, formatMemberId } from "./member-id.js";
-import { normalizeMembershipOrder } from "./membership-order.js";
+import { normalizeAgentOrder } from "./membership-order.js";
 import { RunRuntimeCoordinator } from "./run-runtime-coordinator.js";
 import { DomainError, NanasaStore } from "./store.js";
 
@@ -51,9 +49,7 @@ export class TopologyService {
         continue;
       }
       const desiredMemberIds = new Set(
-        Object.values(loaded.config.groups[group.id]?.memberships ?? {}).map(
-          (membership) => membership.memberId,
-        ),
+        Object.values(loaded.config.groups[group.id]?.agents ?? {}).map((agent) => agent.memberId),
       );
       for (const membership of snapshot.memberships.filter(
         (candidate) => candidate.groupId === group.id,
@@ -76,7 +72,7 @@ export class TopologyService {
           [groupId]: config.groups[groupId] ?? {
             name: command.name.trim(),
             instructions: command.instructions ?? [],
-            memberships: {},
+            agents: {},
           },
         },
       },
@@ -157,134 +153,27 @@ export class TopologyService {
     return this.#coordinator.deleteGroup(groupId, idempotencyKey);
   }
 
-  public async createAgentProfile(
-    command: CreateAgentProfileCommand,
-    idempotencyKey?: string,
-  ): Promise<AgentProfile> {
-    const profileId = stableId("profile", "agent-profile.create", idempotencyKey);
-    const mutation = await this.#repository.mutate((config) => {
-      if (config.agentTypes[command.agentType] === undefined) {
-        throw new DomainError("agent_type_not_found", "Agent type not found", 400);
-      }
-      if (
-        command.defaultRoleId !== undefined &&
-        config.roles[command.defaultRoleId] === undefined
-      ) {
-        throw new DomainError("role_not_found", "Role not found", 404);
-      }
-      return {
-        config: {
-          ...config,
-          agentProfiles: {
-            ...config.agentProfiles,
-            [profileId]: config.agentProfiles[profileId] ?? {
-              name: command.name.trim(),
-              agentType: command.agentType,
-              instructions: command.instructions ?? [],
-              ...(command.defaultRoleId === undefined
-                ? {}
-                : { defaultRoleId: command.defaultRoleId }),
-            },
-          },
-        },
-        result: profileId,
-      };
-    });
-    this.#store.reconcileTopology(mutation.loaded.config, mutation.loaded.status);
-    this.#store.recordRuntimeEvent("agent-profile.created", "agent-profile", profileId, {
-      profileId,
-    });
-    return this.#store.getAgentProfile(profileId);
-  }
-
-  public async updateAgentProfile(
-    profileId: string,
-    command: UpdateAgentProfileCommand,
-  ): Promise<AgentProfile> {
-    const promptChange = command.defaultRoleId !== undefined || command.instructions !== undefined;
-    if (promptChange) {
-      const activeMembership = this.#store
-        .getSnapshot()
-        .memberships.find(
-          (membership) =>
-            membership.agentProfileId === profileId &&
-            this.#store.getActiveRun(membership.groupId, membership.memberId) !== undefined,
-        );
-      if (activeMembership !== undefined) {
-        throw new DomainError(
-          "active_run_profile_change_requires_restart",
-          "Stop agents using this profile before changing its role or instructions",
-          409,
-        );
-      }
-    }
-    const mutation = await this.#repository.mutate((config) => {
-      const profile = config.agentProfiles[profileId];
-      if (profile === undefined) {
-        throw new DomainError("agent_profile_not_found", "Agent profile not found", 404);
-      }
-      const defaultRoleId =
-        command.defaultRoleId === null
-          ? undefined
-          : (command.defaultRoleId ?? profile.defaultRoleId);
-      if (defaultRoleId !== undefined && config.roles[defaultRoleId] === undefined) {
-        throw new DomainError("role_not_found", "Role not found", 404);
-      }
-      return {
-        config: {
-          ...config,
-          agentProfiles: {
-            ...config.agentProfiles,
-            [profileId]: {
-              ...profile,
-              name: command.name?.trim() ?? profile.name,
-              defaultRoleId,
-              instructions: command.instructions ?? profile.instructions,
-            },
-          },
-        },
-        result: profileId,
-      };
-    });
-    this.#store.reconcileTopology(mutation.loaded.config, mutation.loaded.status);
-    this.#store.recordRuntimeEvent("agent-profile.updated", "agent-profile", profileId, {
-      profileId,
-    });
-    return this.#store.getAgentProfile(profileId);
-  }
-
-  public async addMembership(
+  public async createAgent(
     groupId: string,
-    command: AddGroupMembershipCommand,
+    command: CreateGroupAgentCommand,
     idempotencyKey?: string,
   ): Promise<GroupMembership> {
-    const membershipId = stableId("membership", `group.${groupId}.membership.add`, idempotencyKey);
+    const agentId = stableId("agent", `group.${groupId}.agent.create`, idempotencyKey);
     const mutation = await this.#repository.mutate((config) => {
       const group = config.groups[groupId];
-      const profile = config.agentProfiles[command.agentProfileId];
       if (group === undefined) throw new DomainError("group_not_found", "Group not found", 404);
-      if (profile === undefined) {
-        throw new DomainError("agent_profile_not_found", "Agent profile not found", 404);
+      if (config.integrations[command.integrationId] === undefined) {
+        throw new DomainError("integration_not_found", "Integration not found", 400);
       }
       if (command.roleId !== undefined && config.roles[command.roleId] === undefined) {
         throw new DomainError("role_not_found", "Role not found", 404);
       }
-      let memberId = command.memberId;
+      const existing = group.agents[agentId];
+      let memberId = existing?.memberId;
       if (memberId === undefined) {
         do {
-          memberId = formatMemberId(profile.agentType, dockerMemberName());
-        } while (
-          Object.values(group.memberships).some((membership) => membership.memberId === memberId)
-        );
-      }
-      if (
-        Object.values(group.memberships).some(
-          (membership) =>
-            membership.memberId === memberId &&
-            group.memberships[membershipId]?.memberId !== memberId,
-        )
-      ) {
-        throw new DomainError("membership_exists", "The member is already active", 409);
+          memberId = formatMemberId(dockerMemberName());
+        } while (Object.values(group.agents).some((agent) => agent.memberId === memberId));
       }
       return {
         config: {
@@ -293,12 +182,12 @@ export class TopologyService {
             ...config.groups,
             [groupId]: {
               ...group,
-              memberships: normalizeMembershipOrder({
-                ...group.memberships,
-                [membershipId]: group.memberships[membershipId] ?? {
+              agents: normalizeAgentOrder({
+                ...group.agents,
+                [agentId]: existing ?? {
                   memberId,
-                  agentProfileId: command.agentProfileId,
-                  alias: command.alias.trim(),
+                  name: command.name.trim(),
+                  integrationId: command.integrationId,
                   instructions: command.instructions ?? [],
                   ...(command.roleId === undefined ? {} : { roleId: command.roleId }),
                 },
@@ -306,42 +195,45 @@ export class TopologyService {
             },
           },
         },
-        result: { membershipId, memberId },
+        result: { agentId, memberId },
       };
     });
     this.#store.reconcileTopology(mutation.loaded.config, mutation.loaded.status);
-    this.#store.recordRuntimeEvent("membership.added", "group", groupId, mutation.result);
+    this.#store.recordRuntimeEvent("agent.created", "group", groupId, mutation.result);
     return this.#store
       .listActiveMemberships(groupId)
-      .find((membership) => membership.id === mutation.result.membershipId) as GroupMembership;
+      .find((membership) => membership.id === mutation.result.agentId) as GroupMembership;
   }
 
-  public async updateMembership(
+  public async updateAgent(
     groupId: string,
-    memberId: string,
-    command: UpdateGroupMembershipCommand,
+    agentId: string,
+    command: UpdateGroupAgentCommand,
   ): Promise<GroupMembership> {
+    const current = this.#repository.load().config.groups[groupId]?.agents[agentId];
+    if (current === undefined) throw new DomainError("agent_not_found", "Agent not found", 404);
+    const roleId = command.roleId === null ? undefined : (command.roleId ?? current.roleId);
+    const requiresStoppedRun =
+      (command.integrationId !== undefined && command.integrationId !== current.integrationId) ||
+      (command.roleId !== undefined && roleId !== current.roleId) ||
+      (command.instructions !== undefined &&
+        JSON.stringify(command.instructions) !== JSON.stringify(current.instructions));
+    if (requiresStoppedRun && this.#store.getActiveRun(groupId, current.memberId) !== undefined) {
+      throw new DomainError(
+        "active_run_agent_change_requires_restart",
+        "Stop the active agent before changing its integration, role, or instructions",
+        409,
+      );
+    }
     const mutation = await this.#repository.mutate((config) => {
       const group = config.groups[groupId];
       if (group === undefined) throw new DomainError("group_not_found", "Group not found", 404);
-      const entry = Object.entries(group.memberships).find(
-        ([, membership]) => membership.memberId === memberId,
-      );
-      if (entry === undefined) {
-        throw new DomainError("membership_not_found", "Membership not found", 404);
+      const agent = group.agents[agentId];
+      if (agent === undefined) throw new DomainError("agent_not_found", "Agent not found", 404);
+      const nextIntegrationId = command.integrationId ?? agent.integrationId;
+      if (config.integrations[nextIntegrationId] === undefined) {
+        throw new DomainError("integration_not_found", "Integration not found", 400);
       }
-      const [membershipId, membership] = entry;
-      if (
-        (command.roleId !== undefined || command.instructions !== undefined) &&
-        this.#store.getActiveRun(groupId, memberId) !== undefined
-      ) {
-        throw new DomainError(
-          "active_run_role_change_requires_restart",
-          "Stop the active agent before changing its role",
-          409,
-        );
-      }
-      const roleId = command.roleId === null ? undefined : (command.roleId ?? membership.roleId);
       if (roleId !== undefined && config.roles[roleId] === undefined) {
         throw new DomainError("role_not_found", "Role not found", 404);
       }
@@ -352,100 +244,113 @@ export class TopologyService {
             ...config.groups,
             [groupId]: {
               ...group,
-              memberships: {
-                ...group.memberships,
-                [membershipId]: {
-                  ...membership,
-                  alias: command.alias?.trim() ?? membership.alias,
+              agents: {
+                ...group.agents,
+                [agentId]: {
+                  ...agent,
+                  name: command.name?.trim() ?? agent.name,
+                  integrationId: nextIntegrationId,
                   roleId,
-                  instructions: command.instructions ?? membership.instructions,
+                  instructions: command.instructions ?? agent.instructions,
                 },
               },
             },
           },
         },
-        result: membershipId,
+        result: agentId,
       };
     });
     this.#store.reconcileTopology(mutation.loaded.config, mutation.loaded.status);
-    this.#store.recordRuntimeEvent("membership.updated", "group", groupId, { memberId });
+    this.#store.recordRuntimeEvent("agent.updated", "group", groupId, { agentId });
     return this.#store
       .listActiveMemberships(groupId)
-      .find((membership) => membership.memberId === memberId) as GroupMembership;
+      .find((membership) => membership.id === agentId) as GroupMembership;
   }
 
-  public async removeMembership(
+  public async removeAgent(
     groupId: string,
-    memberId: string,
+    agentId: string,
     idempotencyKey?: string,
-  ): Promise<GroupMembership> {
+  ): Promise<RemoveGroupAgentResult> {
+    const current = this.getAgentMembership(groupId, agentId);
+    const revokedDeliveries = this.#store
+      .listDeliveries()
+      .filter(
+        (delivery) =>
+          delivery.recipientMemberId === current.memberId &&
+          ["queued", "received", "delivering", "retrying"].includes(delivery.status),
+      ).length;
     await this.#repository.mutate((config) => {
       const group = config.groups[groupId];
       if (group === undefined) throw new DomainError("group_not_found", "Group not found", 404);
-      const entry = Object.entries(group.memberships).find(
-        ([, membership]) => membership.memberId === memberId,
-      );
-      if (entry === undefined) {
-        throw new DomainError("membership_not_found", "Membership not found", 404);
+      if (group.agents[agentId] === undefined) {
+        throw new DomainError("agent_not_found", "Agent not found", 404);
       }
-      const memberships = { ...group.memberships };
-      delete memberships[entry[0]];
+      const agents = { ...group.agents };
+      delete agents[agentId];
       return {
         config: {
           ...config,
           groups: {
             ...config.groups,
-            [groupId]: { ...group, memberships: normalizeMembershipOrder(memberships) },
+            [groupId]: { ...group, agents: normalizeAgentOrder(agents) },
           },
         },
-        result: entry[0],
+        result: agentId,
       };
     });
-    return this.#coordinator.removeMembership(groupId, memberId, idempotencyKey);
+    await this.#coordinator.removeMembership(groupId, current.memberId, idempotencyKey);
+    return { groupId, agentId, deletedRuns: 0, revokedDeliveries };
   }
 
-  public async reorderMemberships(
+  public async reorderAgents(
     groupId: string,
-    command: ReorderGroupMembershipsCommand,
-  ): Promise<ReorderGroupMembershipsResult> {
+    command: ReorderGroupAgentsCommand,
+  ): Promise<ReorderGroupAgentsResult> {
+    const agentRevision = this.#store.getGroup(groupId).membershipRevision;
+    if (command.expectedAgentRevision !== agentRevision) {
+      throw new DomainError(
+        "agent_order_stale",
+        "Agents changed while preparing the new order; refresh and retry",
+        409,
+      );
+    }
     const mutation = await this.#repository.mutate((config) => {
       const group = config.groups[groupId];
       if (group === undefined) throw new DomainError("group_not_found", "Group not found", 404);
-      const entriesByMemberId = new Map(
-        Object.entries(group.memberships).map(([membershipId, membership]) => [
-          membership.memberId,
-          [membershipId, membership] as const,
-        ]),
-      );
       if (
-        command.memberIds.length !== entriesByMemberId.size ||
-        command.memberIds.some((memberId) => !entriesByMemberId.has(memberId))
+        command.agentIds.length !== Object.keys(group.agents).length ||
+        command.agentIds.some((agentId) => group.agents[agentId] === undefined)
       ) {
         throw new DomainError(
-          "membership_order_stale",
-          "Memberships changed while preparing the new order; refresh and retry",
+          "agent_order_stale",
+          "Agents changed while preparing the new order; refresh and retry",
           409,
         );
       }
-      const memberships = Object.fromEntries(
-        command.memberIds.map((memberId, order) => {
-          const [membershipId, membership] = entriesByMemberId.get(memberId) as readonly [
-            string,
-            (typeof group.memberships)[string],
-          ];
-          return [membershipId, { ...membership, order }];
-        }),
+      const agents = Object.fromEntries(
+        command.agentIds.map((agentId, order) => [agentId, { ...group.agents[agentId]!, order }]),
       );
       return {
         config: {
           ...config,
-          groups: { ...config.groups, [groupId]: { ...group, memberships } },
+          groups: { ...config.groups, [groupId]: { ...group, agents } },
         },
-        result: { groupId, memberIds: command.memberIds },
+        result: { groupId, agentIds: command.agentIds, agentRevision },
       };
     });
     this.#store.reconcileTopology(mutation.loaded.config, mutation.loaded.status);
-    this.#store.recordRuntimeEvent("membership.reordered", "group", groupId, mutation.result);
+    this.#store.recordRuntimeEvent("agent.reordered", "group", groupId, mutation.result);
     return mutation.result;
+  }
+
+  public getAgentMembership(groupId: string, agentId: string): GroupMembership {
+    const configured = this.#repository.load().config.groups[groupId]?.agents[agentId];
+    if (configured === undefined) throw new DomainError("agent_not_found", "Agent not found", 404);
+    const membership = this.#store
+      .listActiveMemberships(groupId)
+      .find((candidate) => candidate.id === agentId);
+    if (membership === undefined) throw new DomainError("agent_not_found", "Agent not found", 404);
+    return membership;
   }
 }

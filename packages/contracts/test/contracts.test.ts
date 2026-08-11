@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  AgentCapabilitySchema,
   AgentProfileSchema,
   AgentProgressReportCommandSchema,
   AgentRunSchema,
   AgentStatusDetailSchema,
   AgentStatusEventInputSchema,
   ConfigStatusSchema,
-  CreateAgentProfileCommandSchema,
+  CreateGroupAgentCommandSchema,
   DeleteGroupResultSchema,
   DeliveryModeSchema,
   DeliveryOutcomeSchema,
@@ -17,13 +16,14 @@ import {
   MAX_MESSAGE_TEXT_BYTES,
   MessageSchema,
   NanasaConfigSchema,
-  ReorderGroupMembershipsCommandSchema,
+  RemoveGroupAgentResultSchema,
+  ReorderGroupAgentsCommandSchema,
+  ReorderGroupAgentsResultSchema,
   StartAgentRunCommandSchema,
   SubmitMessageCommandSchema,
   TerminalEndpointStatusSchema,
+  UpdateGroupAgentCommandSchema,
   UpdateGroupCommandSchema,
-  UpdateGroupMembershipCommandSchema,
-  UpdateRolePresentationCommandSchema,
 } from "../src/index.js";
 
 const baseMessage = {
@@ -224,23 +224,7 @@ describe("terminal endpoint status contracts", () => {
 });
 
 describe("agent run contracts", () => {
-  it("creates profiles by configured agent type only", () => {
-    expect(
-      CreateAgentProfileCommandSchema.parse({
-        name: "Claude reviewer",
-        agentType: "claude-copilot",
-      }),
-    ).toEqual({
-      name: "Claude reviewer",
-      agentType: "claude-copilot",
-    });
-    expect(
-      CreateAgentProfileCommandSchema.safeParse({
-        name: "Unsafe",
-        agentType: "copilot",
-        command: "sh",
-      }).success,
-    ).toBe(false);
+  it("applies run viewport defaults", () => {
     expect(StartAgentRunCommandSchema.parse({})).toEqual({ cols: 120, rows: 40 });
   });
 
@@ -388,10 +372,9 @@ describe("agent status contracts", () => {
 
 describe("configuration contracts", () => {
   const config = {
-    version: 1,
-    agentTypes: {
+    integrations: {
       copilot: {
-        key: "copilot",
+        id: "copilot",
         name: "GitHub Copilot",
         kind: "copilot",
         adapter: "copilot-cli",
@@ -401,7 +384,7 @@ describe("configuration contracts", () => {
         capabilities: ["queue"],
       },
       opencode: {
-        key: "opencode",
+        id: "opencode",
         name: "OpenCode",
         kind: "opencode",
         adapter: "terminal",
@@ -413,28 +396,25 @@ describe("configuration contracts", () => {
     },
   } as const;
 
-  it("accepts legacy agent fields but emits terminal-only canonical configuration", () => {
-    expect(AgentCapabilitySchema.safeParse("terminal").success).toBe(false);
+  it("emits an unversioned integration configuration with canonical defaults", () => {
     expect(NanasaConfigSchema.parse(config)).toEqual({
-      version: 1,
       instructions: [],
       roles: {},
-      agentProfiles: {},
-      agentTypes: {
+      integrations: {
         copilot: {
-          key: "copilot",
+          id: "copilot",
           name: "GitHub Copilot",
           kind: "copilot",
           command: ["copilot"],
-          agentConfigHome: { scope: "agent-type" },
+          agentConfigHome: { scope: "integration" },
           environment: {},
         },
         opencode: {
-          key: "opencode",
+          id: "opencode",
           name: "OpenCode",
           kind: "opencode",
           command: ["opencode"],
-          agentConfigHome: { scope: "agent-type" },
+          agentConfigHome: { scope: "integration" },
           environment: {},
         },
       },
@@ -444,10 +424,10 @@ describe("configuration contracts", () => {
     expect(
       NanasaConfigSchema.safeParse({
         ...config,
-        agentTypes: {
-          ...config.agentTypes,
+        integrations: {
+          ...config.integrations,
           opencode: {
-            ...config.agentTypes.opencode,
+            ...config.integrations.opencode,
             capabilities: ["queue", "steer"],
           },
         },
@@ -456,10 +436,10 @@ describe("configuration contracts", () => {
     expect(
       NanasaConfigSchema.safeParse({
         ...config,
-        agentTypes: {
-          ...config.agentTypes,
+        integrations: {
+          ...config.integrations,
           copilot: {
-            ...config.agentTypes.copilot,
+            ...config.integrations.copilot,
             capabilities: ["queue", "steer"],
           },
         },
@@ -467,13 +447,12 @@ describe("configuration contracts", () => {
     ).toBe(false);
   });
 
-  it("accepts minimal terminal-only agent configuration", () => {
+  it("accepts a minimal terminal-only integration", () => {
     expect(
       NanasaConfigSchema.parse({
-        version: 1,
-        agentTypes: {
+        integrations: {
           pi: {
-            key: "pi",
+            id: "pi",
             name: "Pi",
             kind: "pi",
             command: ["pi"],
@@ -481,17 +460,15 @@ describe("configuration contracts", () => {
         },
       }),
     ).toEqual({
-      version: 1,
       instructions: [],
       roles: {},
-      agentProfiles: {},
-      agentTypes: {
+      integrations: {
         pi: {
-          key: "pi",
+          id: "pi",
           name: "Pi",
           kind: "pi",
           command: ["pi"],
-          agentConfigHome: { scope: "agent-type" },
+          agentConfigHome: { scope: "integration" },
           environment: {},
         },
       },
@@ -500,54 +477,9 @@ describe("configuration contracts", () => {
     });
   });
 
-  it("validates declarative topology references and retention", () => {
-    expect(
-      NanasaConfigSchema.parse({
-        version: 1,
-        agentTypes: config.agentTypes,
-        agentProfiles: {
-          profile_one: { name: "Builder", agentType: "copilot" },
-        },
-        groups: {
-          group_one: {
-            name: "Team",
-            memberships: {
-              membership_one: {
-                memberId: "copilot.builder",
-                agentProfileId: "profile_one",
-                alias: "Builder",
-              },
-            },
-          },
-        },
-        messages: { retentionPerGroup: 20 },
-      }),
-    ).toMatchObject({ messages: { retentionPerGroup: 20 } });
-    expect(
-      NanasaConfigSchema.safeParse({
-        version: 1,
-        agentTypes: config.agentTypes,
-        agentProfiles: {},
-        groups: {
-          group_one: {
-            name: "Team",
-            memberships: {
-              membership_one: {
-                memberId: "copilot.builder",
-                agentProfileId: "missing",
-                alias: "Builder",
-              },
-            },
-          },
-        },
-      }).success,
-    ).toBe(false);
-  });
-
-  it("resolves reusable role references with layered instruction defaults", () => {
+  it("validates flattened agents, integration and role references, and defaults", () => {
     const parsed = NanasaConfigSchema.parse({
-      version: 1,
-      agentTypes: config.agentTypes,
+      integrations: config.integrations,
       instructions: [".nanasa/instructions/team.md"],
       roles: {
         reviewer: {
@@ -561,21 +493,16 @@ describe("configuration contracts", () => {
           },
         },
       },
-      agentProfiles: {
-        profile_one: {
-          name: "Builder",
-          agentType: "copilot",
-          defaultRoleId: "reviewer",
-        },
-      },
       groups: {
         group_one: {
           name: "Team",
-          memberships: {
-            membership_one: {
+          agents: {
+            agent_one: {
               memberId: "copilot.reviewer",
-              agentProfileId: "profile_one",
-              alias: "Reviewer",
+              name: "Reviewer",
+              integrationId: "copilot",
+              roleId: "reviewer",
+              order: 0,
             },
           },
         },
@@ -591,8 +518,14 @@ describe("configuration contracts", () => {
         shortName: "Review",
       },
     });
-    expect(parsed.agentProfiles.profile_one?.instructions).toEqual([]);
-    expect(parsed.groups.group_one?.memberships.membership_one?.instructions).toEqual([]);
+    expect(parsed.groups.group_one?.agents.agent_one).toMatchObject({
+      memberId: "copilot.reviewer",
+      name: "Reviewer",
+      integrationId: "copilot",
+      roleId: "reviewer",
+      instructions: [],
+      order: 0,
+    });
     expect(
       NanasaConfigSchema.safeParse({
         ...parsed,
@@ -608,64 +541,29 @@ describe("configuration contracts", () => {
     expect(
       NanasaConfigSchema.safeParse({
         ...parsed,
-        agentProfiles: {
-          ...parsed.agentProfiles,
-          profile_one: { ...parsed.agentProfiles.profile_one, defaultRoleId: "missing-role" },
-        },
-      }).success,
-    ).toBe(false);
-  });
-
-  it("validates role presentation updates and complete membership order commands", () => {
-    expect(
-      UpdateRolePresentationCommandSchema.parse({
-        icon: "hammer",
-        color: "blue",
-        shortName: "Build",
-      }),
-    ).toEqual({ icon: "hammer", color: "blue", shortName: "Build" });
-    expect(
-      UpdateRolePresentationCommandSchema.safeParse({ icon: "sparkles", color: "gold" }).success,
-    ).toBe(false);
-
-    expect(
-      ReorderGroupMembershipsCommandSchema.parse({ memberIds: ["builder", "reviewer"] }),
-    ).toEqual({ memberIds: ["builder", "reviewer"] });
-    expect(
-      ReorderGroupMembershipsCommandSchema.safeParse({ memberIds: ["builder", "builder"] }).success,
-    ).toBe(false);
-
-    const configured = NanasaConfigSchema.parse({
-      version: 1,
-      agentTypes: config.agentTypes,
-      groups: {
-        group_one: {
-          name: "Team",
-          memberships: {
-            membership_one: {
-              memberId: "copilot.builder",
-              agentProfileId: "profile_one",
-              alias: "Builder",
-              order: 0,
+        groups: {
+          group_one: {
+            ...parsed.groups.group_one,
+            agents: {
+              agent_one: {
+                ...parsed.groups.group_one?.agents.agent_one,
+                integrationId: "missing-integration",
+              },
             },
           },
         },
-      },
-      agentProfiles: {
-        profile_one: { name: "Builder", agentType: "copilot" },
-      },
-    });
-    expect(configured.groups.group_one?.memberships.membership_one?.order).toBe(0);
+      }).success,
+    ).toBe(false);
     expect(
       NanasaConfigSchema.safeParse({
-        ...configured,
+        ...parsed,
         groups: {
           group_one: {
-            ...configured.groups.group_one,
-            memberships: {
-              membership_one: {
-                ...configured.groups.group_one?.memberships.membership_one,
-                order: -1,
+            ...parsed.groups.group_one,
+            agents: {
+              agent_one: {
+                ...parsed.groups.group_one?.agents.agent_one,
+                roleId: "missing-role",
               },
             },
           },
@@ -674,44 +572,91 @@ describe("configuration contracts", () => {
     ).toBe(false);
   });
 
+  it("rejects duplicate configured agent IDs globally and member IDs within a group", () => {
+    const agent = {
+      memberId: "copilot.builder",
+      name: "Builder",
+      integrationId: "copilot",
+    };
+    expect(
+      NanasaConfigSchema.safeParse({
+        integrations: config.integrations,
+        groups: {
+          first: { name: "First", agents: { shared_agent: agent } },
+          second: {
+            name: "Second",
+            agents: { shared_agent: { ...agent, memberId: "copilot.reviewer" } },
+          },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      NanasaConfigSchema.safeParse({
+        integrations: config.integrations,
+        groups: {
+          first: {
+            name: "First",
+            agents: {
+              agent_one: agent,
+              agent_two: { ...agent, name: "Reviewer" },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    ["version", { ...config, version: 1 }],
+    ["agentTypes", { ...config, agentTypes: config.integrations }],
+    ["agentProfiles", { ...config, agentProfiles: {} }],
+    [
+      "memberships",
+      {
+        ...config,
+        groups: { group_one: { name: "Team", memberships: {} } },
+      },
+    ],
+  ])("rejects the legacy %s vocabulary", (_name, legacyConfig) => {
+    expect(NanasaConfigSchema.safeParse(legacyConfig).success).toBe(false);
+  });
+
+  it("accepts agent and custom repository-local configuration homes", () => {
+    const agent = NanasaConfigSchema.parse({
+      integrations: {
+        pi: {
+          id: "pi",
+          name: "Pi",
+          kind: "pi",
+          command: ["pi"],
+          agentConfigHome: { scope: "agent" },
+        },
+      },
+    });
+    expect(agent.integrations.pi.agentConfigHome).toEqual({ scope: "agent" });
+
+    const custom = NanasaConfigSchema.parse({
+      integrations: {
+        copilot: {
+          id: "copilot",
+          name: "Copilot",
+          kind: "copilot",
+          command: ["copilot"],
+          agentConfigHome: { scope: "custom", path: "homes/{integrationId}/{agentId}" },
+        },
+      },
+    });
+    expect(custom.integrations.copilot.agentConfigHome).toEqual({
+      scope: "custom",
+      path: "homes/{integrationId}/{agentId}",
+    });
+  });
+
   it("accepts only Markdown instruction paths", () => {
     expect(InstructionPathSchema.parse(".nanasa/instructions/team.md")).toBe(
       ".nanasa/instructions/team.md",
     );
     expect(InstructionPathSchema.safeParse(".nanasa/instructions/team.txt").success).toBe(false);
-  });
-
-  it("accepts member and custom repository-local configuration homes", () => {
-    const member = NanasaConfigSchema.parse({
-      version: 1,
-      agentTypes: {
-        pi: {
-          key: "pi",
-          name: "Pi",
-          kind: "pi",
-          command: ["pi"],
-          agentConfigHome: { scope: "member" },
-        },
-      },
-    });
-    expect(member.agentTypes.pi.agentConfigHome).toEqual({ scope: "member" });
-
-    const custom = NanasaConfigSchema.parse({
-      version: 1,
-      agentTypes: {
-        copilot: {
-          key: "copilot",
-          name: "Copilot",
-          kind: "copilot",
-          command: ["copilot"],
-          agentConfigHome: { scope: "custom", path: "homes/{agentType}/{membershipId}" },
-        },
-      },
-    });
-    expect(custom.agentTypes.copilot.agentConfigHome).toEqual({
-      scope: "custom",
-      path: "homes/{agentType}/{membershipId}",
-    });
   });
 
   it("validates source-aware config status", () => {
@@ -728,12 +673,12 @@ describe("configuration contracts", () => {
 });
 
 describe("group CRUD contracts", () => {
-  it("trims group and membership rename commands", () => {
+  it("trims group and agent names", () => {
     expect(UpdateGroupCommandSchema.parse({ name: "  Builders  " })).toEqual({
       name: "Builders",
     });
-    expect(UpdateGroupMembershipCommandSchema.parse({ alias: "  Reviewer  " })).toEqual({
-      alias: "Reviewer",
+    expect(UpdateGroupAgentCommandSchema.parse({ name: "  Reviewer  " })).toEqual({
+      name: "Reviewer",
     });
   });
 
@@ -741,11 +686,50 @@ describe("group CRUD contracts", () => {
     [UpdateGroupCommandSchema, { name: "" }],
     [UpdateGroupCommandSchema, { name: "x".repeat(101) }],
     [UpdateGroupCommandSchema, { name: "Builders", unknown: true }],
-    [UpdateGroupMembershipCommandSchema, { alias: "" }],
-    [UpdateGroupMembershipCommandSchema, { alias: "x".repeat(101) }],
-    [UpdateGroupMembershipCommandSchema, { alias: "Reviewer", unknown: true }],
+    [UpdateGroupAgentCommandSchema, { name: "" }],
+    [UpdateGroupAgentCommandSchema, { name: "x".repeat(101) }],
+    [UpdateGroupAgentCommandSchema, { name: "Reviewer", unknown: true }],
   ])("rejects invalid or unknown rename fields", (schema, value) => {
     expect(schema.safeParse(value).success).toBe(false);
+  });
+
+  it("validates direct agent create, update, remove, and order contracts", () => {
+    expect(
+      CreateGroupAgentCommandSchema.parse({
+        name: "Builder",
+        integrationId: "copilot",
+        roleId: "implementor",
+      }),
+    ).toEqual({ name: "Builder", integrationId: "copilot", roleId: "implementor" });
+    expect(UpdateGroupAgentCommandSchema.parse({ roleId: null })).toEqual({ roleId: null });
+    expect(UpdateGroupAgentCommandSchema.safeParse({}).success).toBe(false);
+
+    const removed = {
+      groupId: "group_1",
+      agentId: "agent_one",
+      deletedRuns: 1,
+      revokedDeliveries: 2,
+    };
+    expect(RemoveGroupAgentResultSchema.parse(removed)).toEqual(removed);
+
+    const reordered = {
+      agentIds: ["agent_one", "agent_two"],
+      expectedAgentRevision: 3,
+    };
+    expect(ReorderGroupAgentsCommandSchema.parse(reordered)).toEqual(reordered);
+    expect(
+      ReorderGroupAgentsCommandSchema.safeParse({
+        agentIds: ["agent_one", "agent_one"],
+        expectedAgentRevision: 3,
+      }).success,
+    ).toBe(false);
+    expect(
+      ReorderGroupAgentsResultSchema.parse({
+        groupId: "group_1",
+        agentIds: reordered.agentIds,
+        agentRevision: 4,
+      }),
+    ).toEqual({ groupId: "group_1", agentIds: reordered.agentIds, agentRevision: 4 });
   });
 
   it("validates strict delete counts", () => {

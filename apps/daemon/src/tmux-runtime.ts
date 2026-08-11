@@ -80,6 +80,7 @@ export class TmuxRuntime {
   readonly #runtimeEnvironment: (run: AgentRun) => Record<string, string>;
   readonly #runtimeProvisioner: AgentRuntimeProvisioner | undefined;
   readonly #reconciliations = new Set<Promise<void>>();
+  readonly #detachedRunIds = new Set<string>();
   #serverConfiguration: Promise<void> | undefined;
   #closing = false;
 
@@ -143,6 +144,42 @@ export class TmuxRuntime {
       { recoveryFrom: current },
     );
     return this.#launchCreatedRun(run, profile, membership, size);
+  }
+
+  public async startConsole(
+    consoleId: string,
+    workingDirectory: string,
+    size: { cols: number; rows: number },
+  ): Promise<AgentRun> {
+    const run: AgentRun = {
+      id: consoleId,
+      groupId: consoleId,
+      memberId: consoleId,
+      agentProfileId: "console",
+      generation: 1,
+      status: "running",
+      desiredState: "running",
+      recoveryPhase: "idle",
+      recoveryAttempts: 0,
+      startedAt: new Date().toISOString(),
+    };
+    try {
+      const terminal = await this.#launchCommand(run, ["bash"], workingDirectory, {}, size);
+      this.#detachedRunIds.add(run.id);
+      return { ...run, terminal };
+    } catch (error) {
+      this.#detachedRunIds.delete(run.id);
+      throw error;
+    }
+  }
+
+  public async stopConsole(run: AgentRun): Promise<void> {
+    this.#detachedRunIds.delete(run.id);
+    if (run.terminal === undefined) return;
+    const result = await this.#tmux(["kill-pane", "-t", run.terminal.paneId], true);
+    if (result.exitCode !== 0 && !result.stderr.includes("can't find pane")) {
+      throw new Error(result.stderr.trim() || "tmux kill-pane failed");
+    }
   }
 
   async #launchCreatedRun(
@@ -249,7 +286,7 @@ export class TmuxRuntime {
   }
 
   public async removeStaleViewSessions(activeRunIds: ReadonlySet<string>): Promise<void> {
-    const desired = new Set([...activeRunIds].map(ttydViewSessionName));
+    const desired = new Set([...activeRunIds, ...this.#detachedRunIds].map(ttydViewSessionName));
     const result = await this.#tmux(["list-sessions", "-F", "#{session_name}"], true);
     if (result.exitCode !== 0) {
       return;
@@ -433,13 +470,24 @@ export class TmuxRuntime {
     membership: GroupMembership,
     size: { cols: number; rows: number },
   ): Promise<TerminalBinding> {
-    const environmentArguments: string[] = [];
     const provisioned = this.#runtimeProvisioner?.provision(membership, profile);
     const environment = {
       ...profile.environment,
       ...this.#runtimeEnvironment(run),
       ...provisioned?.environment,
     };
+    const launchArguments = provisioned?.command ?? [profile.command, ...profile.args];
+    return this.#launchCommand(run, launchArguments, profile.workingDirectory, environment, size);
+  }
+
+  async #launchCommand(
+    run: AgentRun,
+    launchArguments: string[],
+    workingDirectory: string | undefined,
+    environment: Record<string, string>,
+    size: { cols: number; rows: number },
+  ): Promise<TerminalBinding> {
+    const environmentArguments: string[] = [];
     for (const [name, value] of Object.entries(environment)) {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
         throw new DomainError(
@@ -450,7 +498,6 @@ export class TmuxRuntime {
       }
       environmentArguments.push("-e", `${name}=${value}`);
     }
-    const launchArguments = provisioned?.command ?? [profile.command, ...profile.args];
     const launchCommand = launchArguments.map(shellQuote).join(" ");
     const session = sessionName(run.groupId);
     const exists = (await this.#tmux(["has-session", "-t", `=${session}`], true)).exitCode === 0;
@@ -488,8 +535,8 @@ export class TmuxRuntime {
         "-n",
         windowName(run),
       ];
-      if (profile.workingDirectory !== undefined) {
-        args.push("-c", profile.workingDirectory);
+      if (workingDirectory !== undefined) {
+        args.push("-c", workingDirectory);
       }
       args.push(...environmentArguments, `stty -ixon 2>/dev/null; exec ${launchCommand}`);
       binding = parseBinding(this.serverName, (await this.#tmux(args)).stdout);

@@ -77,7 +77,9 @@ test("init creates one repository-local config without runtime state", () => {
     /^\/integrations\/$/m,
   );
   const original = readFileSync(configPath, "utf8");
-  assert.match(original, /^version: 1$/m);
+  assert.match(original, /^integrations:$/m);
+  assert.doesNotMatch(original, /^version:/m);
+  assert.doesNotMatch(original, /^agentProfiles:|^agentTypes:/m);
   assert.match(original, /command: \[copilot\]/);
   assert.match(original, /command: \[pi\]/);
   assert.doesNotMatch(original, /^\s+(adapter|capabilities|recovery):/m);
@@ -118,9 +120,10 @@ test("help documents authenticated MCP enablement", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /--host <host>\s+Listen host; MCP requires loopback/);
   assert.match(result.stdout, /--mcp\s+Enable authenticated MCP \(default path: \/mcp\)/);
-  assert.match(result.stdout, /setup\s+Prepare repository-local integration homes/);
-  assert.match(result.stdout, /auth\s+Launch an agent CLI in its isolated home/);
-  assert.match(result.stdout, /doctor\s+Validate configuration, commands, and integration paths/);
+  assert.match(result.stdout, /nanasa auth <integration> \[--agent <agent-id>\]/);
+  assert.match(result.stdout, /setup\s+Prepare repository-local integration configuration homes/);
+  assert.match(result.stdout, /auth\s+Launch an integration CLI in its isolated home/);
+  assert.match(result.stdout, /doctor\s+Validate configuration, commands, and integration homes/);
 });
 
 test("setup and doctor prepare private repository-local integrations", () => {
@@ -128,14 +131,13 @@ test("setup and doctor prepare private repository-local integrations", () => {
   assert.equal(runCli(repository, ["init"]).status, 0);
   writeFileSync(
     join(repository, ".nanasa", "config.yaml"),
-    `version: 1
-agentTypes:
+    `integrations:
   fixture:
     name: Fixture
     kind: copilot
     command: [node]
     cwd: .
-    agentConfigHome: { scope: agent-type }
+    agentConfigHome: { scope: integration }
 `,
   );
 
@@ -147,11 +149,11 @@ agentTypes:
   assert.equal(setup.status, 0, setup.stderr);
   const integrations = join(repository, ".nanasa", "integrations");
   assert.equal(statSync(integrations).mode & 0o777, 0o700);
-  assert.equal(existsSync(join(integrations, "agent-types", "fixture")), true);
+  assert.equal(existsSync(join(integrations, "integrations", "fixture")), true);
 
   const doctor = runCli(repository, ["doctor"]);
   assert.equal(doctor.status, 0, doctor.stderr);
-  assert.match(doctor.stdout, /doctor passed for 1 agent types/);
+  assert.match(doctor.stdout, /doctor passed for 1 integrations/);
 });
 
 test("auth launches the configured CLI in an isolated home without changing HOME", () => {
@@ -174,14 +176,13 @@ writeFileSync(process.env.AUTH_CAPTURE, JSON.stringify({
   );
   writeFileSync(
     join(repository, ".nanasa", "config.yaml"),
-    `version: 1
-agentTypes:
+    `integrations:
   fixture:
     name: Fixture Copilot
     kind: copilot
     command: [node, ${JSON.stringify(scriptPath)}]
     cwd: .
-    agentConfigHome: { scope: custom, path: "auth/{agentType}" }
+    agentConfigHome: { scope: custom, path: "auth/{integrationId}" }
 `,
   );
 
@@ -200,25 +201,24 @@ agentTypes:
   assert.equal(readFileSync(join(externalHome, "sentinel"), "utf8"), "unchanged\n");
 });
 
-test("member-scoped auth requires a stable membership identifier", () => {
+test("agent-scoped auth requires a stable agent identifier", () => {
   const repository = temporaryRepository();
   assert.equal(runCli(repository, ["init"]).status, 0);
   writeFileSync(
     join(repository, ".nanasa", "config.yaml"),
-    `version: 1
-agentTypes:
+    `integrations:
   fixture:
     name: Fixture
     kind: copilot
     command: [node]
     cwd: .
-    agentConfigHome: { scope: member }
+    agentConfigHome: { scope: agent }
 `,
   );
 
   const result = runCli(repository, ["auth", "fixture"]);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /requires --member <membership-id>/);
+  assert.match(result.stderr, /requires --agent <agent-id>/);
 });
 
 test("package build contains one terminal-only daemon entry", () => {
@@ -278,7 +278,9 @@ test("packed package installs cleanly and initializes terminal-only config", () 
   assert.equal(initialized.status, 0, initialized.stderr);
   const configPath = join(repository, ".nanasa", "config.yaml");
   const config = readFileSync(configPath, "utf8");
+  assert.match(config, /^integrations:$/m);
   assert.match(config, /command: \[copilot\]/);
+  assert.doesNotMatch(config, /^version:|^agentProfiles:|^agentTypes:/m);
   assert.doesNotMatch(config, /^\s+(adapter|capabilities|recovery):/m);
   assert.equal(existsSync(join(repository, ".nanasa", "state")), false);
 });

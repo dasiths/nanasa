@@ -3,28 +3,29 @@ import { dirname, join } from "node:path";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import {
-  AddGroupMembershipCommandSchema,
-  CreateAgentProfileCommandSchema,
+  AdHocConsoleSessionSchema,
+  CreateGroupAgentCommandSchema,
   CreateGroupCommandSchema,
   DeleteGroupResultSchema,
   InterruptAgentRunCommandSchema,
   MAX_MESSAGE_REQUEST_BYTES,
   MAX_MESSAGE_TEXT_BYTES,
   OVERSIZED_MESSAGE_GUIDANCE,
-  ReorderGroupMembershipsCommandSchema,
-  ReorderGroupMembershipsResultSchema,
+  RemoveGroupAgentResultSchema,
+  ReorderGroupAgentsCommandSchema,
+  ReorderGroupAgentsResultSchema,
   RoleDefinitionSchema,
   StartAgentRunCommandSchema,
   StartGroupRunsCommandSchema,
   StartGroupRunsResultSchema,
   StopAgentRunCommandSchema,
   TerminalEndpointStatusSchema,
-  UpdateAgentProfileCommandSchema,
+  UpdateGroupAgentCommandSchema,
   UpdateGroupCommandSchema,
-  UpdateGroupMembershipCommandSchema,
   UpdateRolePresentationCommandSchema,
 } from "@nanasa/contracts";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
+import { AdHocConsoleManager } from "./ad-hoc-console-manager.js";
 import { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
 import { registerAgentStatusRoutes } from "./agent-status-routes.js";
 import { discoverAndLoadNanasaConfig, type LoadedNanasaConfig } from "./config.js";
@@ -74,6 +75,7 @@ export interface DaemonContext {
   coordinator: RunRuntimeCoordinator;
   terminalEndpoints: TerminalEndpointRegistry;
   ttydSupervisor: TtydSupervisor;
+  consoles: AdHocConsoleManager;
   dispatcher: DeliveryDispatcher;
   messageCommands: MessageCommandService;
   topology: TopologyService;
@@ -126,7 +128,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
   if (options.servePortal === true && options.portalAssetsPath === undefined) {
     throw new Error("portalAssetsPath is required when servePortal is enabled");
   }
-  let loadedConfig =
+  const loadedConfig =
     options.loadedConfig ?? discoverAndLoadNanasaConfig(options.repoRoot ?? process.cwd());
   const dataPath = options.dataPath ?? loadedConfig.dataPath;
   const runtimePath =
@@ -141,7 +143,6 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     configStatus: loadedConfig.status,
   });
   const configRepository = new ConfigRepository(loadedConfig.repoRoot);
-  loadedConfig = configRepository.initializeTopology(store.getSnapshot());
   const mcpPath = options.mcp?.path ?? "/mcp";
   if (!/^\/[A-Za-z0-9/_-]*$/.test(mcpPath) || mcpPath.includes("//")) {
     throw new Error("MCP path must be an absolute URL path");
@@ -189,20 +190,19 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
           runtimeProvisioner: new AgentRuntimeProvisioner({
             integrationsDirectory: loadedConfig.integrationsDirectory,
             agentConfigHomes: Object.fromEntries(
-              Object.entries(loadedConfig.config.agentTypes).map(([key, agentType]) => [
+              Object.entries(loadedConfig.config.integrations).map(([key, integration]) => [
                 key,
-                agentType.agentConfigHome,
+                integration.agentConfigHome,
               ]),
             ),
             mcpEndpointUrl,
-            promptResolver: (membership, profile) => {
+            promptResolver: (membership) => {
               const current = configRepository.load();
               return resolveEffectiveAgentPrompt({
                 repoRoot: current.repoRoot,
                 config: current.config,
-                profileId: profile.id,
                 groupId: membership.groupId,
-                membershipId: membership.id,
+                agentId: membership.id,
               });
             },
           }),
@@ -223,6 +223,12 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       store.recordRuntimeEvent(type, "run", runId, payload);
     },
   });
+  const consoles = new AdHocConsoleManager(
+    runtime,
+    ttydSupervisor,
+    terminalEndpoints,
+    loadedConfig.repoRoot,
+  );
   const dispatcher = new DeliveryDispatcher(store, terminalDelivery);
   const messageCommands = new MessageCommandService(store);
   const coordinator = new RunRuntimeCoordinator(store, runtime, ttydSupervisor, dispatcher, {
@@ -280,6 +286,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
   });
 
   app.addHook("preClose", async () => {
+    await consoles.close();
     await coordinator.close();
   });
 
@@ -314,6 +321,16 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
   app.get<{ Params: { runId: string } }>("/api/runs/:runId/terminal", async (request) =>
     TerminalEndpointStatusSchema.parse(terminalEndpoints.status(request.params.runId)),
   );
+  app.post("/api/consoles", async (_request, reply) =>
+    reply.status(201).send(AdHocConsoleSessionSchema.parse(await consoles.create())),
+  );
+  app.delete<{ Params: { consoleId: string } }>(
+    "/api/consoles/:consoleId",
+    async (request, reply) => {
+      await consoles.remove(request.params.consoleId);
+      return reply.status(204).send();
+    },
+  );
   app.post<{ Params: { runId: string } }>("/api/runs/:runId/interrupt", async (request, reply) => {
     InterruptAgentRunCommandSchema.parse(request.body);
     await coordinator.interrupt(request.params.runId);
@@ -338,21 +355,6 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     ),
   );
 
-  app.post("/api/agent-profiles", async (request, reply) => {
-    const profile = await topology.createAgentProfile(
-      CreateAgentProfileCommandSchema.parse(request.body),
-      idempotencyKey(request.headers),
-    );
-    return reply.status(201).send(profile);
-  });
-
-  app.patch<{ Params: { profileId: string } }>("/api/agent-profiles/:profileId", async (request) =>
-    topology.updateAgentProfile(
-      request.params.profileId,
-      UpdateAgentProfileCommandSchema.parse(request.body),
-    ),
-  );
-
   app.patch<{ Params: { roleId: string } }>("/api/roles/:roleId/presentation", async (request) =>
     RoleDefinitionSchema.parse(
       await topology.updateRolePresentation(
@@ -363,57 +365,57 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
   );
 
   app.post<{ Params: { groupId: string } }>(
-    "/api/groups/:groupId/memberships",
+    "/api/groups/:groupId/agents",
     async (request, reply) => {
-      const membership = await topology.addMembership(
+      const membership = await topology.createAgent(
         request.params.groupId,
-        AddGroupMembershipCommandSchema.parse(request.body),
+        CreateGroupAgentCommandSchema.parse(request.body),
         idempotencyKey(request.headers),
       );
       return reply.status(201).send(membership);
     },
   );
 
-  app.delete<{ Params: { groupId: string; memberId: string } }>(
-    "/api/groups/:groupId/memberships/:memberId",
+  app.delete<{ Params: { groupId: string; agentId: string } }>(
+    "/api/groups/:groupId/agents/:agentId",
     async (request) =>
-      topology.removeMembership(
-        request.params.groupId,
-        request.params.memberId,
-        idempotencyKey(request.headers),
-      ),
-  );
-
-  app.patch<{ Params: { groupId: string; memberId: string } }>(
-    "/api/groups/:groupId/memberships/:memberId",
-    async (request) =>
-      topology.updateMembership(
-        request.params.groupId,
-        request.params.memberId,
-        UpdateGroupMembershipCommandSchema.parse(request.body),
-      ),
-  );
-
-  app.put<{ Params: { groupId: string } }>(
-    "/api/groups/:groupId/membership-order",
-    async (request) =>
-      ReorderGroupMembershipsResultSchema.parse(
-        await topology.reorderMemberships(
+      RemoveGroupAgentResultSchema.parse(
+        await topology.removeAgent(
           request.params.groupId,
-          ReorderGroupMembershipsCommandSchema.parse(request.body),
+          request.params.agentId,
+          idempotencyKey(request.headers),
         ),
       ),
   );
 
-  app.post<{ Params: { groupId: string; memberId: string } }>(
-    "/api/groups/:groupId/memberships/:memberId/run",
+  app.patch<{ Params: { groupId: string; agentId: string } }>(
+    "/api/groups/:groupId/agents/:agentId",
+    async (request) =>
+      topology.updateAgent(
+        request.params.groupId,
+        request.params.agentId,
+        UpdateGroupAgentCommandSchema.parse(request.body),
+      ),
+  );
+
+  app.put<{ Params: { groupId: string } }>("/api/groups/:groupId/agent-order", async (request) =>
+    ReorderGroupAgentsResultSchema.parse(
+      await topology.reorderAgents(
+        request.params.groupId,
+        ReorderGroupAgentsCommandSchema.parse(request.body),
+      ),
+    ),
+  );
+
+  app.post<{ Params: { groupId: string; agentId: string } }>(
+    "/api/groups/:groupId/agents/:agentId/run",
     async (request, reply) => {
       const command = StartAgentRunCommandSchema.parse(request.body ?? {});
-      const run = await coordinator.startRun(
+      const membership = topology.getAgentMembership(
         request.params.groupId,
-        request.params.memberId,
-        command,
+        request.params.agentId,
       );
+      const run = await coordinator.startRun(request.params.groupId, membership.memberId, command);
       return reply.status(201).send(run);
     },
   );
@@ -432,11 +434,15 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     },
   );
 
-  app.delete<{ Params: { groupId: string; memberId: string } }>(
-    "/api/groups/:groupId/memberships/:memberId/run",
+  app.delete<{ Params: { groupId: string; agentId: string } }>(
+    "/api/groups/:groupId/agents/:agentId/run",
     async (request) => {
       StopAgentRunCommandSchema.parse(request.body ?? {});
-      return coordinator.stopRun(request.params.groupId, request.params.memberId);
+      const membership = topology.getAgentMembership(
+        request.params.groupId,
+        request.params.agentId,
+      );
+      return coordinator.stopRun(request.params.groupId, membership.memberId);
     },
   );
 
@@ -535,6 +541,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     coordinator,
     terminalEndpoints,
     ttydSupervisor,
+    consoles,
     dispatcher,
     messageCommands,
     topology,

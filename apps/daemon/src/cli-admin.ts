@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync } from "node:fs";
 import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { AgentTypeConfig } from "@nanasa/contracts";
+import type { IntegrationConfig } from "@nanasa/contracts";
 import { agentConfigHomeEnvironment, resolveAgentConfigHome } from "./agent-config-home.js";
 import { loadNanasaConfig } from "./config.js";
 
@@ -70,47 +70,47 @@ function executablePath(
   });
 }
 
-function selectedAgentType(repositoryRoot: string, agentTypeKey: string): AgentTypeConfig {
-  const agentType = loadNanasaConfig(repositoryRoot).config.agentTypes[agentTypeKey];
-  if (agentType === undefined) throw new Error(`Unknown agent type: ${agentTypeKey}`);
-  return agentType;
+function selectedIntegration(repositoryRoot: string, integrationId: string): IntegrationConfig {
+  const integration = loadNanasaConfig(repositoryRoot).config.integrations[integrationId];
+  if (integration === undefined) throw new Error(`Unknown integration: ${integrationId}`);
+  return integration;
 }
 
 function selectedHome(
   repositoryRoot: string,
-  agentType: AgentTypeConfig,
-  membershipId?: string,
+  integration: IntegrationConfig,
+  agentId?: string,
 ): string {
   if (
-    (agentType.agentConfigHome.scope === "member" ||
-      (agentType.agentConfigHome.scope === "custom" &&
-        agentType.agentConfigHome.path.includes("{membershipId}"))) &&
-    membershipId === undefined
+    (integration.agentConfigHome.scope === "agent" ||
+      (integration.agentConfigHome.scope === "custom" &&
+        integration.agentConfigHome.path.includes("{agentId}"))) &&
+    agentId === undefined
   ) {
-    throw new Error(`${agentType.key} requires --member <membership-id>`);
+    throw new Error(`${integration.id} requires --agent <agent-id>`);
   }
   return resolveAgentConfigHome(
     loadNanasaConfig(repositoryRoot).integrationsDirectory,
-    agentType.key,
-    agentType.agentConfigHome,
-    membershipId,
+    integration.id,
+    integration.agentConfigHome,
+    agentId,
   );
 }
 
-function hasSharedHome(agentType: AgentTypeConfig): boolean {
+function hasSharedHome(integration: IntegrationConfig): boolean {
   return !(
-    agentType.agentConfigHome.scope === "member" ||
-    (agentType.agentConfigHome.scope === "custom" &&
-      agentType.agentConfigHome.path.includes("{membershipId}"))
+    integration.agentConfigHome.scope === "agent" ||
+    (integration.agentConfigHome.scope === "custom" &&
+      integration.agentConfigHome.path.includes("{agentId}"))
   );
 }
 
 export function setupIntegrations(repositoryRoot: string): void {
   const loaded = loadNanasaConfig(repositoryRoot);
   ensurePrivateTree(loaded.integrationsDirectory, loaded.integrationsDirectory);
-  for (const agentType of Object.values(loaded.config.agentTypes)) {
-    if (!hasSharedHome(agentType)) continue;
-    ensurePrivateTree(loaded.integrationsDirectory, selectedHome(repositoryRoot, agentType));
+  for (const integration of Object.values(loaded.config.integrations)) {
+    if (!hasSharedHome(integration)) continue;
+    ensurePrivateTree(loaded.integrationsDirectory, selectedHome(repositoryRoot, integration));
   }
   process.stdout.write(`Prepared isolated integrations at ${loaded.integrationsDirectory}\n`);
 }
@@ -119,13 +119,13 @@ export function doctorIntegrations(repositoryRoot: string): void {
   const loaded = loadNanasaConfig(repositoryRoot);
   const problems: string[] = [];
   inspectPrivateDirectory(loaded.integrationsDirectory, problems, true);
-  for (const agentType of Object.values(loaded.config.agentTypes)) {
-    const command = agentType.command[0] as string;
-    if (executablePath(command, process.env, agentType.cwd) === undefined) {
-      problems.push(`${agentType.key}: command not found: ${command}`);
+  for (const integration of Object.values(loaded.config.integrations)) {
+    const command = integration.command[0] as string;
+    if (executablePath(command, process.env, integration.cwd) === undefined) {
+      problems.push(`${integration.id}: command not found: ${command}`);
     }
-    if (hasSharedHome(agentType)) {
-      inspectPrivateDirectory(selectedHome(repositoryRoot, agentType), problems, true);
+    if (hasSharedHome(integration)) {
+      inspectPrivateDirectory(selectedHome(repositoryRoot, integration), problems, true);
     }
   }
   const ttydCommand = process.env.NANASA_TTYD_PATH ?? "ttyd";
@@ -139,30 +139,30 @@ export function doctorIntegrations(repositoryRoot: string): void {
     );
   }
   process.stdout.write(
-    `Nanasa doctor passed for ${Object.keys(loaded.config.agentTypes).length} agent types\n`,
+    `Nanasa doctor passed for ${Object.keys(loaded.config.integrations).length} integrations\n`,
   );
 }
 
 export function authenticateAgent(
   repositoryRoot: string,
-  agentTypeKey: string,
-  membershipId?: string,
+  integrationId: string,
+  agentId?: string,
 ): void {
   const loaded = loadNanasaConfig(repositoryRoot);
-  const agentType = selectedAgentType(repositoryRoot, agentTypeKey);
-  const configHome = selectedHome(repositoryRoot, agentType, membershipId);
+  const integration = selectedIntegration(repositoryRoot, integrationId);
+  const configHome = selectedHome(repositoryRoot, integration, agentId);
   ensurePrivateTree(loaded.integrationsDirectory, configHome);
-  const command = agentType.command[0] as string;
-  if (executablePath(command, process.env, agentType.cwd) === undefined) {
+  const command = integration.command[0] as string;
+  if (executablePath(command, process.env, integration.cwd) === undefined) {
     throw new Error(`Agent command not found: ${command}`);
   }
-  process.stdout.write(`Launching ${agentType.name} with isolated home ${configHome}\n`);
-  const result = spawnSync(command, agentType.command.slice(1), {
-    cwd: agentType.cwd,
+  process.stdout.write(`Launching ${integration.name} with isolated home ${configHome}\n`);
+  const result = spawnSync(command, integration.command.slice(1), {
+    cwd: integration.cwd,
     env: {
       ...process.env,
-      ...agentType.environment,
-      ...agentConfigHomeEnvironment(agentType.kind, configHome),
+      ...integration.environment,
+      ...agentConfigHomeEnvironment(integration.kind, configHome),
     },
     stdio: "inherit",
   });

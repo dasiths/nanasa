@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
-import type { NanasaConfig, PortalSnapshot } from "@nanasa/contracts";
+import type { NanasaConfig } from "@nanasa/contracts";
 import { parseDocument } from "yaml";
 import {
   type LoadedNanasaConfig,
@@ -34,42 +34,6 @@ export class ConfigRepository {
 
   public load(): LoadedNanasaConfig {
     return loadNanasaConfig(this.#repositoryRoot);
-  }
-
-  public initializeTopology(snapshot: PortalSnapshot): LoadedNanasaConfig {
-    const current = this.load();
-    if (current.hasDeclarativeTopology) return current;
-    const agentProfiles = Object.fromEntries(
-      snapshot.agentProfiles.map((profile) => [
-        profile.id,
-        { name: profile.name, agentType: profile.agentType, instructions: [] },
-      ]),
-    );
-    const groups = Object.fromEntries(
-      snapshot.groups.map((group) => [
-        group.id,
-        {
-          name: group.name,
-          instructions: [],
-          memberships: Object.fromEntries(
-            snapshot.memberships
-              .filter((membership) => membership.groupId === group.id)
-              .map((membership, order) => [
-                membership.id,
-                {
-                  memberId: membership.memberId,
-                  agentProfileId: membership.agentProfileId,
-                  alias: membership.alias,
-                  instructions: [],
-                  order,
-                },
-              ]),
-          ),
-        },
-      ]),
-    );
-    this.#write(current, { ...current.config, agentProfiles, groups });
-    return this.load();
   }
 
   public mutate<T>(
@@ -103,7 +67,6 @@ export class ConfigRepository {
     const document = parseDocument(source, { version: "1.2" });
     document.set("instructions", config.instructions);
     document.set("roles", config.roles);
-    document.set("agentProfiles", config.agentProfiles);
     document.set("groups", config.groups);
     document.set("messages", config.messages);
     const candidate = document.toString({ lineWidth: 100 });

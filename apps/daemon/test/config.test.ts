@@ -9,9 +9,7 @@ import {
   loadNanasaConfig,
   nanasaPaths,
 } from "../src/config.js";
-import { ConfigRepository } from "../src/config-repository.js";
 import { resolveEffectiveAgentPrompt } from "../src/instruction-resolver.js";
-import { NanasaStore } from "../src/store.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -25,8 +23,7 @@ function temporaryRepository(config: string): string {
 }
 
 function validConfig(extra = ""): string {
-  return `version: 1
-agentTypes:
+  return `integrations:
   copilot:
     name: GitHub Copilot
     kind: copilot
@@ -38,8 +35,7 @@ ${extra}`;
 }
 
 function minimalConfig(extra = ""): string {
-  return `version: 1
-agentTypes:
+  return `integrations:
   opencode:
     name: OpenCode
     kind: opencode
@@ -59,17 +55,17 @@ describe("Nanasa configuration", () => {
     const first = loadNanasaConfig(repository);
     const second = loadNanasaConfig(repository);
 
-    expect(first.config.agentTypes.copilot).toMatchObject({
-      key: "copilot",
+    expect(first.config.integrations.copilot).toMatchObject({
+      id: "copilot",
       command: ["copilot"],
       cwd: repository,
-      agentConfigHome: { scope: "agent-type" },
+      agentConfigHome: { scope: "integration" },
     });
-    expect(Object.keys(first.config.agentTypes.copilot)).not.toEqual(
+    expect(Object.keys(first.config.integrations.copilot)).not.toEqual(
       expect.arrayContaining(["adapter", "capabilities", "recovery"]),
     );
     expect(JSON.parse(JSON.stringify(first.config))).not.toMatchObject({
-      agentTypes: { copilot: { adapter: expect.anything() } },
+      integrations: { copilot: { adapter: expect.anything() } },
     });
     expect(first.status.revision).toBe(second.status.revision);
     expect(first.status.revision).toMatch(/^[0-9a-f]{64}$/);
@@ -81,28 +77,25 @@ describe("Nanasa configuration", () => {
     const repository = temporaryRepository(minimalConfig());
 
     expect(loadNanasaConfig(repository).config).toEqual({
-      version: 1,
       instructions: [],
       roles: {},
-      agentProfiles: {},
-      agentTypes: {
+      integrations: {
         opencode: {
-          key: "opencode",
+          id: "opencode",
           name: "OpenCode",
           kind: "opencode",
           command: ["opencode"],
           cwd: repository,
-          agentConfigHome: { scope: "agent-type" },
+          agentConfigHome: { scope: "integration" },
           environment: {},
         },
       },
       groups: {},
       messages: { retentionPerGroup: 1_000 },
     });
-    expect(loadNanasaConfig(repository).hasDeclarativeTopology).toBe(false);
   });
 
-  it("loads role instructions and composes deterministic effective prompts", () => {
+  it("loads role, group, and direct agent instructions", () => {
     const repository = temporaryRepository(`${minimalConfig()}
 instructions: [.nanasa/instructions/team.md]
 roles:
@@ -111,22 +104,17 @@ roles:
     description: Reviews changes without modifying them
     instructions: [.nanasa/instructions/reviewer.md]
     permissionPolicy: read-only
-agentProfiles:
-  profile_one:
-    name: OpenCode reviewer
-    agentType: opencode
-    defaultRoleId: reviewer
-    instructions: [.nanasa/instructions/profile.md]
 groups:
   group_one:
     name: Team
     instructions: [.nanasa/instructions/group.md]
-    memberships:
-      membership_one:
+    agents:
+      agent_one:
         memberId: opencode.reviewer
-        agentProfileId: profile_one
-        alias: Reviewer
-        instructions: [.nanasa/instructions/assignment.md]
+        name: Reviewer
+        integrationId: opencode
+        roleId: reviewer
+        instructions: [.nanasa/instructions/agent.md]
         order: 2
 `);
     const instructionDirectory = join(repository, ".nanasa", "instructions");
@@ -134,47 +122,43 @@ groups:
     writeFileSync(join(instructionDirectory, "team.md"), "Coordinate through Nanasa.\r\n");
     writeFileSync(join(instructionDirectory, "group.md"), "Deliver the group objective.\n");
     writeFileSync(join(instructionDirectory, "reviewer.md"), "Report findings by severity.\n");
-    writeFileSync(join(instructionDirectory, "profile.md"), "Use the configured model.\n");
-    writeFileSync(join(instructionDirectory, "assignment.md"), "Review the API package.\n");
+    writeFileSync(join(instructionDirectory, "agent.md"), "Review the API package.\n");
 
     const loaded = loadNanasaConfig(repository);
-    const first = resolveEffectiveAgentPrompt({
+    expect(loaded.config.roles.reviewer?.permissionPolicy).toBe("read-only");
+    expect(loaded.config.groups.group_one?.agents.agent_one).toMatchObject({
+      memberId: "opencode.reviewer",
+      name: "Reviewer",
+      integrationId: "opencode",
+      roleId: "reviewer",
+      instructions: [".nanasa/instructions/agent.md"],
+      order: 2,
+    });
+    const prompt = resolveEffectiveAgentPrompt({
       repoRoot: repository,
       config: loaded.config,
-      profileId: "profile_one",
       groupId: "group_one",
-      membershipId: "membership_one",
+      agentId: "agent_one",
     });
-    const second = resolveEffectiveAgentPrompt({
-      repoRoot: repository,
-      config: loaded.config,
-      profileId: "profile_one",
-      groupId: "group_one",
-      membershipId: "membership_one",
-    });
-
-    expect(first.roleId).toBe("reviewer");
-    expect(first.role?.permissionPolicy).toBe("read-only");
-    expect(loaded.config.groups.group_one?.memberships.membership_one?.order).toBe(2);
-    expect(first.sources.map((source) => source.scope)).toEqual([
+    expect(prompt.roleId).toBe("reviewer");
+    expect(prompt.role?.permissionPolicy).toBe("read-only");
+    expect(prompt.sources.map((source) => source.scope)).toEqual([
       "builtin",
       "builtin",
       "global",
       "group",
       "role",
-      "profile",
-      "membership",
+      "agent",
     ]);
-    expect(first.text.indexOf("Coordinate through Nanasa.")).toBeLessThan(
-      first.text.indexOf("Deliver the group objective."),
+    expect(prompt.text.indexOf("Coordinate through Nanasa.")).toBeLessThan(
+      prompt.text.indexOf("Deliver the group objective."),
     );
-    expect(first.text.indexOf("Deliver the group objective.")).toBeLessThan(
-      first.text.indexOf("Report findings by severity."),
+    expect(prompt.text.indexOf("Deliver the group objective.")).toBeLessThan(
+      prompt.text.indexOf("Report findings by severity."),
     );
-    expect(first.text).not.toContain("\r");
-    expect(first.text).toContain("Messages with From: Human are direct operator input");
-    expect(first.text).toContain("Messages from an agent are peer task input");
-    expect(first.revision).toBe(second.revision);
+    expect(prompt.text.indexOf("Report findings by severity.")).toBeLessThan(
+      prompt.text.indexOf("Review the API package."),
+    );
   });
 
   it("rejects missing instruction files during configuration loading", () => {
@@ -222,67 +206,37 @@ instructions: [.nanasa/instructions/nul.md]
     expect(nanasaPaths(repository).configPath).toBe(join(repository, ".nanasa", "config.yaml"));
   });
 
-  it("loads member and repository-local custom configuration homes", () => {
-    const memberRepository = temporaryRepository(
-      validConfig("    agentConfigHome: { scope: member }\n"),
+  it("loads agent and repository-local custom configuration homes", () => {
+    const agentRepository = temporaryRepository(
+      validConfig("    agentConfigHome: { scope: agent }\n"),
     );
-    expect(loadNanasaConfig(memberRepository).config.agentTypes.copilot.agentConfigHome).toEqual({
-      scope: "member",
+    expect(loadNanasaConfig(agentRepository).config.integrations.copilot.agentConfigHome).toEqual({
+      scope: "agent",
     });
 
     const customRepository = temporaryRepository(
       validConfig(
-        '    agentConfigHome: { scope: custom, path: "homes/{agentType}/{membershipId}" }\n',
+        '    agentConfigHome: { scope: custom, path: "homes/{integrationId}/{agentId}" }\n',
       ),
     );
-    expect(loadNanasaConfig(customRepository).config.agentTypes.copilot.agentConfigHome).toEqual({
+    expect(loadNanasaConfig(customRepository).config.integrations.copilot.agentConfigHome).toEqual({
       scope: "custom",
-      path: "homes/{agentType}/{membershipId}",
+      path: "homes/{integrationId}/{agentId}",
     });
   });
 
-  it("imports legacy SQLite topology and rebuilds a fresh runtime projection", () => {
-    const repository = temporaryRepository(validConfig());
-    const original = new NanasaStore(":memory:", {
-      config: loadNanasaConfig(repository).config,
-    });
-    const group = original.createGroup({ name: "Imported" });
-    const profile = original.createInternalAgentProfile({
-      name: "Reviewer",
-      agentType: "copilot",
-      kind: "copilot",
-      command: "copilot",
-      args: [],
-      environment: {},
-    });
-    const membership = original.addMembership(group.id, {
-      memberId: "copilot.reviewer",
-      agentProfileId: profile.id,
-      alias: "Reviewer",
-    });
-    const repositoryStore = new ConfigRepository(repository);
-    const imported = repositoryStore.initializeTopology(original.getSnapshot());
-    original.close();
-
-    expect(imported.hasDeclarativeTopology).toBe(true);
-    expect(imported.config.groups[group.id]?.memberships[membership.id]).toMatchObject({
-      memberId: membership.memberId,
-      agentProfileId: profile.id,
-    });
-
-    const rebuilt = new NanasaStore(":memory:", { config: imported.config });
-    rebuilt.reconcileTopology(imported.config, imported.status);
-    expect(rebuilt.getSnapshot()).toMatchObject({
-      groups: [{ id: group.id, name: "Imported" }],
-      agentProfiles: [{ id: profile.id, name: "Reviewer" }],
-      memberships: [{ id: membership.id, memberId: "copilot.reviewer" }],
-    });
-    rebuilt.close();
+  it.each([
+    ["version", `${validConfig()}version: 1\n`],
+    ["agentTypes", validConfig().replace("integrations:", "agentTypes:")],
+    ["agentProfiles", `${validConfig()}agentProfiles: {}\n`],
+    ["memberships", `${validConfig()}groups:\n  group_one:\n    name: Team\n    memberships: {}\n`],
+  ])("rejects the legacy %s vocabulary", (_name, source) => {
+    const repository = temporaryRepository(source);
+    expect(() => loadNanasaConfig(repository)).toThrow(ConfigLoadError);
   });
 
-  it("rejects agent types that resolve to the same configuration home", () => {
-    const repository = temporaryRepository(`version: 1
-agentTypes:
+  it("rejects integrations that resolve to the same configuration home", () => {
+    const repository = temporaryRepository(`integrations:
   first:
     name: First
     kind: copilot
@@ -308,8 +262,7 @@ agentTypes:
     ["duplicate keys", validConfig("  copilot:\n    name: Duplicate\n")],
     [
       "aliases",
-      `version: 1
-agentTypes:
+      `integrations:
   copilot: &agent
     name: GitHub Copilot
     kind: copilot
@@ -322,10 +275,9 @@ agentTypes:
     ],
     [
       "merge keys",
-      `version: 1
-base: &base
+      `base: &base
   name: Base
-agentTypes:
+integrations:
   copilot:
     <<: *base
     kind: copilot
@@ -362,7 +314,7 @@ agentTypes:
     ],
     [
       "reserved configuration home namespace",
-      validConfig("    agentConfigHome: { scope: custom, path: members/shared }\n"),
+      validConfig("    agentConfigHome: { scope: custom, path: agents/shared }\n"),
     ],
     [
       "integration root as configuration home",

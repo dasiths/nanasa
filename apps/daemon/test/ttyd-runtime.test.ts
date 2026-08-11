@@ -278,16 +278,14 @@ describeRuntime("real tmux and ttyd runtime", () => {
     mkdirSync(join(directory, ".nanasa"));
     writeFileSync(
       join(directory, ".nanasa", "config.yaml"),
-      `version: 1
-agentTypes:
+      `integrations:
   test-echo:
     name: Echo fixture
     kind: opencode
     command: ${JSON.stringify(["node", "-e", fixtureCode])}
     cwd: .
     environment: { NANASA_MEMBER: shared }
-    agentConfigHome: { scope: agent-type }
-agentProfiles: {}
+    agentConfigHome: { scope: integration }
 groups: {}
 messages: { retentionPerGroup: 1000 }
 `,
@@ -305,30 +303,23 @@ messages: { retentionPerGroup: 1000 }
     const group = (
       await first.app.inject({ method: "POST", url: "/api/groups", payload: { name: "Shells" } })
     ).json<{ id: string }>();
-    const profile = (
-      await first.app.inject({
-        method: "POST",
-        url: "/api/agent-profiles",
-        payload: { name: "Echo fixture", agentType: "test-echo" },
-      })
-    ).json<{ id: string }>();
+    const agentIds = new Map<string, string>();
     for (const memberId of ["alpha", "beta"]) {
-      expect(
-        (
-          await first.app.inject({
-            method: "POST",
-            url: `/api/groups/${group.id}/memberships`,
-            payload: { memberId, agentProfileId: profile.id, alias: memberId },
-          })
-        ).statusCode,
-      ).toBe(201);
+      const response = await first.app.inject({
+        method: "POST",
+        url: `/api/groups/${group.id}/agents`,
+        payload: { name: memberId, integrationId: "test-echo" },
+      });
+      expect(response.statusCode).toBe(201);
+      const agent = response.json<{ id: string; memberId: string }>();
+      agentIds.set(memberId, agent.id);
     }
 
     const runs: AgentRun[] = [];
     for (const memberId of ["alpha", "beta"]) {
       const response = await first.app.inject({
         method: "POST",
-        url: `/api/groups/${group.id}/memberships/${memberId}/run`,
+        url: `/api/groups/${group.id}/agents/${agentIds.get(memberId)}/run`,
         payload: { cols: 100, rows: 30 },
       });
       expect(response.statusCode, response.body).toBe(201);
@@ -501,7 +492,7 @@ messages: { retentionPerGroup: 1000 }
 
     const stopResponse = await reopened.app.inject({
       method: "DELETE",
-      url: `/api/groups/${group.id}/memberships/beta/run`,
+      url: `/api/groups/${group.id}/agents/${agentIds.get("beta")}/run`,
     });
     expect(stopResponse.statusCode, stopResponse.body).toBe(200);
     expect(stopResponse.json<AgentRun>().status).toBe("stopped");

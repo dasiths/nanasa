@@ -8,10 +8,9 @@ import {
 } from "@nanasa/contracts";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-
+import { nanasaMcpServerInstructions } from "./coordination-instructions.js";
 import { McpCredentialIssuer, type McpPrincipal } from "./mcp-auth.js";
 import { MessageCommandService } from "./message-command-service.js";
-import { nanasaMcpServerInstructions } from "./coordination-instructions.js";
 import { DomainError, NanasaStore } from "./store.js";
 
 const IdentifierSchema = z.string().trim().min(1).max(128);
@@ -134,6 +133,7 @@ function listMembersResult(
     .filter((membership) => membership.groupId === groupId && membership.state === "active")
     .sort((left, right) => left.memberId.localeCompare(right.memberId))
     .map((membership) => {
+      const integrationId = snapshot.config?.groups[groupId]?.agents[membership.id]?.integrationId;
       const profile = snapshot.agentProfiles.find(
         (candidate) => candidate.id === membership.agentProfileId,
       );
@@ -146,7 +146,7 @@ function listMembersResult(
       return {
         memberId: membership.memberId,
         alias: membership.alias,
-        agentType: profile?.agentType ?? "unknown",
+        agentType: integrationId ?? profile?.agentType ?? "unknown",
         roleId: membership.roleId,
         roleName:
           membership.roleId === undefined

@@ -7,13 +7,13 @@ import {
   AgentCapabilitySchema,
   AgentConfigHomeSchema,
   AgentKindSchema,
-  AgentTypeConfigSchema,
   type ConfigDiagnostic,
   type ConfigStatus,
   ConfigStatusSchema,
-  ConfiguredAgentProfileSchema,
   ConfiguredGroupSchema,
   InstructionPathSchema,
+  IntegrationConfigSchema,
+  IntegrationIdSchema,
   MessageConfigSchema,
   type NanasaConfig,
   NanasaConfigSchema,
@@ -32,14 +32,14 @@ const MAX_CONFIG_DEPTH = 20;
 const MAX_CONFIG_NODES = 10_000;
 const CORE_TAG_PREFIX = "tag:yaml.org,2002:";
 
-const RawAgentTypeConfigSchema = z
+const RawIntegrationConfigSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
     kind: AgentKindSchema,
     adapter: AdapterKindSchema.optional(),
     command: z.array(z.string().min(1).max(4_096)).min(1).max(64),
     cwd: z.string().min(1).max(4_096).optional(),
-    agentConfigHome: AgentConfigHomeSchema.default({ scope: "agent-type" }),
+    agentConfigHome: AgentConfigHomeSchema.default({ scope: "integration" }),
     environment: z
       .record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string().max(16_384))
       .default({}),
@@ -48,17 +48,13 @@ const RawAgentTypeConfigSchema = z
   })
   .strict();
 
-type RawAgentTypeConfig = z.infer<typeof RawAgentTypeConfigSchema>;
+type RawIntegrationConfig = z.infer<typeof RawIntegrationConfigSchema>;
 
 const RawNanasaConfigSchema = z
   .object({
-    version: z.literal(1),
-    agentTypes: z.record(z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), RawAgentTypeConfigSchema),
     instructions: z.array(InstructionPathSchema).max(32).default([]),
+    integrations: z.record(IntegrationIdSchema, RawIntegrationConfigSchema),
     roles: z.record(RoleIdSchema, RoleDefinitionSchema).default({}),
-    agentProfiles: z
-      .record(z.string().trim().min(1).max(128), ConfiguredAgentProfileSchema)
-      .default({}),
     groups: z.record(z.string().trim().min(1).max(128), ConfiguredGroupSchema).default({}),
     messages: MessageConfigSchema.default({ retentionPerGroup: 1_000 }),
   })
@@ -76,7 +72,6 @@ export interface NanasaPaths {
 export interface LoadedNanasaConfig extends NanasaPaths {
   config: NanasaConfig;
   status: ConfigStatus;
-  hasDeclarativeTopology: boolean;
 }
 
 export class ConfigLoadError extends Error {
@@ -180,11 +175,11 @@ function assertInsideRepository(repoRoot: string, configuredPath: string): strin
   return realCandidate;
 }
 
-function validateAgentType(agentType: RawAgentTypeConfig): string | undefined {
-  if (agentType.command.some((argument) => argument.includes("\0"))) {
+function validateIntegration(integration: RawIntegrationConfig): string | undefined {
+  if (integration.command.some((argument) => argument.includes("\0"))) {
     return "Command arguments may not contain NUL characters";
   }
-  for (const [name, value] of Object.entries(agentType.environment)) {
+  for (const [name, value] of Object.entries(integration.environment)) {
     if (["NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES"].includes(name)) {
       return `Environment variable ${name} is not allowed`;
     }
@@ -192,14 +187,14 @@ function validateAgentType(agentType: RawAgentTypeConfig): string | undefined {
       return `Environment variable ${name} may not contain NUL characters`;
     }
   }
-  if (agentType.adapter === "copilot-cli" && agentType.kind !== "copilot") {
+  if (integration.adapter === "copilot-cli" && integration.kind !== "copilot") {
     return "The copilot-cli adapter requires copilot compatibility";
   }
-  if (agentType.adapter === "pi-rpc" && agentType.kind !== "pi") {
+  if (integration.adapter === "pi-rpc" && integration.kind !== "pi") {
     return "The pi-rpc adapter requires pi compatibility";
   }
   try {
-    validateAgentConfigHome(agentType.agentConfigHome);
+    validateAgentConfigHome(integration.agentConfigHome);
   } catch (error) {
     return error instanceof Error ? error.message : "Invalid agent configuration home";
   }
@@ -209,7 +204,7 @@ function validateAgentType(agentType: RawAgentTypeConfig): string | undefined {
 export function parseNanasaConfigSource(
   source: string,
   paths: NanasaPaths,
-): { config: NanasaConfig; hasDeclarativeTopology: boolean } {
+): { config: NanasaConfig } {
   const lineCounter = new LineCounter();
   const document = parseDocument(source, {
     version: "1.2",
@@ -277,10 +272,6 @@ export function parseNanasaConfigSource(
   }
 
   const rawDocument = document.toJS({ maxAliasCount: 0 });
-  const hasDeclarativeTopology =
-    typeof rawDocument === "object" &&
-    rawDocument !== null &&
-    (Object.hasOwn(rawDocument, "agentProfiles") || Object.hasOwn(rawDocument, "groups"));
   const parsed = RawNanasaConfigSchema.safeParse(rawDocument);
   if (!parsed.success) {
     throw new ConfigLoadError(
@@ -297,39 +288,43 @@ export function parseNanasaConfigSource(
     );
   }
 
-  const agentTypes = Object.fromEntries(
-    Object.entries(parsed.data.agentTypes).map(([key, rawAgentType]) => {
+  const integrations = Object.fromEntries(
+    Object.entries(parsed.data.integrations).map(([integrationId, rawIntegration]) => {
       let cwd: string | undefined;
       try {
-        cwd = assertInsideRepository(paths.repoRoot, rawAgentType.cwd ?? ".");
+        cwd = assertInsideRepository(paths.repoRoot, rawIntegration.cwd ?? ".");
       } catch (error) {
         throw new ConfigLoadError(
           errorStatus(paths, [
             diagnostic(
               "invalid_cwd",
               error instanceof Error ? error.message : "Invalid working directory",
-              ["agentTypes", key, "cwd"],
+              ["integrations", integrationId, "cwd"],
             ),
           ]),
         );
       }
-      const invalidReason = validateAgentType(rawAgentType);
+      const invalidReason = validateIntegration(rawIntegration);
       if (invalidReason !== undefined) {
         throw new ConfigLoadError(
           errorStatus(paths, [
-            diagnostic("invalid_agent_type", invalidReason, ["agentTypes", key]),
+            diagnostic("invalid_integration", invalidReason, ["integrations", integrationId]),
           ]),
         );
       }
-      const normalized = AgentTypeConfigSchema.safeParse({ ...rawAgentType, key, cwd });
+      const normalized = IntegrationConfigSchema.safeParse({
+        ...rawIntegration,
+        id: integrationId,
+        cwd,
+      });
       if (!normalized.success) {
         throw new ConfigLoadError(
           errorStatus(
             paths,
             normalized.error.issues.map((issue) =>
-              diagnostic("invalid_agent_type", issue.message, [
-                "agentTypes",
-                key,
+              diagnostic("invalid_integration", issue.message, [
+                "integrations",
+                integrationId,
                 ...issue.path.filter(
                   (segment): segment is string | number => typeof segment !== "symbol",
                 ),
@@ -338,37 +333,35 @@ export function parseNanasaConfigSource(
           ),
         );
       }
-      return [key, normalized.data];
+      return [integrationId, normalized.data];
     }),
   );
   const resolvedHomes = new Map<string, string>();
-  for (const [key, agentType] of Object.entries(agentTypes)) {
+  for (const [integrationId, integration] of Object.entries(integrations)) {
     const home = resolveAgentConfigHome(
       paths.integrationsDirectory,
-      key,
-      agentType.agentConfigHome,
-      "membership_validation",
+      integrationId,
+      integration.agentConfigHome,
+      "agent_validation",
     );
-    const existingKey = resolvedHomes.get(home);
-    if (existingKey !== undefined) {
+    const existingIntegrationId = resolvedHomes.get(home);
+    if (existingIntegrationId !== undefined) {
       throw new ConfigLoadError(
         errorStatus(paths, [
           diagnostic(
             "agent_config_home_collision",
-            `Agent configuration home collides with ${existingKey}`,
-            ["agentTypes", key, "agentConfigHome"],
+            `Agent configuration home collides with ${existingIntegrationId}`,
+            ["integrations", integrationId, "agentConfigHome"],
           ),
         ]),
       );
     }
-    resolvedHomes.set(home, key);
+    resolvedHomes.set(home, integrationId);
   }
   const config = NanasaConfigSchema.parse({
-    version: parsed.data.version,
-    agentTypes,
     instructions: parsed.data.instructions,
+    integrations,
     roles: parsed.data.roles,
-    agentProfiles: parsed.data.agentProfiles,
     groups: parsed.data.groups,
     messages: parsed.data.messages,
   });
@@ -385,7 +378,7 @@ export function parseNanasaConfigSource(
       ]),
     );
   }
-  return { config, hasDeclarativeTopology };
+  return { config };
 }
 
 export function loadNanasaConfig(repoRoot: string): LoadedNanasaConfig {
@@ -406,7 +399,7 @@ export function loadNanasaConfig(repoRoot: string): LoadedNanasaConfig {
     );
   }
   const source = readFileSync(paths.configPath, "utf8");
-  const { config, hasDeclarativeTopology } = parseNanasaConfigSource(source, paths);
+  const { config } = parseNanasaConfigSource(source, paths);
   const revision = createHash("sha256").update(source).digest("hex");
   const status = ConfigStatusSchema.parse({
     state: "ready",
@@ -415,7 +408,7 @@ export function loadNanasaConfig(repoRoot: string): LoadedNanasaConfig {
     revision,
     diagnostics: [],
   });
-  return { ...paths, config, status, hasDeclarativeTopology };
+  return { ...paths, config, status };
 }
 
 export function discoverAndLoadNanasaConfig(startPath = process.cwd()): LoadedNanasaConfig {

@@ -155,8 +155,8 @@ export class AgentRuntimeProvisioner {
   }
 
   public provision(membership: GroupMembership, profile: AgentProfile): AgentRuntimeConfiguration {
-    if (!/^membership_[A-Za-z0-9-]+$/.test(membership.id)) {
-      throw new Error(`Membership ID is not safe for agent persistence: ${membership.id}`);
+    if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(membership.id)) {
+      throw new Error(`Agent ID is not safe for agent persistence: ${membership.id}`);
     }
     const policy = this.#options.agentConfigHomes[profile.agentType];
     if (policy === undefined) {

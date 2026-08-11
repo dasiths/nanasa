@@ -38,12 +38,16 @@ export const AgentKindSchema = z.enum(["copilot", "pi", "opencode", "claude-code
 
 export type AgentKind = z.infer<typeof AgentKindSchema>;
 
-export const AgentTypeKeySchema = z
+export const IntegrationIdSchema = z
   .string()
   .trim()
   .min(1)
   .max(64)
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+
+export type IntegrationId = z.infer<typeof IntegrationIdSchema>;
+
+export const AgentTypeKeySchema = IntegrationIdSchema;
 
 export const AdapterKindSchema = z.enum(["copilot-cli", "pi-rpc", "terminal"]);
 export const RecoveryPolicySchema = z.enum(["resume-or-restart", "restart"]);
@@ -54,8 +58,8 @@ export type RecoveryPolicy = z.infer<typeof RecoveryPolicySchema>;
 export type AgentCapability = z.infer<typeof AgentCapabilitySchema>;
 
 export const AgentConfigHomeSchema = z.discriminatedUnion("scope", [
-  z.object({ scope: z.literal("agent-type") }).strict(),
-  z.object({ scope: z.literal("member") }).strict(),
+  z.object({ scope: z.literal("integration") }).strict(),
+  z.object({ scope: z.literal("agent") }).strict(),
   z
     .object({
       scope: z.literal("custom"),
@@ -71,24 +75,24 @@ const EnvironmentSchema = z.record(
   z.string().max(16_384),
 );
 
-const AgentTypeConfigInputSchema = z
+const IntegrationConfigInputSchema = z
   .object({
-    key: AgentTypeKeySchema,
+    id: IntegrationIdSchema,
     name: z.string().trim().min(1).max(100),
     kind: AgentKindSchema,
     adapter: AdapterKindSchema.optional(),
     command: z.array(z.string().min(1).max(4_096)).min(1).max(64),
     cwd: z.string().min(1).max(4_096).optional(),
-    agentConfigHome: AgentConfigHomeSchema.default({ scope: "agent-type" }),
+    agentConfigHome: AgentConfigHomeSchema.default({ scope: "integration" }),
     environment: EnvironmentSchema.default({}),
     recovery: RecoveryPolicySchema.optional(),
     capabilities: z.array(AgentCapabilitySchema).min(1).max(2).optional(),
   })
   .strict()
-  .superRefine((agentType, context) => {
+  .superRefine((integration, context) => {
     if (
-      agentType.capabilities !== undefined &&
-      new Set(agentType.capabilities).size !== agentType.capabilities.length
+      integration.capabilities !== undefined &&
+      new Set(integration.capabilities).size !== integration.capabilities.length
     ) {
       context.addIssue({
         code: "custom",
@@ -96,21 +100,27 @@ const AgentTypeConfigInputSchema = z
         path: ["capabilities"],
       });
     }
-    if (agentType.adapter === "terminal" && agentType.capabilities?.includes("steer") === true) {
+    if (
+      integration.adapter === "terminal" &&
+      integration.capabilities?.includes("steer") === true
+    ) {
       context.addIssue({
         code: "custom",
         message: "Terminal adapters support queue delivery only",
         path: ["capabilities"],
       });
     }
-    if (agentType.adapter === "copilot-cli" && agentType.capabilities?.includes("steer") === true) {
+    if (
+      integration.adapter === "copilot-cli" &&
+      integration.capabilities?.includes("steer") === true
+    ) {
       context.addIssue({
         code: "custom",
         message: "Copilot CLI ACP supports queue delivery only",
         path: ["capabilities"],
       });
     }
-    if (agentType.adapter === "terminal" && agentType.recovery !== "restart") {
+    if (integration.adapter === "terminal" && integration.recovery !== "restart") {
       context.addIssue({
         code: "custom",
         message: "Terminal adapters must use restart recovery",
@@ -119,7 +129,7 @@ const AgentTypeConfigInputSchema = z
     }
   })
   .transform((config) => ({
-    key: config.key,
+    id: config.id,
     name: config.name,
     kind: config.kind,
     command: config.command,
@@ -128,11 +138,11 @@ const AgentTypeConfigInputSchema = z
     environment: config.environment,
   }));
 
-type CanonicalAgentTypeConfig = z.output<typeof AgentTypeConfigInputSchema>;
+type CanonicalIntegrationConfig = z.output<typeof IntegrationConfigInputSchema>;
 
-export type AgentTypeConfig = CanonicalAgentTypeConfig;
+export type IntegrationConfig = CanonicalIntegrationConfig;
 
-export const AgentTypeConfigSchema = AgentTypeConfigInputSchema;
+export const IntegrationConfigSchema = IntegrationConfigInputSchema;
 
 export const RoleIdSchema = z
   .string()
@@ -235,65 +245,106 @@ export const RoleDefinitionSchema = z
 
 export type RoleDefinition = z.infer<typeof RoleDefinitionSchema>;
 
-export const ConfiguredAgentProfileSchema = z
-  .object({
-    name: z.string().trim().min(1).max(100),
-    agentType: AgentTypeKeySchema,
-    defaultRoleId: RoleIdSchema.optional(),
-    instructions: z.array(InstructionPathSchema).max(32).default([]),
-  })
-  .strict();
+export const ConfiguredAgentIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/);
 
-export type ConfiguredAgentProfile = z.infer<typeof ConfiguredAgentProfileSchema>;
+export type ConfiguredAgentId = z.infer<typeof ConfiguredAgentIdSchema>;
 
-export const ConfiguredMembershipSchema = z
+export const ConfiguredAgentSchema = z
   .object({
     memberId: IdentifierSchema,
-    agentProfileId: IdentifierSchema,
-    alias: z.string().trim().min(1).max(100),
+    name: z.string().trim().min(1).max(100),
+    integrationId: IntegrationIdSchema,
     roleId: RoleIdSchema.optional(),
     instructions: z.array(InstructionPathSchema).max(32).default([]),
     order: z.number().int().nonnegative().max(255).optional(),
   })
   .strict();
 
-export type ConfiguredMembership = z.infer<typeof ConfiguredMembershipSchema>;
+export type ConfiguredAgent = z.infer<typeof ConfiguredAgentSchema>;
 
-export const ReorderGroupMembershipsCommandSchema = z
+export const CreateGroupAgentCommandSchema = z
   .object({
-    memberIds: z.array(IdentifierSchema).max(256),
+    name: z.string().trim().min(1).max(100),
+    integrationId: IntegrationIdSchema,
+    roleId: RoleIdSchema.optional(),
+    instructions: z.array(InstructionPathSchema).max(32).optional(),
+  })
+  .strict();
+
+export type CreateGroupAgentCommand = z.infer<typeof CreateGroupAgentCommandSchema>;
+
+export const UpdateGroupAgentCommandSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100).optional(),
+    integrationId: IntegrationIdSchema.optional(),
+    roleId: RoleIdSchema.nullable().optional(),
+    instructions: z.array(InstructionPathSchema).max(32).optional(),
+  })
+  .strict()
+  .refine(
+    (command) =>
+      command.name !== undefined ||
+      command.integrationId !== undefined ||
+      command.roleId !== undefined ||
+      command.instructions !== undefined,
+    { message: "Agent update requires at least one field" },
+  );
+
+export type UpdateGroupAgentCommand = z.infer<typeof UpdateGroupAgentCommandSchema>;
+
+export const RemoveGroupAgentResultSchema = z
+  .object({
+    groupId: IdentifierSchema,
+    agentId: ConfiguredAgentIdSchema,
+    deletedRuns: z.number().int().nonnegative(),
+    revokedDeliveries: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export type RemoveGroupAgentResult = z.infer<typeof RemoveGroupAgentResultSchema>;
+
+export const ReorderGroupAgentsCommandSchema = z
+  .object({
+    agentIds: z.array(ConfiguredAgentIdSchema).max(256),
+    expectedAgentRevision: z.number().int().nonnegative(),
   })
   .strict()
   .superRefine((command, context) => {
     const seen = new Set<string>();
-    for (const [index, memberId] of command.memberIds.entries()) {
-      if (seen.has(memberId)) {
+    for (const [index, agentId] of command.agentIds.entries()) {
+      if (seen.has(agentId)) {
         context.addIssue({
           code: "custom",
-          message: "Member order must not contain duplicate member IDs",
-          path: ["memberIds", index],
+          message: "Agent order must not contain duplicate agent IDs",
+          path: ["agentIds", index],
         });
       }
-      seen.add(memberId);
+      seen.add(agentId);
     }
   });
 
-export type ReorderGroupMembershipsCommand = z.infer<typeof ReorderGroupMembershipsCommandSchema>;
+export type ReorderGroupAgentsCommand = z.infer<typeof ReorderGroupAgentsCommandSchema>;
 
-export const ReorderGroupMembershipsResultSchema = z
+export const ReorderGroupAgentsResultSchema = z
   .object({
     groupId: IdentifierSchema,
-    memberIds: z.array(IdentifierSchema).max(256),
+    agentIds: z.array(ConfiguredAgentIdSchema).max(256),
+    agentRevision: z.number().int().nonnegative(),
   })
   .strict();
 
-export type ReorderGroupMembershipsResult = z.infer<typeof ReorderGroupMembershipsResultSchema>;
+export type ReorderGroupAgentsResult = z.infer<typeof ReorderGroupAgentsResultSchema>;
 
 export const ConfiguredGroupSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
     instructions: z.array(InstructionPathSchema).max(32).default([]),
-    memberships: z.record(IdentifierSchema, ConfiguredMembershipSchema).default({}),
+    agents: z.record(ConfiguredAgentIdSchema, ConfiguredAgentSchema).default({}),
   })
   .strict();
 
@@ -314,11 +365,9 @@ export type MessageConfig = z.infer<typeof MessageConfigSchema>;
 
 export const NanasaConfigSchema = z
   .object({
-    version: z.literal(1),
-    agentTypes: z.record(AgentTypeKeySchema, AgentTypeConfigSchema),
     instructions: z.array(InstructionPathSchema).max(32).default([]),
+    integrations: z.record(IntegrationIdSchema, IntegrationConfigSchema),
     roles: z.record(RoleIdSchema, RoleDefinitionSchema).default({}),
-    agentProfiles: z.record(IdentifierSchema, ConfiguredAgentProfileSchema).default({}),
     groups: z.record(IdentifierSchema, ConfiguredGroupSchema).default({}),
     messages: MessageConfigSchema.default({
       retentionPerGroup: DEFAULT_MESSAGE_RETENTION_PER_GROUP,
@@ -326,59 +375,49 @@ export const NanasaConfigSchema = z
   })
   .strict()
   .superRefine((config, context) => {
-    for (const [key, agentType] of Object.entries(config.agentTypes)) {
-      if (agentType.key !== key) {
+    for (const [integrationId, integration] of Object.entries(config.integrations)) {
+      if (integration.id !== integrationId) {
         context.addIssue({
           code: "custom",
-          message: "Agent type key must match its configuration key",
-          path: ["agentTypes", key, "key"],
+          message: "Integration ID must match its configuration key",
+          path: ["integrations", integrationId, "id"],
         });
       }
     }
-    for (const [profileId, profile] of Object.entries(config.agentProfiles)) {
-      if (config.agentTypes[profile.agentType] === undefined) {
-        context.addIssue({
-          code: "custom",
-          message: `Agent profile references unknown agent type ${profile.agentType}`,
-          path: ["agentProfiles", profileId, "agentType"],
-        });
-      }
-      if (
-        profile.defaultRoleId !== undefined &&
-        config.roles[profile.defaultRoleId] === undefined
-      ) {
-        context.addIssue({
-          code: "custom",
-          message: `Agent profile references unknown role ${profile.defaultRoleId}`,
-          path: ["agentProfiles", profileId, "defaultRoleId"],
-        });
-      }
-    }
+    const agentIds = new Set<string>();
     for (const [groupId, group] of Object.entries(config.groups)) {
       const memberIds = new Set<string>();
-      for (const [membershipId, membership] of Object.entries(group.memberships)) {
-        if (config.agentProfiles[membership.agentProfileId] === undefined) {
+      for (const [agentId, agent] of Object.entries(group.agents)) {
+        if (config.integrations[agent.integrationId] === undefined) {
           context.addIssue({
             code: "custom",
-            message: `Membership references unknown agent profile ${membership.agentProfileId}`,
-            path: ["groups", groupId, "memberships", membershipId, "agentProfileId"],
+            message: `Agent references unknown integration ${agent.integrationId}`,
+            path: ["groups", groupId, "agents", agentId, "integrationId"],
           });
         }
-        if (membership.roleId !== undefined && config.roles[membership.roleId] === undefined) {
+        if (agent.roleId !== undefined && config.roles[agent.roleId] === undefined) {
           context.addIssue({
             code: "custom",
-            message: `Membership references unknown role ${membership.roleId}`,
-            path: ["groups", groupId, "memberships", membershipId, "roleId"],
+            message: `Agent references unknown role ${agent.roleId}`,
+            path: ["groups", groupId, "agents", agentId, "roleId"],
           });
         }
-        if (memberIds.has(membership.memberId)) {
+        if (agentIds.has(agentId)) {
           context.addIssue({
             code: "custom",
-            message: `Group contains duplicate member ID ${membership.memberId}`,
-            path: ["groups", groupId, "memberships", membershipId, "memberId"],
+            message: `Configuration contains duplicate agent ID ${agentId}`,
+            path: ["groups", groupId, "agents", agentId],
           });
         }
-        memberIds.add(membership.memberId);
+        if (memberIds.has(agent.memberId)) {
+          context.addIssue({
+            code: "custom",
+            message: `Group contains duplicate member ID ${agent.memberId}`,
+            path: ["groups", groupId, "agents", agentId, "memberId"],
+          });
+        }
+        agentIds.add(agentId);
+        memberIds.add(agent.memberId);
       }
     }
   });
@@ -431,34 +470,6 @@ export type AgentProfile = CanonicalAgentProfile;
 
 export const AgentProfileSchema = CanonicalAgentProfileSchema;
 
-export const CreateAgentProfileCommandSchema = z
-  .object({
-    name: z.string().trim().min(1).max(100),
-    agentType: AgentTypeKeySchema,
-    defaultRoleId: RoleIdSchema.optional(),
-    instructions: z.array(InstructionPathSchema).max(32).optional(),
-  })
-  .strict();
-
-export type CreateAgentProfileCommand = z.infer<typeof CreateAgentProfileCommandSchema>;
-
-export const UpdateAgentProfileCommandSchema = z
-  .object({
-    name: z.string().trim().min(1).max(100).optional(),
-    defaultRoleId: RoleIdSchema.nullable().optional(),
-    instructions: z.array(InstructionPathSchema).max(32).optional(),
-  })
-  .strict()
-  .refine(
-    (command) =>
-      command.name !== undefined ||
-      command.defaultRoleId !== undefined ||
-      command.instructions !== undefined,
-    { message: "Agent profile update requires at least one field" },
-  );
-
-export type UpdateAgentProfileCommand = z.infer<typeof UpdateAgentProfileCommandSchema>;
-
 const CanonicalInternalCreateAgentProfileCommandSchema = CanonicalAgentProfileSchema.omit({
   id: true,
   createdAt: true,
@@ -503,33 +514,6 @@ export const GroupMembershipSchema = z.object({
 });
 
 export type GroupMembership = z.infer<typeof GroupMembershipSchema>;
-
-export const AddGroupMembershipCommandSchema = z.object({
-  memberId: IdentifierSchema.optional(),
-  agentProfileId: IdentifierSchema,
-  alias: z.string().trim().min(1).max(100),
-  roleId: RoleIdSchema.optional(),
-  instructions: z.array(InstructionPathSchema).max(32).optional(),
-});
-
-export type AddGroupMembershipCommand = z.infer<typeof AddGroupMembershipCommandSchema>;
-
-export const UpdateGroupMembershipCommandSchema = z
-  .object({
-    alias: z.string().trim().min(1).max(100).optional(),
-    roleId: RoleIdSchema.nullable().optional(),
-    instructions: z.array(InstructionPathSchema).max(32).optional(),
-  })
-  .strict()
-  .refine(
-    (command) =>
-      command.alias !== undefined ||
-      command.roleId !== undefined ||
-      command.instructions !== undefined,
-    { message: "Membership update requires at least one field" },
-  );
-
-export type UpdateGroupMembershipCommand = z.infer<typeof UpdateGroupMembershipCommandSchema>;
 
 export const RunStatusSchema = z.enum(["starting", "running", "stopping", "stopped", "failed"]);
 
@@ -604,6 +588,15 @@ export const TerminalEndpointStatusSchema = z.discriminatedUnion("state", [
 ]);
 
 export type TerminalEndpointStatus = z.infer<typeof TerminalEndpointStatusSchema>;
+
+export const AdHocConsoleSessionSchema = z
+  .object({
+    id: IdentifierSchema,
+    runId: IdentifierSchema,
+  })
+  .strict();
+
+export type AdHocConsoleSession = z.infer<typeof AdHocConsoleSessionSchema>;
 
 const CanonicalAgentRunSchema = z.object({
   id: IdentifierSchema,

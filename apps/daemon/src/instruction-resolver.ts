@@ -3,8 +3,7 @@ import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import type {
-  ConfiguredAgentProfile,
-  ConfiguredMembership,
+  ConfiguredAgent,
   InstructionPath,
   NanasaConfig,
   RoleDefinition,
@@ -16,7 +15,7 @@ const MAX_INSTRUCTION_FILE_BYTES = 64 * 1024;
 const MAX_EFFECTIVE_PROMPT_BYTES = 256 * 1024;
 
 export interface PromptInstructionSource {
-  scope: "builtin" | "global" | "group" | "role" | "profile" | "membership";
+  scope: "builtin" | "global" | "group" | "role" | "agent";
   reference: string;
 }
 
@@ -31,9 +30,8 @@ export interface EffectiveAgentPrompt {
 export interface ResolveEffectiveAgentPromptInput {
   repoRoot: string;
   config: NanasaConfig;
-  profileId: string;
   groupId: string;
-  membershipId: string;
+  agentId: string;
 }
 
 function assertInsideRepository(repoRoot: string, path: InstructionPath): string {
@@ -78,31 +76,22 @@ function readInstruction(repoRoot: string, path: InstructionPath): string {
   }
 }
 
-function configuredInputs(input: ResolveEffectiveAgentPromptInput): {
-  profile: ConfiguredAgentProfile;
-  membership: ConfiguredMembership;
-} {
-  const profile = input.config.agentProfiles[input.profileId];
-  if (profile === undefined) throw new Error(`Configured profile not found: ${input.profileId}`);
-  const membership = input.config.groups[input.groupId]?.memberships[input.membershipId];
-  if (membership === undefined) {
-    throw new Error(`Configured membership not found: ${input.membershipId}`);
+function configuredAgent(input: ResolveEffectiveAgentPromptInput): ConfiguredAgent {
+  const agent = input.config.groups[input.groupId]?.agents[input.agentId];
+  if (agent === undefined) throw new Error(`Configured agent not found: ${input.agentId}`);
+  if (input.config.integrations[agent.integrationId] === undefined) {
+    throw new Error(`Configured integration not found: ${agent.integrationId}`);
   }
-  if (membership.agentProfileId !== input.profileId) {
-    throw new Error(
-      `Membership ${input.membershipId} does not reference profile ${input.profileId}`,
-    );
-  }
-  return { profile, membership };
+  return agent;
 }
 
 export function resolveEffectiveAgentPrompt(
   input: ResolveEffectiveAgentPromptInput,
 ): EffectiveAgentPrompt {
-  const { profile, membership } = configuredInputs(input);
+  const agent = configuredAgent(input);
   const group = input.config.groups[input.groupId];
   if (group === undefined) throw new Error(`Configured group not found: ${input.groupId}`);
-  const roleId = membership.roleId ?? profile.defaultRoleId;
+  const roleId = agent.roleId;
   const role = roleId === undefined ? undefined : input.config.roles[roleId];
   if (roleId !== undefined && role === undefined)
     throw new Error(`Configured role not found: ${roleId}`);
@@ -115,8 +104,8 @@ export function resolveEffectiveAgentPrompt(
     {
       source: { scope: "builtin", reference: "builtin:nanasa-assignment-v1" },
       content: [
-        `Nanasa member ID: ${membership.memberId}`,
-        `Nanasa member alias: ${membership.alias}`,
+        `Nanasa member ID: ${agent.memberId}`,
+        `Nanasa member alias: ${agent.name}`,
         roleId === undefined ? "Nanasa role: unassigned" : `Nanasa role: ${role!.name} (${roleId})`,
         ...(role?.description === undefined ? [] : [`Role purpose: ${role.description}`]),
       ].join("\n"),
@@ -129,8 +118,7 @@ export function resolveEffectiveAgentPrompt(
     { scope: "global", paths: input.config.instructions },
     { scope: "group", paths: group.instructions },
     { scope: "role", paths: role?.instructions ?? [] },
-    { scope: "profile", paths: profile.instructions },
-    { scope: "membership", paths: membership.instructions },
+    { scope: "agent", paths: agent.instructions },
   ];
   const seen = new Set<string>();
   for (const { scope, paths } of references) {
@@ -163,10 +151,9 @@ export function validateInstructionFiles(repoRoot: string, config: NanasaConfig)
   const references = [
     ...config.instructions,
     ...Object.values(config.roles).flatMap((role) => role.instructions),
-    ...Object.values(config.agentProfiles).flatMap((profile) => profile.instructions),
     ...Object.values(config.groups).flatMap((group) => [
       ...group.instructions,
-      ...Object.values(group.memberships).flatMap((membership) => membership.instructions),
+      ...Object.values(group.agents).flatMap((agent) => agent.instructions),
     ]),
   ];
   const seen = new Set<string>();

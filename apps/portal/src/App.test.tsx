@@ -31,7 +31,6 @@ vi.mock("./components/terminal-workspace.js", () => ({
 const timestamp = "2026-08-09T12:00:00.000Z";
 
 const config: NanasaConfig = {
-  version: 1,
   instructions: [],
   roles: {
     reviewer: {
@@ -42,32 +41,66 @@ const config: NanasaConfig = {
       presentation: { icon: "shield-check", color: "amber", shortName: "Review" },
     },
   },
-  agentProfiles: {},
-  groups: {},
+  groups: {
+    "group-backend": {
+      name: "Backend",
+      instructions: [],
+      agents: {
+        "builder-agent": {
+          memberId: "builder",
+          name: "Builder",
+          integrationId: "copilot",
+          instructions: [],
+          order: 0,
+        },
+        "reviewer-agent": {
+          memberId: "reviewer",
+          name: "Reviewer",
+          integrationId: "copilot",
+          roleId: "reviewer",
+          instructions: [],
+          order: 1,
+        },
+      },
+    },
+    "group-review": {
+      name: "Review",
+      instructions: [],
+      agents: {
+        "auditor-agent": {
+          memberId: "auditor",
+          name: "Auditor",
+          integrationId: "copilot",
+          instructions: [],
+          order: 0,
+        },
+      },
+    },
+  },
   messages: { retentionPerGroup: 1_000 },
-  agentTypes: {
+  integrations: {
     copilot: {
-      key: "copilot",
+      id: "copilot",
       name: "GitHub Copilot",
       kind: "copilot",
       command: ["copilot", "--acp", "--stdio"],
-      agentConfigHome: { scope: "agent-type" },
+      agentConfigHome: { scope: "integration" },
       environment: {},
     },
     "claude-copilot": {
-      key: "claude-copilot",
+      id: "claude-copilot",
       name: "Claude through Copilot",
       kind: "claude-code",
       command: ["make", "claude-copilot"],
-      agentConfigHome: { scope: "agent-type" },
+      agentConfigHome: { scope: "integration" },
       environment: {},
     },
     "custom-agent": {
-      key: "custom-agent",
+      id: "custom-agent",
       name: "Custom reviewer",
       kind: "opencode",
       command: ["custom-reviewer"],
-      agentConfigHome: { scope: "agent-type" },
+      agentConfigHome: { scope: "integration" },
       environment: {},
     },
   },
@@ -169,6 +202,8 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     stoppedAt: timestamp,
   };
   return {
+    createConsole: vi.fn().mockResolvedValue({ id: "console-one", runId: "console-one" }),
+    closeConsole: vi.fn().mockResolvedValue(undefined),
     loadSnapshot: vi.fn().mockResolvedValue(snapshot),
     loadConfig: vi.fn().mockResolvedValue(config),
     createGroup: vi.fn().mockResolvedValue(snapshot.groups[0]),
@@ -180,16 +215,20 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
       deletedMessages: 0,
       deletedDeliveries: 0,
     }),
-    createAgentProfile: vi.fn().mockResolvedValue(profile),
-    updateAgentProfile: vi.fn().mockResolvedValue(profile),
-    updateRolePresentation: vi.fn().mockResolvedValue(config.roles.reviewer),
-    addMembership: vi.fn().mockResolvedValue(memberships[0]),
-    updateMembership: vi.fn().mockResolvedValue(memberships[0]),
-    removeMembership: vi.fn().mockResolvedValue({ ...memberships[0], state: "removed" }),
-    reorderMemberships: vi.fn().mockResolvedValue({
+    createAgent: vi.fn().mockResolvedValue(memberships[0]),
+    updateAgent: vi.fn().mockResolvedValue(memberships[0]),
+    removeAgent: vi.fn().mockResolvedValue({
       groupId: "group-backend",
-      memberIds: ["builder", "reviewer"],
+      agentId: "builder-agent",
+      deletedRuns: 0,
+      revokedDeliveries: 0,
     }),
+    reorderAgents: vi.fn().mockResolvedValue({
+      groupId: "group-backend",
+      agentIds: ["builder-agent", "reviewer-agent"],
+      agentRevision: 4,
+    }),
+    updateRolePresentation: vi.fn().mockResolvedValue(config.roles.reviewer),
     startRun: vi.fn().mockResolvedValue(run),
     startAllRuns: vi.fn().mockResolvedValue({ groupId: "group-backend", outcomes: [] }),
     stopRun: vi.fn().mockResolvedValue(run),
@@ -283,10 +322,25 @@ describe("portal application", () => {
     await screen.findByRole("heading", { name: "Backend" });
     expect(client.loadSnapshot).toHaveBeenCalledTimes(1);
 
-    const socket = vi.mocked(client.createEventsSocket).mock.results[0]?.value;
-    await act(async () => socket?.onopen?.(new Event("open")));
+    await waitFor(() => expect(client.createEventsSocket).toHaveBeenCalledTimes(1));
+    const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
+    await waitFor(() => expect(socket?.onopen).toEqual(expect.any(Function)));
+    await act(async () => socket!.onopen!(new Event("open")));
 
     await waitFor(() => expect(client.loadSnapshot).toHaveBeenCalledTimes(2));
+  });
+
+  it("replaces the rail Add agent shortcut with Console", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    expect(screen.getByRole("button", { name: "Console" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Add agent$/ })).not.toBeInTheDocument();
+
+    await chooseRowAction(user, "Actions for group Backend", "Add agent to Backend");
+    expect(screen.getByRole("button", { name: /^Add agent$/ })).toBeInTheDocument();
   });
 
   it("renames groups and agents inline with Enter and cancels edits with Escape", async () => {
@@ -307,12 +361,12 @@ describe("portal application", () => {
     );
 
     await chooseRowAction(user, "Actions for agent Reviewer", "Rename agent Reviewer");
-    const alias = screen.getByRole("textbox", { name: "agent alias for Reviewer" });
-    await user.clear(alias);
-    await user.type(alias, "Quality reviewer{Escape}");
-    expect(client.updateMembership).not.toHaveBeenCalled();
+    const agentName = screen.getByRole("textbox", { name: "agent name for Reviewer" });
+    await user.clear(agentName);
+    await user.type(agentName, "Quality reviewer{Escape}");
+    expect(client.updateAgent).not.toHaveBeenCalled();
     expect(
-      screen.queryByRole("textbox", { name: "agent alias for Reviewer" }),
+      screen.queryByRole("textbox", { name: "agent name for Reviewer" }),
     ).not.toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Actions for agent Reviewer" })).toHaveFocus(),
@@ -343,6 +397,7 @@ describe("portal application", () => {
         onRemoveAgent={vi.fn()}
         onStartRun={vi.fn()}
         onStopRun={vi.fn()}
+        onOpenConsole={vi.fn()}
       />,
     );
 
@@ -462,13 +517,14 @@ describe("portal application", () => {
     await user.click(within(reviewerMenu).getByRole("menuitem", { name: "Move Reviewer up" }));
 
     await waitFor(() =>
-      expect(client.reorderMemberships).toHaveBeenCalledWith("group-backend", {
-        memberIds: ["reviewer", "builder"],
+      expect(client.reorderAgents).toHaveBeenCalledWith("group-backend", {
+        agentIds: ["reviewer-agent", "builder-agent"],
+        expectedAgentRevision: 4,
       }),
     );
   });
 
-  it("requires a dialog confirmation before removing a membership", async () => {
+  it("requires a dialog confirmation before removing an agent", async () => {
     const user = userEvent.setup();
     const client = createClient();
     render(<App client={client} />);
@@ -476,12 +532,13 @@ describe("portal application", () => {
     await screen.findByRole("heading", { name: "Backend" });
     await chooseRowAction(user, "Actions for agent Reviewer", "Remove agent Reviewer");
     const dialog = screen.getByRole("dialog", { name: "Remove Reviewer?" });
-    expect(dialog).toHaveTextContent("reusable agent profile remains available");
-    expect(client.removeMembership).not.toHaveBeenCalled();
+    expect(dialog).toHaveTextContent("agent will be removed from the group");
+    expect(dialog).not.toHaveTextContent("profile");
+    expect(client.removeAgent).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Remove agent" }));
 
     await waitFor(() =>
-      expect(client.removeMembership).toHaveBeenCalledWith("group-backend", "reviewer"),
+      expect(client.removeAgent).toHaveBeenCalledWith("group-backend", "reviewer-agent"),
     );
     expect(screen.queryByRole("dialog", { name: "Remove Reviewer?" })).not.toBeInTheDocument();
   });
@@ -502,7 +559,7 @@ describe("portal application", () => {
     await screen.findByRole("heading", { name: "Backend" });
     await chooseRowAction(user, "Actions for group Backend", "Delete group Backend");
     const dialog = screen.getByRole("dialog", { name: "Delete Backend?" });
-    expect(dialog).toHaveTextContent("0 runs will stop before 2 memberships and 0 messages");
+    expect(dialog).toHaveTextContent("0 runs will stop before 2 agents and 0 messages");
     await user.click(screen.getByRole("button", { name: "Delete group" }));
 
     expect(await screen.findByRole("heading", { name: "Review" })).toHaveFocus();
@@ -539,7 +596,7 @@ describe("portal application", () => {
         "group-backend": {
           name: "Backend",
           instructions: [".nanasa/instructions/groups/backend.md"],
-          memberships: {},
+          agents: config.groups["group-backend"]!.agents,
         },
       },
     });
@@ -564,192 +621,103 @@ describe("portal application", () => {
     );
   });
 
-  it("opens the add-agent form from the selected group row", async () => {
+  it("opens the add-agent dialog from the selected group row", async () => {
     const user = userEvent.setup();
     render(<App client={createClient()} />);
 
     await screen.findByRole("heading", { name: "Backend" });
     await chooseRowAction(user, "Actions for group Backend", "Add agent to Backend");
+    const dialog = screen.getByRole("dialog", { name: "Add agent" });
 
-    expect(screen.getByLabelText("Member alias")).toBeInTheDocument();
-    expect(screen.getByLabelText("Profile source")).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Reviewer (reviewer)" })).toBeInTheDocument();
-  });
-
-  it("assigns a selected role when adding an agent", async () => {
-    const user = userEvent.setup();
-    const client = createClient();
-    render(<App client={client} />);
-    await screen.findByRole("heading", { name: "Backend" });
-    await chooseRowAction(user, "Actions for group Backend", "Add agent to Backend");
-    await user.type(screen.getByLabelText("Member alias"), "Security reviewer");
-    await user.selectOptions(screen.getByLabelText("Role override"), "reviewer");
-    await user.click(screen.getByRole("button", { name: "Add member" }));
-
-    expect(client.addMembership).toHaveBeenCalledWith(
-      "group-backend",
-      expect.objectContaining({ alias: "Security reviewer", roleId: "reviewer" }),
-    );
-  });
-
-  it("selects the first existing profile when profiles arrive after the form opens", async () => {
-    const user = userEvent.setup();
-    const onAddAgent = vi.fn().mockResolvedValue(undefined);
-    const treeProps = {
-      config,
-      selectedGroupId: "group-backend",
-      unreadCounts: new Map<string, number>(),
-      onSelectGroup: vi.fn(),
-      onCreateGroup: vi.fn().mockResolvedValue(undefined),
-      onRenameGroup: vi.fn().mockResolvedValue(undefined),
-      onDeleteGroup: vi.fn().mockResolvedValue(undefined),
-      onAddAgent,
-      onRenameAgent: vi.fn().mockResolvedValue(undefined),
-      onRemoveAgent: vi.fn().mockResolvedValue(undefined),
-      onStartRun: vi.fn().mockResolvedValue(undefined),
-      onStopRun: vi.fn().mockResolvedValue(undefined),
-    };
-    const { rerender } = render(
-      <GroupTree {...treeProps} snapshot={{ ...snapshot, agentProfiles: [] }} />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "Add agent" }));
-    rerender(<GroupTree {...treeProps} snapshot={snapshot} />);
-    await user.type(screen.getByLabelText("Member alias"), "Echo worker");
-    await user.selectOptions(screen.getByLabelText("Profile source"), "existing");
-    await user.click(screen.getByRole("button", { name: "Add member" }));
-
-    expect(onAddAgent).toHaveBeenCalledWith({
-      groupId: "group-backend",
-      alias: "Echo worker",
-      profileId: profile.id,
-      instructions: [],
-    });
+    expect(within(dialog).getByLabelText("Name")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Integration")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Role")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Agent instruction files")).toBeInTheDocument();
+    expect(within(dialog).getByRole("option", { name: "Reviewer (reviewer)" })).toBeInTheDocument();
+    expect(within(dialog).queryByText(/profile/i)).not.toBeInTheDocument();
   });
 
   it.each([
     ["custom-agent", "Custom reviewer (custom-agent)"],
     ["claude-copilot", "Claude through Copilot (claude-copilot)"],
-  ])("creates profiles with the configured %s agent type", async (agentType, optionName) => {
+  ])("creates one agent with the configured %s integration", async (integrationId, optionName) => {
     const user = userEvent.setup();
     const client = createClient();
     render(<App client={client} />);
 
     await screen.findByRole("heading", { name: "Backend" });
     await chooseRowAction(user, "Actions for group Backend", "Add agent to Backend");
-    await user.selectOptions(screen.getByLabelText("Profile source"), "new");
-    await user.type(screen.getByLabelText("Member alias"), `${agentType} member`);
-    await user.type(screen.getByLabelText("Profile name"), `${agentType} profile`);
-    await user.selectOptions(screen.getByLabelText("Agent type"), agentType);
+    await user.type(screen.getByLabelText("Name"), "Security reviewer");
+    await user.selectOptions(screen.getByLabelText("Integration"), integrationId);
+    await user.selectOptions(screen.getByLabelText("Role"), "reviewer");
+    await user.type(
+      screen.getByLabelText("Agent instruction files"),
+      ".nanasa/instructions/agents/security.md",
+    );
     expect(screen.getByRole("option", { name: optionName })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Add member" }));
+    const form = screen.getByLabelText("Agent instruction files").closest("form");
+    expect(form).not.toBeNull();
+    await user.click(within(form!).getByRole("button", { name: "Add agent" }));
 
-    expect(client.createAgentProfile).toHaveBeenCalledWith({
-      name: `${agentType} profile`,
-      agentType,
-      instructions: [],
-    });
-  });
-
-  it("creates profiles and memberships with layered role instructions", async () => {
-    const user = userEvent.setup();
-    const client = createClient();
-    render(<App client={client} />);
-
-    await screen.findByRole("heading", { name: "Backend" });
-    await chooseRowAction(user, "Actions for group Backend", "Add agent to Backend");
-    await user.selectOptions(screen.getByLabelText("Profile source"), "new");
-    await user.type(screen.getByLabelText("Member alias"), "Security reviewer");
-    await user.type(screen.getByLabelText("Profile name"), "Review profile");
-    await user.selectOptions(screen.getByLabelText("Profile default role"), "reviewer");
-    await user.type(
-      screen.getByLabelText("Profile instruction files"),
-      ".nanasa/instructions/profiles/review.md",
-    );
-    await user.selectOptions(screen.getByLabelText("Role override"), "reviewer");
-    await user.type(
-      screen.getByLabelText("Assignment instruction files"),
-      ".nanasa/instructions/memberships/security.md",
-    );
-    await user.click(screen.getByRole("button", { name: "Add member" }));
-
-    expect(client.createAgentProfile).toHaveBeenCalledWith({
-      name: "Review profile",
-      agentType: "copilot",
-      defaultRoleId: "reviewer",
-      instructions: [".nanasa/instructions/profiles/review.md"],
-    });
-    expect(client.addMembership).toHaveBeenCalledWith("group-backend", {
-      agentProfileId: profile.id,
-      alias: "Security reviewer",
+    expect(client.createAgent).toHaveBeenCalledTimes(1);
+    expect(client.createAgent).toHaveBeenCalledWith("group-backend", {
+      name: "Security reviewer",
+      integrationId,
       roleId: "reviewer",
-      instructions: [".nanasa/instructions/memberships/security.md"],
+      instructions: [".nanasa/instructions/agents/security.md"],
     });
   });
 
-  it("edits membership overrides and reusable profile defaults independently", async () => {
+  it("edits all direct agent settings with one save", async () => {
     const user = userEvent.setup();
     const client = createClient();
-    const configured = {
+    vi.mocked(client.loadConfig).mockResolvedValue({
       ...config,
-      agentProfiles: {
-        [profile.id]: {
-          name: profile.name,
-          agentType: profile.agentType,
-          defaultRoleId: "reviewer" as const,
-          instructions: [".nanasa/instructions/profiles/review.md"],
-        },
-      },
       groups: {
+        ...config.groups,
         "group-backend": {
           name: "Backend",
           instructions: [],
-          memberships: {
-            "membership-reviewer": {
+          agents: {
+            ...config.groups["group-backend"]!.agents,
+            "reviewer-agent": {
               memberId: "reviewer",
-              agentProfileId: profile.id,
-              alias: "Reviewer",
-              roleId: "reviewer" as const,
-              instructions: [".nanasa/instructions/memberships/reviewer.md"],
+              name: "Reviewer",
+              integrationId: "copilot",
+              roleId: "reviewer",
+              instructions: [".nanasa/instructions/agents/reviewer.md"],
+              order: 1,
             },
           },
         },
       },
-    };
-    vi.mocked(client.loadConfig).mockResolvedValue(configured);
+    });
     render(<App client={client} />);
 
     await screen.findByRole("heading", { name: "Backend" });
     await chooseRowAction(user, "Actions for agent Reviewer", "Edit agent settings Reviewer");
     const dialog = screen.getByRole("dialog", { name: "Reviewer" });
 
-    const alias = within(dialog).getByLabelText("Member alias");
-    await user.clear(alias);
-    await user.type(alias, "Security reviewer");
-    const memberFiles = within(dialog).getByLabelText("Assignment instruction files");
-    await user.clear(memberFiles);
-    await user.type(memberFiles, ".nanasa/instructions/memberships/security.md");
-    await user.click(within(dialog).getByRole("button", { name: "Save membership" }));
-    await waitFor(() =>
-      expect(client.updateMembership).toHaveBeenCalledWith("group-backend", "reviewer", {
-        alias: "Security reviewer",
-        roleId: "reviewer",
-        instructions: [".nanasa/instructions/memberships/security.md"],
-      }),
-    );
+    expect(within(dialog).getByText("reviewer")).toBeInTheDocument();
+    expect(within(dialog).getByText("reviewer-agent")).toBeInTheDocument();
+    expect(within(dialog).getByText("Internal")).toBeInTheDocument();
 
-    const profileName = within(dialog).getByLabelText("Profile name");
-    await user.clear(profileName);
-    await user.type(profileName, "Security review profile");
-    const profileFiles = within(dialog).getByLabelText("Profile instruction files");
-    await user.clear(profileFiles);
-    await user.type(profileFiles, ".nanasa/instructions/profiles/security.md");
-    await user.click(within(dialog).getByRole("button", { name: "Save profile" }));
+    const name = within(dialog).getByLabelText("Name");
+    await user.clear(name);
+    await user.type(name, "Security reviewer");
+    await user.selectOptions(within(dialog).getByLabelText("Integration"), "custom-agent");
+    const files = within(dialog).getByLabelText("Agent instruction files");
+    await user.clear(files);
+    await user.type(files, ".nanasa/instructions/agents/security.md");
+    expect(within(dialog).queryByText(/profile|default|override/i)).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Save agent" }));
+
     await waitFor(() =>
-      expect(client.updateAgentProfile).toHaveBeenCalledWith(profile.id, {
-        name: "Security review profile",
-        defaultRoleId: "reviewer",
-        instructions: [".nanasa/instructions/profiles/security.md"],
+      expect(client.updateAgent).toHaveBeenCalledWith("group-backend", "reviewer-agent", {
+        name: "Security reviewer",
+        integrationId: "custom-agent",
+        roleId: "reviewer",
+        instructions: [".nanasa/instructions/agents/security.md"],
       }),
     );
   });
@@ -761,24 +729,17 @@ describe("portal application", () => {
     await screen.findByRole("heading", { name: "Backend" });
     await chooseRowAction(user, "Actions for agent Builder", "Edit agent settings Builder");
     const dialog = screen.getByRole("dialog", { name: "Builder" });
-    const assignment = within(dialog).getByLabelText("Assignment instruction files");
-    const profile = within(dialog).getByLabelText("Profile instruction files");
+    const files = within(dialog).getByLabelText("Agent instruction files");
 
-    expect(assignment).toHaveValue("");
-    expect(assignment).not.toHaveAttribute("placeholder");
-    expect(profile).toHaveValue("");
-    expect(profile).not.toHaveAttribute("placeholder");
+    expect(files).toHaveValue("");
+    expect(files).not.toHaveAttribute("placeholder");
     expect(
-      within(dialog).getByText("No assignment-specific instruction files configured"),
+      within(dialog).getByText("No agent-specific instruction files configured"),
     ).toBeVisible();
+    await user.type(files, ".nanasa/instructions/agents/builder.md");
+    expect(files).toHaveValue(".nanasa/instructions/agents/builder.md");
     expect(
-      within(dialog).getByText("No profile-specific instruction files configured"),
-    ).toBeVisible();
-
-    await user.type(assignment, ".nanasa/instructions/memberships/builder.md");
-    expect(assignment).toHaveValue(".nanasa/instructions/memberships/builder.md");
-    expect(
-      within(dialog).queryByText("No assignment-specific instruction files configured"),
+      within(dialog).queryByText("No agent-specific instruction files configured"),
     ).not.toBeInTheDocument();
   });
 
@@ -795,16 +756,19 @@ describe("portal application", () => {
         },
       },
       groups: {
+        ...config.groups,
         "group-backend": {
           name: "Backend",
           instructions: [".nanasa/instructions/groups/backend.md"],
-          memberships: {
-            "membership-reviewer": {
+          agents: {
+            ...config.groups["group-backend"]!.agents,
+            "reviewer-agent": {
               memberId: "reviewer",
-              agentProfileId: profile.id,
-              alias: "Reviewer",
+              name: "Reviewer",
+              integrationId: "copilot",
               roleId: "reviewer",
               instructions: [],
+              order: 1,
             },
           },
         },
@@ -827,11 +791,11 @@ describe("portal application", () => {
 
   it("shows a distinct repository configuration error", async () => {
     const client = createClient();
-    vi.mocked(client.loadConfig).mockRejectedValue(new Error("agentTypes is invalid"));
+    vi.mocked(client.loadConfig).mockRejectedValue(new Error("integrations is invalid"));
     render(<App client={client} />);
 
     expect(await screen.findByText("Repository configuration unavailable")).toBeInTheDocument();
-    expect(screen.getByText("agentTypes is invalid")).toBeInTheDocument();
+    expect(screen.getByText("integrations is invalid")).toBeInTheDocument();
   });
 
   it("deduplicates Start all while pending and announces per-member outcomes", async () => {
@@ -910,6 +874,7 @@ describe("portal application", () => {
           onRemoveAgent={vi.fn()}
           onStartRun={vi.fn()}
           onStopRun={vi.fn()}
+          onOpenConsole={vi.fn()}
         />,
       );
 
@@ -979,6 +944,7 @@ describe("portal application", () => {
         onRemoveAgent={vi.fn()}
         onStartRun={vi.fn()}
         onStopRun={vi.fn()}
+        onOpenConsole={vi.fn()}
       />,
     );
 
@@ -1002,6 +968,8 @@ describe("portal application", () => {
     expect(within(details).getByText("decision required")).toBeInTheDocument();
     expect(within(details).getByText("Implementation complete")).toBeInTheDocument();
     expect(within(details).getByText("builder")).toBeInTheDocument();
+    const kindLabel = within(details).getByText("Kind");
+    expect(kindLabel.nextElementSibling).toHaveTextContent("copilot");
     await user.click(within(details).getByRole("button", { name: "Close details for Builder" }));
     expect(
       screen.queryByRole("dialog", { name: "Agent details for Builder" }),
@@ -1091,6 +1059,7 @@ describe("portal application", () => {
         onRemoveAgent={vi.fn()}
         onStartRun={vi.fn()}
         onStopRun={vi.fn()}
+        onOpenConsole={vi.fn()}
       />,
     );
 
@@ -1146,7 +1115,7 @@ describe("portal application", () => {
     await user.click(screen.getByRole("button", { name: "Review1" }));
 
     expect(screen.getByRole("heading", { name: "Review" })).toBeInTheDocument();
-    expect(screen.getByText(/1 members/)).toBeInTheDocument();
+    expect(screen.getByText(/1 agents/)).toBeInTheDocument();
   });
 
   it("keeps floating Messages open across the workspace and restores launcher focus", async () => {

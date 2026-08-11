@@ -1,4 +1,5 @@
 import type {
+  AgentKind,
   AgentRun,
   AgentStatusSummary,
   GroupMembership,
@@ -27,6 +28,7 @@ function TerminalPane({
   run,
   alias,
   memberId,
+  kind,
   role,
   connectionRevision,
   suspended,
@@ -35,6 +37,7 @@ function TerminalPane({
   run: AgentRun;
   alias: string;
   memberId: string;
+  kind: AgentKind | undefined;
   role: RoleDefinition | undefined;
   connectionRevision: number;
   suspended: boolean;
@@ -59,6 +62,15 @@ function TerminalPane({
           aria-hidden="true"
         />
         <strong>{alias}</strong>
+        {kind !== undefined && (
+          <span
+            className="terminal-agent-kind"
+            aria-label={`Agent kind ${kind}`}
+            title="Agent kind"
+          >
+            {kind}
+          </span>
+        )}
         <RoleIdentity role={role} compact />
         <span className="status-separator" aria-hidden="true" />
         <span>{endpointState ?? (loading ? "loading" : "unavailable")}</span>
@@ -122,6 +134,7 @@ function TerminalPane({
 
 interface TerminalWorkspaceProps {
   client: PortalClient;
+  config?: NanasaConfig;
   members: GroupMembership[];
   roles?: NanasaConfig["roles"];
   runs: AgentRun[];
@@ -132,6 +145,7 @@ interface TerminalWorkspaceProps {
 
 export function TerminalWorkspace({
   client,
+  config,
   members,
   roles = {},
   runs,
@@ -161,6 +175,14 @@ export function TerminalWorkspace({
     const roleId = members.find((member) => member.memberId === run.memberId)?.roleId;
     return roleId === undefined ? undefined : roles[roleId];
   };
+  const memberKind = (run: AgentRun) => {
+    const member = members.find((candidate) => candidate.memberId === run.memberId);
+    const integrationId =
+      member === undefined
+        ? undefined
+        : config?.groups[run.groupId]?.agents[member.id]?.integrationId;
+    return integrationId === undefined ? undefined : config?.integrations[integrationId]?.kind;
+  };
   const displayStatus = (run: AgentRun) =>
     agentStatuses.find(
       (status) => status.groupId === run.groupId && status.memberId === run.memberId,
@@ -171,7 +193,7 @@ export function TerminalWorkspace({
       <div className="empty-state terminal-empty">
         <Monitor aria-hidden="true" size={28} />
         <h2>No active terminals</h2>
-        <p>Start a group member from the tree to open its tmux terminal.</p>
+        <p>Start an agent from the tree to open its tmux terminal.</p>
       </div>
     );
   }
@@ -231,6 +253,7 @@ export function TerminalWorkspace({
               run={run}
               alias={memberAlias(run)}
               memberId={run.memberId}
+              kind={memberKind(run)}
               role={memberRole(run)}
               connectionRevision={connectionRevision}
               suspended={suspended}

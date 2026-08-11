@@ -1,14 +1,12 @@
 import {
-  type AddGroupMembershipCommand,
-  AddGroupMembershipCommandSchema,
-  type AgentProfile,
-  AgentProfileSchema,
+  type AdHocConsoleSession,
+  AdHocConsoleSessionSchema,
   type AgentRun,
   AgentRunSchema,
   type ClearMessageHistoryResult,
   ClearMessageHistoryResultSchema,
-  type CreateAgentProfileCommand,
-  CreateAgentProfileCommandSchema,
+  type CreateGroupAgentCommand,
+  CreateGroupAgentCommandSchema,
   type CreateGroupCommand,
   CreateGroupCommandSchema,
   type DeleteGroupResult,
@@ -25,10 +23,12 @@ import {
   NanasaConfigSchema,
   type PortalSnapshot,
   PortalSnapshotSchema,
-  type ReorderGroupMembershipsCommand,
-  ReorderGroupMembershipsCommandSchema,
-  type ReorderGroupMembershipsResult,
-  ReorderGroupMembershipsResultSchema,
+  type RemoveGroupAgentResult,
+  RemoveGroupAgentResultSchema,
+  type ReorderGroupAgentsCommand,
+  ReorderGroupAgentsCommandSchema,
+  type ReorderGroupAgentsResult,
+  ReorderGroupAgentsResultSchema,
   type RoleDefinition,
   RoleDefinitionSchema,
   type StartGroupRunsResult,
@@ -37,12 +37,10 @@ import {
   SubmitMessageCommandSchema,
   type TerminalEndpointStatus,
   TerminalEndpointStatusSchema,
-  type UpdateAgentProfileCommand,
-  UpdateAgentProfileCommandSchema,
+  type UpdateGroupAgentCommand,
+  UpdateGroupAgentCommandSchema,
   type UpdateGroupCommand,
   UpdateGroupCommandSchema,
-  type UpdateGroupMembershipCommand,
-  UpdateGroupMembershipCommandSchema,
   type UpdateRolePresentationCommand,
   UpdateRolePresentationCommandSchema,
 } from "@nanasa/contracts";
@@ -62,31 +60,31 @@ export class ApiError extends Error {
 }
 
 export interface PortalClient {
+  createConsole(): Promise<AdHocConsoleSession>;
+  closeConsole(consoleId: string): Promise<void>;
   loadSnapshot(): Promise<PortalSnapshot>;
   loadConfig(): Promise<NanasaConfig>;
   createGroup(command: CreateGroupCommand): Promise<Group>;
   updateGroup(groupId: string, command: UpdateGroupCommand): Promise<Group>;
   deleteGroup(groupId: string): Promise<DeleteGroupResult>;
-  createAgentProfile(command: CreateAgentProfileCommand): Promise<AgentProfile>;
-  updateAgentProfile(profileId: string, command: UpdateAgentProfileCommand): Promise<AgentProfile>;
+  createAgent(groupId: string, command: CreateGroupAgentCommand): Promise<GroupMembership>;
+  updateAgent(
+    groupId: string,
+    agentId: string,
+    command: UpdateGroupAgentCommand,
+  ): Promise<GroupMembership>;
+  removeAgent(groupId: string, agentId: string): Promise<RemoveGroupAgentResult>;
+  reorderAgents(
+    groupId: string,
+    command: ReorderGroupAgentsCommand,
+  ): Promise<ReorderGroupAgentsResult>;
   updateRolePresentation(
     roleId: string,
     command: UpdateRolePresentationCommand,
   ): Promise<RoleDefinition>;
-  addMembership(groupId: string, command: AddGroupMembershipCommand): Promise<GroupMembership>;
-  updateMembership(
-    groupId: string,
-    memberId: string,
-    command: UpdateGroupMembershipCommand,
-  ): Promise<GroupMembership>;
-  removeMembership(groupId: string, memberId: string): Promise<GroupMembership>;
-  reorderMemberships(
-    groupId: string,
-    command: ReorderGroupMembershipsCommand,
-  ): Promise<ReorderGroupMembershipsResult>;
-  startRun(groupId: string, memberId: string): Promise<AgentRun>;
+  startRun(groupId: string, agentId: string): Promise<AgentRun>;
   startAllRuns(groupId: string, idempotencyKey: string): Promise<StartGroupRunsResult>;
-  stopRun(groupId: string, memberId: string): Promise<AgentRun>;
+  stopRun(groupId: string, agentId: string): Promise<AgentRun>;
   submitMessage(groupId: string, command: SubmitMessageCommand): Promise<MessageSubmissionResult>;
   loadMessages(
     groupId: string,
@@ -116,6 +114,17 @@ async function request<T>(path: string, schema: Schema<T>, init?: RequestInit): 
   return schema.parse(payload);
 }
 
+async function requestVoid(path: string, init: RequestInit): Promise<void> {
+  const response = await fetch(path, init);
+  if (response.ok) return;
+  const payload: unknown = await response.json();
+  const message =
+    typeof payload === "object" && payload !== null && "message" in payload
+      ? String(payload.message)
+      : `Request failed with status ${response.status}`;
+  throw new ApiError(message, response.status);
+}
+
 function commandInit(
   method: "POST" | "PUT" | "PATCH" | "DELETE",
   body: unknown,
@@ -132,6 +141,9 @@ function commandInit(
 }
 
 export const api: PortalClient = {
+  createConsole: () => request("/api/consoles", AdHocConsoleSessionSchema, commandInit("POST", {})),
+  closeConsole: (consoleId) =>
+    requestVoid(`/api/consoles/${encodeURIComponent(consoleId)}`, commandInit("DELETE", {})),
   loadSnapshot: () => request("/api/snapshot", PortalSnapshotSchema),
   loadConfig: () => request("/api/config", NanasaConfigSchema),
   createGroup: (command) =>
@@ -152,17 +164,29 @@ export const api: PortalClient = {
       DeleteGroupResultSchema,
       commandInit("DELETE", {}),
     ),
-  createAgentProfile: (command) =>
+  createAgent: (groupId, command) =>
     request(
-      "/api/agent-profiles",
-      AgentProfileSchema,
-      commandInit("POST", CreateAgentProfileCommandSchema.parse(command)),
+      `/api/groups/${encodeURIComponent(groupId)}/agents`,
+      GroupMembershipSchema,
+      commandInit("POST", CreateGroupAgentCommandSchema.parse(command)),
     ),
-  updateAgentProfile: (profileId, command) =>
+  updateAgent: (groupId, agentId, command) =>
     request(
-      `/api/agent-profiles/${encodeURIComponent(profileId)}`,
-      AgentProfileSchema,
-      commandInit("PATCH", UpdateAgentProfileCommandSchema.parse(command)),
+      `/api/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}`,
+      GroupMembershipSchema,
+      commandInit("PATCH", UpdateGroupAgentCommandSchema.parse(command)),
+    ),
+  removeAgent: (groupId, agentId) =>
+    request(
+      `/api/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}`,
+      RemoveGroupAgentResultSchema,
+      commandInit("DELETE", {}),
+    ),
+  reorderAgents: (groupId, command) =>
+    request(
+      `/api/groups/${encodeURIComponent(groupId)}/agent-order`,
+      ReorderGroupAgentsResultSchema,
+      commandInit("PUT", ReorderGroupAgentsCommandSchema.parse(command)),
     ),
   updateRolePresentation: (roleId, command) =>
     request(
@@ -170,33 +194,9 @@ export const api: PortalClient = {
       RoleDefinitionSchema,
       commandInit("PATCH", UpdateRolePresentationCommandSchema.parse(command)),
     ),
-  addMembership: (groupId, command) =>
+  startRun: (groupId, agentId) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/memberships`,
-      GroupMembershipSchema,
-      commandInit("POST", AddGroupMembershipCommandSchema.parse(command)),
-    ),
-  updateMembership: (groupId, memberId, command) =>
-    request(
-      `/api/groups/${encodeURIComponent(groupId)}/memberships/${encodeURIComponent(memberId)}`,
-      GroupMembershipSchema,
-      commandInit("PATCH", UpdateGroupMembershipCommandSchema.parse(command)),
-    ),
-  removeMembership: (groupId, memberId) =>
-    request(
-      `/api/groups/${encodeURIComponent(groupId)}/memberships/${encodeURIComponent(memberId)}`,
-      GroupMembershipSchema,
-      commandInit("DELETE", {}),
-    ),
-  reorderMemberships: (groupId, command) =>
-    request(
-      `/api/groups/${encodeURIComponent(groupId)}/membership-order`,
-      ReorderGroupMembershipsResultSchema,
-      commandInit("PUT", ReorderGroupMembershipsCommandSchema.parse(command)),
-    ),
-  startRun: (groupId, memberId) =>
-    request(
-      `/api/groups/${encodeURIComponent(groupId)}/memberships/${encodeURIComponent(memberId)}/run`,
+      `/api/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}/run`,
       AgentRunSchema,
       commandInit("POST", {}),
     ),
@@ -206,9 +206,9 @@ export const api: PortalClient = {
       StartGroupRunsResultSchema,
       commandInit("POST", {}, idempotencyKey),
     ),
-  stopRun: (groupId, memberId) =>
+  stopRun: (groupId, agentId) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/memberships/${encodeURIComponent(memberId)}/run`,
+      `/api/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}/run`,
       AgentRunSchema,
       commandInit("DELETE", {}),
     ),

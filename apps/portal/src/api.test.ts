@@ -45,7 +45,35 @@ describe("terminal endpoint API", () => {
 });
 
 describe("portal operations API", () => {
-  it("updates role presentation and sends complete membership order permutations", async () => {
+  it("creates and closes an ad hoc console", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: "console/one", runId: "console-run" }),
+      })
+      .mockResolvedValueOnce({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.createConsole()).resolves.toEqual({
+      id: "console/one",
+      runId: "console-run",
+    });
+    await expect(api.closeConsole("console/one")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/consoles",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/consoles/console%2Fone",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it("updates role presentation and sends complete agent order permutations", async () => {
     const responses = [
       {
         name: "Reviewer",
@@ -53,7 +81,7 @@ describe("portal operations API", () => {
         permissionPolicy: "read-only",
         presentation: { icon: "scan-search", color: "rose", shortName: "Inspect" },
       },
-      { groupId: "group/one", memberIds: ["reviewer", "builder"] },
+      { groupId: "group/one", agentIds: ["reviewer", "builder"], agentRevision: 8 },
     ];
     const fetchMock = vi.fn().mockImplementation(async () => ({
       ok: true,
@@ -66,7 +94,10 @@ describe("portal operations API", () => {
       color: "rose",
       shortName: "Inspect",
     });
-    await api.reorderMemberships("group/one", { memberIds: ["reviewer", "builder"] });
+    await api.reorderAgents("group/one", {
+      agentIds: ["reviewer", "builder"],
+      expectedAgentRevision: 7,
+    });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -78,45 +109,49 @@ describe("portal operations API", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "/api/groups/group%2Fone/membership-order",
+      "/api/groups/group%2Fone/agent-order",
       expect.objectContaining({
         method: "PUT",
-        body: JSON.stringify({ memberIds: ["reviewer", "builder"] }),
+        body: JSON.stringify({
+          agentIds: ["reviewer", "builder"],
+          expectedAgentRevision: 7,
+        }),
       }),
     );
   });
 
-  it("updates reusable profile role and Markdown instruction defaults", async () => {
+  it("updates direct agent settings", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        id: "profile/one",
-        name: "Reviewer",
-        agentType: "copilot",
-        kind: "copilot",
-        command: "copilot",
-        args: [],
-        environment: {},
-        createdAt: "2026-08-10T08:00:00.000Z",
-        updatedAt: "2026-08-10T08:01:00.000Z",
+        id: "agent-one",
+        groupId: "group/one",
+        memberId: "member-one",
+        agentProfileId: "agent-one",
+        alias: "Reviewer",
+        roleId: "reviewer",
+        state: "active",
+        joinedAt: "2026-08-10T08:00:00.000Z",
       }),
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.updateAgentProfile("profile/one", {
+    await api.updateAgent("group/one", "agent/one", {
       name: " Reviewer ",
-      defaultRoleId: "reviewer",
-      instructions: [".nanasa/instructions/profiles/reviewer.md"],
+      integrationId: "copilot",
+      roleId: "reviewer",
+      instructions: [".nanasa/instructions/agents/reviewer.md"],
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/agent-profiles/profile%2Fone",
+      "/api/groups/group%2Fone/agents/agent%2Fone",
       expect.objectContaining({
         method: "PATCH",
         body: JSON.stringify({
           name: "Reviewer",
-          defaultRoleId: "reviewer",
-          instructions: [".nanasa/instructions/profiles/reviewer.md"],
+          integrationId: "copilot",
+          roleId: "reviewer",
+          instructions: [".nanasa/instructions/agents/reviewer.md"],
         }),
       }),
     );
@@ -166,7 +201,7 @@ describe("portal operations API", () => {
     );
   });
 
-  it("sends encoded group and membership CRUD commands", async () => {
+  it("sends encoded group and direct agent CRUD commands", async () => {
     const responses = [
       {
         id: "group/one",
@@ -176,23 +211,19 @@ describe("portal operations API", () => {
         updatedAt: "2026-08-10T08:01:00.000Z",
       },
       {
-        id: "membership-one",
+        id: "agent-one",
         groupId: "group/one",
         memberId: "member/one",
-        agentProfileId: "profile-one",
-        alias: "Renamed member",
+        agentProfileId: "agent-one",
+        alias: "New agent",
         state: "active",
         joinedAt: "2026-08-10T08:00:00.000Z",
       },
       {
-        id: "membership-one",
         groupId: "group/one",
-        memberId: "member/one",
-        agentProfileId: "profile-one",
-        alias: "Renamed member",
-        state: "removed",
-        joinedAt: "2026-08-10T08:00:00.000Z",
-        removedAt: "2026-08-10T08:02:00.000Z",
+        agentId: "agent-one",
+        deletedRuns: 1,
+        revokedDeliveries: 2,
       },
       {
         groupId: "group/one",
@@ -209,8 +240,8 @@ describe("portal operations API", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await api.updateGroup("group/one", { name: "  Renamed group  " });
-    await api.updateMembership("group/one", "member/one", { alias: " Renamed member " });
-    await api.removeMembership("group/one", "member/one");
+    await api.createAgent("group/one", { name: " New agent ", integrationId: "copilot" });
+    await api.removeAgent("group/one", "agent/one");
     await api.deleteGroup("group/one");
 
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -220,12 +251,15 @@ describe("portal operations API", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "/api/groups/group%2Fone/memberships/member%2Fone",
-      expect.objectContaining({ method: "PATCH", body: '{"alias":"Renamed member"}' }),
+      "/api/groups/group%2Fone/agents",
+      expect.objectContaining({
+        method: "POST",
+        body: '{"name":"New agent","integrationId":"copilot"}',
+      }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
-      "/api/groups/group%2Fone/memberships/member%2Fone",
+      "/api/groups/group%2Fone/agents/agent%2Fone",
       expect.objectContaining({ method: "DELETE", body: "{}" }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -242,16 +276,16 @@ describe("portal operations API", () => {
     }
   });
 
-  it("loads and validates configured agent types", async () => {
+  it("loads and validates configured integrations and group agents", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
-          version: 1,
-          agentTypes: {
+          instructions: [],
+          integrations: {
             "custom-agent": {
-              key: "custom-agent",
+              id: "custom-agent",
               name: "Custom agent",
               kind: "opencode",
               adapter: "terminal",
@@ -261,13 +295,64 @@ describe("portal operations API", () => {
               capabilities: ["queue"],
             },
           },
+          roles: {},
+          groups: {
+            team: {
+              name: "Team",
+              instructions: [],
+              agents: {
+                reviewer: {
+                  memberId: "custom-agent.reviewer",
+                  name: "Reviewer",
+                  integrationId: "custom-agent",
+                  instructions: [],
+                },
+              },
+            },
+          },
+          messages: { retentionPerGroup: 1000 },
         }),
       }),
     );
 
     await expect(api.loadConfig()).resolves.toMatchObject({
-      agentTypes: { "custom-agent": { name: "Custom agent" } },
+      integrations: { "custom-agent": { name: "Custom agent" } },
+      groups: { team: { agents: { reviewer: { integrationId: "custom-agent" } } } },
     });
+  });
+
+  it("starts and stops runs through agent routes", async () => {
+    const run = {
+      id: "run-one",
+      groupId: "group/one",
+      memberId: "member-one",
+      agentProfileId: "agent-one",
+      generation: 1,
+      status: "running",
+      desiredState: "running",
+      recoveryPhase: "idle",
+      recoveryAttempts: 0,
+      startedAt: "2026-08-10T08:00:00.000Z",
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => run,
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.startRun("group/one", "agent/one");
+    await api.stopRun("group/one", "agent/one");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/groups/group%2Fone/agents/agent%2Fone/run",
+      expect.objectContaining({ method: "POST", body: "{}" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/groups/group%2Fone/agents/agent%2Fone/run",
+      expect.objectContaining({ method: "DELETE", body: "{}" }),
+    );
   });
 
   it("posts Start all with the supplied idempotency key and validates outcomes", async () => {

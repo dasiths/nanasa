@@ -1,17 +1,13 @@
 import type {
-  AgentProfile,
   AgentRun,
-  ConfiguredAgentProfile,
-  ConfiguredMembership,
+  ConfiguredAgent,
   Group,
-  GroupMembership,
   NanasaConfig,
   PortalSnapshot,
-  ReorderGroupMembershipsCommand,
+  ReorderGroupAgentsCommand,
   RoleDefinition,
-  UpdateAgentProfileCommand,
+  UpdateGroupAgentCommand,
   UpdateGroupCommand,
-  UpdateGroupMembershipCommand,
   UpdateRolePresentationCommand,
 } from "@nanasa/contracts";
 import {
@@ -35,6 +31,7 @@ import {
   Plus,
   RefreshCw,
   Settings2,
+  SquareTerminal,
   Trash2,
   UserPlus,
   X,
@@ -56,14 +53,8 @@ import { RoleIdentity } from "./role-identity.js";
 
 export interface AddAgentInput {
   groupId: string;
-  alias: string;
-  profileId?: string;
-  newProfile?: {
-    name: string;
-    agentType: string;
-    defaultRoleId?: string;
-    instructions: string[];
-  };
+  name: string;
+  integrationId: string;
   roleId?: string;
   instructions: string[];
 }
@@ -80,23 +71,19 @@ interface GroupTreeProps {
   onUpdateGroup?(groupId: string, command: UpdateGroupCommand): Promise<void>;
   onDeleteGroup(groupId: string): Promise<void>;
   onAddAgent(input: AddAgentInput): Promise<void>;
-  onRenameAgent(groupId: string, memberId: string, alias: string): Promise<void>;
-  onUpdateAgent?(
-    groupId: string,
-    memberId: string,
-    command: UpdateGroupMembershipCommand,
-  ): Promise<void>;
-  onUpdateAgentProfile?(profileId: string, command: UpdateAgentProfileCommand): Promise<void>;
+  onRenameAgent(groupId: string, agentId: string, name: string): Promise<void>;
+  onUpdateAgent?(groupId: string, agentId: string, command: UpdateGroupAgentCommand): Promise<void>;
   onUpdateRolePresentation?(roleId: string, command: UpdateRolePresentationCommand): Promise<void>;
-  onReorderMembers?(groupId: string, command: ReorderGroupMembershipsCommand): Promise<void>;
-  onRemoveAgent(groupId: string, memberId: string): Promise<void>;
-  onStartRun(groupId: string, memberId: string): Promise<void>;
-  onStopRun(groupId: string, memberId: string): Promise<void>;
+  onReorderAgents?(groupId: string, command: ReorderGroupAgentsCommand): Promise<void>;
+  onRemoveAgent(groupId: string, agentId: string): Promise<void>;
+  onStartRun(groupId: string, agentId: string): Promise<void>;
+  onStopRun(groupId: string, agentId: string): Promise<void>;
+  onOpenConsole(): void;
 }
 
 type EditTarget =
   | { kind: "group"; groupId: string; name: string }
-  | { kind: "member"; groupId: string; memberId: string; name: string };
+  | { kind: "agent"; groupId: string; agentId: string; name: string };
 
 type DestructiveTarget =
   | {
@@ -107,7 +94,7 @@ type DestructiveTarget =
       runCount: number;
       messageCount: number;
     }
-  | { kind: "member"; groupId: string; memberId: string; name: string };
+  | { kind: "agent"; groupId: string; agentId: string; name: string };
 
 interface ActionMenuProps {
   label: string;
@@ -364,8 +351,8 @@ function ConfirmRemovalDialog({
         </h2>
         <p>
           {target.kind === "group"
-            ? `${target.runCount} runs will stop before ${target.memberCount} memberships and ${target.messageCount} messages are deleted with this group. Reusable agent profiles and event history remain.`
-            : "This agent run will stop, queued deliveries will be revoked, and the membership will be removed. Its reusable agent profile remains available."}
+            ? `${target.runCount} runs will stop before ${target.memberCount} agents and ${target.messageCount} messages are deleted with this group. Event history remains.`
+            : "This agent run will stop, queued deliveries will be revoked, and the agent will be removed from the group."}
         </p>
         <div className="confirmation-actions">
           <button type="button" className="compact-button" disabled={busy} onClick={onCancel}>
@@ -710,51 +697,37 @@ function RoleSettingsDialog({
 }
 
 function AgentSettingsDialog({
-  member,
-  profile,
-  configuredMember,
-  configuredProfile,
+  groupId,
+  agentId,
+  agent,
   config,
   onClose,
-  onUpdateMember,
-  onUpdateProfile,
+  onUpdate,
 }: {
-  member: GroupMembership;
-  profile: AgentProfile;
-  configuredMember: ConfiguredMembership | undefined;
-  configuredProfile: ConfiguredAgentProfile | undefined;
+  groupId: string;
+  agentId: string;
+  agent: ConfiguredAgent;
   config: NanasaConfig;
   onClose(): void;
-  onUpdateMember(command: UpdateGroupMembershipCommand): Promise<void>;
-  onUpdateProfile(command: UpdateAgentProfileCommand): Promise<void>;
+  onUpdate(command: UpdateGroupAgentCommand): Promise<void>;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const [alias, setAlias] = useState(member.alias);
-  const [roleId, setRoleId] = useState(configuredMember?.roleId ?? "");
-  const [memberInstructions, setMemberInstructions] = useState(
-    instructionPathText(configuredMember?.instructions ?? []),
-  );
-  const [profileName, setProfileName] = useState(configuredProfile?.name ?? profile.name);
-  const [defaultRoleId, setDefaultRoleId] = useState(configuredProfile?.defaultRoleId ?? "");
-  const [profileInstructions, setProfileInstructions] = useState(
-    instructionPathText(configuredProfile?.instructions ?? []),
-  );
-  const [memberBusy, setMemberBusy] = useState(false);
-  const [profileBusy, setProfileBusy] = useState(false);
-  const [memberError, setMemberError] = useState<string>();
-  const [profileError, setProfileError] = useState<string>();
+  const [name, setName] = useState(agent.name);
+  const [integrationId, setIntegrationId] = useState(agent.integrationId);
+  const [roleId, setRoleId] = useState(agent.roleId ?? "");
+  const [instructions, setInstructions] = useState(instructionPathText(agent.instructions));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
   const inheritedInstructions = [
     ...config.instructions.map((path) => ({ source: "Global", path })),
-    ...(config.groups[member.groupId]?.instructions ?? []).map((path) => ({
+    ...(config.groups[groupId]?.instructions ?? []).map((path) => ({
       source: "Group",
       path,
     })),
-    ...(member.roleId === undefined ? [] : (config.roles[member.roleId]?.instructions ?? [])).map(
-      (path) => ({
-        source: `Role · ${config.roles[member.roleId as string]?.name ?? member.roleId}`,
-        path,
-      }),
-    ),
+    ...(roleId === "" ? [] : (config.roles[roleId]?.instructions ?? [])).map((path) => ({
+      source: `Role · ${config.roles[roleId]?.name ?? roleId}`,
+      path,
+    })),
   ];
 
   useEffect(() => {
@@ -767,37 +740,21 @@ function AgentSettingsDialog({
     };
   }, []);
 
-  const saveMember = async (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
-    setMemberBusy(true);
-    setMemberError(undefined);
+    setBusy(true);
+    setError(undefined);
     try {
-      await onUpdateMember({
-        alias,
+      await onUpdate({
+        name,
+        integrationId,
         roleId: roleId === "" ? null : roleId,
-        instructions: parseInstructionPaths(memberInstructions),
+        instructions: parseInstructionPaths(instructions),
       });
     } catch (cause) {
-      setMemberError(cause instanceof Error ? cause.message : "Unable to update member settings");
+      setError(cause instanceof Error ? cause.message : "Unable to update agent settings");
     } finally {
-      setMemberBusy(false);
-    }
-  };
-
-  const saveProfile = async (event: FormEvent) => {
-    event.preventDefault();
-    setProfileBusy(true);
-    setProfileError(undefined);
-    try {
-      await onUpdateProfile({
-        name: profileName,
-        defaultRoleId: defaultRoleId === "" ? null : defaultRoleId,
-        instructions: parseInstructionPaths(profileInstructions),
-      });
-    } catch (cause) {
-      setProfileError(cause instanceof Error ? cause.message : "Unable to update profile defaults");
-    } finally {
-      setProfileBusy(false);
+      setBusy(false);
     }
   };
 
@@ -811,11 +768,11 @@ function AgentSettingsDialog({
         onClose();
       }}
     >
-      <div className="confirmation-dialog-body">
+      <form className="confirmation-dialog-body" onSubmit={(event) => void submit(event)}>
         <header className="agent-settings-heading">
           <div>
             <span className="eyebrow">Agent settings</span>
-            <h2 id="agent-settings-title">{member.alias}</h2>
+            <h2 id="agent-settings-title">{agent.name}</h2>
           </div>
           <button
             type="button"
@@ -837,246 +794,191 @@ function AgentSettingsDialog({
             ))}
           </ul>
         </section>
-        <form className="agent-settings-section" onSubmit={(event) => void saveMember(event)}>
-          <h3>Membership</h3>
+        <section className="agent-settings-section">
+          <h3>Agent</h3>
           <div className="form-row form-row-split">
             <label>
-              Member alias
-              <input value={alias} onChange={(event) => setAlias(event.target.value)} required />
+              Name
+              <input value={name} onChange={(event) => setName(event.target.value)} required />
             </label>
             <label>
-              Role override
-              <select value={roleId} onChange={(event) => setRoleId(event.target.value)}>
-                <option value="">
-                  Profile default
-                  {configuredProfile?.defaultRoleId === undefined
-                    ? " or unassigned"
-                    : ` (${config.roles[configuredProfile.defaultRoleId]?.name ?? configuredProfile.defaultRoleId})`}
-                </option>
-                {roleOptions(config)}
-              </select>
-            </label>
-          </div>
-          <label>
-            Assignment instruction files
-            <textarea
-              value={memberInstructions}
-              onChange={(event) => setMemberInstructions(event.target.value)}
-              rows={3}
-            />
-          </label>
-          {memberInstructions === "" && (
-            <small className="instruction-empty-state">
-              No assignment-specific instruction files configured
-            </small>
-          )}
-          {memberError !== undefined && <p className="form-error">{memberError}</p>}
-          <button type="submit" className="compact-button" disabled={memberBusy}>
-            <Check aria-hidden="true" size={15} />
-            {memberBusy ? "Saving..." : "Save membership"}
-          </button>
-        </form>
-        <form className="agent-settings-section" onSubmit={(event) => void saveProfile(event)}>
-          <h3>Reusable profile</h3>
-          <div className="form-row form-row-split">
-            <label>
-              Profile name
-              <input
-                value={profileName}
-                onChange={(event) => setProfileName(event.target.value)}
-                required
-              />
-            </label>
-            <label>
-              Default role
+              Integration
               <select
-                value={defaultRoleId}
-                onChange={(event) => setDefaultRoleId(event.target.value)}
+                value={integrationId}
+                onChange={(event) => setIntegrationId(event.target.value)}
               >
-                <option value="">Unassigned</option>
-                {roleOptions(config)}
-              </select>
-            </label>
-          </div>
-          <label>
-            Profile instruction files
-            <textarea
-              value={profileInstructions}
-              onChange={(event) => setProfileInstructions(event.target.value)}
-              rows={3}
-            />
-          </label>
-          {profileInstructions === "" && (
-            <small className="instruction-empty-state">
-              No profile-specific instruction files configured
-            </small>
-          )}
-          {profileError !== undefined && <p className="form-error">{profileError}</p>}
-          <button type="submit" className="compact-button" disabled={profileBusy}>
-            <Check aria-hidden="true" size={15} />
-            {profileBusy ? "Saving..." : "Save profile"}
-          </button>
-        </form>
-      </div>
-    </dialog>
-  );
-}
-
-function AddAgentForm({
-  group,
-  profiles,
-  config,
-  onAdd,
-}: {
-  group: Group;
-  profiles: AgentProfile[];
-  config: NanasaConfig;
-  onAdd(input: AddAgentInput): Promise<void>;
-}) {
-  const [creatingProfile, setCreatingProfile] = useState(profiles.length === 0);
-  const [profileId, setProfileId] = useState(profiles[0]?.id ?? "");
-  const [alias, setAlias] = useState("");
-  const [profileName, setProfileName] = useState("");
-  const agentTypes = Object.values(config.agentTypes);
-  const [agentType, setAgentType] = useState(agentTypes[0]?.key ?? "");
-  const [roleId, setRoleId] = useState("");
-  const [defaultRoleId, setDefaultRoleId] = useState("");
-  const [profileInstructions, setProfileInstructions] = useState("");
-  const [memberInstructions, setMemberInstructions] = useState("");
-  const [error, setError] = useState<string>();
-  const selectedProfileId = profileId || profiles[0]?.id || "";
-  const selectedProfileDefaultRole = config.agentProfiles[selectedProfileId]?.defaultRoleId;
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    try {
-      await onAdd({
-        groupId: group.id,
-        alias,
-        instructions: parseInstructionPaths(memberInstructions),
-        ...(roleId === "" ? {} : { roleId }),
-        ...(creatingProfile
-          ? {
-              newProfile: {
-                name: profileName,
-                agentType,
-                instructions: parseInstructionPaths(profileInstructions),
-                ...(defaultRoleId === "" ? {} : { defaultRoleId }),
-              },
-            }
-          : { profileId: selectedProfileId }),
-      });
-      setAlias("");
-      setProfileName("");
-      setError(undefined);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to add agent");
-    }
-  };
-
-  return (
-    <form className="agent-form" onSubmit={(event) => void submit(event)}>
-      <div className="form-row form-row-split">
-        <label>
-          Member alias
-          <input value={alias} onChange={(event) => setAlias(event.target.value)} required />
-        </label>
-        <label>
-          Profile source
-          <select
-            value={creatingProfile ? "new" : "existing"}
-            onChange={(event) => setCreatingProfile(event.target.value === "new")}
-          >
-            {profiles.length > 0 && <option value="existing">Existing profile</option>}
-            <option value="new">New profile</option>
-          </select>
-        </label>
-      </div>
-      {creatingProfile ? (
-        <>
-          <div className="form-row form-row-split">
-            <label>
-              Profile name
-              <input
-                value={profileName}
-                onChange={(event) => setProfileName(event.target.value)}
-                required
-              />
-            </label>
-            <label>
-              Agent type
-              <select value={agentType} onChange={(event) => setAgentType(event.target.value)}>
-                {agentTypes.map((configuredType) => (
-                  <option key={configuredType.key} value={configuredType.key}>
-                    {configuredType.name} ({configuredType.key})
+                {Object.entries(config.integrations).map(([id, integration]) => (
+                  <option key={id} value={id}>
+                    {integration.name} ({id})
                   </option>
                 ))}
               </select>
             </label>
           </div>
           <label>
-            Profile default role
-            <select
-              value={defaultRoleId}
-              onChange={(event) => setDefaultRoleId(event.target.value)}
-            >
+            Role
+            <select value={roleId} onChange={(event) => setRoleId(event.target.value)}>
               <option value="">Unassigned</option>
               {roleOptions(config)}
             </select>
           </label>
           <label>
-            Profile instruction files
+            Agent instruction files
             <textarea
-              value={profileInstructions}
-              onChange={(event) => setProfileInstructions(event.target.value)}
+              value={instructions}
+              onChange={(event) => setInstructions(event.target.value)}
               rows={3}
-              placeholder=".nanasa/instructions/profiles/copilot.md"
             />
           </label>
-        </>
-      ) : (
+          {instructions === "" && (
+            <small className="instruction-empty-state">
+              No agent-specific instruction files configured
+            </small>
+          )}
+          <dl className="agent-settings-identifiers">
+            <div>
+              <dt>Member ID</dt>
+              <dd>
+                <code>{agent.memberId}</code>
+              </dd>
+            </div>
+            <div>
+              <dt>
+                Agent ID <span>Internal</span>
+              </dt>
+              <dd>
+                <code>{agentId}</code>
+              </dd>
+            </div>
+          </dl>
+          {error !== undefined && <p className="form-error">{error}</p>}
+          <button type="submit" className="compact-button" disabled={busy}>
+            <Check aria-hidden="true" size={15} />
+            {busy ? "Saving..." : "Save agent"}
+          </button>
+        </section>
+      </form>
+    </dialog>
+  );
+}
+
+function AddAgentDialog({
+  group,
+  config,
+  onAdd,
+  onClose,
+}: {
+  group: Group;
+  config: NanasaConfig;
+  onAdd(input: AddAgentInput): Promise<void>;
+  onClose(): void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const integrations = Object.entries(config.integrations);
+  const [name, setName] = useState("");
+  const [integrationId, setIntegrationId] = useState(integrations[0]?.[0] ?? "");
+  const [roleId, setRoleId] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    return () => {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+    };
+  }, []);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(undefined);
+    try {
+      await onAdd({
+        groupId: group.id,
+        name,
+        integrationId,
+        instructions: parseInstructionPaths(instructions),
+        ...(roleId === "" ? {} : { roleId }),
+      });
+      onClose();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to add agent");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="confirmation-dialog agent-settings-dialog"
+      aria-labelledby="add-agent-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
+      <form className="confirmation-dialog-body" onSubmit={(event) => void submit(event)}>
+        <header className="agent-settings-heading">
+          <div>
+            <span className="eyebrow">{group.name}</span>
+            <h2 id="add-agent-title">Add agent</h2>
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Close Add agent"
+            onClick={onClose}
+          >
+            <X aria-hidden="true" size={16} />
+          </button>
+        </header>
+        <div className="form-row form-row-split">
+          <label>
+            Name
+            <input value={name} onChange={(event) => setName(event.target.value)} required />
+          </label>
+          <label>
+            Integration
+            <select
+              value={integrationId}
+              onChange={(event) => setIntegrationId(event.target.value)}
+            >
+              {integrations.map(([id, integration]) => (
+                <option key={id} value={id}>
+                  {integration.name} ({id})
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
         <label>
-          Agent profile
-          <select value={selectedProfileId} onChange={(event) => setProfileId(event.target.value)}>
-            {profiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.name} ({config.agentTypes[profile.agentType]?.name ?? profile.agentType};{" "}
-                {profile.agentType})
-              </option>
-            ))}
+          Role
+          <select value={roleId} onChange={(event) => setRoleId(event.target.value)}>
+            <option value="">Unassigned</option>
+            {roleOptions(config)}
           </select>
         </label>
-      )}
-      <label>
-        Role override
-        <select value={roleId} onChange={(event) => setRoleId(event.target.value)}>
-          <option value="">
-            {creatingProfile
-              ? defaultRoleId === ""
-                ? "Profile default: unassigned"
-                : `Profile default: ${config.roles[defaultRoleId]?.name ?? defaultRoleId}`
-              : selectedProfileDefaultRole === undefined
-                ? "Profile default: unassigned"
-                : `Profile default: ${config.roles[selectedProfileDefaultRole]?.name ?? selectedProfileDefaultRole}`}
-          </option>
-          {roleOptions(config)}
-        </select>
-      </label>
-      <label>
-        Assignment instruction files
-        <textarea
-          value={memberInstructions}
-          onChange={(event) => setMemberInstructions(event.target.value)}
-          rows={3}
-          placeholder=".nanasa/instructions/memberships/reviewer.md"
-        />
-      </label>
-      <button type="submit" className="compact-button">
-        <UserPlus aria-hidden="true" size={15} />
-        Add member
-      </button>
-      {error !== undefined && <p className="form-error">{error}</p>}
-    </form>
+        <label>
+          Agent instruction files
+          <textarea
+            value={instructions}
+            onChange={(event) => setInstructions(event.target.value)}
+            rows={3}
+            placeholder=".nanasa/instructions/agents/reviewer.md"
+          />
+        </label>
+        <button type="submit" className="compact-button" disabled={busy}>
+          <UserPlus aria-hidden="true" size={15} />
+          {busy ? "Adding..." : "Add agent"}
+        </button>
+        {error !== undefined && <p className="form-error">{error}</p>}
+      </form>
+    </dialog>
   );
 }
 
@@ -1094,12 +996,12 @@ export function GroupTree({
   onAddAgent,
   onRenameAgent,
   onUpdateAgent,
-  onUpdateAgentProfile,
   onUpdateRolePresentation,
-  onReorderMembers,
+  onReorderAgents,
   onRemoveAgent,
   onStartRun,
   onStopRun,
+  onOpenConsole,
 }: GroupTreeProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
     () => new Set(selectedGroupId === undefined ? [] : [selectedGroupId]),
@@ -1111,7 +1013,7 @@ export function GroupTree({
   const [editTarget, setEditTarget] = useState<EditTarget>();
   const [settingsTarget, setSettingsTarget] = useState<{
     groupId: string;
-    memberId: string;
+    agentId: string;
   }>();
   const [destructiveTarget, setDestructiveTarget] = useState<DestructiveTarget>();
   const [statusPopover, setStatusPopover] = useState<{
@@ -1122,26 +1024,10 @@ export function GroupTree({
   const failedMemberIds = new Set(
     snapshot.messageGroups?.flatMap((state) => state.failedRecipientMemberIds) ?? [],
   );
-  const settingsMember =
+  const settingsAgent =
     settingsTarget === undefined
       ? undefined
-      : snapshot.memberships.find(
-          (membership) =>
-            membership.groupId === settingsTarget.groupId &&
-            membership.memberId === settingsTarget.memberId,
-        );
-  const settingsProfile =
-    settingsMember === undefined
-      ? undefined
-      : snapshot.agentProfiles.find((profile) => profile.id === settingsMember.agentProfileId);
-  const configuredSettingsMember =
-    settingsTarget === undefined
-      ? undefined
-      : Object.values(config.groups[settingsTarget.groupId]?.memberships ?? {}).find(
-          (membership) => membership.memberId === settingsTarget.memberId,
-        );
-  const configuredSettingsProfile =
-    settingsProfile === undefined ? undefined : config.agentProfiles[settingsProfile.id];
+      : config.groups[settingsTarget.groupId]?.agents[settingsTarget.agentId];
 
   const toggleGroup = (groupId: string) => {
     setExpandedGroups((current) => {
@@ -1233,9 +1119,21 @@ export function GroupTree({
           </div>
         )}
         {snapshot.groups.map((group) => {
-          const members = snapshot.memberships.filter(
-            (member) => member.groupId === group.id && member.state === "active",
-          );
+          const agents = Object.entries(config.groups[group.id]?.agents ?? {})
+            .map(([agentId, agent], index) => ({ agentId, agent, index }))
+            .sort(
+              (left, right) =>
+                (left.agent.order ?? left.index) - (right.agent.order ?? right.index),
+            )
+            .flatMap(({ agentId, agent }) => {
+              const member = snapshot.memberships.find(
+                (candidate) =>
+                  candidate.groupId === group.id &&
+                  candidate.state === "active" &&
+                  (candidate.agentProfileId === agentId || candidate.memberId === agent.memberId),
+              );
+              return member === undefined ? [] : [{ agentId, agent, member }];
+            });
           const expanded = expandedGroups.has(group.id);
           const unread = unreadCounts.get(group.id) ?? 0;
           return (
@@ -1275,7 +1173,7 @@ export function GroupTree({
                     }}
                   >
                     <span>{group.name}</span>
-                    <span className="tree-count">{members.length}</span>
+                    <span className="tree-count">{agents.length}</span>
                     {unread > 0 && (
                       <span className="unread-badge" aria-label={`${unread} unread`}>
                         {unread}
@@ -1294,7 +1192,10 @@ export function GroupTree({
                       role="menuitem"
                       className="action-menu-item"
                       aria-label={`Add agent to ${group.name}`}
-                      onClick={() => setShowAddAgent(true)}
+                      onClick={() => {
+                        onSelectGroup(group.id);
+                        setShowAddAgent(true);
+                      }}
                     >
                       <UserPlus aria-hidden="true" size={15} />
                       <span>Add agent</span>
@@ -1332,9 +1233,7 @@ export function GroupTree({
                           kind: "group",
                           groupId: group.id,
                           name: group.name,
-                          memberCount: snapshot.memberships.filter(
-                            (member) => member.groupId === group.id,
-                          ).length,
+                          memberCount: agents.length,
                           runCount: snapshot.runs.filter((run) => run.groupId === group.id).length,
                           messageCount:
                             snapshot.messageGroups?.find((state) => state.groupId === group.id)
@@ -1350,25 +1249,18 @@ export function GroupTree({
               </div>
               {expanded && (
                 <div className="tree-members">
-                  {members.length === 0 && <p className="tree-empty">No members</p>}
-                  {members.map((member) => {
-                    const memberIndex = members.findIndex(
-                      (candidate) => candidate.memberId === member.memberId,
-                    );
+                  {agents.length === 0 && <p className="tree-empty">No agents</p>}
+                  {agents.map(({ agentId, agent, member }, agentIndex) => {
                     const {
                       run,
                       status: agentStatus,
                       label: semanticLabel,
                     } = memberStatusView(snapshot.agentStatuses, snapshot.runs, member);
                     const action = runAction(run);
-                    const actionKey = `${group.id}:${member.memberId}`;
-                    const profile = snapshot.agentProfiles.find(
-                      (candidate) => candidate.id === member.agentProfileId,
-                    );
-                    const configuredType =
-                      profile === undefined ? undefined : config.agentTypes[profile.agentType];
+                    const actionKey = `${group.id}:${agentId}`;
+                    const integration = config.integrations[agent.integrationId];
                     const role =
-                      member.roleId === undefined ? undefined : config.roles?.[member.roleId];
+                      agent.roleId === undefined ? undefined : config.roles[agent.roleId];
                     const recoveryDetail = run?.recoveryReason;
                     const semanticDetail = [
                       agentStatus?.phase,
@@ -1389,13 +1281,13 @@ export function GroupTree({
                     const popoverId = `member-status-${member.id}`;
                     const popoverVisible = statusPopover?.membershipId === member.id;
                     return (
-                      <div className="member-row" key={member.id}>
+                      <div className="member-row" key={agentId}>
                         <span className={`status-dot status-${semanticLabel}`} aria-hidden="true" />
-                        {editTarget?.kind === "member" &&
+                        {editTarget?.kind === "agent" &&
                         editTarget.groupId === group.id &&
-                        editTarget.memberId === member.memberId ? (
+                        editTarget.agentId === agentId ? (
                           <InlineRename
-                            label={`agent alias for ${member.alias}`}
+                            label={`agent name for ${agent.name}`}
                             initialValue={editTarget.name}
                             onCancel={() => setEditTarget(undefined)}
                             onRestoreFocus={() =>
@@ -1403,14 +1295,14 @@ export function GroupTree({
                                 .getElementById(`member-actions-${group.id}-${member.memberId}`)
                                 ?.focus()
                             }
-                            onSave={(alias) => onRenameAgent(group.id, member.memberId, alias)}
+                            onSave={(name) => onRenameAgent(group.id, agentId, name)}
                           />
                         ) : (
                           <button
                             id={`member-status-trigger-${member.id}`}
                             type="button"
                             className="member-select"
-                            aria-label={`View details for ${member.alias}`}
+                            aria-label={`View details for ${agent.name}`}
                             aria-haspopup="dialog"
                             aria-expanded={popoverVisible}
                             aria-controls={popoverVisible ? popoverId : undefined}
@@ -1419,7 +1311,7 @@ export function GroupTree({
                               toggleStatusPopover(member.id, event.currentTarget);
                             }}
                           >
-                            <span>{member.alias}</span>
+                            <span>{agent.name}</span>
                             <RoleIdentity role={role} />
                             <small title={statusTitle || undefined}>
                               {semanticLabel}
@@ -1434,7 +1326,7 @@ export function GroupTree({
                             <div
                               id={popoverId}
                               role="dialog"
-                              aria-label={`Agent details for ${member.alias}`}
+                              aria-label={`Agent details for ${agent.name}`}
                               tabIndex={-1}
                               className="member-status-popover"
                               style={{ left: statusPopover.left, top: statusPopover.top }}
@@ -1444,12 +1336,12 @@ export function GroupTree({
                                   className={`status-dot status-${semanticLabel}`}
                                   aria-hidden="true"
                                 />
-                                <strong>{member.alias}</strong>
+                                <strong>{agent.name}</strong>
                                 <span>{semanticLabel.replaceAll("_", " ")}</span>
                                 <button
                                   type="button"
                                   className="icon-button status-popover-close"
-                                  aria-label={`Close details for ${member.alias}`}
+                                  aria-label={`Close details for ${agent.name}`}
                                   onClick={() => {
                                     setStatusPopover(undefined);
                                     requestAnimationFrame(() =>
@@ -1468,16 +1360,20 @@ export function GroupTree({
                                   <dd>{member.memberId}</dd>
                                 </div>
                                 <div>
-                                  <dt>Agent type</dt>
+                                  <dt>Integration</dt>
                                   <dd>
-                                    {configuredType === undefined
-                                      ? (profile?.agentType ?? "Unknown")
-                                      : `${configuredType.name} (${configuredType.key})`}
+                                    {integration === undefined
+                                      ? agent.integrationId
+                                      : `${integration.name} (${agent.integrationId})`}
                                   </dd>
                                 </div>
                                 <div>
+                                  <dt>Kind</dt>
+                                  <dd>{integration?.kind ?? "Unknown"}</dd>
+                                </div>
+                                <div>
                                   <dt>Role</dt>
-                                  <dd>{role?.name ?? member.roleId ?? "Unassigned"}</dd>
+                                  <dd>{role?.name ?? agent.roleId ?? "Unassigned"}</dd>
                                 </div>
                                 <div>
                                   <dt>Semantic status</dt>
@@ -1542,15 +1438,15 @@ export function GroupTree({
                             className="attention-icon"
                             aria-label={
                               agentStatus !== undefined && agentStatus.attention !== "none"
-                                ? `${member.alias} needs ${agentStatus.attention.replaceAll("_", " ")}`
+                                ? `${agent.name} needs ${agentStatus.attention.replaceAll("_", " ")}`
                                 : "Delivery needs attention"
                             }
                             size={15}
                           />
                         )}
-                        {editTarget?.kind !== "member" && (
+                        {editTarget?.kind !== "agent" && (
                           <ActionMenu
-                            label={`Actions for agent ${member.alias}`}
+                            label={`Actions for agent ${agent.name}`}
                             itemCount={action === "none" ? 6 : 7}
                             triggerId={`member-actions-${group.id}-${member.memberId}`}
                           >
@@ -1570,21 +1466,22 @@ export function GroupTree({
                               type="button"
                               role="menuitem"
                               className="action-menu-item"
-                              aria-label={`Move ${member.alias} up`}
+                              aria-label={`Move ${agent.name} up`}
                               disabled={
-                                memberIndex === 0 ||
-                                onReorderMembers === undefined ||
+                                agentIndex === 0 ||
+                                onReorderAgents === undefined ||
                                 busyAction === `${group.id}:reorder`
                               }
                               onClick={() => {
-                                const memberIds = members.map((candidate) => candidate.memberId);
-                                [memberIds[memberIndex - 1], memberIds[memberIndex]] = [
-                                  memberIds[memberIndex] as string,
-                                  memberIds[memberIndex - 1] as string,
+                                const agentIds = agents.map((candidate) => candidate.agentId);
+                                [agentIds[agentIndex - 1], agentIds[agentIndex]] = [
+                                  agentIds[agentIndex] as string,
+                                  agentIds[agentIndex - 1] as string,
                                 ];
-                                void onReorderMembers?.(group.id, { memberIds }).catch(
-                                  () => undefined,
-                                );
+                                void onReorderAgents?.(group.id, {
+                                  agentIds,
+                                  expectedAgentRevision: group.membershipRevision,
+                                }).catch(() => undefined);
                               }}
                             >
                               <ArrowUp aria-hidden="true" size={14} />
@@ -1594,21 +1491,22 @@ export function GroupTree({
                               type="button"
                               role="menuitem"
                               className="action-menu-item"
-                              aria-label={`Move ${member.alias} down`}
+                              aria-label={`Move ${agent.name} down`}
                               disabled={
-                                memberIndex === members.length - 1 ||
-                                onReorderMembers === undefined ||
+                                agentIndex === agents.length - 1 ||
+                                onReorderAgents === undefined ||
                                 busyAction === `${group.id}:reorder`
                               }
                               onClick={() => {
-                                const memberIds = members.map((candidate) => candidate.memberId);
-                                [memberIds[memberIndex], memberIds[memberIndex + 1]] = [
-                                  memberIds[memberIndex + 1] as string,
-                                  memberIds[memberIndex] as string,
+                                const agentIds = agents.map((candidate) => candidate.agentId);
+                                [agentIds[agentIndex], agentIds[agentIndex + 1]] = [
+                                  agentIds[agentIndex + 1] as string,
+                                  agentIds[agentIndex] as string,
                                 ];
-                                void onReorderMembers?.(group.id, { memberIds }).catch(
-                                  () => undefined,
-                                );
+                                void onReorderAgents?.(group.id, {
+                                  agentIds,
+                                  expectedAgentRevision: group.membershipRevision,
+                                }).catch(() => undefined);
                               }}
                             >
                               <ArrowDown aria-hidden="true" size={14} />
@@ -1619,13 +1517,13 @@ export function GroupTree({
                                 type="button"
                                 role="menuitem"
                                 className="action-menu-item"
-                                aria-label={`${action === "retry" ? "Retry" : action === "stop" ? "Stop" : "Start"} ${member.alias}`}
+                                aria-label={`${action === "retry" ? "Retry" : action === "stop" ? "Stop" : "Start"} ${agent.name}`}
                                 disabled={busyAction === actionKey}
                                 onClick={() => {
                                   const operation =
                                     action === "stop"
-                                      ? onStopRun(group.id, member.memberId)
-                                      : onStartRun(group.id, member.memberId);
+                                      ? onStopRun(group.id, agentId)
+                                      : onStartRun(group.id, agentId);
                                   void operation.catch(() => undefined);
                                 }}
                               >
@@ -1649,11 +1547,11 @@ export function GroupTree({
                               type="button"
                               role="menuitem"
                               className="action-menu-item"
-                              aria-label={`Edit agent settings ${member.alias}`}
+                              aria-label={`Edit agent settings ${agent.name}`}
                               onClick={() =>
                                 setSettingsTarget({
                                   groupId: group.id,
-                                  memberId: member.memberId,
+                                  agentId,
                                 })
                               }
                             >
@@ -1664,13 +1562,13 @@ export function GroupTree({
                               type="button"
                               role="menuitem"
                               className="action-menu-item"
-                              aria-label={`Rename agent ${member.alias}`}
+                              aria-label={`Rename agent ${agent.name}`}
                               onClick={() =>
                                 setEditTarget({
-                                  kind: "member",
+                                  kind: "agent",
                                   groupId: group.id,
-                                  memberId: member.memberId,
-                                  name: member.alias,
+                                  agentId,
+                                  name: agent.name,
                                 })
                               }
                             >
@@ -1681,13 +1579,13 @@ export function GroupTree({
                               type="button"
                               role="menuitem"
                               className="action-menu-item danger-action"
-                              aria-label={`Remove agent ${member.alias}`}
+                              aria-label={`Remove agent ${agent.name}`}
                               onClick={() =>
                                 setDestructiveTarget({
-                                  kind: "member",
+                                  kind: "agent",
                                   groupId: group.id,
-                                  memberId: member.memberId,
-                                  name: member.alias,
+                                  agentId,
+                                  name: agent.name,
                                 })
                               }
                             >
@@ -1705,26 +1603,12 @@ export function GroupTree({
           );
         })}
       </nav>
-      {selectedGroupId !== undefined && (
-        <div className="rail-footer">
-          <button
-            type="button"
-            className="compact-button"
-            onClick={() => setShowAddAgent((visible) => !visible)}
-          >
-            <UserPlus aria-hidden="true" size={15} />
-            Add agent
-          </button>
-          {showAddAgent && (
-            <AddAgentForm
-              group={snapshot.groups.find((group) => group.id === selectedGroupId)!}
-              profiles={snapshot.agentProfiles}
-              config={config}
-              onAdd={onAddAgent}
-            />
-          )}
-        </div>
-      )}
+      <div className="rail-footer">
+        <button type="button" className="compact-button" onClick={onOpenConsole}>
+          <SquareTerminal aria-hidden="true" size={15} />
+          Console
+        </button>
+      </div>
       {destructiveTarget !== undefined && (
         <ConfirmRemovalDialog
           target={destructiveTarget}
@@ -1732,13 +1616,13 @@ export function GroupTree({
             busyAction ===
             (destructiveTarget.kind === "group"
               ? `${destructiveTarget.groupId}:delete`
-              : `${destructiveTarget.groupId}:${destructiveTarget.memberId}:remove`)
+              : `${destructiveTarget.groupId}:${destructiveTarget.agentId}:remove`)
           }
           onCancel={() => setDestructiveTarget(undefined)}
           onConfirm={() =>
             destructiveTarget.kind === "group"
               ? onDeleteGroup(destructiveTarget.groupId)
-              : onRemoveAgent(destructiveTarget.groupId, destructiveTarget.memberId)
+              : onRemoveAgent(destructiveTarget.groupId, destructiveTarget.agentId)
           }
         />
       )}
@@ -1757,22 +1641,26 @@ export function GroupTree({
           onUpdate={onUpdateRolePresentation}
         />
       )}
+      {showAddAgent && selectedGroupId !== undefined && (
+        <AddAgentDialog
+          group={snapshot.groups.find((group) => group.id === selectedGroupId)!}
+          config={config}
+          onAdd={onAddAgent}
+          onClose={() => setShowAddAgent(false)}
+        />
+      )}
       {settingsTarget !== undefined &&
-        settingsMember !== undefined &&
-        settingsProfile !== undefined &&
-        onUpdateAgent !== undefined &&
-        onUpdateAgentProfile !== undefined && (
+        settingsAgent !== undefined &&
+        onUpdateAgent !== undefined && (
           <AgentSettingsDialog
-            member={settingsMember}
-            profile={settingsProfile}
-            configuredMember={configuredSettingsMember}
-            configuredProfile={configuredSettingsProfile}
+            groupId={settingsTarget.groupId}
+            agentId={settingsTarget.agentId}
+            agent={settingsAgent}
             config={config}
             onClose={() => setSettingsTarget(undefined)}
-            onUpdateMember={(command) =>
-              onUpdateAgent(settingsTarget.groupId, settingsTarget.memberId, command)
+            onUpdate={(command) =>
+              onUpdateAgent(settingsTarget.groupId, settingsTarget.agentId, command)
             }
-            onUpdateProfile={(command) => onUpdateAgentProfile(settingsProfile.id, command)}
           />
         )}
     </>

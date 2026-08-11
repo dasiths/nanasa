@@ -1,16 +1,16 @@
 import type {
-  ReorderGroupMembershipsCommand,
+  ReorderGroupAgentsCommand,
   StartGroupRunsResult,
   SubmitMessageCommand,
-  UpdateAgentProfileCommand,
+  UpdateGroupAgentCommand,
   UpdateGroupCommand,
-  UpdateGroupMembershipCommand,
   UpdateRolePresentationCommand,
 } from "@nanasa/contracts";
 import { Cable, CircleAlert, Laptop, Moon, Play, RefreshCw, Sun, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { api, type PortalClient } from "./api.js";
+import { AdHocConsoleDialog } from "./components/ad-hoc-console-dialog.js";
 import { type AddAgentInput, GroupTree } from "./components/group-tree.js";
 import { MessageWorkspace } from "./components/message-workspace.js";
 import { TerminalWorkspace } from "./components/terminal-workspace.js";
@@ -36,6 +36,7 @@ export function App({ client = api }: AppProps) {
   const [focusSelectedGroupAfterDelete, setFocusSelectedGroupAfterDelete] = useState(false);
   const [terminalConnectionRevision, setTerminalConnectionRevision] = useState(0);
   const [portalSubmissionSuspended, setPortalSubmissionSuspended] = useState(false);
+  const [consoleOpen, setConsoleOpen] = useState(false);
   const startAllInFlight = useRef(new Map<string, Promise<void>>());
   const previousEventStatus = useRef(eventStatus);
   const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -126,52 +127,33 @@ export function App({ client = api }: AppProps) {
   };
 
   const addAgent = async (input: AddAgentInput) => {
-    await runAction(`${input.groupId}:add-agent`, async () => {
-      let profileId = input.profileId;
-      if (input.newProfile !== undefined) {
-        const profile = await client.createAgentProfile({
-          name: input.newProfile.name,
-          agentType: input.newProfile.agentType,
-          instructions: input.newProfile.instructions,
-          ...(input.newProfile.defaultRoleId === undefined
-            ? {}
-            : { defaultRoleId: input.newProfile.defaultRoleId }),
-        });
-        profileId = profile.id;
-      }
-      if (profileId === undefined) {
-        throw new Error("Select or create an agent profile");
-      }
-      await client.addMembership(input.groupId, {
-        agentProfileId: profileId,
-        alias: input.alias,
+    await runAction(`${input.groupId}:add-agent`, () =>
+      client.createAgent(input.groupId, {
+        name: input.name,
+        integrationId: input.integrationId,
         instructions: input.instructions,
         ...(input.roleId === undefined ? {} : { roleId: input.roleId }),
-      });
-    });
+      }),
+    );
   };
 
-  const renameAgent = (groupId: string, memberId: string, alias: string) =>
-    runAction(`${groupId}:${memberId}:rename`, () =>
-      client.updateMembership(groupId, memberId, { alias }),
+  const renameAgent = (groupId: string, agentId: string, name: string) =>
+    runAction(`${groupId}:${agentId}:rename`, () => client.updateAgent(groupId, agentId, { name }));
+  const updateAgent = (groupId: string, agentId: string, command: UpdateGroupAgentCommand) =>
+    runAction(`${groupId}:${agentId}:settings`, () =>
+      client.updateAgent(groupId, agentId, command),
     );
-  const updateAgent = (groupId: string, memberId: string, command: UpdateGroupMembershipCommand) =>
-    runAction(`${groupId}:${memberId}:settings`, () =>
-      client.updateMembership(groupId, memberId, command),
-    );
-  const updateAgentProfile = (profileId: string, command: UpdateAgentProfileCommand) =>
-    runAction(`${profileId}:settings`, () => client.updateAgentProfile(profileId, command));
   const updateRolePresentation = (roleId: string, command: UpdateRolePresentationCommand) =>
     runAction(`role:${roleId}:presentation`, () => client.updateRolePresentation(roleId, command));
-  const reorderMembers = (groupId: string, command: ReorderGroupMembershipsCommand) =>
-    runAction(`${groupId}:reorder`, () => client.reorderMemberships(groupId, command));
-  const removeAgent = (groupId: string, memberId: string) =>
-    runAction(`${groupId}:${memberId}:remove`, () => client.removeMembership(groupId, memberId));
+  const reorderAgents = (groupId: string, command: ReorderGroupAgentsCommand) =>
+    runAction(`${groupId}:reorder`, () => client.reorderAgents(groupId, command));
+  const removeAgent = (groupId: string, agentId: string) =>
+    runAction(`${groupId}:${agentId}:remove`, () => client.removeAgent(groupId, agentId));
 
-  const startRun = (groupId: string, memberId: string) =>
-    runAction(`${groupId}:${memberId}`, () => client.startRun(groupId, memberId));
-  const stopRun = (groupId: string, memberId: string) =>
-    runAction(`${groupId}:${memberId}`, () => client.stopRun(groupId, memberId));
+  const startRun = (groupId: string, agentId: string) =>
+    runAction(`${groupId}:${agentId}`, () => client.startRun(groupId, agentId));
+  const stopRun = (groupId: string, agentId: string) =>
+    runAction(`${groupId}:${agentId}`, () => client.stopRun(groupId, agentId));
   const startAll = (groupId: string): Promise<void> => {
     const existing = startAllInFlight.current.get(groupId);
     if (existing !== undefined) return existing;
@@ -253,12 +235,12 @@ export function App({ client = api }: AppProps) {
           onAddAgent={addAgent}
           onRenameAgent={renameAgent}
           onUpdateAgent={updateAgent}
-          onUpdateAgentProfile={updateAgentProfile}
           onUpdateRolePresentation={updateRolePresentation}
-          onReorderMembers={reorderMembers}
+          onReorderAgents={reorderAgents}
           onRemoveAgent={removeAgent}
           onStartRun={startRun}
           onStopRun={stopRun}
+          onOpenConsole={() => setConsoleOpen(true)}
         />
       </aside>
       <section className="workspace">
@@ -270,7 +252,7 @@ export function App({ client = api }: AppProps) {
             </h1>
             {selectedGroup !== undefined && (
               <p className="group-status-summary">
-                <span>{members.length} members</span>
+                <span>{members.length} agents</span>
                 <span>{runningCount} terminals</span>
                 {memberStatusViews.length > 0 && (
                   <>
@@ -399,13 +381,14 @@ export function App({ client = api }: AppProps) {
           {selectedGroup === undefined ? (
             <div className="empty-state workspace-empty">
               <h2>Create a group to begin</h2>
-              <p>Groups contain agent profiles, active runs, terminals, and routed messages.</p>
+              <p>Groups contain agents, active runs, terminals, and routed messages.</p>
             </div>
           ) : (
             <div className="unified-workspace">
               <section className="terminal-surface" aria-label="Agent terminals">
                 <TerminalWorkspace
                   client={client}
+                  config={config}
                   members={members}
                   roles={config.roles}
                   runs={runs}
@@ -430,6 +413,7 @@ export function App({ client = api }: AppProps) {
           )}
         </div>
       </section>
+      {consoleOpen && <AdHocConsoleDialog client={client} onClose={() => setConsoleOpen(false)} />}
     </main>
   );
 }

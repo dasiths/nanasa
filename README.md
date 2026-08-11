@@ -12,8 +12,8 @@ coding-agent terminals. The name means "wisdom" or "intellect" in Sinhala.
 ## Status
 
 Nanasa is in early development. The current vertical slice manages groups,
-agent profiles, memberships, tmux-backed runs, terminal access, and structured
-message and status records. Interfaces and configuration may change.
+agents, tmux-backed runs, terminal access, and structured message and status
+records. Interfaces and configuration may change.
 
 Every configured agent launches as its command directly in a tmux pane. Nanasa
 does not start model-specific subprocess protocols. Portal and MCP messages use
@@ -24,7 +24,7 @@ without an agent account.
 ## Architecture
 
 The Fastify daemon owns application state and terminal-provider processes. It
-stores groups, profiles, memberships, runs, messages, delivery outcomes, and
+stores projected agent runtime state, runs, messages, delivery outcomes, and
 domain events in SQLite. A private tmux server owns the durable agent panes. The
 daemon creates one deterministic linked tmux view session and supervises one
 loopback-only ttyd process for each active run.
@@ -39,26 +39,27 @@ production, the daemon serves the built portal from `apps/portal/dist` with an
 extensionless SPA fallback. API, event WebSocket, and terminal proxy routes keep
 precedence over static content.
 
-New memberships receive a readable stable ID in the form
-`<agent-type>.<adjective>-<surname>`, for example `pi.focused-hopper`. Nanasa
+New agents receive a readable stable member ID in the form
+`<integration>.<adjective>-<surname>`, for example `pi.focused-hopper`. Nanasa
 generates the suffix with `docker-names`, normalizes it for use as an identifier,
-and retries collisions within the group. Aliases remain independently editable.
+and retries collisions within the group. Agent names remain independently
+editable.
 
 ## Requirements
 
 * Node.js 22 or later
 * tmux
 * ttyd 1.7.7, available on `PATH` or configured through `NANASA_TTYD_PATH`
-* An installed and authenticated agent CLI for each enabled profile
+* An installed and authenticated agent CLI for each enabled integration
 
 The development container installs the pinned ttyd binary for amd64 and arm64
 and verifies its published checksum. The npm package does not bundle ttyd because
 it is a native executable. `nanasa start` checks `ttyd --version` before starting
 and explains how to configure a nonstandard executable path.
 
-Each profile requires its command to be installed and authenticated as required
-by that CLI. Nanasa does not initiate interactive authentication or send a model
-prompt during startup.
+Each integration requires its command to be installed and authenticated as
+required by that CLI. Nanasa does not initiate interactive authentication or
+send a model prompt during startup.
 
 ## Setup
 
@@ -91,33 +92,33 @@ npx nanasa auth copilot
 
 The command launches the configured provider command and leaves its native
 login flow in control. Environment credentials supported by the provider are
-inherited without being copied into Nanasa files. A member-scoped home requires
-the stable membership ID:
+inherited without being copied into Nanasa files. An agent-scoped home requires
+the stable configured agent ID:
 
 ```bash
-npx nanasa auth copilot --member membership_example
+npx nanasa auth copilot --agent agent_example
 ```
 
 ### Agent configuration homes
 
-Each agent type can select how provider configuration, authentication, and
-session state are shared. Omitting `agentConfigHome` uses `agent-type` scope.
+Each integration can select how provider configuration, authentication, and
+session state are shared. Omitting `agentConfigHome` uses `integration` scope.
 
 ```yaml
-agentTypes:
+integrations:
   copilot:
     name: GitHub Copilot
     kind: copilot
     command: [copilot]
     cwd: .
-    agentConfigHome: { scope: agent-type }
+    agentConfigHome: { scope: integration }
 
   isolated-reviewer:
     name: Isolated reviewer
     kind: copilot
     command: [copilot]
     cwd: .
-    agentConfigHome: { scope: member }
+    agentConfigHome: { scope: agent }
 
   custom-home:
     name: Custom home
@@ -126,22 +127,31 @@ agentTypes:
     cwd: .
     agentConfigHome:
       scope: custom
-      path: homes/{agentType}/{membershipId}
+      path: homes/{integrationId}/{agentId}
 ```
 
-`agent-type` shares one home between members of that configured type. `member`
-uses a stable home for each membership across run restarts. `custom` paths are
-relative to `.nanasa/integrations` and may use `{agentType}` and
-`{membershipId}`. Absolute paths, traversal, unknown placeholders, and
-symlinked integration directories are rejected.
+`integration` shares one home between agents using that integration. `agent`
+uses a stable home for one configured agent across run restarts. `custom` paths
+are relative to `.nanasa/integrations` and may use `{integrationId}` and
+`{agentId}`. Absolute paths, traversal, unknown placeholders, and symlinked
+integration directories are rejected.
 
-Profiles, groups, and memberships are also declared in `.nanasa/config.yaml`.
-Map keys are stable IDs used by run history and member-scoped integration homes:
+Integrations, roles, groups, and agents are declared directly in
+`.nanasa/config.yaml`. Agent map keys are stable IDs used by run history and
+agent-scoped integration homes:
 
 ```yaml
 instructions:
   - .nanasa/instructions/nanasa-mcp.md
   - .nanasa/instructions/team.md
+
+integrations:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+    command: [copilot]
+    cwd: .
+    agentConfigHome: { scope: integration }
 
 roles:
   implementor:
@@ -163,23 +173,16 @@ roles:
       - .nanasa/instructions/reviewer.md
     permissionPolicy: read-only
 
-agentProfiles:
-  profile_reviewer:
-    name: Reviewer
-    agentType: copilot
-    defaultRoleId: reviewer
-    instructions: []
-
 groups:
   group_backend:
     name: Backend
     instructions:
       - .nanasa/instructions/groups/backend.md
-    memberships:
-      membership_reviewer:
+    agents:
+      agent_reviewer:
         memberId: copilot.reviewer
-        agentProfileId: profile_reviewer
-        alias: Reviewer
+        name: Reviewer
+        integrationId: copilot
         roleId: reviewer
         instructions: []
         order: 0
@@ -190,43 +193,42 @@ messages:
 
 Portal topology changes update this file atomically, then reconcile SQLite as a
 runtime projection. Run generations, delivery leases, messages, semantic status,
-event ordering, and idempotency remain transactional SQLite state. Existing
-alpha databases are imported into the YAML topology when those sections are
-absent.
+event ordering, and idempotency remain transactional SQLite state.
 
-Roles describe responsibility independently from the provider profile. A
-membership `roleId` overrides its profile `defaultRoleId`; omitting both leaves
-the member unassigned. Optional role `presentation` metadata gives the portal a
-consistent icon and theme-safe color for the group tree, terminal tabs, and grid
-terminal titles. Supported colors are `amber`, `blue`, `cyan`, `rose`, `slate`,
-`teal`, and `violet`. Supported icons are `briefcase-business`,
+Roles describe responsibility independently from integrations. An agent can
+reference one role with `roleId`; omitting it leaves the agent unassigned.
+Optional role `presentation` metadata gives the portal a consistent icon and
+theme-safe color for the group tree, terminal tabs, and grid terminal titles.
+Supported colors are `amber`, `blue`, `cyan`, `rose`, `slate`, `teal`, and
+`violet`. Supported icons are `briefcase-business`,
 `clipboard-list`, `code`, `hammer`, `scan-search`, `shield-check`, `waypoints`,
 and `wrench`. An optional `shortName` (24 characters maximum) can replace a long
 role name in compact terminal surfaces. Presentation metadata does not change
 instructions or permission policy. The portal Role settings dialog updates these
 presentation fields without restarting active agents.
 
-Membership `order` is a zero-based group-local display position. The portal's
+Agent `order` is a zero-based group-local display position. The portal's
 Move up and Move down commands atomically rewrite dense order values in YAML.
 The resulting order is shared by the group tree, terminal tabs, and terminal
-grid. Reordering does not change membership revision or restart active agents.
+grid. Reordering does not restart active agents.
 
 Nanasa composes the system-prompt suffix in this order:
 built-in MCP coordination guidance, top-level instructions, group instructions,
-effective role instructions, profile instructions, then membership
-instructions. References must be unique, repository-relative UTF-8 Markdown
-files. Symlinks, traversal, files larger than 64 KiB, and effective suffixes
-larger than 256 KiB are rejected.
+effective role instructions, then agent instructions. Operator instruction
+layering is global, group, role, then agent after Nanasa's built-in coordination
+and assignment sections. References must be unique, repository-relative UTF-8
+Markdown files. Symlinks, traversal, files larger than 64 KiB, and effective
+suffixes larger than 256 KiB are rejected.
 
 Each launch composes a private `system-prompt-suffix.md` and manifest beneath
-the membership integration directory. The suffix always starts with built-in
-Nanasa MCP and incoming-message etiquette, then appends repository-global,
-role, profile, and membership Markdown instructions in that order. Copilot uses a generated custom agent,
+the agent integration directory. The suffix always starts with built-in Nanasa
+MCP and incoming-message etiquette, then appends global, group, role, and agent
+Markdown instructions in that order. Copilot uses a generated custom agent,
 Claude appends the file to its default system prompt, Pi appends the file and
 uses an extension for read-only enforcement, and OpenCode uses a generated
 primary agent. Provider defaults, managed policy, repository instructions,
 authentication, preferences, and unrelated configuration remain active. Change
-a running member's role only after stopping it; Nanasa rejects live role changes
+a running agent's role only after stopping it; Nanasa rejects live role changes
 instead of mutating an active prompt.
 
 Running `nanasa` without a command is equivalent to `nanasa start`. The daemon
@@ -352,7 +354,7 @@ permissions, and secure-context policy still apply. Enabling clipboard signaling
 allows terminal applications to replace clipboard contents, so only run trusted
 agent commands.
 
-Every profile command runs directly in its verified owner pane. Interrupt sends
+Every agent command runs directly in its verified owner pane. Interrupt sends
 Ctrl+C to that pane. Message delivery loads text into the pane, enables bracketed
 paste, pastes the content, and sends Enter separately. A successful outcome
 means terminal injection completed; it does not claim that the CLI processed or
@@ -434,7 +436,7 @@ TypeScript server and Node packages.
 Nanasa exposes these tools:
 
 * `nanasa.list_members` returns active member IDs, aliases, effective roles,
-  agent types, current run status, and which member is the authenticated caller
+  integration IDs, current run status, and which member is the authenticated caller
 * `nanasa.list_agent_statuses` returns compact semantic and process status for
   every active member, optionally limited to agents needing attention
 * `nanasa.get_agent_status` returns one member's wait, progress, evidence,
@@ -461,7 +463,7 @@ then injects `NANASA_MCP_URL` and `NANASA_MCP_TOKEN` into the direct tmux CLI
 environment. The signing key is stored at `.nanasa/state/mcp-secret`. Nanasa
 requires the key to be a current-user-owned regular file with mode `0600` and
 protects its directory with mode `0700`. Stopping or replacing a run, changing
-its desired state, or removing its membership revokes the capability during the
+its desired state, or removing the agent revokes the capability during the
 next request.
 
 Agent commands receive three non-persisted environment variables when MCP is
@@ -476,7 +478,7 @@ Nanasa also registers its MCP endpoint with each supported CLI before launch.
 Generated files live under `.nanasa/integrations/`, contain only an
 environment-variable placeholder for the bearer token, and use private file
 permissions. The generation capability remains only in the process
-environment. Shared or membership-specific provider homes are reused after run
+environment. Shared or agent-specific provider homes are reused after run
 and daemon restarts.
 
 Client integration follows each CLI's supported configuration contract:
@@ -526,37 +528,33 @@ listener directly to the network.
 
 ## Portal operations
 
-The Add agent form loads agent types from `.nanasa/config.yaml`. New configured
-keys appear without a portal code change, and existing profiles show both the
-configured display name and stable key.
-
-New-agent creation also accepts a profile default role, profile Markdown
-instruction files, a membership role override, and assignment-specific Markdown
+The Add agent form loads integrations and roles from `.nanasa/config.yaml`. New
+integration keys appear without a portal code change. Creating an agent selects
+its integration and optional role, then accepts agent-specific Markdown
 instruction files. Instruction paths are entered one per line and must resolve
-to repository-relative `.md` files. Existing member rows expose an Agent
-settings dialog with separate save actions for the membership and its reusable
-profile. Profile changes affect every membership using that profile. Prompt-
-affecting role or instruction edits require affected agents to be stopped;
-aliases and display names remain editable while agents run.
+to repository-relative `.md` files. Existing agent rows expose one Agent
+settings dialog for name, integration, role, and agent instructions.
+Prompt-affecting integration, role, or instruction edits require the agent to be
+stopped; names remain editable while agents run.
 
 Group creation accepts shared group Markdown instruction files, and the selected
 group's Settings action edits both its name and those files. Group instructions
 apply to every member after the global suffix and before role-specific guidance.
 Changing them requires all agents in the group to be stopped.
 
-Use **Start all** in the selected group header to start every active member that
+Use **Start all** in the selected group header to start every active agent that
 is not already running. The result panel reports each member as started, already
 running, or failed. Repeated clicks while the operation is pending reuse one
 idempotent request.
 
-Member rows distinguish reconciling, restarting, recovered, and failed recovery
-states. Active recovery can be stopped but not started again. Retry is
-offered only when recovery cannot continue; a normally stopped member retains
-the standard Start action.
+Agent rows distinguish reconciling, restarting, recovered, and failed recovery
+states. Active recovery can be stopped but not started again. Retry is offered
+only when recovery cannot continue; a normally stopped agent retains the
+standard Start action.
 
 The floating Messages overlay is a shared group-chat timeline backed by daemon messages.
 Portal submissions appear as **Human**; MCP messages use the authenticated
-agent's membership alias. Agent-to-agent direct messages, multicasts, and
+agent's name. Agent-to-agent direct messages, multicasts, and
 broadcasts appear in the same oldest-to-newest timeline. Each message has an
 actor-initial badge and a collapsed delivery summary that expands to resolved
 recipients, retry information, statuses, and failure reasons. Agent messages
@@ -580,7 +578,7 @@ inset full-screen sheet and hides the launcher until closed from the header.
 Terminal grid mode renders up to three agent columns, stepping down to two and
 one at narrower widths.
 Terminal tabs, status bars, iframe titles, and accessible names show both the
-editable alias and stable member ID. Membership revision remains an internal
+editable name and stable member ID. The agent-set revision remains an internal
 broadcast concurrency token and is not shown in the workspace header.
 
 Browser terminals configure 10,000 lines of xterm scrollback and enable tmux
@@ -598,13 +596,14 @@ tab layout without blocking portal controls.
 
 ## Concepts
 
-| Concept       | Description                                                                     |
-|---------------|---------------------------------------------------------------------------------|
-| Group         | An operator-created pool with revisioned membership                             |
-| Agent profile | Reusable command, arguments, working directory, and environment configuration  |
-| Membership    | A stable agent identity and alias within a group                                |
-| Run           | One process generation with a tmux terminal binding                             |
-| Message       | Structured content and audience delivered through terminal injection            |
+| Concept     | Description                                                                  |
+|-------------|------------------------------------------------------------------------------|
+| Integration | Executable CLI settings and provider configuration-home policy                   |
+| Role        | Reusable responsibility, instructions, permissions, and presentation metadata    |
+| Group       | An operator-created pool with shared instructions and directly configured agents |
+| Agent       | A stable group-owned identity with an integration, role, name, and instructions   |
+| Run         | One process generation with a tmux terminal binding                              |
+| Message     | Structured content and audience delivered through terminal injection             |
 
 ## Roadmap
 

@@ -1,5 +1,4 @@
 import type {
-  AgentProfile,
   AgentRun,
   GroupMembership,
   NanasaConfig,
@@ -33,6 +32,44 @@ const roles = {
     presentation: { icon: "shield-check", color: "amber", shortName: "Review" },
   },
 } satisfies NanasaConfig["roles"];
+
+const config = {
+  instructions: [],
+  integrations: {
+    copilot: {
+      id: "copilot",
+      name: "GitHub Copilot",
+      kind: "copilot",
+      command: ["copilot"],
+      agentConfigHome: { scope: "integration" },
+      environment: {},
+    },
+  },
+  roles,
+  groups: {
+    "group-backend": {
+      name: "Backend",
+      instructions: [],
+      agents: {
+        "membership-builder": {
+          memberId: "builder",
+          name: "Builder",
+          integrationId: "copilot",
+          roleId: "implementor",
+          instructions: [],
+        },
+        "membership-reviewer": {
+          memberId: "reviewer",
+          name: "Reviewer",
+          integrationId: "copilot",
+          roleId: "reviewer",
+          instructions: [],
+        },
+      },
+    },
+  },
+  messages: { retentionPerGroup: 1_000 },
+} satisfies NanasaConfig;
 
 const members: GroupMembership[] = [
   {
@@ -84,18 +121,18 @@ function createClient(
   getTerminalEndpointStatus: PortalClient["getTerminalEndpointStatus"],
 ): PortalClient {
   return {
+    createConsole: vi.fn(),
+    closeConsole: vi.fn(),
     loadSnapshot: vi.fn<() => Promise<PortalSnapshot>>(),
     loadConfig: vi.fn(),
     createGroup: vi.fn(),
     updateGroup: vi.fn(),
     deleteGroup: vi.fn(),
-    createAgentProfile: vi.fn<() => Promise<AgentProfile>>(),
-    updateAgentProfile: vi.fn(),
+    createAgent: vi.fn(),
+    updateAgent: vi.fn(),
+    removeAgent: vi.fn(),
+    reorderAgents: vi.fn(),
     updateRolePresentation: vi.fn(),
-    addMembership: vi.fn(),
-    updateMembership: vi.fn(),
-    removeMembership: vi.fn(),
-    reorderMemberships: vi.fn(),
     startRun: vi.fn(),
     startAllRuns: vi.fn(),
     stopRun: vi.fn(),
@@ -119,6 +156,7 @@ describe("TerminalWorkspace", () => {
     const { container } = render(
       <TerminalWorkspace
         client={client}
+        config={config}
         members={members}
         roles={roles}
         runs={runs}
@@ -161,6 +199,9 @@ describe("TerminalWorkspace", () => {
       .getByRole("region", { name: "Builder (builder) terminal" })
       .querySelector(".terminal-statusbar");
     const memberId = within(titleBar as HTMLElement).getByLabelText("Member ID builder");
+    expect(within(titleBar as HTMLElement).getByLabelText("Agent kind copilot")).toHaveClass(
+      "terminal-agent-kind",
+    );
     expect(memberId).toHaveTextContent("builder");
     expect(memberId).toHaveAttribute("title", "builder");
     expect(memberId.parentElement).toHaveClass("terminal-title-tools");

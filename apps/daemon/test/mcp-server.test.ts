@@ -1,10 +1,15 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { loadNanasaConfig } from "../src/config.js";
 import { McpCredentialIssuer } from "../src/mcp-auth.js";
-import { createDaemon, type DaemonContext } from "../src/server.js";
+import {
+  createDaemon as createDaemonBase,
+  type DaemonContext,
+  type DaemonOptions,
+} from "../src/server.js";
 
 const operatorToken = "configured-remote-operator-token-1234567890";
 const temporaryDirectories: string[] = [];
@@ -14,6 +19,27 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+function createDaemon(options: DaemonOptions = {}) {
+  const repository = mkdtempSync(join(tmpdir(), "nanasa-mcp-config-"));
+  temporaryDirectories.push(repository);
+  mkdirSync(join(repository, ".git"));
+  mkdirSync(join(repository, ".nanasa"));
+  writeFileSync(
+    join(repository, ".nanasa", "config.yaml"),
+    `integrations:
+  fixture:
+    name: Fixture
+    kind: opencode
+    command: [node, --version]
+roles:
+  reviewer:
+    name: Reviewer
+groups: {}
+`,
+  );
+  return createDaemonBase({ ...options, loadedConfig: loadNanasaConfig(repository) });
+}
 
 async function createFixture() {
   const directory = mkdtempSync(join(tmpdir(), "nanasa-mcp-server-"));

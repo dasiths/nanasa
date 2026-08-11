@@ -3,8 +3,6 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
-  type AddGroupMembershipCommand,
-  AddGroupMembershipCommandSchema,
   type AgentProfile,
   AgentProfileSchema,
   type AgentProgressReportCommand,
@@ -17,12 +15,9 @@ import {
   AgentStatusEventInputSchema,
   type AgentStatusSummary,
   AgentStatusSummarySchema,
-  type AgentTypeConfig,
   type ClearMessageHistoryResult,
   ClearMessageHistoryResultSchema,
   type ConfigStatus,
-  type CreateAgentProfileCommand,
-  CreateAgentProfileCommandSchema,
   type CreateGroupCommand,
   CreateGroupCommandSchema,
   DEFAULT_MESSAGE_PAGE_SIZE,
@@ -60,8 +55,6 @@ import {
   type TerminalBinding,
   type UpdateGroupCommand,
   UpdateGroupCommandSchema,
-  type UpdateGroupMembershipCommand,
-  UpdateGroupMembershipCommandSchema,
 } from "@nanasa/contracts";
 
 import {
@@ -71,7 +64,19 @@ import {
   reduceAgentStatus,
 } from "./agent-status-reducer.js";
 import { dockerMemberName, formatMemberId, type MemberNameGenerator } from "./member-id.js";
-import { orderedMembershipEntries } from "./membership-order.js";
+import { orderedAgentEntries } from "./membership-order.js";
+
+interface AddMembershipInput {
+  memberId?: string;
+  agentProfileId: string;
+  alias: string;
+  roleId?: string;
+}
+
+interface UpdateMembershipInput {
+  alias?: string;
+  roleId?: string | null;
+}
 
 interface Parser<T> {
   parse(value: unknown): T;
@@ -306,45 +311,47 @@ export class NanasaStore {
   public reconcileTopology(config: NanasaConfig, configStatus?: ConfigStatus): void {
     const timestamp = new Date().toISOString();
     this.#transaction(() => {
-      for (const [profileId, configuredProfile] of Object.entries(config.agentProfiles)) {
-        const agentType = config.agentTypes[configuredProfile.agentType];
-        if (agentType === undefined) {
-          throw new DomainError(
-            "configured_agent_type_not_found",
-            `Agent type ${configuredProfile.agentType} is not configured`,
-            409,
-          );
+      for (const configuredGroup of Object.values(config.groups)) {
+        for (const [agentId, configuredAgent] of Object.entries(configuredGroup.agents)) {
+          const integration = config.integrations[configuredAgent.integrationId];
+          if (integration === undefined) {
+            throw new DomainError(
+              "configured_integration_not_found",
+              `Integration ${configuredAgent.integrationId} is not configured`,
+              409,
+            );
+          }
+          this.#database
+            .prepare(
+              `INSERT INTO agent_profiles
+                 (id, name, agent_type, kind, adapter, capabilities_json, command, args_json,
+                  working_directory, environment_json, created_at, updated_at)
+               VALUES (?, ?, ?, ?, 'terminal', '[]', ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 name = excluded.name,
+                 agent_type = excluded.agent_type,
+                 kind = excluded.kind,
+                 adapter = excluded.adapter,
+                 capabilities_json = excluded.capabilities_json,
+                 command = excluded.command,
+                 args_json = excluded.args_json,
+                 working_directory = excluded.working_directory,
+                 environment_json = excluded.environment_json,
+                 updated_at = excluded.updated_at`,
+            )
+            .run(
+              agentId,
+              configuredAgent.name,
+              integration.id,
+              integration.kind,
+              integration.command[0] as string,
+              JSON.stringify(integration.command.slice(1)),
+              integration.cwd ?? null,
+              JSON.stringify(integration.environment),
+              timestamp,
+              timestamp,
+            );
         }
-        this.#database
-          .prepare(
-            `INSERT INTO agent_profiles
-               (id, name, agent_type, kind, adapter, capabilities_json, command, args_json,
-                working_directory, environment_json, created_at, updated_at)
-             VALUES (?, ?, ?, ?, 'terminal', '[]', ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-               name = excluded.name,
-               agent_type = excluded.agent_type,
-               kind = excluded.kind,
-               adapter = excluded.adapter,
-               capabilities_json = excluded.capabilities_json,
-               command = excluded.command,
-               args_json = excluded.args_json,
-               working_directory = excluded.working_directory,
-               environment_json = excluded.environment_json,
-               updated_at = excluded.updated_at`,
-          )
-          .run(
-            profileId,
-            configuredProfile.name,
-            agentType.key,
-            agentType.kind,
-            agentType.command[0] as string,
-            JSON.stringify(agentType.command.slice(1)),
-            agentType.cwd ?? null,
-            JSON.stringify(agentType.environment),
-            timestamp,
-            timestamp,
-          );
       }
 
       const desiredGroupIds = new Set(Object.keys(config.groups));
@@ -355,7 +362,7 @@ export class NanasaStore {
         const existingMemberships = this.#database
           .prepare("SELECT * FROM memberships WHERE group_id = ? AND state = 'active'")
           .all(groupId) as unknown as MembershipRow[];
-        const desiredMemberships = Object.entries(configuredGroup.memberships);
+        const desiredMemberships = Object.entries(configuredGroup.agents);
         const existingIdentity = existingMemberships
           .map(
             (membership) =>
@@ -363,10 +370,7 @@ export class NanasaStore {
           )
           .sort();
         const desiredIdentity = desiredMemberships
-          .map(
-            ([membershipId, membership]) =>
-              `${membershipId}:${membership.memberId}:${membership.agentProfileId}`,
-          )
+          .map(([agentId, agent]) => `${agentId}:${agent.memberId}:${agentId}`)
           .sort();
         const membershipChanged =
           JSON.stringify(existingIdentity) !== JSON.stringify(desiredIdentity);
@@ -398,9 +402,7 @@ export class NanasaStore {
         const desiredMembershipIds = new Set(
           desiredMemberships.map(([membershipId]) => membershipId),
         );
-        for (const [membershipId, membership] of desiredMemberships) {
-          const roleId =
-            membership.roleId ?? config.agentProfiles[membership.agentProfileId]?.defaultRoleId;
+        for (const [agentId, agent] of desiredMemberships) {
           this.#database
             .prepare(
               `INSERT INTO memberships
@@ -416,12 +418,12 @@ export class NanasaStore {
                  removed_at = NULL`,
             )
             .run(
-              membershipId,
+              agentId,
               groupId,
-              membership.memberId,
-              membership.agentProfileId,
-              membership.alias,
-              roleId ?? null,
+              agent.memberId,
+              agentId,
+              agent.name,
+              agent.roleId ?? null,
               timestamp,
             );
         }
@@ -586,26 +588,6 @@ export class NanasaStore {
     );
   }
 
-  public createAgentProfile(
-    command: CreateAgentProfileCommand,
-    idempotencyKey?: string,
-  ): AgentProfile {
-    const input = CreateAgentProfileCommandSchema.parse(command);
-    const agentType = this.#requireConfiguredAgentType(input.agentType);
-    return this.#createAgentProfile(
-      {
-        name: input.name,
-        agentType: agentType.key,
-        kind: agentType.kind,
-        command: agentType.command[0] as string,
-        args: agentType.command.slice(1),
-        ...(agentType.cwd === undefined ? {} : { workingDirectory: agentType.cwd }),
-        environment: agentType.environment,
-      },
-      idempotencyKey,
-    );
-  }
-
   public createInternalAgentProfile(
     command: InternalCreateAgentProfileCommand,
     idempotencyKey?: string,
@@ -666,15 +648,15 @@ export class NanasaStore {
 
   public addMembership(
     groupId: string,
-    command: AddGroupMembershipCommand,
+    command: AddMembershipInput,
     idempotencyKey?: string,
   ): GroupMembership {
-    const input = AddGroupMembershipCommandSchema.parse(command);
+    const input = command;
     const scope = `group.${groupId}.membership.add`;
     return this.#executeIdempotent(scope, idempotencyKey, GroupMembershipSchema, () => {
       this.#requireGroup(groupId);
-      const profile = this.#requireAgentProfile(input.agentProfileId);
-      const memberId = input.memberId ?? this.#generateMemberId(groupId, profile.agentType);
+      this.#requireAgentProfile(input.agentProfileId);
+      const memberId = input.memberId ?? this.#generateMemberId(groupId);
       const existing = this.#getMembershipRow(groupId, memberId);
       if (existing?.state === "active") {
         throw new DomainError("membership_exists", "The member is already active", 409);
@@ -737,10 +719,10 @@ export class NanasaStore {
   public updateMembership(
     groupId: string,
     memberId: string,
-    command: UpdateGroupMembershipCommand,
+    command: UpdateMembershipInput,
     idempotencyKey?: string,
   ): GroupMembership {
-    const input = UpdateGroupMembershipCommandSchema.parse(command);
+    const input = command;
     const scope = `group.${groupId}.membership.${memberId}.update`;
     return this.#executeIdempotent(scope, idempotencyKey, GroupMembershipSchema, () => {
       this.#requireGroup(groupId);
@@ -1940,7 +1922,14 @@ export class NanasaStore {
     ).map((row) => this.#hydrateGroup(row));
     const agentProfiles = (
       this.#database
-        .prepare("SELECT * FROM agent_profiles ORDER BY created_at, id")
+        .prepare(
+          `SELECT p.* FROM agent_profiles p
+           WHERE EXISTS (
+             SELECT 1 FROM memberships m
+             WHERE m.agent_profile_id = p.id AND m.state = 'active'
+           )
+           ORDER BY p.created_at, p.id`,
+        )
         .all() as unknown as AgentProfileRow[]
     ).map((row) => this.#hydrateAgentProfile(row));
     const memberships = (
@@ -1951,8 +1940,8 @@ export class NanasaStore {
     const configuredOrder = new Map<string, number>();
     let nextConfiguredOrder = 0;
     for (const configuredGroup of Object.values(this.#config?.groups ?? {})) {
-      for (const [membershipId] of orderedMembershipEntries(configuredGroup.memberships)) {
-        configuredOrder.set(membershipId, nextConfiguredOrder);
+      for (const [agentId] of orderedAgentEntries(configuredGroup.agents)) {
+        configuredOrder.set(agentId, nextConfiguredOrder);
         nextConfiguredOrder += 1;
       }
     }
@@ -2093,9 +2082,9 @@ export class NanasaStore {
     return requested;
   }
 
-  #generateMemberId(groupId: string, agentType: string): string {
+  #generateMemberId(groupId: string): string {
     for (let attempt = 0; attempt < 32; attempt += 1) {
-      const memberId = formatMemberId(agentType, this.#memberNameGenerator());
+      const memberId = formatMemberId(this.#memberNameGenerator());
       if (this.#getMembershipRow(groupId, memberId) === undefined) return memberId;
     }
     throw new DomainError(
@@ -2427,18 +2416,6 @@ export class NanasaStore {
       throw new DomainError("agent_profile_not_found", "Agent profile not found", 404);
     }
     return this.#hydrateAgentProfile(row);
-  }
-
-  #requireConfiguredAgentType(agentTypeKey: string): AgentTypeConfig {
-    const agentType = this.#config?.agentTypes[agentTypeKey];
-    if (agentType === undefined) {
-      throw new DomainError(
-        "agent_type_not_configured",
-        `Agent type ${agentTypeKey} is not configured`,
-        400,
-      );
-    }
-    return agentType;
   }
 
   #getMembershipRow(groupId: string, memberId: string): MembershipRow | undefined {

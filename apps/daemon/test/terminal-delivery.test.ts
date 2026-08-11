@@ -66,6 +66,39 @@ function createFixture(store: NanasaStore, name: string) {
 const describeTmux = tmuxAvailable ? describe : describe.skip;
 
 describeTmux("TmuxTerminalDelivery", () => {
+  it("preserves console view sessions during agent-run reconciliation", async () => {
+    const serverName = `nanasa-console-view-${process.pid}-${Date.now()}`;
+    tmuxServers.push(serverName);
+    const store = new NanasaStore(":memory:");
+    const runtime = new TmuxRuntime(store, { serverName });
+    const run = await runtime.startConsole("console-test", process.cwd(), {
+      cols: 100,
+      rows: 30,
+    });
+    const viewSession = await runtime.ensureViewSession(run);
+
+    await runtime.removeStaleViewSessions(new Set());
+    expect(
+      spawnSync(
+        "tmux",
+        ["-L", serverName, "-f", "/dev/null", "has-session", "-t", `=${viewSession}`],
+        { encoding: "utf8" },
+      ).status,
+    ).toBe(0);
+
+    await runtime.stopConsole(run);
+    await runtime.removeStaleViewSessions(new Set());
+    expect(
+      spawnSync(
+        "tmux",
+        ["-L", serverName, "-f", "/dev/null", "has-session", "-t", `=${viewSession}`],
+        { encoding: "utf8" },
+      ).status,
+    ).not.toBe(0);
+    await runtime.close();
+    store.close();
+  });
+
   it("injects generation-scoped MCP variables into the direct CLI environment only", async () => {
     const serverName = `nanasa-terminal-mcp-${process.pid}-${Date.now()}`;
     tmuxServers.push(serverName);

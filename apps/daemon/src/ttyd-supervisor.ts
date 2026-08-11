@@ -134,6 +134,7 @@ export function restartBackoffMs(consecutiveFailures: number, baseMs = 250, capM
 interface SupervisedProcess {
   run: AgentRun;
   generation: number;
+  detached: boolean;
   ttydArgv?: string[];
   child?: ChildProcessWithoutNullStreams;
   failures: number;
@@ -189,6 +190,14 @@ export class TtydSupervisor {
   }
 
   public start(run: AgentRun): void {
+    this.#start(run, false);
+  }
+
+  public startDetached(run: AgentRun): void {
+    this.#start(run, true);
+  }
+
+  #start(run: AgentRun, detached: boolean): void {
     if (this.#closing || run.terminal === undefined || run.status !== "running") {
       return;
     }
@@ -199,6 +208,7 @@ export class TtydSupervisor {
     const record: SupervisedProcess = {
       run,
       generation: this.#nextGeneration,
+      detached,
       failures: current?.failures ?? 0,
       stopping: false,
     };
@@ -231,6 +241,7 @@ export class TtydSupervisor {
       this.#manifestsReconciled = true;
     }
     for (const [runId, record] of this.#processes) {
+      if (record.detached) continue;
       const run = desired.get(runId);
       if (
         run === undefined ||
@@ -276,7 +287,7 @@ export class TtydSupervisor {
     }
     const endpointKey = terminalEndpointKey(record.run.id);
     const basePath = terminalBasePath(endpointKey);
-    this.#registry.begin(record.run, record.generation);
+    this.#registry.begin(record.run, record.generation, record.detached);
     const args = buildTtydArguments(
       {
         runId: record.run.id,
@@ -380,7 +391,7 @@ export class TtydSupervisor {
     record.generation = this.#nextGeneration;
     this.#nextGeneration += 1;
     const delay = restartBackoffMs(record.failures, this.#backoffBaseMs, this.#backoffCapMs);
-    this.#registry.begin(record.run, record.generation);
+    this.#registry.begin(record.run, record.generation, record.detached);
     this.#registry.publishBackoff(record.run.id, record.generation, delay, {
       code: "ttyd_unavailable",
       message: error instanceof Error ? error.message : "Terminal provider failed",

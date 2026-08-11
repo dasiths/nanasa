@@ -33,21 +33,19 @@ function createDaemon(options: DaemonOptions = {}) {
     );
     writeFileSync(
       join(repository, ".nanasa", "config.yaml"),
-      `version: 1
-agentTypes:
+      `integrations:
   copilot:
     name: GitHub Copilot
     kind: copilot
     command: [copilot]
     cwd: .
-    agentConfigHome: { scope: agent-type }
+    agentConfigHome: { scope: integration }
   claude-copilot:
     name: Claude Code via Copilot
     kind: claude-code
     command: [make, claude-copilot]
     cwd: .
-    agentConfigHome: { scope: agent-type }
-agentProfiles: {}
+    agentConfigHome: { scope: integration }
 roles:
   reviewer:
     name: Reviewer
@@ -75,7 +73,7 @@ afterEach(() => {
 });
 
 describe("daemon REST API", () => {
-  it("assigns roles and rejects role changes while an agent run is active", async () => {
+  it("projects direct roles and requires restart for launch or prompt changes", async () => {
     const daemon = await createDaemon({ dataPath: ":memory:" });
     const group = (
       await daemon.app.inject({
@@ -87,82 +85,67 @@ describe("daemon REST API", () => {
         },
       })
     ).json<{ id: string }>();
-    const profile = (
-      await daemon.app.inject({
-        method: "POST",
-        url: "/api/agent-profiles",
-        payload: {
-          name: "Reusable",
-          agentType: "copilot",
-          defaultRoleId: "reviewer",
-          instructions: [".nanasa/instructions/profile.md"],
-        },
-      })
-    ).json<{ id: string }>();
     const added = await daemon.app.inject({
       method: "POST",
-      url: `/api/groups/${group.id}/memberships`,
+      url: `/api/groups/${group.id}/agents`,
       payload: {
-        memberId: "reviewer",
-        agentProfileId: profile.id,
-        alias: "Reviewer",
+        name: "Reviewer",
+        integrationId: "copilot",
         roleId: "reviewer",
-        instructions: [".nanasa/instructions/membership.md"],
+        instructions: [".nanasa/instructions/profile.md", ".nanasa/instructions/membership.md"],
       },
     });
     expect(added.statusCode).toBe(201);
-    expect(added.json()).toMatchObject({ roleId: "reviewer" });
+    const agent = added.json<{ id: string; memberId: string }>();
+    expect(agent).toMatchObject({ id: expect.any(String), roleId: "reviewer" });
     const configured = (await daemon.app.inject({ method: "GET", url: "/api/config" })).json<{
-      agentProfiles: Record<string, { defaultRoleId?: string; instructions: string[] }>;
       groups: Record<
         string,
         {
           instructions: string[];
-          memberships: Record<string, { roleId?: string; instructions: string[] }>;
+          agents: Record<
+            string,
+            { roleId?: string; integrationId: string; name: string; instructions: string[] }
+          >;
         }
       >;
     }>();
     expect(configured.groups[group.id]).toMatchObject({
       instructions: [".nanasa/instructions/group.md"],
     });
-    expect(configured.agentProfiles[profile.id]).toMatchObject({
-      defaultRoleId: "reviewer",
-      instructions: [".nanasa/instructions/profile.md"],
-    });
-    expect(Object.values(configured.groups[group.id]!.memberships)[0]).toMatchObject({
+    expect(configured.groups[group.id]!.agents[agent.id]).toMatchObject({
+      name: "Reviewer",
+      integrationId: "copilot",
       roleId: "reviewer",
-      instructions: [".nanasa/instructions/membership.md"],
+      instructions: [".nanasa/instructions/profile.md", ".nanasa/instructions/membership.md"],
     });
 
-    daemon.store.createRunForMembership(group.id, "reviewer");
-    const renamedProfile = await daemon.app.inject({
+    daemon.store.createRunForMembership(group.id, agent.memberId);
+    const renamedAgent = await daemon.app.inject({
       method: "PATCH",
-      url: `/api/agent-profiles/${profile.id}`,
-      payload: { name: "Renamed reusable profile" },
+      url: `/api/groups/${group.id}/agents/${agent.id}`,
+      payload: { name: "Renamed reviewer" },
     });
-    expect(renamedProfile.statusCode).toBe(200);
+    expect(renamedAgent.statusCode).toBe(200);
     const renamedGroup = await daemon.app.inject({
       method: "PATCH",
       url: `/api/groups/${group.id}`,
       payload: { name: "Renamed team" },
     });
     expect(renamedGroup.statusCode).toBe(200);
-    const changed = await daemon.app.inject({
-      method: "PATCH",
-      url: `/api/groups/${group.id}/memberships/reviewer`,
-      payload: { roleId: null },
-    });
-    expect(changed.statusCode).toBe(409);
-    expect(changed.json()).toMatchObject({ code: "active_run_role_change_requires_restart" });
-    const profileChanged = await daemon.app.inject({
-      method: "PATCH",
-      url: `/api/agent-profiles/${profile.id}`,
-      payload: { instructions: [] },
-    });
-    expect(profileChanged.statusCode).toBe(409);
-    expect(profileChanged.json()).toMatchObject({
-      code: "active_run_profile_change_requires_restart",
-    });
+    for (const payload of [
+      { roleId: null },
+      { integrationId: "claude-copilot" },
+      { instructions: [] },
+    ]) {
+      const changed = await daemon.app.inject({
+        method: "PATCH",
+        url: `/api/groups/${group.id}/agents/${agent.id}`,
+        payload,
+      });
+      expect(changed.statusCode).toBe(409);
+      expect(changed.json()).toMatchObject({ code: "active_run_agent_change_requires_restart" });
+    }
     const groupChanged = await daemon.app.inject({
       method: "PATCH",
       url: `/api/groups/${group.id}`,
@@ -175,30 +158,22 @@ describe("daemon REST API", () => {
     await daemon.app.close();
   });
 
-  it("updates role presentation and atomically persists portal membership order", async () => {
+  it("updates role presentation and atomically persists agent order", async () => {
     const daemon = await createDaemon({ dataPath: ":memory:" });
     const group = (
       await daemon.app.inject({ method: "POST", url: "/api/groups", payload: { name: "Team" } })
     ).json<{ id: string }>();
-    const profile = (
-      await daemon.app.inject({
+    const agents = new Map<string, { id: string; memberId: string }>();
+    for (const name of ["builder", "reviewer", "tester"]) {
+      const response = await daemon.app.inject({
         method: "POST",
-        url: "/api/agent-profiles",
-        payload: { name: "Reusable", agentType: "copilot" },
-      })
-    ).json<{ id: string }>();
-    for (const memberId of ["builder", "reviewer", "tester"]) {
-      expect(
-        (
-          await daemon.app.inject({
-            method: "POST",
-            url: `/api/groups/${group.id}/memberships`,
-            payload: { memberId, agentProfileId: profile.id, alias: memberId },
-          })
-        ).statusCode,
-      ).toBe(201);
+        url: `/api/groups/${group.id}/agents`,
+        payload: { name, integrationId: "copilot" },
+      });
+      expect(response.statusCode).toBe(201);
+      agents.set(name, response.json<{ id: string; memberId: string }>());
     }
-    daemon.store.createRunForMembership(group.id, "builder");
+    daemon.store.createRunForMembership(group.id, agents.get("builder")!.memberId);
 
     const presentation = await daemon.app.inject({
       method: "PATCH",
@@ -211,19 +186,21 @@ describe("daemon REST API", () => {
       presentation: { icon: "shield-check", color: "amber", shortName: "Review" },
     });
 
+    const agentIds = ["tester", "builder", "reviewer"].map((name) => agents.get(name)!.id);
     const reordered = await daemon.app.inject({
       method: "PUT",
-      url: `/api/groups/${group.id}/membership-order`,
-      payload: { memberIds: ["tester", "builder", "reviewer"] },
+      url: `/api/groups/${group.id}/agent-order`,
+      payload: { agentIds, expectedAgentRevision: 3 },
     });
     expect(reordered.statusCode).toBe(200);
-    expect(reordered.json()).toEqual({
-      groupId: group.id,
-      memberIds: ["tester", "builder", "reviewer"],
-    });
+    expect(reordered.json()).toEqual({ groupId: group.id, agentIds, agentRevision: 3 });
     expect(daemon.store.getSnapshot()).toMatchObject({
       groups: [{ id: group.id, membershipRevision: 3 }],
-      memberships: [{ memberId: "tester" }, { memberId: "builder" }, { memberId: "reviewer" }],
+      memberships: [
+        { id: agents.get("tester")!.id },
+        { id: agents.get("builder")!.id },
+        { id: agents.get("reviewer")!.id },
+      ],
     });
 
     const repository = repositoryByDataPath.get(":memory:") as string;
@@ -234,30 +211,23 @@ describe("daemon REST API", () => {
       shortName: "Review",
     });
     expect(
-      Object.values(persisted.groups[group.id]?.memberships ?? {}).map((membership) => [
-        membership.memberId,
-        membership.order,
+      Object.entries(persisted.groups[group.id]?.agents ?? {}).map(([id, item]) => [
+        id,
+        item.order,
       ]),
-    ).toEqual([
-      ["tester", 0],
-      ["builder", 1],
-      ["reviewer", 2],
-    ]);
+    ).toEqual(agentIds.map((id, order) => [id, order]));
 
     const stale = await daemon.app.inject({
       method: "PUT",
-      url: `/api/groups/${group.id}/membership-order`,
-      payload: { memberIds: ["builder", "reviewer"] },
+      url: `/api/groups/${group.id}/agent-order`,
+      payload: { agentIds, expectedAgentRevision: 2 },
     });
     expect(stale.statusCode).toBe(409);
-    expect(stale.json()).toMatchObject({ code: "membership_order_stale" });
-    expect(daemon.store.getSnapshot().memberships.map((membership) => membership.memberId)).toEqual(
-      ["tester", "builder", "reviewer"],
-    );
+    expect(stale.json()).toMatchObject({ code: "agent_order_stale" });
     await daemon.app.close();
   });
 
-  it("renames and removes groups and memberships while preserving profiles", async () => {
+  it("renames and removes direct agents without exposing orphan profiles", async () => {
     const daemon = await createDaemon({ dataPath: ":memory:" });
     const group = (
       await daemon.app.inject({
@@ -266,18 +236,13 @@ describe("daemon REST API", () => {
         payload: { name: "Original group" },
       })
     ).json<{ id: string }>();
-    const profile = (
+    const agent = (
       await daemon.app.inject({
         method: "POST",
-        url: "/api/agent-profiles",
-        payload: { name: "Reusable", agentType: "copilot" },
+        url: `/api/groups/${group.id}/agents`,
+        payload: { name: "Original alias", integrationId: "copilot" },
       })
-    ).json<{ id: string }>();
-    await daemon.app.inject({
-      method: "POST",
-      url: `/api/groups/${group.id}/memberships`,
-      payload: { memberId: "reviewer", agentProfileId: profile.id, alias: "Original alias" },
-    });
+    ).json<{ id: string; memberId: string }>();
 
     const renamedGroup = await daemon.app.inject({
       method: "PATCH",
@@ -291,28 +256,33 @@ describe("daemon REST API", () => {
       name: "Renamed group",
       membershipRevision: 1,
     });
-    const renamedMembership = await daemon.app.inject({
+    const renamedAgent = await daemon.app.inject({
       method: "PATCH",
-      url: `/api/groups/${group.id}/memberships/reviewer`,
-      headers: { "idempotency-key": "rename-member" },
-      payload: { alias: "Renamed alias" },
+      url: `/api/groups/${group.id}/agents/${agent.id}`,
+      payload: { name: "Renamed alias" },
     });
-    expect(renamedMembership.statusCode).toBe(200);
-    expect(renamedMembership.json()).toMatchObject({
-      memberId: "reviewer",
+    expect(renamedAgent.statusCode).toBe(200);
+    expect(renamedAgent.json()).toMatchObject({
+      id: agent.id,
+      memberId: agent.memberId,
       alias: "Renamed alias",
     });
 
-    const removedMembership = await daemon.app.inject({
+    const removedAgent = await daemon.app.inject({
       method: "DELETE",
-      url: `/api/groups/${group.id}/memberships/reviewer`,
-      headers: { "idempotency-key": "remove-member" },
+      url: `/api/groups/${group.id}/agents/${agent.id}`,
+      headers: { "idempotency-key": "remove-agent" },
     });
-    expect(removedMembership.statusCode).toBe(200);
-    expect(removedMembership.json()).toMatchObject({ memberId: "reviewer", state: "removed" });
+    expect(removedAgent.statusCode).toBe(200);
+    expect(removedAgent.json()).toEqual({
+      groupId: group.id,
+      agentId: agent.id,
+      deletedRuns: 0,
+      revokedDeliveries: 0,
+    });
     expect(daemon.store.getSnapshot()).toMatchObject({
       groups: [{ id: group.id, membershipRevision: 2 }],
-      agentProfiles: [{ id: profile.id }],
+      agentProfiles: [],
       memberships: [],
       runs: [],
     });
@@ -330,19 +300,10 @@ describe("daemon REST API", () => {
       deletedMessages: 0,
       deletedDeliveries: 0,
     });
-    expect(
-      (
-        await daemon.app.inject({
-          method: "DELETE",
-          url: `/api/groups/${group.id}`,
-          headers: { "idempotency-key": "delete-group" },
-        })
-      ).json(),
-    ).toEqual(deleted.json());
     expect(daemon.store.getSnapshot()).toMatchObject({
       groups: [],
       memberships: [],
-      agentProfiles: [{ id: profile.id }],
+      agentProfiles: [],
     });
     await daemon.app.close();
   });
@@ -425,26 +386,13 @@ describe("daemon REST API", () => {
     expect(replayedGroupResponse.json()).toEqual(groupResponse.json());
     const group = groupResponse.json<{ id: string }>();
 
-    const profileResponse = await first.app.inject({
-      method: "POST",
-      url: "/api/agent-profiles",
-      payload: {
-        name: "Reviewer",
-        agentType: "copilot",
-      },
-    });
-    expect(profileResponse.statusCode).toBe(201);
-    const profile = profileResponse.json<{ id: string; command: string }>();
-    expect(profile).toMatchObject({ command: "copilot" });
-    expect(profile).not.toHaveProperty("adapter");
-
-    for (const memberId of ["reviewer", "tester"]) {
-      const membershipResponse = await first.app.inject({
+    for (const name of ["reviewer", "tester"]) {
+      const agentResponse = await first.app.inject({
         method: "POST",
-        url: `/api/groups/${group.id}/memberships`,
-        payload: { memberId, agentProfileId: profile.id, alias: memberId },
+        url: `/api/groups/${group.id}/agents`,
+        payload: { name, integrationId: "copilot" },
       });
-      expect(membershipResponse.statusCode).toBe(201);
+      expect(agentResponse.statusCode).toBe(201);
     }
 
     const messageResponse = await first.app.inject({
@@ -493,38 +441,43 @@ describe("daemon REST API", () => {
       }),
     ]);
     expect(snapshot).toMatchObject({
-      config: { version: 1, agentTypes: { copilot: { command: ["copilot"] } } },
+      config: { integrations: { copilot: { command: ["copilot"] } } },
       configStatus: { state: "ready" },
     });
-    expect(snapshot.config.agentTypes.copilot).not.toHaveProperty("adapter");
+    expect(snapshot.config.integrations.copilot).not.toHaveProperty("adapter");
     await reopened.app.close();
   });
 
-  it("exposes config status and rejects unconfigured or arbitrary profile launch data", async () => {
+  it("exposes config status and rejects unconfigured or arbitrary agent launch data", async () => {
     const daemon = await createDaemon({ dataPath: ":memory:" });
     const config = await daemon.app.inject({ method: "GET", url: "/api/config" });
     const status = await daemon.app.inject({ method: "GET", url: "/api/config/status" });
     expect(config.statusCode).toBe(200);
     expect(config.json()).toMatchObject({
-      version: 1,
-      agentTypes: {
+      integrations: {
         "claude-copilot": { command: ["make", "claude-copilot"] },
       },
     });
     expect(status.json()).toMatchObject({ state: "ready", revision: expect.any(String) });
+    const group = (
+      await daemon.app.inject({ method: "POST", url: "/api/groups", payload: { name: "Team" } })
+    ).json<{ id: string }>();
 
     const unknown = await daemon.app.inject({
       method: "POST",
-      url: "/api/agent-profiles",
-      payload: { name: "Unknown", agentType: "not-configured" },
+      url: `/api/groups/${group.id}/agents`,
+      payload: { name: "Unknown", integrationId: "not-configured" },
     });
     expect(unknown.statusCode).toBe(400);
     const arbitrary = await daemon.app.inject({
       method: "POST",
-      url: "/api/agent-profiles",
-      payload: { name: "Unsafe", agentType: "copilot", command: "sh" },
+      url: `/api/groups/${group.id}/agents`,
+      payload: { name: "Unsafe", integrationId: "copilot", command: "sh" },
     });
     expect(arbitrary.statusCode).toBe(400);
+    expect(
+      (await daemon.app.inject({ method: "POST", url: "/api/agent-profiles" })).statusCode,
+    ).toBe(404);
     await daemon.app.close();
   });
 
@@ -534,12 +487,12 @@ describe("daemon REST API", () => {
       await daemon.app.inject({ method: "POST", url: "/api/groups", payload: { name: "Team" } })
     ).json<{ id: string }>();
 
-    const invalidProfile = await daemon.app.inject({
+    const invalidAgent = await daemon.app.inject({
       method: "POST",
-      url: "/api/agent-profiles",
-      payload: { name: "", kind: "unknown", command: "" },
+      url: `/api/groups/${group.id}/agents`,
+      payload: { name: "", integrationId: "copilot" },
     });
-    expect(invalidProfile.statusCode).toBe(400);
+    expect(invalidAgent.statusCode).toBe(400);
 
     const staleBroadcast = await daemon.app.inject({
       method: "POST",
@@ -642,18 +595,13 @@ describe("portal static assets", () => {
     const group = (
       await daemon.app.inject({ method: "POST", url: "/api/groups", payload: { name: "Chat" } })
     ).json<{ id: string }>();
-    const profile = (
+    const agent = (
       await daemon.app.inject({
         method: "POST",
-        url: "/api/agent-profiles",
-        payload: { name: "Agent", agentType: "copilot" },
+        url: `/api/groups/${group.id}/agents`,
+        payload: { name: "Agent", integrationId: "copilot" },
       })
-    ).json<{ id: string }>();
-    await daemon.app.inject({
-      method: "POST",
-      url: `/api/groups/${group.id}/memberships`,
-      payload: { memberId: "agent", agentProfileId: profile.id, alias: "Agent" },
-    });
+    ).json<{ id: string; memberId: string }>();
     const submit = (text: string) =>
       daemon.app.inject({
         method: "POST",
@@ -661,7 +609,7 @@ describe("portal static assets", () => {
         payload: {
           intent: "request",
           sender: { kind: "operator", operatorId: "portal" },
-          audience: { kind: "dm", memberId: "agent" },
+          audience: { kind: "dm", memberId: agent.memberId },
           body: { contentType: "text/plain", text },
           delivery: {},
           hop: 0,
@@ -715,9 +663,13 @@ describe("domain event WebSocket", () => {
   it("replays after a sequence and continues with committed events", async () => {
     const daemon = await createDaemon({ dataPath: ":memory:" });
     daemon.store.createGroup({ name: "First" });
-    daemon.store.createAgentProfile({
+    daemon.store.createInternalAgentProfile({
       name: "Reviewer",
       agentType: "copilot",
+      kind: "copilot",
+      command: "copilot",
+      args: [],
+      environment: {},
     });
 
     let resolveReplay: (value: string) => void = () => undefined;

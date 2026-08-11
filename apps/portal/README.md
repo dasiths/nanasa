@@ -49,7 +49,7 @@ input. Clipboard operations use browser/platform shortcuts such as
 
 The portal displays every persisted group message as a shared chronological chat
 timeline in a bottom-right floating overlay. Portal senders appear as Human;
-authenticated MCP senders show their membership alias and stable ID, so
+authenticated MCP senders show their agent name and stable member ID, so
 agent-to-agent messages are visible alongside operator messages. Hovering an
 initials badge shows the sender or recipient ID. Each message exposes a collapsed
 recipient and delivery summary with live outcomes. A claimed delivery count of
@@ -70,19 +70,19 @@ semantic completion by the agent CLI.
 
 ## Operations and preferences
 
-Profile creation validates `/api/config` with the shared configuration schema
-and lists every configured agent type by display name and key. A configuration
-load failure has a dedicated blocking state so the portal cannot offer stale or
-hardcoded launch choices.
+Agent creation validates `/api/config` with the shared configuration schema and
+lists every configured integration and role by display name and key. A
+configuration load failure has a dedicated blocking state so the portal cannot
+offer stale or hardcoded launch choices.
 
 The selected group header exposes Start all. One in-flight idempotency key is
 used until completion, then a live status panel lists started, already-running,
-and failed outcomes. Group and member menus support inline rename and confirmed
-removal; removing an active member stops its run first. Member rows show
+and failed outcomes. Group and agent menus support inline rename and confirmed
+removal; removing an active agent stops its run first. Agent rows show
 recovery phase, reason, and scheduled retry time. Start is hidden during
 continuation; Retry appears only after continuation can no longer proceed.
 
-The workspace header reports member and running counts. Membership revision is
+The workspace header reports agent and running counts. The agent-set revision is
 kept internal for safe broadcasts and is not displayed.
 
 Light, dark, and system themes and the terminal tab or grid layout persist in

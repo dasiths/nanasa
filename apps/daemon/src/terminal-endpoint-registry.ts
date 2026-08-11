@@ -23,6 +23,7 @@ interface EndpointRecord {
   bindingFingerprint: string;
   state: TerminalEndpointState;
   generation: number;
+  detached: boolean;
   upstream?: string;
   retryAfterMs?: number;
   error?: { code: string; message: string };
@@ -53,7 +54,7 @@ export class TerminalEndpointRegistry {
     this.#store = store;
   }
 
-  public begin(run: AgentRun, generation: number): EndpointRecord {
+  public begin(run: AgentRun, generation: number, detached = false): EndpointRecord {
     if (run.terminal === undefined) {
       throw new Error("Cannot register a terminal endpoint without a tmux binding");
     }
@@ -69,6 +70,7 @@ export class TerminalEndpointRegistry {
       bindingFingerprint: terminalBindingFingerprint(run.terminal),
       state: "starting",
       generation,
+      detached,
     };
     this.#byRun.set(run.id, record);
     this.#runByKey.set(endpointKey, run.id);
@@ -163,16 +165,16 @@ export class TerminalEndpointRegistry {
   }
 
   public status(runId: string): TerminalEndpointStatus {
-    const run = this.#store.getRun(runId);
     const record = this.#byRun.get(runId);
     if (record === undefined) {
+      const run = this.#store.getRun(runId);
       return {
         runId,
         provider: "ttyd",
         state: run.status === "stopped" || run.status === "failed" ? "stopped" : "unavailable",
       };
     }
-    if (!this.#matchesActiveRun(record, run)) {
+    if (!record.detached && !this.#matchesActiveRun(record, this.#store.getRun(runId))) {
       return { runId, provider: "ttyd", state: "stopped" };
     }
     if (record.state === "ready") {
@@ -215,8 +217,7 @@ export class TerminalEndpointRegistry {
     if (record === undefined) {
       throw new DomainError("terminal_endpoint_not_found", "Terminal endpoint not found", 404);
     }
-    const run = this.#store.getRun(runId);
-    if (!this.#matchesActiveRun(record, run)) {
+    if (!record.detached && !this.#matchesActiveRun(record, this.#store.getRun(runId))) {
       throw new DomainError("terminal_endpoint_inactive", "Terminal endpoint is inactive", 409);
     }
     if (record.state !== "ready" || record.upstream === undefined) {

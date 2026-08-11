@@ -2,8 +2,8 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import type { AgentConfigHome, AgentKind } from "@nanasa/contracts";
 
 const PLACEHOLDER_PATTERN = /\{([^}]+)\}/g;
-const SAFE_AGENT_TYPE_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const SAFE_MEMBERSHIP_PATTERN = /^membership_[A-Za-z0-9-]+$/;
+const SAFE_INTEGRATION_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const SAFE_AGENT_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
 
 export function validateAgentConfigHome(policy: AgentConfigHome): void {
   if (policy.scope !== "custom") return;
@@ -21,17 +21,17 @@ export function validateAgentConfigHome(policy: AgentConfigHome): void {
   if (firstSegment === undefined) {
     throw new Error("Agent configuration home path must name a directory beneath integrations");
   }
-  if (firstSegment === "agent-types" || firstSegment === "members") {
+  if (firstSegment === "integrations" || firstSegment === "agents") {
     throw new Error(`Agent configuration home path uses reserved directory ${firstSegment}`);
   }
   const placeholders = [...policy.path.matchAll(PLACEHOLDER_PATTERN)].map((match) => match[1]);
-  if (placeholders.some((name) => name !== "agentType" && name !== "membershipId")) {
+  if (placeholders.some((name) => name !== "integrationId" && name !== "agentId")) {
     throw new Error("Agent configuration home path contains an unknown placeholder");
   }
   if (
     policy.path
-      .replaceAll("{agentType}", "agent")
-      .replaceAll("{membershipId}", "member")
+      .replaceAll("{integrationId}", "integration")
+      .replaceAll("{agentId}", "agent")
       .match(/[{}]/) !== null
   ) {
     throw new Error("Agent configuration home path contains an invalid placeholder");
@@ -40,29 +40,29 @@ export function validateAgentConfigHome(policy: AgentConfigHome): void {
 
 export function resolveAgentConfigHome(
   integrationsDirectory: string,
-  agentType: string,
+  integrationId: string,
   policy: AgentConfigHome,
-  membershipId?: string,
+  agentId?: string,
 ): string {
   validateAgentConfigHome(policy);
-  if (!SAFE_AGENT_TYPE_PATTERN.test(agentType)) {
-    throw new Error(`Agent type is not path-safe: ${agentType}`);
+  if (!SAFE_INTEGRATION_PATTERN.test(integrationId)) {
+    throw new Error(`Integration ID is not path-safe: ${integrationId}`);
   }
-  if (policy.scope === "member" && membershipId === undefined) {
-    throw new Error(`Agent type ${agentType} requires a membership-specific configuration home`);
+  if (policy.scope === "agent" && agentId === undefined) {
+    throw new Error(`Integration ${integrationId} requires an agent-specific configuration home`);
   }
-  if (membershipId !== undefined && !SAFE_MEMBERSHIP_PATTERN.test(membershipId)) {
-    throw new Error(`Membership ID is not path-safe: ${membershipId}`);
+  if (agentId !== undefined && !SAFE_AGENT_PATTERN.test(agentId)) {
+    throw new Error(`Agent ID is not path-safe: ${agentId}`);
   }
 
   const relativeHome =
-    policy.scope === "agent-type"
-      ? `agent-types/${agentType}`
-      : policy.scope === "member"
-        ? `members/${membershipId}/${agentType}`
+    policy.scope === "integration"
+      ? `integrations/${integrationId}`
+      : policy.scope === "agent"
+        ? `agents/${agentId}/${integrationId}`
         : policy.path
-            .replaceAll("{agentType}", agentType)
-            .replaceAll("{membershipId}", membershipId ?? "shared");
+            .replaceAll("{integrationId}", integrationId)
+            .replaceAll("{agentId}", agentId ?? "shared");
   const home = resolve(integrationsDirectory, relativeHome);
   const relativeHomePath = relative(resolve(integrationsDirectory), home);
   if (

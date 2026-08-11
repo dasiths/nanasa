@@ -19,7 +19,7 @@ interface Group {
   name: string;
 }
 
-interface Membership {
+interface RuntimeAgent {
   id: string;
   groupId: string;
   memberId: string;
@@ -38,8 +38,7 @@ interface Run {
 
 interface Snapshot {
   groups: Group[];
-  agentProfiles: { id: string }[];
-  memberships: Membership[];
+  memberships: RuntimeAgent[];
   runs: Run[];
 }
 
@@ -62,7 +61,7 @@ export interface TerminalEndpointStatus {
 
 export interface SeededGroup {
   group: Group;
-  members: Membership[];
+  agents: RuntimeAgent[];
 }
 
 const root = resolve(import.meta.dirname, "../../..");
@@ -149,13 +148,13 @@ export class PackageAcceptanceService {
     writeFileSync(
       join(repository, ".nanasa", "config.yaml"),
       [
-        "version: 1",
-        "agentTypes:",
+        "integrations:",
         "  echo:",
         "    name: Safe Echo",
         "    kind: opencode",
         `    command: [${JSON.stringify(process.execPath)}, ${JSON.stringify(echoAgentPath)}]`,
         "    cwd: .",
+        "    agentConfigHome: { scope: integration }",
         "",
       ].join("\n"),
     );
@@ -225,31 +224,26 @@ export class PackageAcceptanceService {
     return body as T;
   }
 
-  async seedGroup(name: string, aliases: string[]): Promise<SeededGroup> {
+  async seedGroup(name: string, agentNames: string[]): Promise<SeededGroup> {
     const group = await this.request<Group>("/api/groups", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
     });
-    const members: Membership[] = [];
-    for (const alias of aliases) {
-      const profile = await this.request<{ id: string }>("/api/agent-profiles", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: `${alias} ${randomUUID().slice(0, 8)}`, agentType: "echo" }),
-      });
-      members.push(
-        await this.request<Membership>(`/api/groups/${group.id}/memberships`, {
+    const agents: RuntimeAgent[] = [];
+    for (const name of agentNames) {
+      agents.push(
+        await this.request<RuntimeAgent>(`/api/groups/${group.id}/agents`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            agentProfileId: profile.id,
-            alias,
+            name,
+            integrationId: "echo",
           }),
         }),
       );
     }
-    return { group, members };
+    return { group, agents };
   }
 
   async snapshot(): Promise<Snapshot> {

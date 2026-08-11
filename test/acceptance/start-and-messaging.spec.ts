@@ -4,7 +4,11 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
   page,
   nanasa,
 }) => {
-  const { group, members } = await nanasa.seedGroup("Acceptance team", ["Alpha", "Beta", "Gamma"]);
+  const { group, agents: members } = await nanasa.seedGroup("Acceptance team", [
+    "Alpha",
+    "Beta",
+    "Gamma",
+  ]);
   await page.goto(nanasa.baseUrl);
 
   await page

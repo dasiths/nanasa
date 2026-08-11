@@ -1,5 +1,29 @@
-version: 1
 instructions: []
+integrations:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+    command: [copilot]
+    cwd: .
+    agentConfigHome: { scope: integration }
+  pi:
+    name: Pi
+    kind: pi
+    command: [pi]
+    cwd: .
+    agentConfigHome: { scope: integration }
+  opencode:
+    name: OpenCode
+    kind: opencode
+    command: [opencode]
+    cwd: .
+    agentConfigHome: { scope: integration }
+  claude-code:
+    name: Claude Code
+    kind: claude-code
+    command: [claude]
+    cwd: .
+    agentConfigHome: { scope: integration }
 roles:
   project-manager:
     name: Project Manager
@@ -22,32 +46,6 @@ roles:
       icon: shield-check
       color: amber
     permissionPolicy: read-only
-agentTypes:
-  copilot:
-    name: GitHub Copilot
-    kind: copilot
-    command: [copilot]
-    cwd: .
-    agentConfigHome: { scope: agent-type }
-  pi:
-    name: Pi
-    kind: pi
-    command: [pi]
-    cwd: .
-    agentConfigHome: { scope: agent-type }
-  opencode:
-    name: OpenCode
-    kind: opencode
-    command: [opencode]
-    cwd: .
-    agentConfigHome: { scope: agent-type }
-  claude-code:
-    name: Claude Code
-    kind: claude-code
-    command: [claude]
-    cwd: .
-    agentConfigHome: { scope: agent-type }
-agentProfiles: {}
 groups: {}
 messages:
   retentionPerGroup: 1000

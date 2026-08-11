@@ -13,14 +13,14 @@ function usage() {
        nanasa init
        nanasa setup
        nanasa doctor
-       nanasa auth <agent-type> [--member <membership-id>]
+      nanasa auth <integration> [--agent <agent-id>]
 
 Commands:
   start              Start the daemon and portal (default)
   init               Create .nanasa/config.yaml when absent
-  setup              Prepare repository-local integration homes
-  doctor             Validate configuration, commands, and integration paths
-  auth               Launch an agent CLI in its isolated home
+  setup              Prepare repository-local integration configuration homes
+  doctor             Validate configuration, commands, and integration homes
+  auth               Launch an integration CLI in its isolated home
 
 Options:
   --host <host>       Listen host; MCP requires loopback (default: 127.0.0.1)
@@ -97,18 +97,18 @@ async function loadAdmin() {
 }
 
 function parseAuthOptions(args) {
-  const [agentType, ...options] = args;
-  if (agentType === undefined || agentType.startsWith("-")) {
-    throw new Error("nanasa auth requires an agent type");
+  const [integrationId, ...options] = args;
+  if (integrationId === undefined || integrationId.startsWith("-")) {
+    throw new Error("nanasa auth requires an integration");
   }
-  let membershipId;
+  let agentId;
   for (let index = 0; index < options.length; index += 1) {
     const option = options[index];
-    if (option !== "--member") throw new Error(`Unknown auth option: ${option}`);
-    membershipId = optionValue(options, index, option);
+    if (option !== "--agent") throw new Error(`Unknown auth option: ${option}`);
+    agentId = optionValue(options, index, option);
     index += 1;
   }
-  return { agentType, membershipId };
+  return { integrationId, agentId };
 }
 
 function optionValue(args, index, option) {
@@ -231,7 +231,7 @@ export async function main(args = process.argv.slice(2), startPath = process.cwd
       admin.doctorIntegrations(repositoryRoot);
     } else {
       const options = parseAuthOptions(rest);
-      admin.authenticateAgent(repositoryRoot, options.agentType, options.membershipId);
+      admin.authenticateAgent(repositoryRoot, options.integrationId, options.agentId);
     }
     return;
   }

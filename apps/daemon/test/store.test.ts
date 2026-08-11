@@ -87,6 +87,81 @@ describe("NanasaStore persistence", () => {
     reopened.close();
   });
 
+  it("projects configured agents to same-ID private profiles and memberships", () => {
+    const directory = mkdtempSync(join(tmpdir(), "nanasa-agent-projection-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "nanasa.sqlite");
+    const config = NanasaConfigSchema.parse({
+      integrations: {
+        copilot: {
+          id: "copilot",
+          name: "GitHub Copilot",
+          kind: "copilot",
+          command: ["copilot", "--allow-all-tools"],
+          cwd: ".",
+        },
+      },
+      roles: { reviewer: { name: "Reviewer" } },
+      groups: {
+        group_one: {
+          name: "Review team",
+          agents: {
+            agent_one: {
+              memberId: "copilot.alpha",
+              name: "Alpha",
+              integrationId: "copilot",
+              roleId: "reviewer",
+              instructions: [],
+              order: 0,
+            },
+          },
+        },
+      },
+    });
+    const store = new NanasaStore(databasePath, { config });
+    store.reconcileTopology(config);
+
+    expect(store.getSnapshot()).toMatchObject({
+      groups: [{ id: "group_one", membershipRevision: 1 }],
+      agentProfiles: [
+        {
+          id: "agent_one",
+          name: "Alpha",
+          agentType: "copilot",
+          command: "copilot",
+          args: ["--allow-all-tools"],
+        },
+      ],
+      memberships: [
+        {
+          id: "agent_one",
+          groupId: "group_one",
+          memberId: "copilot.alpha",
+          agentProfileId: "agent_one",
+          alias: "Alpha",
+          roleId: "reviewer",
+        },
+      ],
+    });
+
+    const renamed = structuredClone(config);
+    renamed.groups.group_one!.agents.agent_one!.name = "Renamed Alpha";
+    store.reconcileTopology(renamed);
+    expect(store.getGroup("group_one").membershipRevision).toBe(1);
+    expect(store.getAgentProfile("agent_one").name).toBe("Renamed Alpha");
+    expect(store.listActiveMemberships("group_one")[0]?.alias).toBe("Renamed Alpha");
+    store.close();
+
+    const reopened = new NanasaStore(databasePath, { config: renamed });
+    expect(reopened.getAgentProfile("agent_one").id).toBe("agent_one");
+    expect(reopened.listActiveMemberships("group_one")[0]).toMatchObject({
+      id: "agent_one",
+      memberId: "copilot.alpha",
+      agentProfileId: "agent_one",
+    });
+    reopened.close();
+  });
+
   it("persists bounded recovery transitions and fences callbacks after operator stop", () => {
     const directory = mkdtempSync(join(tmpdir(), "nanasa-recovery-store-"));
     temporaryDirectories.push(directory);
@@ -179,10 +254,9 @@ describe("NanasaStore persistence", () => {
 
   it("retains bounded message pages, clears history, and preserves sequence high-water", () => {
     const config = NanasaConfigSchema.parse({
-      version: 1,
-      agentTypes: {
+      integrations: {
         copilot: {
-          key: "copilot",
+          id: "copilot",
           name: "Copilot",
           kind: "copilot",
           command: ["copilot"],
@@ -285,8 +359,8 @@ describe("NanasaStore group and membership updates", () => {
       alias: "Explicit",
     });
 
-    expect(first.memberId).toBe("claude-code.calm-hopper");
-    expect(second.memberId).toBe("claude-code.bold-lovelace");
+    expect(first.memberId).toBe("calm-hopper");
+    expect(second.memberId).toBe("bold-lovelace");
     expect(explicit.memberId).toBe("fixture-member");
     store.close();
   });
@@ -855,9 +929,7 @@ describe("NanasaStore schema migration", () => {
     historical.close();
 
     const migrated = new NanasaStore(databasePath);
-    const migratedProfile = migrated
-      .getSnapshot()
-      .agentProfiles.find((candidate) => candidate.id === profile.id);
+    const migratedProfile = migrated.getAgentProfile(profile.id);
     expect(migratedProfile).toBeDefined();
     expect(migratedProfile).not.toHaveProperty("adapter");
     expect(migratedProfile).not.toHaveProperty("capabilities");
@@ -915,14 +987,13 @@ describe("NanasaStore schema migration", () => {
     legacy.close();
 
     const store = new NanasaStore(databasePath);
-    expect(store.getSnapshot().agentProfiles).toMatchObject([
-      {
-        id: "legacy_claude",
-        agentType: "claude-copilot",
-      },
-    ]);
-    expect(store.getSnapshot().agentProfiles[0]).not.toHaveProperty("adapter");
-    expect(store.getSnapshot().agentProfiles[0]).not.toHaveProperty("capabilities");
+    expect(store.getAgentProfile("legacy_claude")).toMatchObject({
+      id: "legacy_claude",
+      agentType: "claude-copilot",
+    });
+    expect(store.getAgentProfile("legacy_claude")).not.toHaveProperty("adapter");
+    expect(store.getAgentProfile("legacy_claude")).not.toHaveProperty("capabilities");
+    expect(store.getSnapshot().agentProfiles).toEqual([]);
     store.close();
 
     const migrated = new DatabaseSync(databasePath, { readOnly: true });

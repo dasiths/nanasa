@@ -1,10 +1,10 @@
 import { expect, test } from "./fixtures/package-fixture.js";
 
-test("group and member rename and delete workflows require confirmation", async ({
+test("group and agent rename and delete workflows require confirmation", async ({
   page,
   nanasa,
 }) => {
-  const { group, members } = await nanasa.seedGroup("CRUD team", [
+  const { group, agents } = await nanasa.seedGroup("CRUD team", [
     "Original agent",
     "Retained agent",
   ]);
@@ -17,7 +17,6 @@ test("group and member rename and delete workflows require confirmation", async 
       .filter((run) => run.groupId === group.id)
       .map((run) => [run.memberId, run.terminal?.paneId]),
   );
-  const profileIds = new Set(members.map((member) => member.agentProfileId));
   for (const paneId of panesByMember.values()) {
     expect(paneId).toBeDefined();
     await nanasa.waitForPaneText(paneId!, "SAFE_ECHO_READY:");
@@ -42,24 +41,24 @@ test("group and member rename and delete workflows require confirmation", async 
 
   await page.getByRole("button", { name: "Actions for agent Original agent" }).click();
   await page.getByRole("menuitem", { name: "Rename agent Original agent" }).click();
-  const agentAlias = page.getByRole("textbox", { name: "agent alias for Original agent" });
-  await agentAlias.fill("Renamed agent");
-  await agentAlias.press("Enter");
+  const agentName = page.getByRole("textbox", { name: "agent name for Original agent" });
+  await agentName.fill("Renamed agent");
+  await agentName.press("Enter");
   await expect(page.getByRole("button", { name: "Actions for agent Renamed agent" })).toBeVisible();
 
   await page.getByRole("button", { name: "Actions for agent Renamed agent" }).click();
   await page.getByRole("menuitem", { name: "Remove agent Renamed agent" }).click();
-  const memberDialog = page.getByRole("dialog", { name: "Remove Renamed agent?" });
-  await expect(memberDialog).toContainText("membership will be removed");
-  await memberDialog.getByRole("button", { name: "Cancel" }).click();
+  const agentDialog = page.getByRole("dialog", { name: "Remove Renamed agent?" });
+  await expect(agentDialog).toContainText("agent will be removed from the group");
+  await agentDialog.getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByRole("button", { name: "Actions for agent Renamed agent" })).toBeVisible();
   await page.getByRole("button", { name: "Actions for agent Renamed agent" }).click();
   await page.getByRole("menuitem", { name: "Remove agent Renamed agent" }).click();
-  const memberRunBeforeDelete = (await nanasa.snapshot()).runs
-    .filter((run) => run.memberId === members[0]!.memberId && run.status === "running")
+  const agentRunBeforeDelete = (await nanasa.snapshot()).runs
+    .filter((run) => run.memberId === agents[0]!.memberId && run.status === "running")
     .sort((left, right) => right.generation - left.generation)[0];
-  expect(memberRunBeforeDelete?.terminal?.paneId).toBeDefined();
-  paneExpectedStopped = memberRunBeforeDelete!.terminal!.paneId;
+  expect(agentRunBeforeDelete?.terminal?.paneId).toBeDefined();
+  paneExpectedStopped = agentRunBeforeDelete!.terminal!.paneId;
   await page
     .getByRole("dialog", { name: "Remove Renamed agent?" })
     .getByRole("button", { name: "Remove agent" })
@@ -69,20 +68,16 @@ test("group and member rename and delete workflows require confirmation", async 
   );
   expect(paneExpectedStopped).toBeUndefined();
 
-  const afterMemberRemoval = await nanasa.snapshot();
+  const afterAgentRemoval = await nanasa.snapshot();
   expect(
-    afterMemberRemoval.memberships.some((member) => member.memberId === members[0]!.memberId),
+    afterAgentRemoval.memberships.some((agent) => agent.memberId === agents[0]!.memberId),
   ).toBe(false);
-  expect(afterMemberRemoval.runs.some((run) => run.memberId === members[0]!.memberId)).toBe(false);
-  const remainingRun = afterMemberRemoval.runs
-    .filter((run) => run.memberId === members[1]!.memberId && run.status === "running")
+  expect(afterAgentRemoval.runs.some((run) => run.memberId === agents[0]!.memberId)).toBe(false);
+  const remainingRun = afterAgentRemoval.runs
+    .filter((run) => run.memberId === agents[1]!.memberId && run.status === "running")
     .sort((left, right) => right.generation - left.generation)[0];
   expect(remainingRun?.terminal?.paneId).toBeDefined();
   expect(nanasa.paneExists(remainingRun!.terminal!.paneId)).toBe(true);
-  expect(afterMemberRemoval.agentProfiles.map((profile) => profile.id)).toEqual(
-    expect.arrayContaining([...profileIds]),
-  );
-
   await page.getByRole("button", { name: "Actions for group Renamed team" }).click();
   await page.getByRole("menuitem", { name: "Delete group Renamed team" }).click();
   const groupDialog = page.getByRole("dialog", { name: "Delete Renamed team?" });
@@ -92,7 +87,7 @@ test("group and member rename and delete workflows require confirmation", async 
   await page.getByRole("button", { name: "Actions for group Renamed team" }).click();
   await page.getByRole("menuitem", { name: "Delete group Renamed team" }).click();
   const groupRunBeforeDelete = (await nanasa.snapshot()).runs
-    .filter((run) => run.memberId === members[1]!.memberId && run.status === "running")
+    .filter((run) => run.memberId === agents[1]!.memberId && run.status === "running")
     .sort((left, right) => right.generation - left.generation)[0];
   expect(groupRunBeforeDelete?.terminal?.paneId).toBeDefined();
   paneExpectedStopped = groupRunBeforeDelete!.terminal!.paneId;
@@ -106,11 +101,8 @@ test("group and member rename and delete workflows require confirmation", async 
 
   const afterGroupDeletion = await nanasa.snapshot();
   expect(afterGroupDeletion.groups.some((candidate) => candidate.id === group.id)).toBe(false);
-  expect(afterGroupDeletion.memberships.some((member) => member.groupId === group.id)).toBe(false);
+  expect(afterGroupDeletion.memberships.some((agent) => agent.groupId === group.id)).toBe(false);
   expect(afterGroupDeletion.runs.some((run) => run.groupId === group.id)).toBe(false);
-  expect(afterGroupDeletion.agentProfiles.map((profile) => profile.id)).toEqual(
-    expect.arrayContaining([...profileIds]),
-  );
 
   const retainedEvents = await page.evaluate(
     ({ baseUrl, deletedGroupId }) =>
@@ -155,7 +147,7 @@ test("group and member rename and delete workflows require confirmation", async 
       (event) =>
         event.type === "membership.removed" &&
         (event.payload.membership as { memberId?: string } | undefined)?.memberId ===
-          members[0]!.memberId,
+          agents[0]!.memberId,
     ),
   ).toBe(true);
   expect(

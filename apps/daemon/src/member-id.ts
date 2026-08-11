@@ -4,7 +4,7 @@ export type MemberNameGenerator = () => string;
 
 export const dockerMemberName: MemberNameGenerator = () => dockerNames.getRandomName();
 
-export function formatMemberId(agentType: string, randomName: string): string {
+export function formatMemberId(randomName: string): string {
   const normalizedName = randomName
     .trim()
     .toLowerCase()
@@ -13,5 +13,5 @@ export function formatMemberId(agentType: string, randomName: string): string {
   if (normalizedName.length === 0) {
     throw new Error("docker-names returned an unusable member name");
   }
-  return `${agentType}.${normalizedName}`;
+  return normalizedName;
 }
