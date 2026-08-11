@@ -29,8 +29,8 @@ import {
   CircleStop,
   Copy,
   EllipsisVertical,
-  Pencil,
   Palette,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -743,6 +743,19 @@ function AgentSettingsDialog({
   const [profileBusy, setProfileBusy] = useState(false);
   const [memberError, setMemberError] = useState<string>();
   const [profileError, setProfileError] = useState<string>();
+  const inheritedInstructions = [
+    ...config.instructions.map((path) => ({ source: "Global", path })),
+    ...(config.groups[member.groupId]?.instructions ?? []).map((path) => ({
+      source: "Group",
+      path,
+    })),
+    ...(member.roleId === undefined ? [] : (config.roles[member.roleId]?.instructions ?? [])).map(
+      (path) => ({
+        source: `Role · ${config.roles[member.roleId as string]?.name ?? member.roleId}`,
+        path,
+      }),
+    ),
+  ];
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -813,6 +826,17 @@ function AgentSettingsDialog({
             <X aria-hidden="true" size={16} />
           </button>
         </header>
+        <section className="agent-settings-section inherited-instructions-section">
+          <h3>Inherited instruction files</h3>
+          <ul className="instruction-layer-list">
+            {inheritedInstructions.map(({ source, path }) => (
+              <li key={`${source}:${path}`}>
+                <span>{source}</span>
+                <code>{path}</code>
+              </li>
+            ))}
+          </ul>
+        </section>
         <form className="agent-settings-section" onSubmit={(event) => void saveMember(event)}>
           <h3>Membership</h3>
           <div className="form-row form-row-split">
@@ -839,9 +863,13 @@ function AgentSettingsDialog({
               value={memberInstructions}
               onChange={(event) => setMemberInstructions(event.target.value)}
               rows={3}
-              placeholder=".nanasa/instructions/memberships/reviewer.md"
             />
           </label>
+          {memberInstructions === "" && (
+            <small className="instruction-empty-state">
+              No assignment-specific instruction files configured
+            </small>
+          )}
           {memberError !== undefined && <p className="form-error">{memberError}</p>}
           <button type="submit" className="compact-button" disabled={memberBusy}>
             <Check aria-hidden="true" size={15} />
@@ -876,9 +904,13 @@ function AgentSettingsDialog({
               value={profileInstructions}
               onChange={(event) => setProfileInstructions(event.target.value)}
               rows={3}
-              placeholder=".nanasa/instructions/profiles/copilot.md"
             />
           </label>
+          {profileInstructions === "" && (
+            <small className="instruction-empty-state">
+              No profile-specific instruction files configured
+            </small>
+          )}
           {profileError !== undefined && <p className="form-error">{profileError}</p>}
           <button type="submit" className="compact-button" disabled={profileBusy}>
             <Check aria-hidden="true" size={15} />

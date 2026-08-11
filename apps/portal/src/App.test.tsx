@@ -754,6 +754,77 @@ describe("portal application", () => {
     );
   });
 
+  it("shows empty instruction fields as state instead of example values", async () => {
+    const user = userEvent.setup();
+    render(<App client={createClient()} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    await chooseRowAction(user, "Actions for agent Builder", "Edit agent settings Builder");
+    const dialog = screen.getByRole("dialog", { name: "Builder" });
+    const assignment = within(dialog).getByLabelText("Assignment instruction files");
+    const profile = within(dialog).getByLabelText("Profile instruction files");
+
+    expect(assignment).toHaveValue("");
+    expect(assignment).not.toHaveAttribute("placeholder");
+    expect(profile).toHaveValue("");
+    expect(profile).not.toHaveAttribute("placeholder");
+    expect(
+      within(dialog).getByText("No assignment-specific instruction files configured"),
+    ).toBeVisible();
+    expect(
+      within(dialog).getByText("No profile-specific instruction files configured"),
+    ).toBeVisible();
+
+    await user.type(assignment, ".nanasa/instructions/memberships/builder.md");
+    expect(assignment).toHaveValue(".nanasa/instructions/memberships/builder.md");
+    expect(
+      within(dialog).queryByText("No assignment-specific instruction files configured"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows inherited global, group, and role instruction files in agent settings", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    vi.mocked(client.loadConfig).mockResolvedValue({
+      ...config,
+      instructions: [".nanasa/instructions/team.md"],
+      roles: {
+        reviewer: {
+          ...config.roles.reviewer!,
+          instructions: [".nanasa/instructions/reviewer.md"],
+        },
+      },
+      groups: {
+        "group-backend": {
+          name: "Backend",
+          instructions: [".nanasa/instructions/groups/backend.md"],
+          memberships: {
+            "membership-reviewer": {
+              memberId: "reviewer",
+              agentProfileId: profile.id,
+              alias: "Reviewer",
+              roleId: "reviewer",
+              instructions: [],
+            },
+          },
+        },
+      },
+    });
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    await chooseRowAction(user, "Actions for agent Reviewer", "Edit agent settings Reviewer");
+    const dialog = screen.getByRole("dialog", { name: "Reviewer" });
+    const inherited = within(dialog).getByRole("heading", {
+      name: "Inherited instruction files",
+    }).parentElement as HTMLElement;
+
+    expect(within(inherited).getByText(".nanasa/instructions/team.md")).toBeVisible();
+    expect(within(inherited).getByText(".nanasa/instructions/groups/backend.md")).toBeVisible();
+    expect(within(inherited).getByText(".nanasa/instructions/reviewer.md")).toBeVisible();
+    expect(within(inherited).getByText("Role · Reviewer")).toBeVisible();
+  });
+
   it("shows a distinct repository configuration error", async () => {
     const client = createClient();
     vi.mocked(client.loadConfig).mockRejectedValue(new Error("agentTypes is invalid"));

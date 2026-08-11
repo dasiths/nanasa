@@ -10,10 +10,10 @@ import type {
   ReorderGroupMembershipsCommand,
   ReorderGroupMembershipsResult,
   RoleDefinition,
-  UpdateRolePresentationCommand,
   UpdateAgentProfileCommand,
   UpdateGroupCommand,
   UpdateGroupMembershipCommand,
+  UpdateRolePresentationCommand,
 } from "@nanasa/contracts";
 import { ConfigRepository } from "./config-repository.js";
 import { dockerMemberName, formatMemberId } from "./member-id.js";

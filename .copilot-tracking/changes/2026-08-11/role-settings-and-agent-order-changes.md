@@ -45,7 +45,8 @@
 
 - 45 contract tests passed.
 - 142 daemon tests passed.
-- 62 portal tests passed.
+- 64 portal tests passed.
 - 9 packed-package tests passed.
 - Typecheck, lint, format check, build, and `git diff --check` passed.
 - Live browser verified role editing, YAML reorder, restart persistence, responsive layout, and iframe continuity.
+- Agent settings live browser verification confirmed inherited global/group/role files remain visible and editable profile/member drafts are unambiguous.

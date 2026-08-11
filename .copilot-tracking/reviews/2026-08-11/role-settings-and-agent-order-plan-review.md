@@ -25,7 +25,7 @@
 
 ## Validation
 
-- `pnpm test`: passed, including 45 contract, 142 daemon, 62 portal, and 9 package tests.
+- `pnpm test`: passed, including 45 contract, 142 daemon, 62 portal, and 9 package tests; the focused portal suite then passed with 64 tests after instruction-layer UX coverage was added.
 - `pnpm typecheck`: passed.
 - `pnpm lint`: passed.
 - `pnpm format:check`: passed.
