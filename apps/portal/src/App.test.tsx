@@ -21,6 +21,7 @@ import {
   MESSAGE_OVERLAY_OPEN_KEY,
   MessageWorkspace,
 } from "./components/message-workspace.js";
+import { MESSAGE_READ_CURSORS_KEY, messageUnreadCount } from "./hooks/use-message-read-cursors.js";
 import { PORTAL_PREFERENCES_KEY } from "./hooks/use-portal-preferences.js";
 
 vi.mock("./components/terminal-workspace.js", () => ({
@@ -31,6 +32,18 @@ const timestamp = "2026-08-09T12:00:00.000Z";
 
 const config: NanasaConfig = {
   version: 1,
+  instructions: [],
+  roles: {
+    reviewer: {
+      name: "Reviewer",
+      description: "Reviews changes without modifying them",
+      instructions: [],
+      permissionPolicy: "read-only",
+    },
+  },
+  agentProfiles: {},
+  groups: {},
+  messages: { retentionPerGroup: 1_000 },
   agentTypes: {
     copilot: {
       key: "copilot",
@@ -87,6 +100,7 @@ const memberships: GroupMembership[] = [
     memberId: "reviewer",
     agentProfileId: profile.id,
     alias: "Reviewer",
+    roleId: "reviewer",
     state: "active",
     joinedAt: timestamp,
   },
@@ -166,6 +180,7 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
       deletedDeliveries: 0,
     }),
     createAgentProfile: vi.fn().mockResolvedValue(profile),
+    updateAgentProfile: vi.fn().mockResolvedValue(profile),
     addMembership: vi.fn().mockResolvedValue(memberships[0]),
     updateMembership: vi.fn().mockResolvedValue(memberships[0]),
     removeMembership: vi.fn().mockResolvedValue({ ...memberships[0], state: "removed" }),
@@ -175,6 +190,31 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     submitMessage: vi.fn().mockImplementation(async () => {
       if (submission === undefined) throw new Error("No submission fixture configured");
       return submission;
+    }),
+    loadMessages: vi.fn().mockResolvedValue({
+      groupId: "group-backend",
+      messages: [],
+      deliveryOutcomes: [],
+      state: {
+        groupId: "group-backend",
+        latestGroupSeq: 0,
+        retainedMessageCount: 0,
+        activeDeliveryCount: 0,
+        failedRecipientMemberIds: [],
+      },
+      pageInfo: { hasOlder: false, hasNewer: false },
+    }),
+    clearMessages: vi.fn().mockResolvedValue({
+      groupId: "group-backend",
+      deletedMessages: 0,
+      deletedDeliveries: 0,
+      state: {
+        groupId: "group-backend",
+        latestGroupSeq: 0,
+        retainedMessageCount: 0,
+        activeDeliveryCount: 0,
+        failedRecipientMemberIds: [],
+      },
     }),
     getTerminalEndpointStatus: vi.fn(),
     createEventsSocket: vi.fn().mockImplementation(inertSocket),
@@ -364,6 +404,61 @@ describe("portal application", () => {
     expect(client.deleteGroup).toHaveBeenCalledWith("group-backend");
   });
 
+  it("creates groups with shared Markdown instructions", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    await user.click(screen.getByRole("button", { name: "Create group" }));
+    await user.type(screen.getByLabelText("Group name"), "Platform team");
+    await user.type(
+      screen.getByLabelText("Group instruction files"),
+      ".nanasa/instructions/groups/platform.md",
+    );
+    const createButtons = screen.getAllByRole("button", { name: "Create group" });
+    await user.click(createButtons.at(-1)!);
+
+    expect(client.createGroup).toHaveBeenCalledWith({
+      name: "Platform team",
+      instructions: [".nanasa/instructions/groups/platform.md"],
+    });
+  });
+
+  it("edits group name and shared Markdown instructions", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    vi.mocked(client.loadConfig).mockResolvedValue({
+      ...config,
+      groups: {
+        "group-backend": {
+          name: "Backend",
+          instructions: [".nanasa/instructions/groups/backend.md"],
+          memberships: {},
+        },
+      },
+    });
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    await user.click(screen.getByRole("button", { name: "Edit group settings Backend" }));
+    const dialog = screen.getByRole("dialog", { name: "Backend" });
+    const name = within(dialog).getByLabelText("Group name");
+    await user.clear(name);
+    await user.type(name, "Platform");
+    const files = within(dialog).getByLabelText("Group instruction files");
+    await user.clear(files);
+    await user.type(files, ".nanasa/instructions/groups/platform.md");
+    await user.click(within(dialog).getByRole("button", { name: "Save group" }));
+
+    await waitFor(() =>
+      expect(client.updateGroup).toHaveBeenCalledWith("group-backend", {
+        name: "Platform",
+        instructions: [".nanasa/instructions/groups/platform.md"],
+      }),
+    );
+  });
+
   it("opens the add-agent form from the selected group row", async () => {
     const user = userEvent.setup();
     render(<App client={createClient()} />);
@@ -373,6 +468,23 @@ describe("portal application", () => {
 
     expect(screen.getByLabelText("Member alias")).toBeInTheDocument();
     expect(screen.getByLabelText("Profile source")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Reviewer (reviewer)" })).toBeInTheDocument();
+  });
+
+  it("assigns a selected role when adding an agent", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+    await user.click(screen.getByRole("button", { name: "Add agent to Backend" }));
+    await user.type(screen.getByLabelText("Member alias"), "Security reviewer");
+    await user.selectOptions(screen.getByLabelText("Role override"), "reviewer");
+    await user.click(screen.getByRole("button", { name: "Add member" }));
+
+    expect(client.addMembership).toHaveBeenCalledWith(
+      "group-backend",
+      expect.objectContaining({ alias: "Security reviewer", roleId: "reviewer" }),
+    );
   });
 
   it("selects the first existing profile when profiles arrive after the form opens", async () => {
@@ -406,6 +518,7 @@ describe("portal application", () => {
       groupId: "group-backend",
       alias: "Echo worker",
       profileId: profile.id,
+      instructions: [],
     });
   });
 
@@ -429,7 +542,111 @@ describe("portal application", () => {
     expect(client.createAgentProfile).toHaveBeenCalledWith({
       name: `${agentType} profile`,
       agentType,
+      instructions: [],
     });
+  });
+
+  it("creates profiles and memberships with layered role instructions", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    await user.click(screen.getByRole("button", { name: "Add agent to Backend" }));
+    await user.selectOptions(screen.getByLabelText("Profile source"), "new");
+    await user.type(screen.getByLabelText("Member alias"), "Security reviewer");
+    await user.type(screen.getByLabelText("Profile name"), "Review profile");
+    await user.selectOptions(screen.getByLabelText("Profile default role"), "reviewer");
+    await user.type(
+      screen.getByLabelText("Profile instruction files"),
+      ".nanasa/instructions/profiles/review.md",
+    );
+    await user.selectOptions(screen.getByLabelText("Role override"), "reviewer");
+    await user.type(
+      screen.getByLabelText("Assignment instruction files"),
+      ".nanasa/instructions/memberships/security.md",
+    );
+    await user.click(screen.getByRole("button", { name: "Add member" }));
+
+    expect(client.createAgentProfile).toHaveBeenCalledWith({
+      name: "Review profile",
+      agentType: "copilot",
+      defaultRoleId: "reviewer",
+      instructions: [".nanasa/instructions/profiles/review.md"],
+    });
+    expect(client.addMembership).toHaveBeenCalledWith("group-backend", {
+      agentProfileId: profile.id,
+      alias: "Security reviewer",
+      roleId: "reviewer",
+      instructions: [".nanasa/instructions/memberships/security.md"],
+    });
+  });
+
+  it("edits membership overrides and reusable profile defaults independently", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const configured = {
+      ...config,
+      agentProfiles: {
+        [profile.id]: {
+          name: profile.name,
+          agentType: profile.agentType,
+          defaultRoleId: "reviewer" as const,
+          instructions: [".nanasa/instructions/profiles/review.md"],
+        },
+      },
+      groups: {
+        "group-backend": {
+          name: "Backend",
+          instructions: [],
+          memberships: {
+            "membership-reviewer": {
+              memberId: "reviewer",
+              agentProfileId: profile.id,
+              alias: "Reviewer",
+              roleId: "reviewer" as const,
+              instructions: [".nanasa/instructions/memberships/reviewer.md"],
+            },
+          },
+        },
+      },
+    };
+    vi.mocked(client.loadConfig).mockResolvedValue(configured);
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    await user.click(screen.getByRole("button", { name: "Edit agent settings Reviewer" }));
+    const dialog = screen.getByRole("dialog", { name: "Reviewer" });
+
+    const alias = within(dialog).getByLabelText("Member alias");
+    await user.clear(alias);
+    await user.type(alias, "Security reviewer");
+    const memberFiles = within(dialog).getByLabelText("Assignment instruction files");
+    await user.clear(memberFiles);
+    await user.type(memberFiles, ".nanasa/instructions/memberships/security.md");
+    await user.click(within(dialog).getByRole("button", { name: "Save membership" }));
+    await waitFor(() =>
+      expect(client.updateMembership).toHaveBeenCalledWith("group-backend", "reviewer", {
+        alias: "Security reviewer",
+        roleId: "reviewer",
+        instructions: [".nanasa/instructions/memberships/security.md"],
+      }),
+    );
+
+    const profileName = within(dialog).getByLabelText("Profile name");
+    await user.clear(profileName);
+    await user.type(profileName, "Security review profile");
+    const profileFiles = within(dialog).getByLabelText("Profile instruction files");
+    await user.clear(profileFiles);
+    await user.type(profileFiles, ".nanasa/instructions/profiles/security.md");
+    await user.click(within(dialog).getByRole("button", { name: "Save profile" }));
+    await waitFor(() =>
+      expect(client.updateAgentProfile).toHaveBeenCalledWith(profile.id, {
+        name: "Security review profile",
+        defaultRoleId: "reviewer",
+        instructions: [".nanasa/instructions/profiles/security.md"],
+      }),
+    );
   });
 
   it("shows a distinct repository configuration error", async () => {
@@ -767,34 +984,140 @@ describe("portal application", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows unread messages on the closed launcher and marks them seen when opened", async () => {
+  it("preserves read cursors across refresh and counts only new messages", async () => {
     window.localStorage.setItem(MESSAGE_OVERLAY_OPEN_KEY, "false");
-    const onSubmit = vi.fn().mockResolvedValue(submissionResult());
-    const { rerender } = render(
-      <MessageWorkspace
-        group={snapshot.groups[0]!}
-        members={memberships.slice(0, 2)}
-        messages={[]}
-        onSubmit={onSubmit}
-      />,
-    );
-
-    expect(screen.queryByRole("region", { name: "Messages" })).not.toBeInTheDocument();
-    rerender(
-      <MessageWorkspace
-        group={snapshot.groups[0]!}
-        members={memberships.slice(0, 2)}
-        messages={[submissionResult().message]}
-        onSubmit={onSubmit}
-      />,
-    );
+    const client = createClient();
+    vi.mocked(client.loadSnapshot).mockResolvedValue({
+      ...snapshot,
+      messageGroups: [
+        {
+          groupId: "group-backend",
+          latestGroupSeq: 1,
+          oldestRetainedGroupSeq: 1,
+          retainedMessageCount: 1,
+          activeDeliveryCount: 0,
+          failedRecipientMemberIds: [],
+        },
+      ],
+    });
+    const first = render(<App client={client} />);
 
     expect(await screen.findByLabelText("1 unread messages")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Messages" }));
-    expect(screen.getByRole("region", { name: "Messages" })).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.queryByLabelText("1 unread messages")).not.toBeInTheDocument(),
     );
+    await userEvent.click(screen.getByRole("button", { name: "Close messages" }));
+    first.unmount();
+
+    expect(window.localStorage.getItem(MESSAGE_READ_CURSORS_KEY)).not.toBeNull();
+    const second = render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+    expect(screen.queryByLabelText("1 unread messages")).not.toBeInTheDocument();
+    second.unmount();
+
+    vi.mocked(client.loadSnapshot).mockResolvedValue({
+      ...snapshot,
+      messageGroups: [
+        {
+          groupId: "group-backend",
+          latestGroupSeq: 2,
+          oldestRetainedGroupSeq: 1,
+          retainedMessageCount: 2,
+          activeDeliveryCount: 0,
+          failedRecipientMemberIds: [],
+        },
+      ],
+    });
+    render(<App client={client} />);
+
+    expect(await screen.findByLabelText("1 unread messages")).toBeInTheDocument();
+  });
+
+  it("does not count messages pruned before the read cursor", () => {
+    expect(
+      messageUnreadCount(
+        {
+          groupId: "group-backend",
+          latestGroupSeq: 100,
+          oldestRetainedGroupSeq: 96,
+          retainedMessageCount: 5,
+          activeDeliveryCount: 0,
+          failedRecipientMemberIds: [],
+        },
+        1,
+      ),
+    ).toBe(5);
+  });
+
+  it("loads the latest 20 messages and prepends an older page near the top", async () => {
+    const client = createClient();
+    const messages = Array.from({ length: 21 }, (_, index) => ({
+      ...submissionResult().message,
+      id: `message-${index + 1}`,
+      groupSeq: index + 1,
+      body: { contentType: "text/markdown" as const, text: `Message ${index + 1}` },
+    }));
+    vi.mocked(client.loadMessages)
+      .mockResolvedValueOnce({
+        groupId: "group-backend",
+        messages: messages.slice(1),
+        deliveryOutcomes: [],
+        state: {
+          groupId: "group-backend",
+          latestGroupSeq: 21,
+          oldestRetainedGroupSeq: 1,
+          retainedMessageCount: 21,
+          activeDeliveryCount: 0,
+          failedRecipientMemberIds: [],
+        },
+        pageInfo: { hasOlder: true, hasNewer: false, nextBefore: 2 },
+      })
+      .mockResolvedValueOnce({
+        groupId: "group-backend",
+        messages: messages.slice(0, 1),
+        deliveryOutcomes: [],
+        state: {
+          groupId: "group-backend",
+          latestGroupSeq: 21,
+          oldestRetainedGroupSeq: 1,
+          retainedMessageCount: 21,
+          activeDeliveryCount: 0,
+          failedRecipientMemberIds: [],
+        },
+        pageInfo: { hasOlder: false, hasNewer: true, nextAfter: 1 },
+      });
+
+    render(
+      <MessageWorkspace
+        group={snapshot.groups[0]!}
+        members={memberships.slice(0, 2)}
+        messageState={{
+          groupId: "group-backend",
+          latestGroupSeq: 21,
+          oldestRetainedGroupSeq: 1,
+          retainedMessageCount: 21,
+          activeDeliveryCount: 0,
+          failedRecipientMemberIds: [],
+        }}
+        client={client}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Message 21")).toBeInTheDocument();
+    expect(client.loadMessages).toHaveBeenNthCalledWith(1, "group-backend", { limit: 20 });
+    const viewport = screen.getByRole("region", { name: "Message history" });
+    Object.defineProperty(viewport, "scrollHeight", { configurable: true, value: 1_000 });
+    Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 400 });
+    viewport.scrollTop = 0;
+    fireEvent.scroll(viewport);
+
+    expect(await screen.findByText("Message 1")).toBeInTheDocument();
+    expect(client.loadMessages).toHaveBeenNthCalledWith(2, "group-backend", {
+      limit: 20,
+      before: 2,
+    });
   });
 
   it("builds a broadcast payload with the current membership revision", () => {
@@ -828,9 +1151,7 @@ describe("portal application", () => {
     expect(delivery).toHaveAttribute("aria-expanded", "false");
     await user.click(delivery);
     expect(screen.getByText("queued")).toBeInTheDocument();
-    expect(JSON.parse(window.localStorage.getItem(MESSAGE_HISTORY_KEY) ?? "[]")).toMatchObject([
-      { submission: { message: { id: "message-1", body: { text: "Review the API" } } } },
-    ]);
+    expect(window.localStorage.getItem(MESSAGE_HISTORY_KEY)).toBeNull();
     expect(client.submitMessage).toHaveBeenCalledWith(
       "group-backend",
       expect.objectContaining({
@@ -840,7 +1161,7 @@ describe("portal application", () => {
     );
   });
 
-  it("restores browser message history and clears all saved entries", async () => {
+  it("restores server message history and clears persisted entries", async () => {
     const user = userEvent.setup();
     const first = render(<App client={createClient(submissionResult())} />);
     await screen.findByRole("heading", { name: "Backend" });
@@ -848,18 +1169,45 @@ describe("portal application", () => {
     await user.type(screen.getByLabelText("Message body"), "Review the API");
     await user.click(screen.getByRole("button", { name: "Send message" }));
     expect(await screen.findByText("Review the API")).toBeInTheDocument();
-    await waitFor(() => expect(window.localStorage.getItem(MESSAGE_HISTORY_KEY)).not.toBeNull());
     first.unmount();
-    expect(window.localStorage.getItem(MESSAGE_HISTORY_KEY)).not.toBeNull();
+    expect(window.localStorage.getItem(MESSAGE_HISTORY_KEY)).toBeNull();
 
-    render(<App client={createClient()} />);
+    const restoredClient = createClient();
+    vi.mocked(restoredClient.loadSnapshot).mockResolvedValue({
+      ...snapshot,
+      messageGroups: [
+        {
+          groupId: "group-backend",
+          latestGroupSeq: 1,
+          oldestRetainedGroupSeq: 1,
+          retainedMessageCount: 1,
+          activeDeliveryCount: 1,
+          failedRecipientMemberIds: [],
+        },
+      ],
+    });
+    vi.mocked(restoredClient.loadMessages).mockResolvedValue({
+      groupId: "group-backend",
+      messages: [submissionResult().message],
+      deliveryOutcomes: submissionResult().deliveryOutcomes,
+      state: {
+        groupId: "group-backend",
+        latestGroupSeq: 1,
+        oldestRetainedGroupSeq: 1,
+        retainedMessageCount: 1,
+        activeDeliveryCount: 1,
+        failedRecipientMemberIds: [],
+      },
+      pageInfo: { hasOlder: false, hasNewer: false },
+    });
+    render(<App client={restoredClient} />);
     await screen.findByRole("heading", { name: "Backend" });
-    expect(screen.getByText("Review the API")).toBeInTheDocument();
+    expect(await screen.findByText("Review the API")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Clear all message history" }));
     const dialog = screen.getByRole("dialog", { name: "Clear all message history?" });
     expect(screen.getByText("Review the API")).toBeInTheDocument();
-    expect(window.localStorage.getItem(MESSAGE_HISTORY_KEY)).not.toBeNull();
+    expect(restoredClient.clearMessages).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(
       screen.queryByRole("dialog", { name: "Clear all message history?" }),
@@ -873,6 +1221,7 @@ describe("portal application", () => {
       ),
     );
     expect(screen.queryByText("Review the API")).not.toBeInTheDocument();
+    expect(restoredClient.clearMessages).toHaveBeenCalledWith("group-backend");
     expect(window.localStorage.getItem(MESSAGE_HISTORY_KEY)).toBeNull();
   });
 
@@ -890,6 +1239,21 @@ describe("portal application", () => {
     };
     const authoritativeSnapshot: PortalSnapshot = {
       ...snapshot,
+      messageGroups: [
+        {
+          groupId: "group-backend",
+          latestGroupSeq: 2,
+          oldestRetainedGroupSeq: 1,
+          retainedMessageCount: 2,
+          activeDeliveryCount: 1,
+          failedRecipientMemberIds: [],
+        },
+      ],
+    };
+    const client = createClient();
+    vi.mocked(client.loadSnapshot).mockResolvedValue(authoritativeSnapshot);
+    vi.mocked(client.loadMessages).mockResolvedValue({
+      groupId: "group-backend",
       messages: [humanMessage, agentMessage],
       deliveryOutcomes: [
         ...submissionResult().deliveryOutcomes,
@@ -901,14 +1265,14 @@ describe("portal application", () => {
           updatedAt: agentMessage.createdAt,
         },
       ],
-    };
-    const client = createClient();
-    vi.mocked(client.loadSnapshot).mockResolvedValue(authoritativeSnapshot);
+      state: authoritativeSnapshot.messageGroups![0]!,
+      pageInfo: { hasOlder: false, hasNewer: false },
+    });
 
     const { container } = render(<App client={client} />);
     await screen.findByRole("heading", { name: "Backend" });
 
-    expect(screen.getAllByText(/^From:/).map((heading) => heading.textContent)).toEqual([
+    expect((await screen.findAllByText(/^From:/)).map((heading) => heading.textContent)).toEqual([
       "From: Human",
       "From: Reviewer · reviewer",
     ]);

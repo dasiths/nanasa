@@ -3,6 +3,12 @@ import { dirname, join } from "node:path";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import {
+  AddGroupMembershipCommandSchema,
+  MAX_MESSAGE_REQUEST_BYTES,
+  MAX_MESSAGE_TEXT_BYTES,
+  OVERSIZED_MESSAGE_GUIDANCE,
+  CreateAgentProfileCommandSchema,
+  CreateGroupCommandSchema,
   DeleteGroupResultSchema,
   InterruptAgentRunCommandSchema,
   StartAgentRunCommandSchema,
@@ -10,6 +16,7 @@ import {
   StartGroupRunsResultSchema,
   StopAgentRunCommandSchema,
   TerminalEndpointStatusSchema,
+  UpdateAgentProfileCommandSchema,
   UpdateGroupCommandSchema,
   UpdateGroupMembershipCommandSchema,
 } from "@nanasa/contracts";
@@ -17,7 +24,9 @@ import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 import { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
 import { registerAgentStatusRoutes } from "./agent-status-routes.js";
 import { discoverAndLoadNanasaConfig, type LoadedNanasaConfig } from "./config.js";
+import { ConfigRepository } from "./config-repository.js";
 import { DeliveryDispatcher } from "./delivery-dispatcher.js";
+import { resolveEffectiveAgentPrompt } from "./instruction-resolver.js";
 import { McpCredentialIssuer } from "./mcp-auth.js";
 import { validateMcpEndpointConfiguration } from "./mcp-config.js";
 import { registerMcpRoutes } from "./mcp-server.js";
@@ -28,6 +37,7 @@ import { TmuxTerminalDelivery } from "./terminal-delivery.js";
 import { TerminalEndpointRegistry } from "./terminal-endpoint-registry.js";
 import { registerTerminalProxy } from "./terminal-proxy.js";
 import { TmuxRuntime } from "./tmux-runtime.js";
+import { TopologyService } from "./topology-service.js";
 import { TtydSupervisor } from "./ttyd-supervisor.js";
 
 export interface DaemonOptions {
@@ -62,6 +72,7 @@ export interface DaemonContext {
   ttydSupervisor: TtydSupervisor;
   dispatcher: DeliveryDispatcher;
   messageCommands: MessageCommandService;
+  topology: TopologyService;
   loadedConfig: LoadedNanasaConfig;
   runtimePath: string;
 }
@@ -74,6 +85,10 @@ function isValidationError(error: unknown): error is ErrorWithIssues {
   return (
     typeof error === "object" && error !== null && "issues" in error && Array.isArray(error.issues)
   );
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === code;
 }
 
 function idempotencyKey(
@@ -107,7 +122,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
   if (options.servePortal === true && options.portalAssetsPath === undefined) {
     throw new Error("portalAssetsPath is required when servePortal is enabled");
   }
-  const loadedConfig =
+  let loadedConfig =
     options.loadedConfig ?? discoverAndLoadNanasaConfig(options.repoRoot ?? process.cwd());
   const dataPath = options.dataPath ?? loadedConfig.dataPath;
   const runtimePath =
@@ -116,11 +131,13 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       ? join(dirname(options.dataPath), "runtime")
       : loadedConfig.runtimeDirectory);
   mkdirSync(runtimePath, { recursive: true });
-  const app = Fastify({ logger: options.logger ?? false });
+  const app = Fastify({ logger: options.logger ?? false, bodyLimit: 1024 * 1024 });
   const store = new NanasaStore(dataPath, {
     config: loadedConfig.config,
     configStatus: loadedConfig.status,
   });
+  const configRepository = new ConfigRepository(loadedConfig.repoRoot);
+  loadedConfig = configRepository.initializeTopology(store.getSnapshot());
   const mcpPath = options.mcp?.path ?? "/mcp";
   if (!/^\/[A-Za-z0-9/_-]*$/.test(mcpPath) || mcpPath.includes("//")) {
     throw new Error("MCP path must be an absolute URL path");
@@ -174,6 +191,16 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
               ]),
             ),
             mcpEndpointUrl,
+            promptResolver: (membership, profile) => {
+              const current = configRepository.load();
+              return resolveEffectiveAgentPrompt({
+                repoRoot: current.repoRoot,
+                config: current.config,
+                profileId: profile.id,
+                groupId: membership.groupId,
+                membershipId: membership.id,
+              });
+            },
           }),
           runtimeEnvironment: (run) => ({
             NANASA_MCP_URL: mcpEndpointUrl,
@@ -199,6 +226,8 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       ? {}
       : { reconcileIntervalMs: options.reconcileIntervalMs }),
   });
+  const topology = new TopologyService(configRepository, store, coordinator);
+  await topology.reconcile();
 
   await app.register(websocket);
   await coordinator.reconcile(true);
@@ -209,11 +238,38 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       return reply.status(error.statusCode).send({ code: error.code, message: error.message });
     }
     if (isValidationError(error)) {
+      const oversized = error.issues.some(
+        (issue) =>
+          typeof issue === "object" &&
+          issue !== null &&
+          "message" in issue &&
+          String(issue.message).includes(`${MAX_MESSAGE_TEXT_BYTES}-byte UTF-8 limit`),
+      );
+      if (oversized) {
+        return reply.status(413).send({
+          code: "message_body_too_large",
+          message: `Message text exceeds the ${MAX_MESSAGE_TEXT_BYTES}-byte UTF-8 limit. ${OVERSIZED_MESSAGE_GUIDANCE}`,
+        });
+      }
       return reply.status(400).send({
         code: "validation_error",
         message: "Request validation failed",
         issues: error.issues,
       });
+    }
+    if (hasErrorCode(error, "FST_ERR_CTP_BODY_TOO_LARGE")) {
+      const payload = {
+        code: "request_too_large",
+        message: `Request exceeds the ${MAX_MESSAGE_REQUEST_BYTES}-byte message request limit. Message text is limited to ${MAX_MESSAGE_TEXT_BYTES} UTF-8 bytes. ${OVERSIZED_MESSAGE_GUIDANCE}`,
+      };
+      if (request.url === mcpPath) {
+        return reply.status(413).send({
+          jsonrpc: "2.0",
+          error: { code: -32_000, message: payload.message },
+          id: null,
+        });
+      }
+      return reply.status(413).send(payload);
     }
     request.log.error(error);
     return reply.status(500).send({ code: "internal_error", message: "Internal server error" });
@@ -244,9 +300,13 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       messages: messageCommands,
     });
   }
-  app.get("/api/config", async () => loadedConfig.config);
-  app.get("/api/config/status", async () => loadedConfig.status);
-  app.get("/api/snapshot", async () => store.getSnapshot());
+  app.get("/api/config", async () => configRepository.load().config);
+  app.get("/api/config/status", async () => configRepository.load().status);
+  app.get("/api/snapshot", async () => ({
+    ...store.getSnapshot(),
+    messages: [],
+    deliveryOutcomes: [],
+  }));
   app.get<{ Params: { runId: string } }>("/api/runs/:runId/terminal", async (request) =>
     TerminalEndpointStatusSchema.parse(terminalEndpoints.status(request.params.runId)),
   );
@@ -257,38 +317,44 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
   });
 
   app.post("/api/groups", async (request, reply) => {
-    const group = store.createGroup(request.body as never, idempotencyKey(request.headers));
+    const group = await topology.createGroup(
+      CreateGroupCommandSchema.parse(request.body),
+      idempotencyKey(request.headers),
+    );
     return reply.status(201).send(group);
   });
 
   app.patch<{ Params: { groupId: string } }>("/api/groups/:groupId", async (request) =>
-    store.updateGroup(
-      request.params.groupId,
-      UpdateGroupCommandSchema.parse(request.body),
-      idempotencyKey(request.headers),
-    ),
+    topology.updateGroup(request.params.groupId, UpdateGroupCommandSchema.parse(request.body)),
   );
 
   app.delete<{ Params: { groupId: string } }>("/api/groups/:groupId", async (request) =>
     DeleteGroupResultSchema.parse(
-      await coordinator.deleteGroup(request.params.groupId, idempotencyKey(request.headers)),
+      await topology.deleteGroup(request.params.groupId, idempotencyKey(request.headers)),
     ),
   );
 
   app.post("/api/agent-profiles", async (request, reply) => {
-    const profile = store.createAgentProfile(
-      request.body as never,
+    const profile = await topology.createAgentProfile(
+      CreateAgentProfileCommandSchema.parse(request.body),
       idempotencyKey(request.headers),
     );
     return reply.status(201).send(profile);
   });
 
+  app.patch<{ Params: { profileId: string } }>("/api/agent-profiles/:profileId", async (request) =>
+    topology.updateAgentProfile(
+      request.params.profileId,
+      UpdateAgentProfileCommandSchema.parse(request.body),
+    ),
+  );
+
   app.post<{ Params: { groupId: string } }>(
     "/api/groups/:groupId/memberships",
     async (request, reply) => {
-      const membership = store.addMembership(
+      const membership = await topology.addMembership(
         request.params.groupId,
-        request.body as never,
+        AddGroupMembershipCommandSchema.parse(request.body),
         idempotencyKey(request.headers),
       );
       return reply.status(201).send(membership);
@@ -298,7 +364,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
   app.delete<{ Params: { groupId: string; memberId: string } }>(
     "/api/groups/:groupId/memberships/:memberId",
     async (request) =>
-      coordinator.removeMembership(
+      topology.removeMembership(
         request.params.groupId,
         request.params.memberId,
         idempotencyKey(request.headers),
@@ -308,11 +374,10 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
   app.patch<{ Params: { groupId: string; memberId: string } }>(
     "/api/groups/:groupId/memberships/:memberId",
     async (request) =>
-      store.updateMembership(
+      topology.updateMembership(
         request.params.groupId,
         request.params.memberId,
         UpdateGroupMembershipCommandSchema.parse(request.body),
-        idempotencyKey(request.headers),
       ),
   );
 
@@ -353,6 +418,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
 
   app.post<{ Params: { groupId: string } }>(
     "/api/groups/:groupId/messages",
+    { bodyLimit: MAX_MESSAGE_REQUEST_BYTES },
     async (request, reply) => {
       const result = messageCommands.submit(
         request.params.groupId,
@@ -361,6 +427,33 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       );
       return reply.status(201).send(result);
     },
+  );
+
+  app.get<{
+    Params: { groupId: string };
+    Querystring: { limit?: string; before?: string; after?: string };
+  }>("/api/groups/:groupId/messages", async (request) => {
+    const parsePositive = (value: string, name: string): number => {
+      if (!/^\d+$/.test(value) || Number(value) < 1) {
+        throw new DomainError(`invalid_message_${name}`, `${name} must be a positive integer`, 400);
+      }
+      return Number(value);
+    };
+    return store.listMessagePage(request.params.groupId, {
+      ...(request.query.limit === undefined
+        ? {}
+        : { limit: parsePositive(request.query.limit, "limit") }),
+      ...(request.query.before === undefined
+        ? {}
+        : { before: parsePositive(request.query.before, "cursor") }),
+      ...(request.query.after === undefined
+        ? {}
+        : { after: parsePositive(request.query.after, "cursor") }),
+    });
+  });
+
+  app.delete<{ Params: { groupId: string } }>("/api/groups/:groupId/messages", async (request) =>
+    store.clearMessageHistory(request.params.groupId, idempotencyKey(request.headers)),
   );
 
   app.get<{ Params: { messageId: string } }>(
@@ -420,6 +513,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     ttydSupervisor,
     dispatcher,
     messageCommands,
+    topology,
     loadedConfig,
     runtimePath,
   };

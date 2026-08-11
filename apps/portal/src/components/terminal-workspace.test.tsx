@@ -72,6 +72,7 @@ function createClient(
     updateGroup: vi.fn(),
     deleteGroup: vi.fn(),
     createAgentProfile: vi.fn<() => Promise<AgentProfile>>(),
+    updateAgentProfile: vi.fn(),
     addMembership: vi.fn(),
     updateMembership: vi.fn(),
     removeMembership: vi.fn(),
@@ -79,6 +80,8 @@ function createClient(
     startAllRuns: vi.fn(),
     stopRun: vi.fn(),
     submitMessage: vi.fn(),
+    loadMessages: vi.fn(),
+    clearMessages: vi.fn(),
     getTerminalEndpointStatus,
     createEventsSocket: vi.fn(),
   };
@@ -91,6 +94,41 @@ afterEach(() => {
 });
 
 describe("TerminalWorkspace", () => {
+  it("uses semantic agent status colors in tabs while the terminal is ready", async () => {
+    const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
+    const { container } = render(
+      <TerminalWorkspace
+        client={client}
+        members={members}
+        runs={runs}
+        agentStatuses={[
+          {
+            groupId: "group-backend",
+            memberId: "builder",
+            alias: "Builder",
+            agentType: "copilot",
+            runId: "run-builder",
+            generation: 1,
+            runStatus: "running",
+            state: "waiting",
+            phase: "settled",
+            outcome: "unknown",
+            confidence: "high",
+            attention: "none",
+            observedAt: timestamp,
+            stateChangedAt: timestamp,
+          },
+        ]}
+      />,
+    );
+
+    await screen.findByTitle("Builder (builder) ttyd terminal");
+    const builderTab = screen.getByRole("tab", { name: /Builder/ });
+    expect(builderTab.querySelector(".status-dot")).toHaveClass("status-waiting");
+    expect(builderTab.querySelector(".status-dot")).not.toHaveClass("status-running");
+    expect(container.querySelector(".connection-ready")).toBeInTheDocument();
+  });
+
   it("mounts only the selected run iframe in tabs", async () => {
     const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
     render(<TerminalWorkspace client={client} members={members} runs={runs} />);

@@ -11,7 +11,7 @@ applyTo: '**'
 * Define agent-type-specific configuration homes in `.nanasa/config.yaml`.
 * Support shared, member-specific, and custom repository-local homes.
 * Add integration setup, authentication, and diagnostic commands.
-* Do not preserve compatibility or add legacy cleanup for this proof of concept.
+* Do not preserve pre-alpha compatibility or add legacy cleanup for this change.
 
 ## Objectives
 

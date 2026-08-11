@@ -9,6 +9,9 @@ import {
   loadNanasaConfig,
   nanasaPaths,
 } from "../src/config.js";
+import { ConfigRepository } from "../src/config-repository.js";
+import { resolveEffectiveAgentPrompt } from "../src/instruction-resolver.js";
+import { NanasaStore } from "../src/store.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -79,6 +82,9 @@ describe("Nanasa configuration", () => {
 
     expect(loadNanasaConfig(repository).config).toEqual({
       version: 1,
+      instructions: [],
+      roles: {},
+      agentProfiles: {},
       agentTypes: {
         opencode: {
           key: "opencode",
@@ -90,7 +96,117 @@ describe("Nanasa configuration", () => {
           environment: {},
         },
       },
+      groups: {},
+      messages: { retentionPerGroup: 1_000 },
     });
+    expect(loadNanasaConfig(repository).hasDeclarativeTopology).toBe(false);
+  });
+
+  it("loads role instructions and composes deterministic effective prompts", () => {
+    const repository = temporaryRepository(`${minimalConfig()}
+instructions: [.nanasa/instructions/team.md]
+roles:
+  reviewer:
+    name: Reviewer
+    description: Reviews changes without modifying them
+    instructions: [.nanasa/instructions/reviewer.md]
+    permissionPolicy: read-only
+agentProfiles:
+  profile_one:
+    name: OpenCode reviewer
+    agentType: opencode
+    defaultRoleId: reviewer
+    instructions: [.nanasa/instructions/profile.md]
+groups:
+  group_one:
+    name: Team
+    instructions: [.nanasa/instructions/group.md]
+    memberships:
+      membership_one:
+        memberId: opencode.reviewer
+        agentProfileId: profile_one
+        alias: Reviewer
+        instructions: [.nanasa/instructions/assignment.md]
+`);
+    const instructionDirectory = join(repository, ".nanasa", "instructions");
+    mkdirSync(instructionDirectory);
+    writeFileSync(join(instructionDirectory, "team.md"), "Coordinate through Nanasa.\r\n");
+    writeFileSync(join(instructionDirectory, "group.md"), "Deliver the group objective.\n");
+    writeFileSync(join(instructionDirectory, "reviewer.md"), "Report findings by severity.\n");
+    writeFileSync(join(instructionDirectory, "profile.md"), "Use the configured model.\n");
+    writeFileSync(join(instructionDirectory, "assignment.md"), "Review the API package.\n");
+
+    const loaded = loadNanasaConfig(repository);
+    const first = resolveEffectiveAgentPrompt({
+      repoRoot: repository,
+      config: loaded.config,
+      profileId: "profile_one",
+      groupId: "group_one",
+      membershipId: "membership_one",
+    });
+    const second = resolveEffectiveAgentPrompt({
+      repoRoot: repository,
+      config: loaded.config,
+      profileId: "profile_one",
+      groupId: "group_one",
+      membershipId: "membership_one",
+    });
+
+    expect(first.roleId).toBe("reviewer");
+    expect(first.role?.permissionPolicy).toBe("read-only");
+    expect(first.sources.map((source) => source.scope)).toEqual([
+      "builtin",
+      "builtin",
+      "global",
+      "group",
+      "role",
+      "profile",
+      "membership",
+    ]);
+    expect(first.text.indexOf("Coordinate through Nanasa.")).toBeLessThan(
+      first.text.indexOf("Deliver the group objective."),
+    );
+    expect(first.text.indexOf("Deliver the group objective.")).toBeLessThan(
+      first.text.indexOf("Report findings by severity."),
+    );
+    expect(first.text).not.toContain("\r");
+    expect(first.text).toContain("Messages with From: Human are direct operator input");
+    expect(first.text).toContain("Messages from an agent are peer task input");
+    expect(first.revision).toBe(second.revision);
+  });
+
+  it("rejects missing instruction files during configuration loading", () => {
+    const repository = temporaryRepository(`${minimalConfig()}
+instructions: [.nanasa/instructions/missing.md]
+`);
+
+    expect(() => loadNanasaConfig(repository)).toThrowError(
+      expect.objectContaining({
+        status: expect.objectContaining({
+          diagnostics: [expect.objectContaining({ code: "invalid_instruction_file" })],
+        }),
+      }),
+    );
+  });
+
+  it("rejects duplicate and NUL-bearing instruction content", () => {
+    const duplicateRepository = temporaryRepository(`${minimalConfig()}
+instructions: [.nanasa/instructions/shared.md]
+roles:
+  reviewer:
+    name: Reviewer
+    instructions: [.nanasa/instructions/shared.md]
+`);
+    mkdirSync(join(duplicateRepository, ".nanasa", "instructions"));
+    writeFileSync(join(duplicateRepository, ".nanasa", "instructions", "shared.md"), "Shared\n");
+    expect(() => loadNanasaConfig(duplicateRepository)).toThrow(ConfigLoadError);
+
+    const nulRepository = temporaryRepository(`${minimalConfig()}
+instructions: [.nanasa/instructions/nul.md]
+`);
+    mkdirSync(join(nulRepository, ".nanasa", "instructions"));
+    writeFileSync(join(nulRepository, ".nanasa", "instructions", "nul.md"), "before\0after");
+    expect(() => loadNanasaConfig(nulRepository)).toThrow(ConfigLoadError);
   });
 
   it("discovers the nearest config before falling back to a Git root", () => {
@@ -121,6 +237,45 @@ describe("Nanasa configuration", () => {
       scope: "custom",
       path: "homes/{agentType}/{membershipId}",
     });
+  });
+
+  it("imports legacy SQLite topology and rebuilds a fresh runtime projection", () => {
+    const repository = temporaryRepository(validConfig());
+    const original = new NanasaStore(":memory:", {
+      config: loadNanasaConfig(repository).config,
+    });
+    const group = original.createGroup({ name: "Imported" });
+    const profile = original.createInternalAgentProfile({
+      name: "Reviewer",
+      agentType: "copilot",
+      kind: "copilot",
+      command: "copilot",
+      args: [],
+      environment: {},
+    });
+    const membership = original.addMembership(group.id, {
+      memberId: "copilot.reviewer",
+      agentProfileId: profile.id,
+      alias: "Reviewer",
+    });
+    const repositoryStore = new ConfigRepository(repository);
+    const imported = repositoryStore.initializeTopology(original.getSnapshot());
+    original.close();
+
+    expect(imported.hasDeclarativeTopology).toBe(true);
+    expect(imported.config.groups[group.id]?.memberships[membership.id]).toMatchObject({
+      memberId: membership.memberId,
+      agentProfileId: profile.id,
+    });
+
+    const rebuilt = new NanasaStore(":memory:", { config: imported.config });
+    rebuilt.reconcileTopology(imported.config, imported.status);
+    expect(rebuilt.getSnapshot()).toMatchObject({
+      groups: [{ id: group.id, name: "Imported" }],
+      agentProfiles: [{ id: profile.id, name: "Reviewer" }],
+      memberships: [{ id: membership.id, memberId: "copilot.reviewer" }],
+    });
+    rebuilt.close();
   });
 
   it("rejects agent types that resolve to the same configuration home", () => {

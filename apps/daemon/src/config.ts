@@ -11,13 +11,20 @@ import {
   type ConfigDiagnostic,
   type ConfigStatus,
   ConfigStatusSchema,
+  ConfiguredAgentProfileSchema,
+  ConfiguredGroupSchema,
+  InstructionPathSchema,
+  MessageConfigSchema,
   type NanasaConfig,
   NanasaConfigSchema,
   RecoveryPolicySchema,
+  RoleDefinitionSchema,
+  RoleIdSchema,
 } from "@nanasa/contracts";
 import { isScalar, LineCounter, parseDocument, visit } from "yaml";
 import { z } from "zod";
 import { resolveAgentConfigHome, validateAgentConfigHome } from "./agent-config-home.js";
+import { validateInstructionFiles } from "./instruction-resolver.js";
 
 const CONFIG_RELATIVE_PATH = join(".nanasa", "config.yaml");
 const MAX_CONFIG_BYTES = 256 * 1024;
@@ -47,6 +54,13 @@ const RawNanasaConfigSchema = z
   .object({
     version: z.literal(1),
     agentTypes: z.record(z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), RawAgentTypeConfigSchema),
+    instructions: z.array(InstructionPathSchema).max(32).default([]),
+    roles: z.record(RoleIdSchema, RoleDefinitionSchema).default({}),
+    agentProfiles: z
+      .record(z.string().trim().min(1).max(128), ConfiguredAgentProfileSchema)
+      .default({}),
+    groups: z.record(z.string().trim().min(1).max(128), ConfiguredGroupSchema).default({}),
+    messages: MessageConfigSchema.default({ retentionPerGroup: 1_000 }),
   })
   .strict();
 
@@ -62,6 +76,7 @@ export interface NanasaPaths {
 export interface LoadedNanasaConfig extends NanasaPaths {
   config: NanasaConfig;
   status: ConfigStatus;
+  hasDeclarativeTopology: boolean;
 }
 
 export class ConfigLoadError extends Error {
@@ -191,7 +206,10 @@ function validateAgentType(agentType: RawAgentTypeConfig): string | undefined {
   return undefined;
 }
 
-function parseConfig(source: string, paths: NanasaPaths): NanasaConfig {
+export function parseNanasaConfigSource(
+  source: string,
+  paths: NanasaPaths,
+): { config: NanasaConfig; hasDeclarativeTopology: boolean } {
   const lineCounter = new LineCounter();
   const document = parseDocument(source, {
     version: "1.2",
@@ -258,7 +276,12 @@ function parseConfig(source: string, paths: NanasaPaths): NanasaConfig {
     throw new ConfigLoadError(errorStatus(paths, astDiagnostics));
   }
 
-  const parsed = RawNanasaConfigSchema.safeParse(document.toJS({ maxAliasCount: 0 }));
+  const rawDocument = document.toJS({ maxAliasCount: 0 });
+  const hasDeclarativeTopology =
+    typeof rawDocument === "object" &&
+    rawDocument !== null &&
+    (Object.hasOwn(rawDocument, "agentProfiles") || Object.hasOwn(rawDocument, "groups"));
+  const parsed = RawNanasaConfigSchema.safeParse(rawDocument);
   if (!parsed.success) {
     throw new ConfigLoadError(
       errorStatus(
@@ -340,7 +363,29 @@ function parseConfig(source: string, paths: NanasaPaths): NanasaConfig {
     }
     resolvedHomes.set(home, key);
   }
-  return NanasaConfigSchema.parse({ version: parsed.data.version, agentTypes });
+  const config = NanasaConfigSchema.parse({
+    version: parsed.data.version,
+    agentTypes,
+    instructions: parsed.data.instructions,
+    roles: parsed.data.roles,
+    agentProfiles: parsed.data.agentProfiles,
+    groups: parsed.data.groups,
+    messages: parsed.data.messages,
+  });
+  try {
+    validateInstructionFiles(paths.repoRoot, config);
+  } catch (error) {
+    throw new ConfigLoadError(
+      errorStatus(paths, [
+        diagnostic(
+          "invalid_instruction_file",
+          error instanceof Error ? error.message : "Invalid instruction file",
+          ["instructions"],
+        ),
+      ]),
+    );
+  }
+  return { config, hasDeclarativeTopology };
 }
 
 export function loadNanasaConfig(repoRoot: string): LoadedNanasaConfig {
@@ -361,7 +406,7 @@ export function loadNanasaConfig(repoRoot: string): LoadedNanasaConfig {
     );
   }
   const source = readFileSync(paths.configPath, "utf8");
-  const config = parseConfig(source, paths);
+  const { config, hasDeclarativeTopology } = parseNanasaConfigSource(source, paths);
   const revision = createHash("sha256").update(source).digest("hex");
   const status = ConfigStatusSchema.parse({
     state: "ready",
@@ -370,7 +415,7 @@ export function loadNanasaConfig(repoRoot: string): LoadedNanasaConfig {
     revision,
     diagnostics: [],
   });
-  return { ...paths, config, status };
+  return { ...paths, config, status, hasDeclarativeTopology };
 }
 
 export function discoverAndLoadNanasaConfig(startPath = process.cwd()): LoadedNanasaConfig {

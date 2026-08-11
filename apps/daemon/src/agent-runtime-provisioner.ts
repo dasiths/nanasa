@@ -1,8 +1,18 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentConfigHome, AgentProfile, GroupMembership } from "@nanasa/contracts";
 import { agentConfigHomeEnvironment, resolveAgentConfigHome } from "./agent-config-home.js";
+import type { EffectiveAgentPrompt } from "./instruction-resolver.js";
 import {
   HOOK_STATUS_REPORTER_SOURCE,
   OPENCODE_STATUS_REPORTER_SOURCE,
@@ -22,6 +32,7 @@ export interface AgentRuntimeProvisionerOptions {
   agentConfigHomes: Readonly<Record<string, AgentConfigHome>>;
   mcpEndpointUrl: string;
   piExtensionPath?: string;
+  promptResolver?: (membership: GroupMembership, profile: AgentProfile) => EffectiveAgentPrompt;
 }
 
 function ensurePrivateDirectory(path: string): void {
@@ -61,6 +72,35 @@ function writePrivateJson(path: string, value: unknown): void {
   chmodSync(path, FILE_MODE);
 }
 
+function readPrivateJsonObject(path: string): Record<string, unknown> {
+  if (!existsSync(path)) return {};
+  const status = lstatSync(path);
+  if (!status.isFile() || status.isSymbolicLink()) {
+    throw new Error(`Agent runtime file must be a regular file: ${path}`);
+  }
+  if (typeof process.getuid === "function" && status.uid !== process.getuid()) {
+    throw new Error(`Agent runtime file must be owned by the current user: ${path}`);
+  }
+  if (status.size > 2 * 1024 * 1024) {
+    throw new Error(`Agent runtime JSON exceeds the supported size: ${path}`);
+  }
+  const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`Agent runtime JSON must contain an object: ${path}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function isNanasaClaudeHook(value: unknown): boolean {
+  return JSON.stringify(value).includes("nanasa-status-hook.mjs");
+}
+
 function writePrivateText(path: string, value: string): void {
   ensurePrivateDirectory(dirname(path));
   const temporaryPath = `${path}.${process.pid}.tmp`;
@@ -75,6 +115,27 @@ function writePrivateText(path: string, value: string): void {
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
+
+function generatedAgentName(membershipId: string): string {
+  return `nanasa-${createHash("sha256").update(membershipId).digest("hex").slice(0, 16)}`;
+}
+
+function appendProviderArguments(command: string[], providerArguments: string[]): string[] {
+  if (command[0] === "make" && command[1] === "claude-copilot") {
+    return [...command, `CLAUDE_ARGS=${providerArguments.map(shellQuote).join(" ")}`];
+  }
+  return [...command, ...providerArguments];
+}
+
+const PI_READ_ONLY_POLICY_SOURCE = `export default function (pi) {
+  const blocked = new Set(["bash", "edit", "write"]);
+  pi.on("tool_call", (event) => {
+    if (blocked.has(event.toolName)) {
+      return { block: true, reason: "The active Nanasa role is read-only", terminate: true };
+    }
+  });
+}
+`;
 
 function commandHook(scriptPath: string, source: "claude-code" | "copilot", eventName: string) {
   return {
@@ -115,7 +176,24 @@ export class AgentRuntimeProvisioner {
     );
     ensurePrivateTree(this.#options.integrationsDirectory, configHome);
     ensurePrivateTree(this.#options.integrationsDirectory, memberDirectory);
-    const command = [profile.command, ...profile.args];
+    let command = [profile.command, ...profile.args];
+    const effectivePrompt = this.#options.promptResolver?.(membership, profile);
+    const generatedName = generatedAgentName(membership.id);
+    let promptPath: string | undefined;
+    if (effectivePrompt !== undefined) {
+      const instructionsDirectory = join(memberDirectory, "instructions");
+      promptPath = join(instructionsDirectory, "system-prompt-suffix.md");
+      writePrivateText(promptPath, effectivePrompt.text);
+      writePrivateJson(join(instructionsDirectory, "manifest.json"), {
+        version: 1,
+        artifact: "system-prompt-suffix",
+        revision: effectivePrompt.revision,
+        roleId: effectivePrompt.roleId ?? null,
+        permissionPolicy: effectivePrompt.role?.permissionPolicy ?? "inherit",
+        sources: effectivePrompt.sources,
+      });
+    }
+    const readOnly = effectivePrompt?.role?.permissionPolicy === "read-only";
 
     switch (profile.kind) {
       case "copilot": {
@@ -156,6 +234,15 @@ export class AgentRuntimeProvisioner {
         });
         const cacheDirectory = join(configHome, "cache");
         ensurePrivateTree(this.#options.integrationsDirectory, cacheDirectory);
+        if (promptPath !== undefined && effectivePrompt !== undefined) {
+          const agentsDirectory = join(configHome, "agents");
+          writePrivateText(
+            join(agentsDirectory, `${generatedName}.agent.md`),
+            `---\nname: ${JSON.stringify(`Nanasa ${membership.alias}`)}\ndescription: ${JSON.stringify(`Nanasa-managed ${effectivePrompt.role?.name ?? "agent"}`)}\ninfer: false\n---\n\n${effectivePrompt.text}`,
+          );
+          command = [...command, "--agent", generatedName];
+          if (readOnly) command.push("--deny-tool=write", "--deny-tool=shell");
+        }
         return {
           command: [...command, "--additional-mcp-config", `@${configPath}`],
           environment: agentConfigHomeEnvironment(profile.kind, configHome),
@@ -166,8 +253,12 @@ export class AgentRuntimeProvisioner {
         ensurePrivateDirectory(configDirectory);
         const reporterPath = join(configDirectory, "nanasa-status-hook.mjs");
         writePrivateText(reporterPath, HOOK_STATUS_REPORTER_SOURCE);
-        writePrivateJson(join(configDirectory, ".claude.json"), {
+        const claudeStatePath = join(configDirectory, ".claude.json");
+        const claudeState = readPrivateJsonObject(claudeStatePath);
+        writePrivateJson(claudeStatePath, {
+          ...claudeState,
           mcpServers: {
+            ...objectValue(claudeState.mcpServers),
             nanasa: {
               type: "http",
               url: this.#options.mcpEndpointUrl,
@@ -180,23 +271,56 @@ export class AgentRuntimeProvisioner {
           ...(matcher === undefined ? {} : { matcher }),
           hooks: [commandHook(reporterPath, "claude-code", eventName)],
         });
-        writePrivateJson(join(configDirectory, "settings.json"), {
-          hooks: {
-            SessionStart: [hook("SessionStart")],
-            UserPromptSubmit: [hook("UserPromptSubmit")],
-            PreToolUse: [hook("PreToolUse", "*")],
-            PermissionRequest: [hook("PermissionRequest", "*")],
-            PostToolUse: [hook("PostToolUse", "*")],
-            PostToolUseFailure: [hook("PostToolUseFailure", "*")],
-            Stop: [hook("Stop")],
-            StopFailure: [hook("StopFailure")],
-            PreCompact: [hook("PreCompact")],
-            PostCompact: [hook("PostCompact")],
-            Elicitation: [hook("Elicitation")],
-            ElicitationResult: [hook("ElicitationResult")],
-            SessionEnd: [hook("SessionEnd")],
-          },
+        const settingsPath = join(configDirectory, "settings.json");
+        const settings = readPrivateJsonObject(settingsPath);
+        const existingHooks = objectValue(settings.hooks);
+        const generatedHooks = {
+          SessionStart: hook("SessionStart"),
+          UserPromptSubmit: hook("UserPromptSubmit"),
+          PreToolUse: hook("PreToolUse", "*"),
+          PermissionRequest: hook("PermissionRequest", "*"),
+          PostToolUse: hook("PostToolUse", "*"),
+          PostToolUseFailure: hook("PostToolUseFailure", "*"),
+          Stop: hook("Stop"),
+          StopFailure: hook("StopFailure"),
+          PreCompact: hook("PreCompact"),
+          PostCompact: hook("PostCompact"),
+          Elicitation: hook("Elicitation"),
+          ElicitationResult: hook("ElicitationResult"),
+          SessionEnd: hook("SessionEnd"),
+        };
+        const mergedHooks: Record<string, unknown> = Object.fromEntries(
+          Object.entries(generatedHooks).map(([eventName, generatedHook]) => [
+            eventName,
+            [
+              ...(Array.isArray(existingHooks[eventName])
+                ? existingHooks[eventName].filter((entry) => !isNanasaClaudeHook(entry))
+                : []),
+              generatedHook,
+            ],
+          ]),
+        );
+        for (const [eventName, entries] of Object.entries(existingHooks)) {
+          if (mergedHooks[eventName] === undefined) mergedHooks[eventName] = entries;
+        }
+        writePrivateJson(settingsPath, {
+          ...settings,
+          hooks: mergedHooks,
         });
+        if (promptPath !== undefined) {
+          const providerArguments = ["--append-system-prompt-file", promptPath];
+          if (readOnly) {
+            providerArguments.push(
+              "--disallowedTools",
+              "Edit",
+              "--disallowedTools",
+              "Write",
+              "--disallowedTools",
+              "Bash",
+            );
+          }
+          command = appendProviderArguments(command, providerArguments);
+        }
         return {
           command,
           environment: agentConfigHomeEnvironment(profile.kind, configHome),
@@ -205,12 +329,17 @@ export class AgentRuntimeProvisioner {
       case "pi": {
         const agentDirectory = configHome;
         ensurePrivateDirectory(agentDirectory);
-        writePrivateJson(join(agentDirectory, "mcp.json"), {
+        const mcpPath = join(agentDirectory, "mcp.json");
+        const mcpConfig = readPrivateJsonObject(mcpPath);
+        writePrivateJson(mcpPath, {
+          ...mcpConfig,
           settings: {
+            ...objectValue(mcpConfig.settings),
             directTools: true,
             hostConfigDiscovery: "off",
           },
           mcpServers: {
+            ...objectValue(mcpConfig.mcpServers),
             nanasa: {
               url: this.#options.mcpEndpointUrl,
               headers: { Authorization: "Bearer ${NANASA_MCP_TOKEN}" },
@@ -223,6 +352,12 @@ export class AgentRuntimeProvisioner {
           this.#options.piExtensionPath ?? fileURLToPath(import.meta.resolve("pi-mcp-adapter"));
         const statusExtensionPath = join(agentDirectory, "nanasa-status-extension.mjs");
         writePrivateText(statusExtensionPath, PI_STATUS_REPORTER_SOURCE);
+        if (promptPath !== undefined) command = [...command, "--append-system-prompt", promptPath];
+        if (readOnly) {
+          const policyPath = join(agentDirectory, "nanasa-read-only-policy.mjs");
+          writePrivateText(policyPath, PI_READ_ONLY_POLICY_SOURCE);
+          command = [...command, "--extension", policyPath];
+        }
         return {
           command: [...command, "--extension", extensionPath, "--extension", statusExtensionPath],
           environment: agentConfigHomeEnvironment(profile.kind, configHome),
@@ -236,9 +371,21 @@ export class AgentRuntimeProvisioner {
           join(configDirectory, "plugins", "nanasa-status.mjs"),
           OPENCODE_STATUS_REPORTER_SOURCE,
         );
+        const opencodeConfig = readPrivateJsonObject(configPath);
+        const generatedAgent =
+          promptPath === undefined
+            ? undefined
+            : {
+                description: `Nanasa-managed ${effectivePrompt?.role?.name ?? "agent"}`,
+                mode: "primary",
+                prompt: `{file:${promptPath}}`,
+                ...(readOnly ? { permission: { edit: "deny", bash: "deny" } } : {}),
+              };
         writePrivateJson(configPath, {
-          $schema: "https://opencode.ai/config.json",
+          ...opencodeConfig,
+          $schema: opencodeConfig.$schema ?? "https://opencode.ai/config.json",
           mcp: {
+            ...objectValue(opencodeConfig.mcp),
             nanasa: {
               type: "remote",
               url: this.#options.mcpEndpointUrl,
@@ -247,7 +394,16 @@ export class AgentRuntimeProvisioner {
               headers: { Authorization: "Bearer {env:NANASA_MCP_TOKEN}" },
             },
           },
+          ...(generatedAgent === undefined
+            ? {}
+            : {
+                agent: {
+                  ...objectValue(opencodeConfig.agent),
+                  [generatedName]: generatedAgent,
+                },
+              }),
         });
+        if (generatedAgent !== undefined) command = [...command, "--agent", generatedName];
         return {
           command,
           environment: {

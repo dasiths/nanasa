@@ -40,6 +40,6 @@ and provides setup, auth, and doctor package commands.
 
 ## Release summary
 
-Existing proof-of-concept generated state is intentionally not migrated. Run
+Existing pre-alpha generated state is intentionally not migrated. Run
 `nanasa setup`, authenticate configured agent types with `nanasa auth`, and
 restart Nanasa so new managed runs use repository-local homes.

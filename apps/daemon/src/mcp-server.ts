@@ -2,6 +2,7 @@ import { hostHeaderValidation, originValidation, toNodeHandler } from "@modelcon
 import { type AuthInfo, createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import {
   AgentProgressReportCommandSchema,
+  MAX_MESSAGE_REQUEST_BYTES,
   type MessageSubmissionResult,
   SubmitMessageCommandSchema,
 } from "@nanasa/contracts";
@@ -10,16 +11,14 @@ import { z } from "zod";
 
 import { McpCredentialIssuer, type McpPrincipal } from "./mcp-auth.js";
 import { MessageCommandService } from "./message-command-service.js";
+import { nanasaMcpServerInstructions } from "./coordination-instructions.js";
 import { DomainError, NanasaStore } from "./store.js";
 
 const IdentifierSchema = z.string().trim().min(1).max(128);
 const MessageFieldsSchema = z
   .object({
     groupId: IdentifierSchema.optional(),
-    text: z
-      .string()
-      .min(1)
-      .refine((value) => Buffer.byteLength(value, "utf8") <= 1_048_576, "Message is too large"),
+    text: z.string().min(1),
     intent: z.enum(["inform", "request", "response"]).default("request"),
     contentType: z.enum(["text/plain", "text/markdown"]).default("text/markdown"),
     conversationId: IdentifierSchema.optional(),
@@ -148,6 +147,11 @@ function listMembersResult(
         memberId: membership.memberId,
         alias: membership.alias,
         agentType: profile?.agentType ?? "unknown",
+        roleId: membership.roleId,
+        roleName:
+          membership.roleId === undefined
+            ? undefined
+            : snapshot.config?.roles[membership.roleId]?.name,
         runStatus:
           run !== undefined && ["starting", "running", "stopping"].includes(run.status)
             ? run.status
@@ -162,7 +166,7 @@ function listMembersResult(
         text: members
           .map(
             (member) =>
-              `${member.alias} (${member.memberId}) · ${member.agentType} · ${member.runStatus}${member.isCaller ? " · you" : ""}`,
+              `${member.alias} (${member.memberId}) · ${member.roleName ?? member.roleId ?? "unassigned"} · ${member.agentType} · ${member.runStatus}${member.isCaller ? " · you" : ""}`,
           )
           .join("\n"),
       },
@@ -218,7 +222,10 @@ function getAgentStatusResult(
 }
 
 function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): McpServer {
-  const server = new McpServer({ name: "nanasa", version: "0.0.0" });
+  const server = new McpServer(
+    { name: "nanasa", version: "0.0.0" },
+    { instructions: nanasaMcpServerInstructions() },
+  );
   server.registerTool(
     "nanasa.list_members",
     {
@@ -372,7 +379,7 @@ export function registerMcpRoutes(app: FastifyInstance, options: McpRouteOptions
   );
   const nodeHandler = toNodeHandler(handler);
 
-  app.post(options.path, async (request, reply) => {
+  app.post(options.path, { bodyLimit: MAX_MESSAGE_REQUEST_BYTES }, async (request, reply) => {
     if (!validateHost(request.raw, reply.raw) || !validateOrigin(request.raw, reply.raw)) {
       reply.hijack();
       return;

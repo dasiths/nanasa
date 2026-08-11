@@ -18,11 +18,14 @@ import {
   type AgentStatusSummary,
   AgentStatusSummarySchema,
   type AgentTypeConfig,
+  type ClearMessageHistoryResult,
+  ClearMessageHistoryResultSchema,
   type ConfigStatus,
   type CreateAgentProfileCommand,
   CreateAgentProfileCommandSchema,
   type CreateGroupCommand,
   CreateGroupCommandSchema,
+  DEFAULT_MESSAGE_PAGE_SIZE,
   type DeleteGroupResult,
   DeleteGroupResultSchema,
   type DeliveryOutcome,
@@ -33,10 +36,15 @@ import {
   type Group,
   type GroupMembership,
   GroupMembershipSchema,
+  type GroupMessageState,
+  GroupMessageStateSchema,
   GroupSchema,
   type InternalCreateAgentProfileCommand,
   InternalCreateAgentProfileCommandSchema,
+  MAX_MESSAGE_PAGE_SIZE,
   type Message,
+  type MessagePage,
+  MessagePageSchema,
   MessageSchema,
   type MessageSubmissionResult,
   MessageSubmissionResultSchema,
@@ -112,6 +120,7 @@ interface MembershipRow {
   member_id: string;
   agent_profile_id: string;
   alias: string;
+  role_id: string | null;
   state: string;
   joined_at: string;
   removed_at: string | null;
@@ -177,7 +186,7 @@ interface AgentStatusCurrentRow {
   reducer_state_json: string;
 }
 
-const DATABASE_SCHEMA_VERSION = 2;
+const DATABASE_SCHEMA_VERSION = 4;
 
 export interface AgentStatusIdentity {
   groupId: string;
@@ -240,6 +249,8 @@ function agentStatusSummary(detail: AgentStatusDetail): AgentStatusSummary {
     memberId: detail.memberId,
     alias: detail.alias,
     agentType: detail.agentType,
+    roleId: detail.roleId,
+    roleName: detail.roleName,
     runId: detail.runId,
     generation: detail.generation,
     runStatus: detail.runStatus,
@@ -262,8 +273,9 @@ function agentStatusSummary(detail: AgentStatusDetail): AgentStatusSummary {
 export class NanasaStore {
   readonly #database: DatabaseSync;
   readonly #listeners = new Set<DomainEventListener>();
-  readonly #config: NanasaConfig | undefined;
-  readonly #configStatus: ConfigStatus | undefined;
+  #config: NanasaConfig | undefined;
+  #configStatus: ConfigStatus | undefined;
+  #messageRetentionPerGroup: number;
   readonly #memberNameGenerator: MemberNameGenerator;
 
   public constructor(path: string, options: NanasaStoreOptions = {}) {
@@ -274,6 +286,7 @@ export class NanasaStore {
     this.#database = new DatabaseSync(path);
     this.#config = options.config;
     this.#configStatus = options.configStatus;
+    this.#messageRetentionPerGroup = options.config?.messages.retentionPerGroup ?? 1_000;
     this.#memberNameGenerator = options.memberNameGenerator ?? dockerMemberName;
     this.#database.exec("PRAGMA foreign_keys = ON");
     this.#database.exec("PRAGMA journal_mode = WAL");
@@ -287,6 +300,162 @@ export class NanasaStore {
   public onEvent(listener: DomainEventListener): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
+  }
+
+  public reconcileTopology(config: NanasaConfig, configStatus?: ConfigStatus): void {
+    const timestamp = new Date().toISOString();
+    this.#transaction(() => {
+      for (const [profileId, configuredProfile] of Object.entries(config.agentProfiles)) {
+        const agentType = config.agentTypes[configuredProfile.agentType];
+        if (agentType === undefined) {
+          throw new DomainError(
+            "configured_agent_type_not_found",
+            `Agent type ${configuredProfile.agentType} is not configured`,
+            409,
+          );
+        }
+        this.#database
+          .prepare(
+            `INSERT INTO agent_profiles
+               (id, name, agent_type, kind, adapter, capabilities_json, command, args_json,
+                working_directory, environment_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 'terminal', '[]', ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               name = excluded.name,
+               agent_type = excluded.agent_type,
+               kind = excluded.kind,
+               adapter = excluded.adapter,
+               capabilities_json = excluded.capabilities_json,
+               command = excluded.command,
+               args_json = excluded.args_json,
+               working_directory = excluded.working_directory,
+               environment_json = excluded.environment_json,
+               updated_at = excluded.updated_at`,
+          )
+          .run(
+            profileId,
+            configuredProfile.name,
+            agentType.key,
+            agentType.kind,
+            agentType.command[0] as string,
+            JSON.stringify(agentType.command.slice(1)),
+            agentType.cwd ?? null,
+            JSON.stringify(agentType.environment),
+            timestamp,
+            timestamp,
+          );
+      }
+
+      const desiredGroupIds = new Set(Object.keys(config.groups));
+      for (const [groupId, configuredGroup] of Object.entries(config.groups)) {
+        const existingGroup = this.#database
+          .prepare("SELECT * FROM groups WHERE id = ?")
+          .get(groupId) as unknown as GroupRow | undefined;
+        const existingMemberships = this.#database
+          .prepare("SELECT * FROM memberships WHERE group_id = ? AND state = 'active'")
+          .all(groupId) as unknown as MembershipRow[];
+        const desiredMemberships = Object.entries(configuredGroup.memberships);
+        const existingIdentity = existingMemberships
+          .map(
+            (membership) =>
+              `${membership.id}:${membership.member_id}:${membership.agent_profile_id}`,
+          )
+          .sort();
+        const desiredIdentity = desiredMemberships
+          .map(
+            ([membershipId, membership]) =>
+              `${membershipId}:${membership.memberId}:${membership.agentProfileId}`,
+          )
+          .sort();
+        const membershipChanged =
+          JSON.stringify(existingIdentity) !== JSON.stringify(desiredIdentity);
+        const membershipRevision =
+          (existingGroup?.membership_revision ?? 0) + (membershipChanged ? 1 : 0);
+        const groupUpdatedAt =
+          existingGroup !== undefined &&
+          existingGroup.name === configuredGroup.name &&
+          existingGroup.membership_revision === membershipRevision
+            ? existingGroup.updated_at
+            : timestamp;
+        this.#database
+          .prepare(
+            `INSERT INTO groups (id, name, membership_revision, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               name = excluded.name,
+               membership_revision = excluded.membership_revision,
+               updated_at = excluded.updated_at`,
+          )
+          .run(
+            groupId,
+            configuredGroup.name,
+            membershipRevision,
+            existingGroup?.created_at ?? timestamp,
+            groupUpdatedAt,
+          );
+
+        const desiredMembershipIds = new Set(
+          desiredMemberships.map(([membershipId]) => membershipId),
+        );
+        for (const [membershipId, membership] of desiredMemberships) {
+          const roleId =
+            membership.roleId ?? config.agentProfiles[membership.agentProfileId]?.defaultRoleId;
+          this.#database
+            .prepare(
+              `INSERT INTO memberships
+                 (id, group_id, member_id, agent_profile_id, alias, role_id, state, joined_at, removed_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'active', ?, NULL)
+               ON CONFLICT(id) DO UPDATE SET
+                 group_id = excluded.group_id,
+                 member_id = excluded.member_id,
+                 agent_profile_id = excluded.agent_profile_id,
+                 alias = excluded.alias,
+                 role_id = excluded.role_id,
+                 state = 'active',
+                 removed_at = NULL`,
+            )
+            .run(
+              membershipId,
+              groupId,
+              membership.memberId,
+              membership.agentProfileId,
+              membership.alias,
+              roleId ?? null,
+              timestamp,
+            );
+        }
+        for (const existing of existingMemberships) {
+          if (desiredMembershipIds.has(existing.id)) continue;
+          this.#database
+            .prepare("UPDATE memberships SET state = 'removed', removed_at = ? WHERE id = ?")
+            .run(timestamp, existing.id);
+          this.#database
+            .prepare(
+              `UPDATE deliveries SET status = 'revoked', reason = 'membership_removed',
+                 lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+               WHERE recipient_member_id = ?
+                 AND status IN ('queued', 'received', 'delivering', 'retrying')
+                 AND message_id IN (SELECT id FROM messages WHERE group_id = ?)`,
+            )
+            .run(timestamp, existing.member_id, groupId);
+        }
+      }
+
+      const persistedGroups = this.#database.prepare("SELECT id FROM groups").all() as Array<{
+        id: string;
+      }>;
+      for (const persisted of persistedGroups) {
+        if (desiredGroupIds.has(persisted.id)) continue;
+        this.#database
+          .prepare(
+            "UPDATE memberships SET state = 'removed', removed_at = ? WHERE group_id = ? AND state = 'active'",
+          )
+          .run(timestamp, persisted.id);
+      }
+    });
+    this.#config = config;
+    this.#configStatus = configStatus;
+    this.#messageRetentionPerGroup = config.messages.retentionPerGroup;
   }
 
   public createGroup(command: CreateGroupCommand, idempotencyKey?: string): Group {
@@ -319,12 +488,13 @@ export class NanasaStore {
     return this.#executeIdempotent(`group.${groupId}.update`, idempotencyKey, GroupSchema, () => {
       const existing = this.#requireGroup(groupId);
       const timestamp = new Date().toISOString();
+      const name = input.name ?? existing.name;
       this.#database
         .prepare("UPDATE groups SET name = ?, updated_at = ? WHERE id = ?")
-        .run(input.name, timestamp, groupId);
+        .run(name, timestamp, groupId);
       const group = GroupSchema.parse({
         ...existing,
-        name: input.name,
+        name,
         updatedAt: timestamp,
       });
       return {
@@ -516,6 +686,7 @@ export class NanasaStore {
         memberId,
         agentProfileId: input.agentProfileId,
         alias: input.alias,
+        roleId: input.roleId,
         state: "active",
         joinedAt: timestamp,
       });
@@ -524,8 +695,8 @@ export class NanasaStore {
         this.#database
           .prepare(
             `INSERT INTO memberships
-               (id, group_id, member_id, agent_profile_id, alias, state, joined_at, removed_at)
-             VALUES (?, ?, ?, ?, ?, 'active', ?, NULL)`,
+               (id, group_id, member_id, agent_profile_id, alias, role_id, state, joined_at, removed_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'active', ?, NULL)`,
           )
           .run(
             membership.id,
@@ -533,16 +704,23 @@ export class NanasaStore {
             membership.memberId,
             membership.agentProfileId,
             membership.alias,
+            membership.roleId ?? null,
             membership.joinedAt,
           );
       } else {
         this.#database
           .prepare(
             `UPDATE memberships
-             SET agent_profile_id = ?, alias = ?, state = 'active', joined_at = ?, removed_at = NULL
+             SET agent_profile_id = ?, alias = ?, role_id = ?, state = 'active', joined_at = ?, removed_at = NULL
              WHERE id = ?`,
           )
-          .run(membership.agentProfileId, membership.alias, membership.joinedAt, membership.id);
+          .run(
+            membership.agentProfileId,
+            membership.alias,
+            membership.roleId ?? null,
+            membership.joinedAt,
+            membership.id,
+          );
       }
       const revision = this.#incrementMembershipRevision(groupId, timestamp);
       return {
@@ -570,15 +748,18 @@ export class NanasaStore {
         throw new DomainError("membership_not_active", "The member is not active", 404);
       }
 
+      const alias = input.alias ?? existing.alias;
+      const roleId = input.roleId === undefined ? existing.role_id : input.roleId;
       this.#database
-        .prepare("UPDATE memberships SET alias = ? WHERE id = ?")
-        .run(input.alias, existing.id);
+        .prepare("UPDATE memberships SET alias = ?, role_id = ? WHERE id = ?")
+        .run(alias, roleId, existing.id);
       const membership = GroupMembershipSchema.parse({
         id: existing.id,
         groupId: existing.group_id,
         memberId: existing.member_id,
         agentProfileId: existing.agent_profile_id,
-        alias: input.alias,
+        alias,
+        roleId: roleId ?? undefined,
         state: existing.state,
         joinedAt: existing.joined_at,
       });
@@ -1180,10 +1361,11 @@ export class NanasaStore {
         throw new DomainError("empty_audience", "The message has no eligible recipients", 409);
       }
 
+      this.#database
+        .prepare("UPDATE groups SET message_sequence = message_sequence + 1 WHERE id = ?")
+        .run(groupId);
       const sequenceRow = this.#database
-        .prepare(
-          "SELECT COALESCE(MAX(group_seq), 0) + 1 AS next_seq FROM messages WHERE group_id = ?",
-        )
+        .prepare("SELECT message_sequence AS next_seq FROM groups WHERE id = ?")
         .get(groupId) as unknown as { next_seq: number };
       const timestamp = new Date().toISOString();
       const messageId = `msg_${randomUUID()}`;
@@ -1225,15 +1407,225 @@ export class NanasaStore {
         this.#insertDelivery(outcome);
         return outcome;
       });
+      this.#pruneGroupMessages(groupId, this.#messageRetentionPerGroup, timestamp);
       const result = MessageSubmissionResultSchema.parse({ message, deliveryOutcomes });
       return {
         result,
         event: this.#appendEvent("message.submitted", "message", message.id, {
-          message,
-          deliveryOutcomes,
+          groupId,
+          groupSeq: message.groupSeq,
+          state: this.getGroupMessageState(groupId),
         }),
       };
     });
+  }
+
+  public getGroupMessageState(groupId: string): GroupMessageState {
+    this.#requireGroup(groupId);
+    const row = this.#database
+      .prepare(
+        `SELECT g.message_sequence AS latest_group_seq,
+                COUNT(DISTINCT m.id) AS retained_message_count,
+                MIN(m.group_seq) AS oldest_retained_group_seq,
+                COUNT(DISTINCT CASE WHEN d.status IN ('queued','received','delivering','retrying')
+                  THEN d.message_id || ':' || d.recipient_member_id END) AS active_delivery_count
+         FROM groups g
+         LEFT JOIN messages m ON m.group_id = g.id
+         LEFT JOIN deliveries d ON d.message_id = m.id
+         WHERE g.id = ? GROUP BY g.id`,
+      )
+      .get(groupId) as unknown as {
+      latest_group_seq: number;
+      retained_message_count: number;
+      oldest_retained_group_seq: number | null;
+      active_delivery_count: number;
+    };
+    const failedRows = this.#database
+      .prepare(
+        `SELECT DISTINCT d.recipient_member_id
+         FROM deliveries d JOIN messages m ON m.id = d.message_id
+         WHERE m.group_id = ? AND d.status IN ('failed','dead-letter','rejected')
+         ORDER BY d.recipient_member_id`,
+      )
+      .all(groupId) as Array<{ recipient_member_id: string }>;
+    return GroupMessageStateSchema.parse({
+      groupId,
+      latestGroupSeq: row.latest_group_seq,
+      ...(row.oldest_retained_group_seq === null
+        ? {}
+        : { oldestRetainedGroupSeq: row.oldest_retained_group_seq }),
+      retainedMessageCount: row.retained_message_count,
+      activeDeliveryCount: row.active_delivery_count,
+      failedRecipientMemberIds: failedRows.map((failed) => failed.recipient_member_id),
+    });
+  }
+
+  public listMessagePage(
+    groupId: string,
+    options: { limit?: number; before?: number; after?: number } = {},
+  ): MessagePage {
+    this.#requireGroup(groupId);
+    const limit = options.limit ?? DEFAULT_MESSAGE_PAGE_SIZE;
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_MESSAGE_PAGE_SIZE) {
+      throw new DomainError(
+        "invalid_message_limit",
+        `Message page limit must be between 1 and ${MAX_MESSAGE_PAGE_SIZE}`,
+        400,
+      );
+    }
+    if (options.before !== undefined && options.after !== undefined) {
+      throw new DomainError(
+        "invalid_message_cursor",
+        "before and after message cursors are mutually exclusive",
+        400,
+      );
+    }
+    const cursor = options.before ?? options.after;
+    if (cursor !== undefined && (!Number.isInteger(cursor) || cursor < 1)) {
+      throw new DomainError("invalid_message_cursor", "Message cursor must be positive", 400);
+    }
+    const direction = options.after === undefined ? "DESC" : "ASC";
+    const comparison =
+      options.before !== undefined
+        ? "AND group_seq < ?"
+        : options.after !== undefined
+          ? "AND group_seq > ?"
+          : "";
+    const parameters = cursor === undefined ? [groupId, limit + 1] : [groupId, cursor, limit + 1];
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM messages WHERE group_id = ? ${comparison}
+         ORDER BY group_seq ${direction} LIMIT ?`,
+      )
+      .all(...parameters) as unknown as MessageRow[];
+    const hasExtra = rows.length > limit;
+    const selected = rows.slice(0, limit);
+    if (direction === "DESC") selected.reverse();
+    const messages = selected.map((row) => this.#hydrateMessage(row));
+    const messageIds = new Set(messages.map((message) => message.id));
+    const deliveryOutcomes = this.listDeliveries().filter((delivery) =>
+      messageIds.has(delivery.messageId),
+    );
+    const first = messages[0]?.groupSeq;
+    const last = messages.at(-1)?.groupSeq;
+    const state = this.getGroupMessageState(groupId);
+    const hasOlder =
+      first !== undefined &&
+      state.oldestRetainedGroupSeq !== undefined &&
+      first > state.oldestRetainedGroupSeq;
+    const hasNewer = last !== undefined && last < state.latestGroupSeq;
+    return MessagePageSchema.parse({
+      groupId,
+      messages,
+      deliveryOutcomes,
+      state,
+      pageInfo: {
+        hasOlder: options.after === undefined ? hasExtra || hasOlder : hasOlder,
+        hasNewer: options.after === undefined ? hasNewer : hasExtra || hasNewer,
+        ...(hasOlder && first !== undefined ? { nextBefore: first } : {}),
+        ...(hasNewer && last !== undefined ? { nextAfter: last } : {}),
+      },
+    });
+  }
+
+  public clearMessageHistory(groupId: string, idempotencyKey?: string): ClearMessageHistoryResult {
+    return this.#executeIdempotent(
+      `group.${groupId}.messages.clear`,
+      idempotencyKey,
+      ClearMessageHistoryResultSchema,
+      () => {
+        this.#requireGroup(groupId);
+        const now = new Date().toISOString();
+        this.#assertMessagesDeletable(groupId, undefined, now, "message_history_busy");
+        const messageIds = this.#database
+          .prepare("SELECT id FROM messages WHERE group_id = ?")
+          .all(groupId) as Array<{ id: string }>;
+        const ids = messageIds.map((row) => row.id);
+        this.#nullMessageReferences(ids);
+        this.#invalidateMessageIdempotency(groupId, ids, now);
+        const deletedDeliveries = this.#database
+          .prepare(
+            "DELETE FROM deliveries WHERE message_id IN (SELECT id FROM messages WHERE group_id = ?)",
+          )
+          .run(groupId);
+        const deletedMessages = this.#database
+          .prepare("DELETE FROM messages WHERE group_id = ?")
+          .run(groupId);
+        const result = ClearMessageHistoryResultSchema.parse({
+          groupId,
+          deletedMessages: Number(deletedMessages.changes),
+          deletedDeliveries: Number(deletedDeliveries.changes),
+          state: this.getGroupMessageState(groupId),
+        });
+        return {
+          result,
+          event: this.#appendEvent("message.history-cleared", "group", groupId, result),
+        };
+      },
+    );
+  }
+
+  #pruneGroupMessages(groupId: string, retain: number, now: string): void {
+    const victims = this.#database
+      .prepare(
+        "SELECT id FROM messages WHERE group_id = ? ORDER BY group_seq DESC LIMIT -1 OFFSET ?",
+      )
+      .all(groupId, retain) as Array<{ id: string }>;
+    if (victims.length === 0) return;
+    const victimIds = victims.map((victim) => victim.id);
+    this.#assertMessagesDeletable(groupId, victimIds, now, "message_retention_busy");
+    this.#nullMessageReferences(victimIds);
+    this.#invalidateMessageIdempotency(groupId, victimIds, now);
+    for (const messageId of victimIds) {
+      this.#database.prepare("DELETE FROM deliveries WHERE message_id = ?").run(messageId);
+      this.#database.prepare("DELETE FROM messages WHERE id = ?").run(messageId);
+    }
+  }
+
+  #assertMessagesDeletable(
+    groupId: string,
+    messageIds: string[] | undefined,
+    now: string,
+    code: string,
+  ): void {
+    const placeholders = messageIds?.map(() => "?").join(",");
+    const filter =
+      messageIds === undefined ? "m.group_id = ?" : `m.group_id = ? AND m.id IN (${placeholders})`;
+    const busy = this.#database
+      .prepare(
+        `SELECT 1 FROM deliveries d JOIN messages m ON m.id = d.message_id
+         WHERE ${filter} AND d.status IN ('received','delivering')
+           AND d.lease_expires_at IS NOT NULL AND d.lease_expires_at > ? LIMIT 1`,
+      )
+      .get(groupId, ...(messageIds ?? []), now);
+    if (busy !== undefined) {
+      throw new DomainError(
+        code,
+        "Message history has an active delivery; retry after it finishes",
+        409,
+      );
+    }
+  }
+
+  #nullMessageReferences(messageIds: string[]): void {
+    for (const messageId of messageIds) {
+      for (const column of ["reply_to", "root_id", "causation_id"] as const) {
+        this.#database
+          .prepare(`UPDATE messages SET ${column} = NULL WHERE ${column} = ?`)
+          .run(messageId);
+      }
+    }
+  }
+
+  #invalidateMessageIdempotency(groupId: string, messageIds: string[], now: string): void {
+    for (const messageId of messageIds) {
+      this.#database
+        .prepare(
+          `UPDATE idempotency_keys SET response_json = 'null', invalidated_at = ?
+           WHERE scope = ? AND json_extract(response_json, '$.message.id') = ?`,
+        )
+        .run(now, `group.${groupId}.message.submit`, messageId);
+    }
   }
 
   public listDeliveries(messageId?: string): DeliveryOutcome[] {
@@ -1575,6 +1967,7 @@ export class NanasaStore {
         .all() as unknown as MessageRow[]
     ).map((row) => this.#hydrateMessage(row));
     const deliveryOutcomes = this.listDeliveries();
+    const messageGroups = groups.map((group) => this.getGroupMessageState(group.id));
     const agentStatuses = groups.flatMap((group) => this.listAgentStatuses(group.id));
     const sequenceRow = this.#database
       .prepare("SELECT COALESCE(MAX(sequence), 0) AS sequence FROM domain_events")
@@ -1590,6 +1983,7 @@ export class NanasaStore {
       agentStatuses,
       messages,
       deliveryOutcomes,
+      messageGroups,
       ...(this.#config === undefined ? {} : { config: this.#config }),
       ...(this.#configStatus === undefined ? {} : { configStatus: this.#configStatus }),
     });
@@ -1603,9 +1997,20 @@ export class NanasaStore {
   ): T {
     if (idempotencyKey !== undefined) {
       const existing = this.#database
-        .prepare("SELECT response_json FROM idempotency_keys WHERE scope = ? AND key = ?")
-        .get(scope, idempotencyKey) as { response_json: string } | undefined;
+        .prepare(
+          "SELECT response_json, invalidated_at FROM idempotency_keys WHERE scope = ? AND key = ?",
+        )
+        .get(scope, idempotencyKey) as
+        | { response_json: string; invalidated_at: string | null }
+        | undefined;
       if (existing !== undefined) {
+        if (existing.invalidated_at !== null) {
+          throw new DomainError(
+            "idempotency_result_expired",
+            "The original idempotent result expired with retained message history; use a new key",
+            410,
+          );
+        }
         return schema.parse(JSON.parse(existing.response_json));
       }
     }
@@ -1871,6 +2276,10 @@ export class NanasaStore {
       throw new DomainError("membership_not_active", "The member is not active", 404);
     }
     const hydratedMembership = this.#hydrateMembership(membership);
+    const role =
+      hydratedMembership.roleId === undefined
+        ? undefined
+        : this.#config?.roles[hydratedMembership.roleId];
     const profile = this.#requireAgentProfile(membership.agent_profile_id);
     const run = this.getLatestRunForMembership(groupId, memberId);
     if (run === undefined) {
@@ -1879,6 +2288,8 @@ export class NanasaStore {
         memberId,
         alias: hydratedMembership.alias,
         agentType: profile.agentType,
+        roleId: hydratedMembership.roleId,
+        roleName: role?.name,
         state: "not_started",
         phase: "startup",
         outcome: "unknown",
@@ -1911,6 +2322,8 @@ export class NanasaStore {
       memberId,
       alias: hydratedMembership.alias,
       agentType: profile.agentType,
+      roleId: hydratedMembership.roleId,
+      roleName: role?.name,
       runId: run.id,
       generation: run.generation,
       runStatus: run.status,
@@ -2051,6 +2464,7 @@ export class NanasaStore {
       memberId: row.member_id,
       agentProfileId: row.agent_profile_id,
       alias: row.alias,
+      roleId: row.role_id ?? undefined,
       state: row.state,
       joinedAt: row.joined_at,
       removedAt: row.removed_at ?? undefined,
@@ -2157,7 +2571,8 @@ export class NanasaStore {
         name TEXT NOT NULL,
         membership_revision INTEGER NOT NULL,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        message_sequence INTEGER NOT NULL DEFAULT 0
       ) STRICT;
 
       CREATE TABLE IF NOT EXISTS agent_profiles (
@@ -2181,6 +2596,7 @@ export class NanasaStore {
         member_id TEXT NOT NULL,
         agent_profile_id TEXT NOT NULL REFERENCES agent_profiles(id),
         alias TEXT NOT NULL,
+        role_id TEXT,
         state TEXT NOT NULL CHECK (state IN ('active', 'removed')),
         joined_at TEXT NOT NULL,
         removed_at TEXT,
@@ -2263,6 +2679,7 @@ export class NanasaStore {
         response_json TEXT NOT NULL,
         event_sequence INTEGER NOT NULL REFERENCES domain_events(sequence),
         created_at TEXT NOT NULL,
+        invalidated_at TEXT,
         PRIMARY KEY (scope, key)
       ) STRICT;
 
@@ -2274,6 +2691,8 @@ export class NanasaStore {
     this.#migrateLegacyColumns();
     this.#migrateTerminalRuntime();
     this.#migrateAgentStatusFoundation();
+    this.#migrateMessageHistory();
+    this.#migrateRoleAssignments();
   }
 
   #migrateLegacyColumns(): void {
@@ -2450,6 +2869,68 @@ export class NanasaStore {
 
         PRAGMA user_version = 2;
       `);
+    });
+  }
+
+  #migrateMessageHistory(): void {
+    const version = this.#database.prepare("PRAGMA user_version").get() as unknown as {
+      user_version: number;
+    };
+    if (version.user_version >= 3) return;
+    this.#transaction(() => {
+      const groupColumns = new Set(
+        (this.#database.prepare("PRAGMA table_info(groups)").all() as Array<{ name: string }>).map(
+          (column) => column.name,
+        ),
+      );
+      if (!groupColumns.has("message_sequence")) {
+        this.#database.exec(
+          "ALTER TABLE groups ADD COLUMN message_sequence INTEGER NOT NULL DEFAULT 0",
+        );
+      }
+      const idempotencyColumns = new Set(
+        (
+          this.#database.prepare("PRAGMA table_info(idempotency_keys)").all() as Array<{
+            name: string;
+          }>
+        ).map((column) => column.name),
+      );
+      if (!idempotencyColumns.has("invalidated_at")) {
+        this.#database.exec("ALTER TABLE idempotency_keys ADD COLUMN invalidated_at TEXT");
+      }
+      this.#database.exec(`
+        UPDATE groups SET message_sequence = COALESCE(
+          (SELECT MAX(group_seq) FROM messages WHERE messages.group_id = groups.id), 0
+        );
+        UPDATE domain_events
+        SET payload_json = json_object(
+          'groupId', json_extract(payload_json, '$.message.groupId'),
+          'groupSeq', json_extract(payload_json, '$.message.groupSeq')
+        )
+        WHERE type = 'message.submitted'
+          AND json_extract(payload_json, '$.message.id') IS NOT NULL;
+        PRAGMA user_version = 3;
+      `);
+    });
+  }
+
+  #migrateRoleAssignments(): void {
+    const version = this.#database.prepare("PRAGMA user_version").get() as unknown as {
+      user_version: number;
+    };
+    if (version.user_version >= 4) return;
+    this.#transaction(() => {
+      const membershipColumns = new Set(
+        (
+          this.#database.prepare("PRAGMA table_info(memberships)").all() as Array<{
+            name: string;
+          }>
+        ).map((column) => column.name),
+      );
+      if (!membershipColumns.has("role_id")) {
+        this.#database.exec("ALTER TABLE memberships ADD COLUMN role_id TEXT");
+      }
+      this.#database.exec("PRAGMA user_version = 4");
     });
   }
 }

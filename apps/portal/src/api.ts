@@ -5,6 +5,8 @@ import {
   AgentProfileSchema,
   type AgentRun,
   AgentRunSchema,
+  type ClearMessageHistoryResult,
+  ClearMessageHistoryResultSchema,
   type CreateAgentProfileCommand,
   CreateAgentProfileCommandSchema,
   type CreateGroupCommand,
@@ -15,6 +17,8 @@ import {
   type GroupMembership,
   GroupMembershipSchema,
   GroupSchema,
+  type MessagePage,
+  MessagePageSchema,
   type MessageSubmissionResult,
   MessageSubmissionResultSchema,
   type NanasaConfig,
@@ -27,6 +31,8 @@ import {
   SubmitMessageCommandSchema,
   type TerminalEndpointStatus,
   TerminalEndpointStatusSchema,
+  type UpdateAgentProfileCommand,
+  UpdateAgentProfileCommandSchema,
   type UpdateGroupCommand,
   UpdateGroupCommandSchema,
   type UpdateGroupMembershipCommand,
@@ -54,6 +60,7 @@ export interface PortalClient {
   updateGroup(groupId: string, command: UpdateGroupCommand): Promise<Group>;
   deleteGroup(groupId: string): Promise<DeleteGroupResult>;
   createAgentProfile(command: CreateAgentProfileCommand): Promise<AgentProfile>;
+  updateAgentProfile(profileId: string, command: UpdateAgentProfileCommand): Promise<AgentProfile>;
   addMembership(groupId: string, command: AddGroupMembershipCommand): Promise<GroupMembership>;
   updateMembership(
     groupId: string,
@@ -65,6 +72,11 @@ export interface PortalClient {
   startAllRuns(groupId: string, idempotencyKey: string): Promise<StartGroupRunsResult>;
   stopRun(groupId: string, memberId: string): Promise<AgentRun>;
   submitMessage(groupId: string, command: SubmitMessageCommand): Promise<MessageSubmissionResult>;
+  loadMessages(
+    groupId: string,
+    options?: { limit?: number; before?: number; after?: number },
+  ): Promise<MessagePage>;
+  clearMessages(groupId: string): Promise<ClearMessageHistoryResult>;
   getTerminalEndpointStatus(runId: string): Promise<TerminalEndpointStatus>;
   createEventsSocket(afterSequence: number): WebSocket;
 }
@@ -96,7 +108,7 @@ function commandInit(
   return {
     method,
     headers: {
-      "Content-Type": "application/json",
+      "Content-Type": "application/json; charset=utf-8",
       "Idempotency-Key": idempotencyKey,
     },
     body: JSON.stringify(body),
@@ -129,6 +141,12 @@ export const api: PortalClient = {
       "/api/agent-profiles",
       AgentProfileSchema,
       commandInit("POST", CreateAgentProfileCommandSchema.parse(command)),
+    ),
+  updateAgentProfile: (profileId, command) =>
+    request(
+      `/api/agent-profiles/${encodeURIComponent(profileId)}`,
+      AgentProfileSchema,
+      commandInit("PATCH", UpdateAgentProfileCommandSchema.parse(command)),
     ),
   addMembership: (groupId, command) =>
     request(
@@ -171,6 +189,23 @@ export const api: PortalClient = {
       `/api/groups/${encodeURIComponent(groupId)}/messages`,
       MessageSubmissionResultSchema,
       commandInit("POST", SubmitMessageCommandSchema.parse(command)),
+    ),
+  loadMessages: (groupId, options = {}) => {
+    const query = new URLSearchParams();
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    if (options.before !== undefined) query.set("before", String(options.before));
+    if (options.after !== undefined) query.set("after", String(options.after));
+    const suffix = query.size === 0 ? "" : `?${query.toString()}`;
+    return request(
+      `/api/groups/${encodeURIComponent(groupId)}/messages${suffix}`,
+      MessagePageSchema,
+    );
+  },
+  clearMessages: (groupId) =>
+    request(
+      `/api/groups/${encodeURIComponent(groupId)}/messages`,
+      ClearMessageHistoryResultSchema,
+      commandInit("DELETE", {}),
     ),
   getTerminalEndpointStatus: (runId) =>
     request(`/api/runs/${encodeURIComponent(runId)}/terminal`, TerminalEndpointStatusSchema),

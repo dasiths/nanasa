@@ -17,7 +17,7 @@ export function formatTerminalDelivery(claim: DeliveryClaim): string {
     claim.message.sender.kind === "agent"
       ? `${claim.senderAlias} | Member: ${claim.message.sender.memberId}`
       : "Human";
-  return `[From: ${sender} | Intent: ${claim.message.intent}]\n${claim.message.body.text}`;
+  return `[From: ${sender} | Message: ${claim.message.id} | Conversation: ${claim.message.conversationId} | Reply-To: ${claim.message.replyTo ?? "none"} | Intent: ${claim.message.intent}]\n${claim.message.body.text}`;
 }
 
 export class TmuxTerminalDelivery {

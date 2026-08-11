@@ -80,6 +80,7 @@ export class TmuxRuntime {
   readonly #runtimeEnvironment: (run: AgentRun) => Record<string, string>;
   readonly #runtimeProvisioner: AgentRuntimeProvisioner | undefined;
   readonly #reconciliations = new Set<Promise<void>>();
+  #serverConfiguration: Promise<void> | undefined;
   #closing = false;
 
   public constructor(store: NanasaStore, options: TmuxRuntimeOptions = {}) {
@@ -475,8 +476,7 @@ export class TmuxRuntime {
       ).stdout.trim();
     }
     try {
-      await this.#tmux(["set-option", "-g", "remain-on-exit", "on"]);
-      await this.#tmux(["set-option", "-g", "mouse", "on"]);
+      await this.#configureServer();
       const args = [
         "new-window",
         "-d",
@@ -491,7 +491,7 @@ export class TmuxRuntime {
       if (profile.workingDirectory !== undefined) {
         args.push("-c", profile.workingDirectory);
       }
-      args.push(...environmentArguments, `exec ${launchCommand}`);
+      args.push(...environmentArguments, `stty -ixon 2>/dev/null; exec ${launchCommand}`);
       binding = parseBinding(this.serverName, (await this.#tmux(args)).stdout);
       await this.#tmux(["set-option", "-p", "-t", binding.paneId, "@nanasa-run-id", run.id]);
       await this.#tmux([
@@ -523,6 +523,31 @@ export class TmuxRuntime {
         await this.#tmux(["kill-window", "-t", bootstrapWindowId], true);
       }
     }
+  }
+
+  #configureServer(): Promise<void> {
+    this.#serverConfiguration ??= (async () => {
+      await this.#tmux(["set-option", "-g", "remain-on-exit", "on"]);
+      await this.#tmux(["set-option", "-g", "mouse", "on"]);
+      await this.#tmux(["set-option", "-g", "extended-keys", "on"]);
+      await this.#tmux(["set-option", "-g", "set-clipboard", "on"]);
+      const terminalFeatures = await this.#tmux(["show-options", "-gv", "terminal-features"], true);
+      if (!terminalFeatures.stdout.includes("xterm-256color:extkeys:clipboard")) {
+        await this.#tmux([
+          "set-option",
+          "-as",
+          "terminal-features",
+          ",xterm-256color:extkeys:clipboard",
+        ]);
+      }
+      // tmux 3.5+ supports CSI-u. Older supported versions use modifyOtherKeys,
+      // which Pi also understands.
+      await this.#tmux(["set-option", "-g", "extended-keys-format", "csi-u"], true);
+    })().catch((error: unknown) => {
+      this.#serverConfiguration = undefined;
+      throw error;
+    });
+    return this.#serverConfiguration;
   }
 
   async #tmux(args: string[], allowFailure = false, stdin?: string): Promise<CommandOutput> {

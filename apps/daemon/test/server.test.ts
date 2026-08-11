@@ -1,11 +1,65 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MAX_MESSAGE_TEXT_BYTES } from "@nanasa/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createDaemon } from "../src/server.js";
+import { loadNanasaConfig } from "../src/config.js";
+import { createDaemon as createDaemonBase, type DaemonOptions } from "../src/server.js";
 
 const temporaryDirectories: string[] = [];
+const repositoryByDataPath = new Map<string, string>();
+
+function createDaemon(options: DaemonOptions = {}) {
+  const key = options.dataPath ?? `memory-${temporaryDirectories.length}`;
+  let repository = repositoryByDataPath.get(key);
+  if (repository === undefined) {
+    repository = mkdtempSync(join(tmpdir(), "nanasa-api-config-"));
+    temporaryDirectories.push(repository);
+    mkdirSync(join(repository, ".git"));
+    mkdirSync(join(repository, ".nanasa"));
+    mkdirSync(join(repository, ".nanasa", "instructions"));
+    writeFileSync(
+      join(repository, ".nanasa", "instructions", "group.md"),
+      "# Group instructions\n",
+    );
+    writeFileSync(
+      join(repository, ".nanasa", "instructions", "profile.md"),
+      "# Profile instructions\n",
+    );
+    writeFileSync(
+      join(repository, ".nanasa", "instructions", "membership.md"),
+      "# Membership instructions\n",
+    );
+    writeFileSync(
+      join(repository, ".nanasa", "config.yaml"),
+      `version: 1
+agentTypes:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+    command: [copilot]
+    cwd: .
+    agentConfigHome: { scope: agent-type }
+  claude-copilot:
+    name: Claude Code via Copilot
+    kind: claude-code
+    command: [make, claude-copilot]
+    cwd: .
+    agentConfigHome: { scope: agent-type }
+agentProfiles: {}
+roles:
+  reviewer:
+    name: Reviewer
+    permissionPolicy: read-only
+groups: {}
+messages: { retentionPerGroup: 1000 }
+`,
+    );
+    repositoryByDataPath.set(key, repository);
+  }
+  return createDaemonBase({ ...options, loadedConfig: loadNanasaConfig(repository) });
+}
 
 function temporaryDatabase(): string {
   const directory = mkdtempSync(join(tmpdir(), "nanasa-api-"));
@@ -17,9 +71,110 @@ afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
   }
+  repositoryByDataPath.clear();
 });
 
 describe("daemon REST API", () => {
+  it("assigns roles and rejects role changes while an agent run is active", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const group = (
+      await daemon.app.inject({
+        method: "POST",
+        url: "/api/groups",
+        payload: {
+          name: "Team",
+          instructions: [".nanasa/instructions/group.md"],
+        },
+      })
+    ).json<{ id: string }>();
+    const profile = (
+      await daemon.app.inject({
+        method: "POST",
+        url: "/api/agent-profiles",
+        payload: {
+          name: "Reusable",
+          agentType: "copilot",
+          defaultRoleId: "reviewer",
+          instructions: [".nanasa/instructions/profile.md"],
+        },
+      })
+    ).json<{ id: string }>();
+    const added = await daemon.app.inject({
+      method: "POST",
+      url: `/api/groups/${group.id}/memberships`,
+      payload: {
+        memberId: "reviewer",
+        agentProfileId: profile.id,
+        alias: "Reviewer",
+        roleId: "reviewer",
+        instructions: [".nanasa/instructions/membership.md"],
+      },
+    });
+    expect(added.statusCode).toBe(201);
+    expect(added.json()).toMatchObject({ roleId: "reviewer" });
+    const configured = (await daemon.app.inject({ method: "GET", url: "/api/config" })).json<{
+      agentProfiles: Record<string, { defaultRoleId?: string; instructions: string[] }>;
+      groups: Record<
+        string,
+        {
+          instructions: string[];
+          memberships: Record<string, { roleId?: string; instructions: string[] }>;
+        }
+      >;
+    }>();
+    expect(configured.groups[group.id]).toMatchObject({
+      instructions: [".nanasa/instructions/group.md"],
+    });
+    expect(configured.agentProfiles[profile.id]).toMatchObject({
+      defaultRoleId: "reviewer",
+      instructions: [".nanasa/instructions/profile.md"],
+    });
+    expect(Object.values(configured.groups[group.id]!.memberships)[0]).toMatchObject({
+      roleId: "reviewer",
+      instructions: [".nanasa/instructions/membership.md"],
+    });
+
+    daemon.store.createRunForMembership(group.id, "reviewer");
+    const renamedProfile = await daemon.app.inject({
+      method: "PATCH",
+      url: `/api/agent-profiles/${profile.id}`,
+      payload: { name: "Renamed reusable profile" },
+    });
+    expect(renamedProfile.statusCode).toBe(200);
+    const renamedGroup = await daemon.app.inject({
+      method: "PATCH",
+      url: `/api/groups/${group.id}`,
+      payload: { name: "Renamed team" },
+    });
+    expect(renamedGroup.statusCode).toBe(200);
+    const changed = await daemon.app.inject({
+      method: "PATCH",
+      url: `/api/groups/${group.id}/memberships/reviewer`,
+      payload: { roleId: null },
+    });
+    expect(changed.statusCode).toBe(409);
+    expect(changed.json()).toMatchObject({ code: "active_run_role_change_requires_restart" });
+    const profileChanged = await daemon.app.inject({
+      method: "PATCH",
+      url: `/api/agent-profiles/${profile.id}`,
+      payload: { instructions: [] },
+    });
+    expect(profileChanged.statusCode).toBe(409);
+    expect(profileChanged.json()).toMatchObject({
+      code: "active_run_profile_change_requires_restart",
+    });
+    const groupChanged = await daemon.app.inject({
+      method: "PATCH",
+      url: `/api/groups/${group.id}`,
+      payload: { instructions: [] },
+    });
+    expect(groupChanged.statusCode).toBe(409);
+    expect(groupChanged.json()).toMatchObject({
+      code: "active_run_group_change_requires_restart",
+    });
+    await daemon.app.close();
+  });
+
   it("renames and removes groups and memberships while preserving profiles", async () => {
     const daemon = await createDaemon({ dataPath: ":memory:" });
     const group = (
@@ -246,8 +401,15 @@ describe("daemon REST API", () => {
     }>();
     expect(snapshot.groups).toHaveLength(1);
     expect(snapshot.memberships).toHaveLength(2);
-    expect(snapshot.messages).toHaveLength(1);
-    expect(snapshot.deliveryOutcomes).toHaveLength(2);
+    expect(snapshot.messages).toHaveLength(0);
+    expect(snapshot.deliveryOutcomes).toHaveLength(0);
+    expect(snapshot.messageGroups).toEqual([
+      expect.objectContaining({
+        groupId: group.id,
+        retainedMessageCount: 1,
+        latestGroupSeq: 1,
+      }),
+    ]);
     expect(snapshot).toMatchObject({
       config: { version: 1, agentTypes: { copilot: { command: ["copilot"] } } },
       configStatus: { state: "ready" },
@@ -390,6 +552,73 @@ describe("portal static assets", () => {
     expect(JSON.parse(await eventFrame)).toMatchObject({ type: "group.created" });
     eventSocket.terminate();
 
+    await daemon.app.close();
+  });
+
+  it("pages, clears, and bounds message history with helpful size errors", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const group = (
+      await daemon.app.inject({ method: "POST", url: "/api/groups", payload: { name: "Chat" } })
+    ).json<{ id: string }>();
+    const profile = (
+      await daemon.app.inject({
+        method: "POST",
+        url: "/api/agent-profiles",
+        payload: { name: "Agent", agentType: "copilot" },
+      })
+    ).json<{ id: string }>();
+    await daemon.app.inject({
+      method: "POST",
+      url: `/api/groups/${group.id}/memberships`,
+      payload: { memberId: "agent", agentProfileId: profile.id, alias: "Agent" },
+    });
+    const submit = (text: string) =>
+      daemon.app.inject({
+        method: "POST",
+        url: `/api/groups/${group.id}/messages`,
+        payload: {
+          intent: "request",
+          sender: { kind: "operator", operatorId: "portal" },
+          audience: { kind: "dm", memberId: "agent" },
+          body: { contentType: "text/plain", text },
+          delivery: {},
+          hop: 0,
+        },
+      });
+
+    for (const text of ["one", "two", "three"]) expect((await submit(text)).statusCode).toBe(201);
+    const latest = await daemon.app.inject({
+      method: "GET",
+      url: `/api/groups/${group.id}/messages?limit=2`,
+    });
+    expect(latest.json()).toMatchObject({
+      messages: [{ groupSeq: 2 }, { groupSeq: 3 }],
+      pageInfo: { hasOlder: true, nextBefore: 2 },
+    });
+    const older = await daemon.app.inject({
+      method: "GET",
+      url: `/api/groups/${group.id}/messages?before=2&limit=2`,
+    });
+    expect(older.json()).toMatchObject({ messages: [{ groupSeq: 1 }] });
+    expect((await daemon.app.inject({ method: "GET", url: "/api/snapshot" })).json()).toMatchObject(
+      {
+        messages: [],
+        deliveryOutcomes: [],
+        messageGroups: [{ groupId: group.id, retainedMessageCount: 3, latestGroupSeq: 3 }],
+      },
+    );
+
+    const oversized = await submit("x".repeat(MAX_MESSAGE_TEXT_BYTES + 1));
+    expect(oversized.statusCode).toBe(413);
+    expect(oversized.json()).toMatchObject({ code: "message_body_too_large" });
+    expect(oversized.json().message).toContain("repository-relative path");
+
+    const cleared = await daemon.app.inject({
+      method: "DELETE",
+      url: `/api/groups/${group.id}/messages`,
+    });
+    expect(cleared.json()).toMatchObject({ deletedMessages: 3, deletedDeliveries: 3 });
+    expect((await submit("four")).json()).toMatchObject({ message: { groupSeq: 4 } });
     await daemon.app.close();
   });
 

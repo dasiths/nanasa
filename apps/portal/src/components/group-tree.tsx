@@ -1,10 +1,17 @@
 import type {
   AgentProfile,
   AgentRun,
+  ConfiguredAgentProfile,
+  ConfiguredMembership,
   Group,
+  GroupMembership,
   NanasaConfig,
   PortalSnapshot,
+  UpdateAgentProfileCommand,
+  UpdateGroupCommand,
+  UpdateGroupMembershipCommand,
 } from "@nanasa/contracts";
+import { InstructionPathSchema } from "@nanasa/contracts";
 import {
   Check,
   ChevronDown,
@@ -16,6 +23,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Settings2,
   Trash2,
   UserPlus,
   X,
@@ -30,7 +38,14 @@ export interface AddAgentInput {
   groupId: string;
   alias: string;
   profileId?: string;
-  newProfile?: { name: string; agentType: string };
+  newProfile?: {
+    name: string;
+    agentType: string;
+    defaultRoleId?: string;
+    instructions: string[];
+  };
+  roleId?: string;
+  instructions: string[];
 }
 
 interface GroupTreeProps {
@@ -40,11 +55,18 @@ interface GroupTreeProps {
   unreadCounts: ReadonlyMap<string, number>;
   busyAction?: string;
   onSelectGroup(groupId: string): void;
-  onCreateGroup(name: string): Promise<void>;
+  onCreateGroup(name: string, instructions: string[]): Promise<void>;
   onRenameGroup(groupId: string, name: string): Promise<void>;
+  onUpdateGroup?(groupId: string, command: UpdateGroupCommand): Promise<void>;
   onDeleteGroup(groupId: string): Promise<void>;
   onAddAgent(input: AddAgentInput): Promise<void>;
   onRenameAgent(groupId: string, memberId: string, alias: string): Promise<void>;
+  onUpdateAgent?(
+    groupId: string,
+    memberId: string,
+    command: UpdateGroupMembershipCommand,
+  ): Promise<void>;
+  onUpdateAgentProfile?(profileId: string, command: UpdateAgentProfileCommand): Promise<void>;
   onRemoveAgent(groupId: string, memberId: string): Promise<void>;
   onStartRun(groupId: string, memberId: string): Promise<void>;
   onStopRun(groupId: string, memberId: string): Promise<void>;
@@ -64,6 +86,29 @@ type DestructiveTarget =
       messageCount: number;
     }
   | { kind: "member"; groupId: string; memberId: string; name: string };
+
+function parseInstructionPaths(value: string): string[] {
+  const paths = value
+    .split("\n")
+    .map((path) => path.trim())
+    .filter(Boolean);
+  if (new Set(paths).size !== paths.length) {
+    throw new Error("Instruction paths must be unique");
+  }
+  return InstructionPathSchema.array().max(32).parse(paths);
+}
+
+function instructionPathText(paths: readonly string[]): string {
+  return paths.join("\n");
+}
+
+function roleOptions(config: NanasaConfig) {
+  return Object.entries(config.roles ?? {}).map(([roleId, role]) => (
+    <option key={roleId} value={roleId}>
+      {role.name} ({roleId})
+    </option>
+  ));
+}
 
 function InlineRename({
   label,
@@ -224,15 +269,21 @@ function runAction(run: AgentRun | undefined): "start" | "stop" | "retry" | "non
     : "none";
 }
 
-function CreateGroupForm({ onCreate }: { onCreate(name: string): Promise<void> }) {
+function CreateGroupForm({
+  onCreate,
+}: {
+  onCreate(name: string, instructions: string[]): Promise<void>;
+}) {
   const [name, setName] = useState("");
+  const [instructions, setInstructions] = useState("");
   const [error, setError] = useState<string>();
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     try {
-      await onCreate(name);
+      await onCreate(name, parseInstructionPaths(instructions));
       setName("");
+      setInstructions("");
       setError(undefined);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to create group");
@@ -259,8 +310,285 @@ function CreateGroupForm({ onCreate }: { onCreate(name: string): Promise<void> }
           <Plus aria-hidden="true" size={16} />
         </button>
       </div>
+      <label htmlFor="new-group-instructions">Group instruction files</label>
+      <textarea
+        id="new-group-instructions"
+        value={instructions}
+        onChange={(event) => setInstructions(event.target.value)}
+        rows={3}
+        placeholder=".nanasa/instructions/groups/backend.md"
+      />
       {error !== undefined && <p className="form-error">{error}</p>}
     </form>
+  );
+}
+
+function GroupSettingsDialog({
+  group,
+  instructions,
+  onClose,
+  onUpdate,
+}: {
+  group: Group;
+  instructions: readonly string[];
+  onClose(): void;
+  onUpdate(command: UpdateGroupCommand): Promise<void>;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [name, setName] = useState(group.name);
+  const [instructionText, setInstructionText] = useState(instructionPathText(instructions));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    return () => {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+    };
+  }, []);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(undefined);
+    try {
+      await onUpdate({ name, instructions: parseInstructionPaths(instructionText) });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to update group settings");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="confirmation-dialog agent-settings-dialog"
+      aria-labelledby="group-settings-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
+      <form className="confirmation-dialog-body" onSubmit={(event) => void submit(event)}>
+        <header className="agent-settings-heading">
+          <div>
+            <span className="eyebrow">Group settings</span>
+            <h2 id="group-settings-title">{group.name}</h2>
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Close group settings"
+            onClick={onClose}
+          >
+            <X aria-hidden="true" size={16} />
+          </button>
+        </header>
+        <label>
+          Group name
+          <input value={name} onChange={(event) => setName(event.target.value)} required />
+        </label>
+        <label>
+          Group instruction files
+          <textarea
+            value={instructionText}
+            onChange={(event) => setInstructionText(event.target.value)}
+            rows={4}
+            placeholder=".nanasa/instructions/groups/backend.md"
+          />
+        </label>
+        {error !== undefined && <p className="form-error">{error}</p>}
+        <button type="submit" className="compact-button" disabled={busy}>
+          <Check aria-hidden="true" size={15} />
+          {busy ? "Saving..." : "Save group"}
+        </button>
+      </form>
+    </dialog>
+  );
+}
+
+function AgentSettingsDialog({
+  member,
+  profile,
+  configuredMember,
+  configuredProfile,
+  config,
+  onClose,
+  onUpdateMember,
+  onUpdateProfile,
+}: {
+  member: GroupMembership;
+  profile: AgentProfile;
+  configuredMember: ConfiguredMembership | undefined;
+  configuredProfile: ConfiguredAgentProfile | undefined;
+  config: NanasaConfig;
+  onClose(): void;
+  onUpdateMember(command: UpdateGroupMembershipCommand): Promise<void>;
+  onUpdateProfile(command: UpdateAgentProfileCommand): Promise<void>;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [alias, setAlias] = useState(member.alias);
+  const [roleId, setRoleId] = useState(configuredMember?.roleId ?? "");
+  const [memberInstructions, setMemberInstructions] = useState(
+    instructionPathText(configuredMember?.instructions ?? []),
+  );
+  const [profileName, setProfileName] = useState(configuredProfile?.name ?? profile.name);
+  const [defaultRoleId, setDefaultRoleId] = useState(configuredProfile?.defaultRoleId ?? "");
+  const [profileInstructions, setProfileInstructions] = useState(
+    instructionPathText(configuredProfile?.instructions ?? []),
+  );
+  const [memberBusy, setMemberBusy] = useState(false);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [memberError, setMemberError] = useState<string>();
+  const [profileError, setProfileError] = useState<string>();
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    return () => {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+    };
+  }, []);
+
+  const saveMember = async (event: FormEvent) => {
+    event.preventDefault();
+    setMemberBusy(true);
+    setMemberError(undefined);
+    try {
+      await onUpdateMember({
+        alias,
+        roleId: roleId === "" ? null : roleId,
+        instructions: parseInstructionPaths(memberInstructions),
+      });
+    } catch (cause) {
+      setMemberError(cause instanceof Error ? cause.message : "Unable to update member settings");
+    } finally {
+      setMemberBusy(false);
+    }
+  };
+
+  const saveProfile = async (event: FormEvent) => {
+    event.preventDefault();
+    setProfileBusy(true);
+    setProfileError(undefined);
+    try {
+      await onUpdateProfile({
+        name: profileName,
+        defaultRoleId: defaultRoleId === "" ? null : defaultRoleId,
+        instructions: parseInstructionPaths(profileInstructions),
+      });
+    } catch (cause) {
+      setProfileError(cause instanceof Error ? cause.message : "Unable to update profile defaults");
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="confirmation-dialog agent-settings-dialog"
+      aria-labelledby="agent-settings-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
+      <div className="confirmation-dialog-body">
+        <header className="agent-settings-heading">
+          <div>
+            <span className="eyebrow">Agent settings</span>
+            <h2 id="agent-settings-title">{member.alias}</h2>
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Close agent settings"
+            onClick={onClose}
+          >
+            <X aria-hidden="true" size={16} />
+          </button>
+        </header>
+        <form className="agent-settings-section" onSubmit={(event) => void saveMember(event)}>
+          <h3>Membership</h3>
+          <div className="form-row form-row-split">
+            <label>
+              Member alias
+              <input value={alias} onChange={(event) => setAlias(event.target.value)} required />
+            </label>
+            <label>
+              Role override
+              <select value={roleId} onChange={(event) => setRoleId(event.target.value)}>
+                <option value="">
+                  Profile default
+                  {configuredProfile?.defaultRoleId === undefined
+                    ? " or unassigned"
+                    : ` (${config.roles[configuredProfile.defaultRoleId]?.name ?? configuredProfile.defaultRoleId})`}
+                </option>
+                {roleOptions(config)}
+              </select>
+            </label>
+          </div>
+          <label>
+            Assignment instruction files
+            <textarea
+              value={memberInstructions}
+              onChange={(event) => setMemberInstructions(event.target.value)}
+              rows={3}
+              placeholder=".nanasa/instructions/memberships/reviewer.md"
+            />
+          </label>
+          {memberError !== undefined && <p className="form-error">{memberError}</p>}
+          <button type="submit" className="compact-button" disabled={memberBusy}>
+            <Check aria-hidden="true" size={15} />
+            {memberBusy ? "Saving..." : "Save membership"}
+          </button>
+        </form>
+        <form className="agent-settings-section" onSubmit={(event) => void saveProfile(event)}>
+          <h3>Reusable profile</h3>
+          <div className="form-row form-row-split">
+            <label>
+              Profile name
+              <input
+                value={profileName}
+                onChange={(event) => setProfileName(event.target.value)}
+                required
+              />
+            </label>
+            <label>
+              Default role
+              <select
+                value={defaultRoleId}
+                onChange={(event) => setDefaultRoleId(event.target.value)}
+              >
+                <option value="">Unassigned</option>
+                {roleOptions(config)}
+              </select>
+            </label>
+          </div>
+          <label>
+            Profile instruction files
+            <textarea
+              value={profileInstructions}
+              onChange={(event) => setProfileInstructions(event.target.value)}
+              rows={3}
+              placeholder=".nanasa/instructions/profiles/copilot.md"
+            />
+          </label>
+          {profileError !== undefined && <p className="form-error">{profileError}</p>}
+          <button type="submit" className="compact-button" disabled={profileBusy}>
+            <Check aria-hidden="true" size={15} />
+            {profileBusy ? "Saving..." : "Save profile"}
+          </button>
+        </form>
+      </div>
+    </dialog>
   );
 }
 
@@ -281,8 +609,13 @@ function AddAgentForm({
   const [profileName, setProfileName] = useState("");
   const agentTypes = Object.values(config.agentTypes);
   const [agentType, setAgentType] = useState(agentTypes[0]?.key ?? "");
+  const [roleId, setRoleId] = useState("");
+  const [defaultRoleId, setDefaultRoleId] = useState("");
+  const [profileInstructions, setProfileInstructions] = useState("");
+  const [memberInstructions, setMemberInstructions] = useState("");
   const [error, setError] = useState<string>();
   const selectedProfileId = profileId || profiles[0]?.id || "";
+  const selectedProfileDefaultRole = config.agentProfiles[selectedProfileId]?.defaultRoleId;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -290,8 +623,17 @@ function AddAgentForm({
       await onAdd({
         groupId: group.id,
         alias,
+        instructions: parseInstructionPaths(memberInstructions),
+        ...(roleId === "" ? {} : { roleId }),
         ...(creatingProfile
-          ? { newProfile: { name: profileName, agentType } }
+          ? {
+              newProfile: {
+                name: profileName,
+                agentType,
+                instructions: parseInstructionPaths(profileInstructions),
+                ...(defaultRoleId === "" ? {} : { defaultRoleId }),
+              },
+            }
           : { profileId: selectedProfileId }),
       });
       setAlias("");
@@ -321,26 +663,47 @@ function AddAgentForm({
         </label>
       </div>
       {creatingProfile ? (
-        <div className="form-row form-row-split">
+        <>
+          <div className="form-row form-row-split">
+            <label>
+              Profile name
+              <input
+                value={profileName}
+                onChange={(event) => setProfileName(event.target.value)}
+                required
+              />
+            </label>
+            <label>
+              Agent type
+              <select value={agentType} onChange={(event) => setAgentType(event.target.value)}>
+                {agentTypes.map((configuredType) => (
+                  <option key={configuredType.key} value={configuredType.key}>
+                    {configuredType.name} ({configuredType.key})
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <label>
-            Profile name
-            <input
-              value={profileName}
-              onChange={(event) => setProfileName(event.target.value)}
-              required
-            />
-          </label>
-          <label>
-            Agent type
-            <select value={agentType} onChange={(event) => setAgentType(event.target.value)}>
-              {agentTypes.map((configuredType) => (
-                <option key={configuredType.key} value={configuredType.key}>
-                  {configuredType.name} ({configuredType.key})
-                </option>
-              ))}
+            Profile default role
+            <select
+              value={defaultRoleId}
+              onChange={(event) => setDefaultRoleId(event.target.value)}
+            >
+              <option value="">Unassigned</option>
+              {roleOptions(config)}
             </select>
           </label>
-        </div>
+          <label>
+            Profile instruction files
+            <textarea
+              value={profileInstructions}
+              onChange={(event) => setProfileInstructions(event.target.value)}
+              rows={3}
+              placeholder=".nanasa/instructions/profiles/copilot.md"
+            />
+          </label>
+        </>
       ) : (
         <label>
           Agent profile
@@ -354,6 +717,30 @@ function AddAgentForm({
           </select>
         </label>
       )}
+      <label>
+        Role override
+        <select value={roleId} onChange={(event) => setRoleId(event.target.value)}>
+          <option value="">
+            {creatingProfile
+              ? defaultRoleId === ""
+                ? "Profile default: unassigned"
+                : `Profile default: ${config.roles[defaultRoleId]?.name ?? defaultRoleId}`
+              : selectedProfileDefaultRole === undefined
+                ? "Profile default: unassigned"
+                : `Profile default: ${config.roles[selectedProfileDefaultRole]?.name ?? selectedProfileDefaultRole}`}
+          </option>
+          {roleOptions(config)}
+        </select>
+      </label>
+      <label>
+        Assignment instruction files
+        <textarea
+          value={memberInstructions}
+          onChange={(event) => setMemberInstructions(event.target.value)}
+          rows={3}
+          placeholder=".nanasa/instructions/memberships/reviewer.md"
+        />
+      </label>
       <button type="submit" className="compact-button">
         <UserPlus aria-hidden="true" size={15} />
         Add member
@@ -372,9 +759,12 @@ export function GroupTree({
   onSelectGroup,
   onCreateGroup,
   onRenameGroup,
+  onUpdateGroup,
   onDeleteGroup,
   onAddAgent,
   onRenameAgent,
+  onUpdateAgent,
+  onUpdateAgentProfile,
   onRemoveAgent,
   onStartRun,
   onStopRun,
@@ -384,7 +774,12 @@ export function GroupTree({
   );
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [showAddAgent, setShowAddAgent] = useState(false);
+  const [settingsGroupId, setSettingsGroupId] = useState<string>();
   const [editTarget, setEditTarget] = useState<EditTarget>();
+  const [settingsTarget, setSettingsTarget] = useState<{
+    groupId: string;
+    memberId: string;
+  }>();
   const [destructiveTarget, setDestructiveTarget] = useState<DestructiveTarget>();
   const [statusPopover, setStatusPopover] = useState<{
     memberId: string;
@@ -392,10 +787,28 @@ export function GroupTree({
     top: number;
   }>();
   const failedMemberIds = new Set(
-    snapshot.deliveryOutcomes
-      .filter((outcome) => ["failed", "dead-letter", "rejected"].includes(outcome.status))
-      .map((outcome) => outcome.recipientMemberId),
+    snapshot.messageGroups?.flatMap((state) => state.failedRecipientMemberIds) ?? [],
   );
+  const settingsMember =
+    settingsTarget === undefined
+      ? undefined
+      : snapshot.memberships.find(
+          (membership) =>
+            membership.groupId === settingsTarget.groupId &&
+            membership.memberId === settingsTarget.memberId,
+        );
+  const settingsProfile =
+    settingsMember === undefined
+      ? undefined
+      : snapshot.agentProfiles.find((profile) => profile.id === settingsMember.agentProfileId);
+  const configuredSettingsMember =
+    settingsTarget === undefined
+      ? undefined
+      : Object.values(config.groups[settingsTarget.groupId]?.memberships ?? {}).find(
+          (membership) => membership.memberId === settingsTarget.memberId,
+        );
+  const configuredSettingsProfile =
+    settingsProfile === undefined ? undefined : config.agentProfiles[settingsProfile.id];
 
   const toggleGroup = (groupId: string) => {
     setExpandedGroups((current) => {
@@ -507,6 +920,15 @@ export function GroupTree({
                       <UserPlus aria-hidden="true" size={15} />
                     </button>
                     <button
+                      type="button"
+                      className="icon-button group-action"
+                      aria-label={`Edit group settings ${group.name}`}
+                      title={`Settings for ${group.name}`}
+                      onClick={() => setSettingsGroupId(group.id)}
+                    >
+                      <Settings2 aria-hidden="true" size={14} />
+                    </button>
+                    <button
                       id={`rename-group-${group.id}`}
                       type="button"
                       className="icon-button group-action"
@@ -532,9 +954,9 @@ export function GroupTree({
                             (member) => member.groupId === group.id,
                           ).length,
                           runCount: snapshot.runs.filter((run) => run.groupId === group.id).length,
-                          messageCount: snapshot.messages.filter(
-                            (message) => message.groupId === group.id,
-                          ).length,
+                          messageCount:
+                            snapshot.messageGroups?.find((state) => state.groupId === group.id)
+                              ?.retainedMessageCount ?? 0,
                         })
                       }
                     >
@@ -559,6 +981,8 @@ export function GroupTree({
                     );
                     const configuredType =
                       profile === undefined ? undefined : config.agentTypes[profile.agentType];
+                    const role =
+                      member.roleId === undefined ? undefined : config.roles?.[member.roleId];
                     const recoveryDetail = run?.recoveryReason;
                     const semanticDetail = [
                       agentStatus?.phase,
@@ -624,6 +1048,7 @@ export function GroupTree({
                               {semanticDetail.length > 0 && ` · ${semanticDetail}`}
                               {configuredType !== undefined &&
                                 ` · ${configuredType.name} (${configuredType.key})`}
+                              {member.roleId !== undefined && ` · ${role?.name ?? member.roleId}`}
                               {run?.recoveryNotBefore !== undefined &&
                                 ` · retry ${new Date(run.recoveryNotBefore).toLocaleTimeString()}`}
                             </small>
@@ -657,6 +1082,10 @@ export function GroupTree({
                                       ? (profile?.agentType ?? "Unknown")
                                       : `${configuredType.name} (${configuredType.key})`}
                                   </dd>
+                                </div>
+                                <div>
+                                  <dt>Role</dt>
+                                  <dd>{role?.name ?? member.roleId ?? "Unassigned"}</dd>
                                 </div>
                                 <div>
                                   <dt>Semantic status</dt>
@@ -765,6 +1194,20 @@ export function GroupTree({
                               </button>
                             )}
                             <button
+                              type="button"
+                              className="icon-button member-action"
+                              aria-label={`Edit agent settings ${member.alias}`}
+                              title={`Settings for ${member.alias}`}
+                              onClick={() =>
+                                setSettingsTarget({
+                                  groupId: group.id,
+                                  memberId: member.memberId,
+                                })
+                              }
+                            >
+                              <Settings2 aria-hidden="true" size={14} />
+                            </button>
+                            <button
                               id={`rename-member-${group.id}-${member.memberId}`}
                               type="button"
                               className="icon-button member-action"
@@ -845,6 +1288,32 @@ export function GroupTree({
           }
         />
       )}
+      {settingsGroupId !== undefined && onUpdateGroup !== undefined && (
+        <GroupSettingsDialog
+          group={snapshot.groups.find((group) => group.id === settingsGroupId)!}
+          instructions={config.groups[settingsGroupId]?.instructions ?? []}
+          onClose={() => setSettingsGroupId(undefined)}
+          onUpdate={(command) => onUpdateGroup(settingsGroupId, command)}
+        />
+      )}
+      {settingsTarget !== undefined &&
+        settingsMember !== undefined &&
+        settingsProfile !== undefined &&
+        onUpdateAgent !== undefined &&
+        onUpdateAgentProfile !== undefined && (
+          <AgentSettingsDialog
+            member={settingsMember}
+            profile={settingsProfile}
+            configuredMember={configuredSettingsMember}
+            configuredProfile={configuredSettingsProfile}
+            config={config}
+            onClose={() => setSettingsTarget(undefined)}
+            onUpdateMember={(command) =>
+              onUpdateAgent(settingsTarget.groupId, settingsTarget.memberId, command)
+            }
+            onUpdateProfile={(command) => onUpdateAgentProfile(settingsProfile.id, command)}
+          />
+        )}
     </>
   );
 }

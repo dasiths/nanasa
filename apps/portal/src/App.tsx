@@ -1,4 +1,10 @@
-import type { StartGroupRunsResult, SubmitMessageCommand } from "@nanasa/contracts";
+import type {
+  StartGroupRunsResult,
+  SubmitMessageCommand,
+  UpdateAgentProfileCommand,
+  UpdateGroupCommand,
+  UpdateGroupMembershipCommand,
+} from "@nanasa/contracts";
 import { Cable, CircleAlert, Laptop, Moon, Play, RefreshCw, Sun, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -6,6 +12,7 @@ import { api, type PortalClient } from "./api.js";
 import { type AddAgentInput, GroupTree } from "./components/group-tree.js";
 import { MessageWorkspace } from "./components/message-workspace.js";
 import { TerminalWorkspace } from "./components/terminal-workspace.js";
+import { useMessageReadCursors } from "./hooks/use-message-read-cursors.js";
 import { useAppliedTheme, usePortalPreferences } from "./hooks/use-portal-preferences.js";
 import { useDomainEvents, usePortalSnapshot } from "./hooks/use-portal-snapshot.js";
 import { memberStatusView } from "./member-status.js";
@@ -20,7 +27,6 @@ export function App({ client = api }: AppProps) {
   const { preferences, setTheme } = usePortalPreferences();
   useAppliedTheme(preferences.theme);
   const [requestedGroupId, setRequestedGroupId] = useState<string>();
-  const [seenMessageSequence, setSeenMessageSequence] = useState<Map<string, number>>(new Map());
   const [busyAction, setBusyAction] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const [startAllResult, setStartAllResult] = useState<StartGroupRunsResult>();
@@ -54,43 +60,16 @@ export function App({ client = api }: AppProps) {
   const attentionSummary = attentionStatuses
     .map((memberStatus) => `${memberStatus.alias}: ${memberStatus.attention.replaceAll("_", " ")}`)
     .join("; ");
-  const selectedMessageIds = new Set(
-    snapshot?.messages
-      .filter((message) => message.groupId === selectedGroupId)
-      .map((message) => message.id) ?? [],
+  const selectedMessageState = snapshot?.messageGroups?.find(
+    (state) => state.groupId === selectedGroupId,
   );
-  const deliveryInProgress =
-    snapshot?.deliveryOutcomes.some(
-      (outcome) =>
-        selectedMessageIds.has(outcome.messageId) &&
-        ["queued", "received", "delivering", "retrying"].includes(outcome.status),
-    ) ?? false;
+  const deliveryInProgress = (selectedMessageState?.activeDeliveryCount ?? 0) > 0;
   const terminalDeliverySuspended = portalSubmissionSuspended || deliveryInProgress;
-
-  const latestMessageSequence = new Map<string, number>();
-  for (const message of snapshot?.messages ?? []) {
-    latestMessageSequence.set(
-      message.groupId,
-      Math.max(latestMessageSequence.get(message.groupId) ?? 0, message.groupSeq),
-    );
-  }
-  const unreadCounts = new Map<string, number>();
-  for (const [groupId, latest] of latestMessageSequence) {
-    unreadCounts.set(groupId, Math.max(0, latest - (seenMessageSequence.get(groupId) ?? 0)));
-  }
-
-  const selectedLatestMessageSequence = latestMessageSequence.get(selectedGroupId ?? "") ?? 0;
-  useEffect(() => {
-    if (selectedGroupId === undefined) {
-      return;
-    }
-    setSeenMessageSequence((current) => {
-      if ((current.get(selectedGroupId) ?? 0) >= selectedLatestMessageSequence) return current;
-      const next = new Map(current);
-      next.set(selectedGroupId, selectedLatestMessageSequence);
-      return next;
-    });
-  }, [selectedGroupId, selectedLatestMessageSequence]);
+  const { unreadCounts, markReadThrough } = useMessageReadCursors(
+    snapshot?.configStatus?.repoRoot,
+    snapshot?.groups ?? [],
+    snapshot?.messageGroups ?? [],
+  );
 
   useEffect(() => {
     if (!focusSelectedGroupAfterDelete || selectedGroup === undefined) return;
@@ -119,10 +98,10 @@ export function App({ client = api }: AppProps) {
     }
   };
 
-  const createGroup = async (name: string) => {
+  const createGroup = async (name: string, instructions: string[]) => {
     let groupId: string | undefined;
     await runAction("group:create", async () => {
-      const group = await client.createGroup({ name });
+      const group = await client.createGroup({ name, instructions });
       groupId = group.id;
     });
     setRequestedGroupId(groupId);
@@ -130,6 +109,8 @@ export function App({ client = api }: AppProps) {
 
   const renameGroup = (groupId: string, name: string) =>
     runAction(`${groupId}:rename`, () => client.updateGroup(groupId, { name }));
+  const updateGroup = (groupId: string, command: UpdateGroupCommand) =>
+    runAction(`${groupId}:settings`, () => client.updateGroup(groupId, command));
   const deleteGroup = async (groupId: string) => {
     const groupIndex = snapshot?.groups.findIndex((group) => group.id === groupId) ?? -1;
     const fallbackGroupId =
@@ -149,6 +130,10 @@ export function App({ client = api }: AppProps) {
         const profile = await client.createAgentProfile({
           name: input.newProfile.name,
           agentType: input.newProfile.agentType,
+          instructions: input.newProfile.instructions,
+          ...(input.newProfile.defaultRoleId === undefined
+            ? {}
+            : { defaultRoleId: input.newProfile.defaultRoleId }),
         });
         profileId = profile.id;
       }
@@ -158,6 +143,8 @@ export function App({ client = api }: AppProps) {
       await client.addMembership(input.groupId, {
         agentProfileId: profileId,
         alias: input.alias,
+        instructions: input.instructions,
+        ...(input.roleId === undefined ? {} : { roleId: input.roleId }),
       });
     });
   };
@@ -166,6 +153,12 @@ export function App({ client = api }: AppProps) {
     runAction(`${groupId}:${memberId}:rename`, () =>
       client.updateMembership(groupId, memberId, { alias }),
     );
+  const updateAgent = (groupId: string, memberId: string, command: UpdateGroupMembershipCommand) =>
+    runAction(`${groupId}:${memberId}:settings`, () =>
+      client.updateMembership(groupId, memberId, command),
+    );
+  const updateAgentProfile = (profileId: string, command: UpdateAgentProfileCommand) =>
+    runAction(`${profileId}:settings`, () => client.updateAgentProfile(profileId, command));
   const removeAgent = (groupId: string, memberId: string) =>
     runAction(`${groupId}:${memberId}:remove`, () => client.removeMembership(groupId, memberId));
 
@@ -249,9 +242,12 @@ export function App({ client = api }: AppProps) {
           onSelectGroup={setRequestedGroupId}
           onCreateGroup={createGroup}
           onRenameGroup={renameGroup}
+          onUpdateGroup={updateGroup}
           onDeleteGroup={deleteGroup}
           onAddAgent={addAgent}
           onRenameAgent={renameAgent}
+          onUpdateAgent={updateAgent}
+          onUpdateAgentProfile={updateAgentProfile}
           onRemoveAgent={removeAgent}
           onStartRun={startRun}
           onStopRun={stopRun}
@@ -404,6 +400,7 @@ export function App({ client = api }: AppProps) {
                   client={client}
                   members={members}
                   runs={runs}
+                  agentStatuses={snapshot.agentStatuses ?? []}
                   connectionRevision={terminalConnectionRevision}
                   suspended={terminalDeliverySuspended}
                 />
@@ -412,8 +409,12 @@ export function App({ client = api }: AppProps) {
                 group={selectedGroup}
                 members={members}
                 historyMembers={groupMemberships}
-                messages={snapshot.messages}
-                deliveryOutcomes={snapshot.deliveryOutcomes}
+                unreadCount={unreadCounts.get(selectedGroup.id) ?? 0}
+                onReadThrough={(sequence) => markReadThrough(selectedGroup.id, sequence)}
+                {...(selectedMessageState === undefined
+                  ? {}
+                  : { messageState: selectedMessageState })}
+                client={client}
                 onSubmit={submitMessage}
               />
             </div>

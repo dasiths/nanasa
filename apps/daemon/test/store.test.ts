@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { NanasaConfigSchema } from "@nanasa/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { NanasaStore } from "../src/store.js";
@@ -174,6 +175,83 @@ describe("NanasaStore persistence", () => {
     const reopened = new NanasaStore(databasePath);
     expect(reopened.getGroupStartAllResult(group.id, "operation-one")).toEqual(result);
     reopened.close();
+  });
+
+  it("retains bounded message pages, clears history, and preserves sequence high-water", () => {
+    const config = NanasaConfigSchema.parse({
+      version: 1,
+      agentTypes: {
+        copilot: {
+          key: "copilot",
+          name: "Copilot",
+          kind: "copilot",
+          command: ["copilot"],
+        },
+      },
+      messages: { retentionPerGroup: 2 },
+    });
+    const store = new NanasaStore(":memory:", { config });
+    const group = store.createGroup({ name: "Messages" });
+    const profile = store.createInternalAgentProfile({
+      name: "Reviewer",
+      agentType: "copilot",
+      kind: "copilot",
+      command: "copilot",
+      args: [],
+      environment: {},
+    });
+    store.addMembership(group.id, {
+      memberId: "reviewer",
+      agentProfileId: profile.id,
+      alias: "Reviewer",
+    });
+    const send = (text: string, key: string) =>
+      store.submitMessage(
+        group.id,
+        {
+          intent: "request",
+          sender: { kind: "operator", operatorId: "operator" },
+          audience: { kind: "dm", memberId: "reviewer" },
+          body: { contentType: "text/plain", text },
+          delivery: {},
+          hop: 0,
+        },
+        key,
+      );
+
+    const first = send("one", "one");
+    send("two", "two");
+    send("three", "three");
+
+    expect(store.getGroupMessageState(group.id)).toMatchObject({
+      latestGroupSeq: 3,
+      oldestRetainedGroupSeq: 2,
+      retainedMessageCount: 2,
+    });
+    expect(store.listMessagePage(group.id).messages.map((message) => message.body.text)).toEqual([
+      "two",
+      "three",
+    ]);
+    expect(store.listMessagePage(group.id, { limit: 1 }).messages[0]?.body.text).toBe("three");
+    expect(store.listMessagePage(group.id, { limit: 1 }).pageInfo).toMatchObject({
+      hasOlder: true,
+      nextBefore: 3,
+    });
+    expect(store.listMessagePage(group.id, { before: 3 }).messages[0]?.body.text).toBe("two");
+    expect(() => send("duplicate", "one")).toThrowError(
+      expect.objectContaining({ code: "idempotency_result_expired", statusCode: 410 }),
+    );
+    expect(first.message.groupSeq).toBe(1);
+
+    const cleared = store.clearMessageHistory(group.id, "clear");
+    expect(cleared).toMatchObject({ deletedMessages: 2, deletedDeliveries: 2 });
+    expect(store.getGroupMessageState(group.id)).toMatchObject({
+      latestGroupSeq: 3,
+      retainedMessageCount: 0,
+    });
+    expect(store.clearMessageHistory(group.id, "clear")).toEqual(cleared);
+    expect(send("four", "four").message.groupSeq).toBe(4);
+    store.close();
   });
 });
 
@@ -693,7 +771,13 @@ describe("NanasaStore schema migration", () => {
     const inspected = new DatabaseSync(databasePath);
     expect(
       (inspected.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
-    ).toBe(2);
+    ).toBe(4);
+    expect(
+      inspected
+        .prepare("PRAGMA table_info(memberships)")
+        .all()
+        .map((row) => (row as { name: string }).name),
+    ).toContain("role_id");
     expect(
       inspected
         .prepare(

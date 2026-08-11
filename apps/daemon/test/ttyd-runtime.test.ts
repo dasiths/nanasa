@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentRun, TerminalEndpointStatus } from "@nanasa/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket, { type RawData } from "ws";
 
+import { loadNanasaConfig } from "../src/config.js";
 import { createDaemon, type DaemonContext } from "../src/server.js";
 import { ttydViewSessionName } from "../src/ttyd-supervisor.js";
 
@@ -267,8 +268,33 @@ describeRuntime("real tmux and ttyd runtime", () => {
     const dataPath = join(directory, "nanasa.sqlite");
     const serverName = `nanasa-ttyd-test-${process.pid}-${Date.now()}`;
     tmuxServers.push(serverName);
+    const fixtureCode = [
+      'const readline = require("node:readline");',
+      "console.log(`READY:${process.env.NANASA_MEMBER}`);",
+      'readline.createInterface({ input: process.stdin }).on("line",',
+      "  (line) => console.log(`ECHO:${process.env.NANASA_MEMBER}:${line}`));",
+    ].join("");
+    mkdirSync(join(directory, ".git"));
+    mkdirSync(join(directory, ".nanasa"));
+    writeFileSync(
+      join(directory, ".nanasa", "config.yaml"),
+      `version: 1
+agentTypes:
+  test-echo:
+    name: Echo fixture
+    kind: opencode
+    command: ${JSON.stringify(["node", "-e", fixtureCode])}
+    cwd: .
+    environment: { NANASA_MEMBER: shared }
+    agentConfigHome: { scope: agent-type }
+agentProfiles: {}
+groups: {}
+messages: { retentionPerGroup: 1000 }
+`,
+    );
     const first = await createDaemon({
       dataPath,
+      loadedConfig: loadNanasaConfig(directory),
       tmuxServerName: serverName,
       ttydPath: "ttyd",
       reconcileIntervalMs: 50,
@@ -279,22 +305,13 @@ describeRuntime("real tmux and ttyd runtime", () => {
     const group = (
       await first.app.inject({ method: "POST", url: "/api/groups", payload: { name: "Shells" } })
     ).json<{ id: string }>();
-    const fixtureCode = [
-      'const readline = require("node:readline");',
-      "console.log(`READY:${process.env.NANASA_MEMBER}`);",
-      'readline.createInterface({ input: process.stdin }).on("line",',
-      "  (line) => console.log(`ECHO:${process.env.NANASA_MEMBER}:${line}`));",
-    ].join("");
-    const profile = first.store.createInternalAgentProfile({
-      name: "Echo fixture",
-      agentType: "test-echo",
-      kind: "opencode",
-      adapter: "terminal",
-      capabilities: ["queue"],
-      command: "node",
-      args: ["-e", fixtureCode],
-      environment: { NANASA_MEMBER: "shared" },
-    });
+    const profile = (
+      await first.app.inject({
+        method: "POST",
+        url: "/api/agent-profiles",
+        payload: { name: "Echo fixture", agentType: "test-echo" },
+      })
+    ).json<{ id: string }>();
     for (const memberId of ["alpha", "beta"]) {
       expect(
         (
@@ -320,6 +337,23 @@ describeRuntime("real tmux and ttyd runtime", () => {
     const [alpha, beta] = runs as [AgentRun, AgentRun];
     expect(alpha.terminal?.sessionId).toBe(beta.terminal?.sessionId);
     expect(alpha.terminal?.windowId).not.toBe(beta.terminal?.windowId);
+    expect(tmux(serverName, ["show-options", "-gv", "extended-keys"])).toBe("on");
+    expect(tmux(serverName, ["show-options", "-gv", "set-clipboard"])).toBe("on");
+    expect(tmux(serverName, ["show-options", "-gv", "terminal-features"])).toContain(
+      "xterm-256color:extkeys:clipboard",
+    );
+    for (const run of runs) {
+      const paneTty = tmux(serverName, [
+        "display-message",
+        "-p",
+        "-t",
+        run.terminal!.paneId,
+        "#{pane_tty}",
+      ]);
+      const terminalMode = spawnSync("stty", ["-a", "-F", paneTty], { encoding: "utf8" });
+      expect(terminalMode.status, terminalMode.stderr).toBe(0);
+      expect(terminalMode.stdout).toMatch(/(?:^|\s)-ixon(?:\s|;)/);
+    }
 
     const statuses = await Promise.all(runs.map((run) => waitForEndpoint(first, run.id)));
     expect(statuses[0].url).not.toBe(statuses[1].url);
@@ -415,6 +449,7 @@ describeRuntime("real tmux and ttyd runtime", () => {
 
     const reopened = await createDaemon({
       dataPath,
+      loadedConfig: loadNanasaConfig(directory),
       tmuxServerName: serverName,
       ttydPath: "ttyd",
       reconcileIntervalMs: 50,

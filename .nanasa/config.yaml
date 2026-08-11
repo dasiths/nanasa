@@ -1,32 +1,95 @@
 version: 1
+instructions:
+  - .nanasa/instructions/nanasa-mcp.md
+  - .nanasa/instructions/team.md
+roles:
+  project-manager:
+    name: Project Manager
+    description: Coordinates assignments, dependencies, decisions, and completion
+    instructions:
+      - .nanasa/instructions/project-manager.md
+    permissionPolicy: inherit
+  implementor:
+    name: Implementor
+    description: Implements assigned changes and validates the result
+    instructions:
+      - .nanasa/instructions/implementor.md
+    permissionPolicy: inherit
+  reviewer:
+    name: Reviewer
+    description: Reviews changes and reports prioritized findings without modifying files
+    instructions:
+      - .nanasa/instructions/reviewer.md
+    permissionPolicy: read-only
 agentTypes:
   copilot:
     name: GitHub Copilot
     kind: copilot
-    command: [copilot]
+    command: [ copilot ]
     cwd: .
     agentConfigHome: { scope: agent-type }
   pi:
     name: Pi
     kind: pi
-    command: [pi]
+    command: [ pi ]
     cwd: .
     agentConfigHome: { scope: agent-type }
   opencode:
     name: OpenCode
     kind: opencode
-    command: [opencode]
+    command: [ opencode ]
     cwd: .
     agentConfigHome: { scope: agent-type }
   claude-code:
     name: Claude Code
     kind: claude-code
-    command: [claude]
+    command: [ claude ]
     cwd: .
     agentConfigHome: { scope: agent-type }
   claude-copilot:
     name: Claude Code via Copilot
     kind: claude-code
-    command: [make, claude-copilot]
+    command: [ make, claude-copilot ]
     cwd: .
     agentConfigHome: { scope: agent-type }
+agentProfiles:
+  profile_7767eeb1-8a15-4ffc-a2ed-d8b8d43cd4e0:
+    name: GitHub Copilot
+    agentType: copilot
+    defaultRoleId: implementor
+  profile_7d72fae7-083c-4835-9b45-fd6756292a6c:
+    name: Claude Copilot
+    agentType: claude-copilot
+    defaultRoleId: project-manager
+  profile_320b21c1-e077-4f0f-b26c-f9701ab4cab0:
+    name: PI
+    agentType: pi
+    defaultRoleId: reviewer
+  profile_f07ad0bf-1e5f-4896-b614-7e7f97dd2820:
+    name: Open Code
+    agentType: opencode
+    defaultRoleId: implementor
+groups:
+  grp_2d506f47-630f-449c-bcb8-851f655d3fa8:
+    name: Agent Team
+    instructions:
+      - .nanasa/instructions/groups/agent-team.md
+    memberships:
+      membership_1bb181be-949e-4355-a854-3f36b38861f5:
+        memberId: copilot.silly-brahmagupta
+        agentProfileId: profile_7767eeb1-8a15-4ffc-a2ed-d8b8d43cd4e0
+        alias: GitHub Copilot
+      membership_888894a6-8b04-45b5-8bdc-615c7924ab53:
+        memberId: claude-copilot.magical-bose
+        agentProfileId: profile_7d72fae7-083c-4835-9b45-fd6756292a6c
+        alias: Claude Copilot
+      membership_df3f1bb8-4484-4a1a-8bc9-94347c0d16c8:
+        memberId: pi.dazzling-northcutt
+        agentProfileId: profile_320b21c1-e077-4f0f-b26c-f9701ab4cab0
+        alias: PI
+      membership_2f19022f-7c27-47bb-b0e3-c8c2a95204b1:
+        memberId: opencode.nice-kalam
+        agentProfileId: profile_f07ad0bf-1e5f-4896-b614-7e7f97dd2820
+        alias: Open Code
+messages:
+  retentionPerGroup: 1000

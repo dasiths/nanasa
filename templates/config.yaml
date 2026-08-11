@@ -1,4 +1,18 @@
 version: 1
+instructions: []
+roles:
+  project-manager:
+    name: Project Manager
+    description: Coordinates assignments, dependencies, decisions, and completion
+    permissionPolicy: inherit
+  implementor:
+    name: Implementor
+    description: Implements assigned changes and validates the result
+    permissionPolicy: inherit
+  reviewer:
+    name: Reviewer
+    description: Reviews changes and reports prioritized findings without modifying files
+    permissionPolicy: read-only
 agentTypes:
   copilot:
     name: GitHub Copilot
@@ -24,3 +38,7 @@ agentTypes:
     command: [claude]
     cwd: .
     agentConfigHome: { scope: agent-type }
+agentProfiles: {}
+groups: {}
+messages:
+  retentionPerGroup: 1000

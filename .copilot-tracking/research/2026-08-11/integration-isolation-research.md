@@ -23,7 +23,7 @@ and installed-package users need setup, authentication, and diagnostic commands.
 * Authentication uses each provider's native interactive client inside the
   selected isolated home or inherited token environment variables.
 * No compatibility migration, provider-default mode, or legacy cleanup command
-  is required for this proof-of-concept project.
+  was required for that explicitly breaking pre-alpha change.
 
 ## Evidence
 

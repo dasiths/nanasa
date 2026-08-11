@@ -154,6 +154,8 @@ vite.config.ts.timestamp-*
 
 # app data
 apps/daemon/data
+apps/daemon/mcp-secret
+apps/daemon/:memory:*
 
 # Nanasa repository-local runtime data. Commit .nanasa/config.yaml.
 .nanasa/state/

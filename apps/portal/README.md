@@ -41,6 +41,12 @@ applications or uses them for copy-mode scrollback. Full-screen alternate-screen
 TUIs own their visible history, so browser scrollbars can remain stationary even
 while the application scrolls internally.
 
+The daemon enables tmux extended-key reporting and clipboard signaling for the
+private server. Modified Enter bindings therefore reach compatible TUIs. Agent
+PTYs disable software flow control so `Ctrl+S` and `Ctrl+Q` remain application
+input. Clipboard operations use browser/platform shortcuts such as
+`Ctrl+Shift+C` and `Ctrl+Shift+V`; plain `Ctrl+C` remains an interrupt.
+
 The portal displays every persisted group message as a shared chronological chat
 timeline in a bottom-right floating overlay. Portal senders appear as Human;
 authenticated MCP senders show their membership alias and stable ID, so

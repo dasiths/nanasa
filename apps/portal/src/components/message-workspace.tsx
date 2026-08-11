@@ -1,12 +1,15 @@
 import {
   type Audience,
+  DEFAULT_MESSAGE_PAGE_SIZE,
   type DeliveryOutcome,
   type Group,
   type GroupMembership,
+  type GroupMessageState,
+  MAX_MESSAGE_TEXT_BYTES,
   type Message,
   type MessageIntent,
   type MessageSubmissionResult,
-  MessageSubmissionResultSchema,
+  OVERSIZED_MESSAGE_GUIDANCE,
   type SubmitMessageCommand,
   SubmitMessageCommandSchema,
 } from "@nanasa/contracts";
@@ -22,6 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
+import { api, type PortalClient } from "../api.js";
 
 type AudienceKind = Audience["kind"];
 
@@ -39,45 +43,6 @@ const intentDescriptions: Record<MessageIntent, string> = {
 interface MessageHistoryEntry {
   storedAt: string;
   submission: MessageSubmissionResult;
-}
-
-function loadMessageHistory(): MessageHistoryEntry[] {
-  try {
-    const value = window.localStorage.getItem(MESSAGE_HISTORY_KEY);
-    if (value === null) return [];
-    const parsed: unknown = JSON.parse(value);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((entry) => {
-      if (typeof entry !== "object" || entry === null || !("submission" in entry)) return [];
-      const result = MessageSubmissionResultSchema.safeParse(entry.submission);
-      const storedAt =
-        "storedAt" in entry && typeof entry.storedAt === "string" ? entry.storedAt : "";
-      return result.success && storedAt !== "" ? [{ storedAt, submission: result.data }] : [];
-    });
-  } catch {
-    return [];
-  }
-}
-
-function saveMessageHistory(history: MessageHistoryEntry[]): void {
-  window.localStorage.setItem(MESSAGE_HISTORY_KEY, JSON.stringify(history));
-}
-
-function loadClearedHistory(): Record<string, number> {
-  try {
-    const value = window.localStorage.getItem(MESSAGE_HISTORY_CLEARED_KEY);
-    if (value === null) return {};
-    const parsed: unknown = JSON.parse(value);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
-    return Object.fromEntries(
-      Object.entries(parsed).filter(
-        (entry): entry is [string, number] =>
-          typeof entry[1] === "number" && Number.isInteger(entry[1]) && entry[1] >= 0,
-      ),
-    );
-  } catch {
-    return {};
-  }
 }
 
 function loadOverlayOpen(): boolean {
@@ -273,8 +238,10 @@ interface MessageWorkspaceProps {
   group: Group;
   members: GroupMembership[];
   historyMembers?: GroupMembership[];
-  messages?: Message[];
-  deliveryOutcomes?: DeliveryOutcome[];
+  messageState?: GroupMessageState;
+  unreadCount?: number;
+  client?: PortalClient;
+  onReadThrough?(sequence: number): void;
   onSubmit(command: SubmitMessageCommand): Promise<MessageSubmissionResult>;
 }
 
@@ -283,7 +250,7 @@ function ConfirmClearHistoryDialog({
   onConfirm,
 }: {
   onCancel(): void;
-  onConfirm(): void;
+  onConfirm(): Promise<void>;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
@@ -310,8 +277,8 @@ function ConfirmClearHistoryDialog({
       <div className="confirmation-dialog-body">
         <h2 id="confirm-clear-message-history-title">Clear all message history?</h2>
         <p>
-          This hides the current group history in this browser. Messages remain persisted by the
-          Nanasa daemon, and new messages will still appear.
+          This permanently deletes stored messages and delivery history for this group for every
+          portal user. Active deliveries must finish before history can be cleared.
         </p>
         <div className="confirmation-actions">
           <button type="button" className="compact-button" onClick={onCancel}>
@@ -321,8 +288,9 @@ function ConfirmClearHistoryDialog({
             type="button"
             className="compact-button danger-button"
             onClick={() => {
-              onConfirm();
-              onCancel();
+              void onConfirm()
+                .then(onCancel)
+                .catch(() => undefined);
             }}
           >
             <Trash2 aria-hidden="true" size={15} />
@@ -338,16 +306,12 @@ export function MessageWorkspace({
   group,
   members,
   historyMembers = members,
-  messages = [],
-  deliveryOutcomes = [],
+  messageState,
+  unreadCount = 0,
+  client = api,
+  onReadThrough,
   onSubmit,
 }: MessageWorkspaceProps) {
-  const initialMessageSequence = Math.max(
-    0,
-    ...messages
-      .filter((message) => message.groupId === group.id)
-      .map((message) => message.groupSeq),
-  );
   const [open, setOpen] = useState(loadOverlayOpen);
   const [composing, setComposing] = useState(false);
   const [audienceKind, setAudienceKind] = useState<AudienceKind>("dm");
@@ -356,8 +320,10 @@ export function MessageWorkspace({
   );
   const [intent, setIntent] = useState<MessageIntent>("request");
   const [body, setBody] = useState("");
-  const [history, setHistory] = useState(loadMessageHistory);
-  const [clearedHistory, setClearedHistory] = useState(loadClearedHistory);
+  const [history, setHistory] = useState<MessageHistoryEntry[]>([]);
+  const [deliveryOutcomes, setDeliveryOutcomes] = useState<DeliveryOutcome[]>([]);
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
   const [confirmingClear, setConfirmingClear] = useState(false);
@@ -368,7 +334,6 @@ export function MessageWorkspace({
   const composerDialogRef = useRef<HTMLDialogElement>(null);
   const launcherRef = useRef<HTMLButtonElement>(null);
   const nearBottomRef = useRef(true);
-  const [seenSequence, setSeenSequence] = useState(initialMessageSequence);
   const previousTimelineRef = useRef<{ groupId: string; latestId: string | undefined }>({
     groupId: group.id,
     latestId: undefined,
@@ -401,17 +366,59 @@ export function MessageWorkspace({
   }, [audienceKind, contextKey]);
 
   useEffect(() => {
-    const synchronize = (event: StorageEvent) => {
-      if (event.key === MESSAGE_HISTORY_KEY) setHistory(loadMessageHistory());
-      if (event.key === MESSAGE_HISTORY_CLEARED_KEY) setClearedHistory(loadClearedHistory());
-    };
-    window.addEventListener("storage", synchronize);
-    return () => window.removeEventListener("storage", synchronize);
+    window.localStorage.removeItem(MESSAGE_HISTORY_KEY);
+    window.localStorage.removeItem(MESSAGE_HISTORY_CLEARED_KEY);
   }, []);
 
   useEffect(() => {
-    if (history.length > 0) saveMessageHistory(history);
-  }, [history]);
+    if (messageState === undefined) return;
+    let cancelled = false;
+    void client
+      .loadMessages(group.id, { limit: DEFAULT_MESSAGE_PAGE_SIZE })
+      .then((page) => {
+        if (cancelled) return;
+        setHistory((current) => {
+          const byId = new Map(current.map((entry) => [entry.submission.message.id, entry]));
+          for (const [messageId, entry] of byId) {
+            if (
+              entry.submission.message.groupId === group.id &&
+              (page.state.retainedMessageCount === 0 ||
+                (page.state.oldestRetainedGroupSeq !== undefined &&
+                  entry.submission.message.groupSeq < page.state.oldestRetainedGroupSeq))
+            ) {
+              byId.delete(messageId);
+            }
+          }
+          for (const message of page.messages) {
+            byId.set(message.id, {
+              storedAt: message.createdAt,
+              submission: {
+                message,
+                deliveryOutcomes: page.deliveryOutcomes.filter(
+                  (outcome) => outcome.messageId === message.id,
+                ),
+              },
+            });
+          }
+          return [...byId.values()];
+        });
+        setDeliveryOutcomes(page.deliveryOutcomes);
+        setHasOlder(page.pageInfo.hasOlder);
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled)
+          setError(cause instanceof Error ? cause.message : "Unable to load messages");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    client,
+    group.id,
+    messageState?.latestGroupSeq,
+    messageState?.activeDeliveryCount,
+    messageState?.failedRecipientMemberIds.join(","),
+  ]);
 
   useEffect(() => {
     try {
@@ -479,38 +486,16 @@ export function MessageWorkspace({
       .filter((entry) => entry.submission.message.groupId === group.id)
       .map((entry) => [entry.submission.message.id, entry] as const),
   );
-  for (const message of messages.filter((candidate) => candidate.groupId === group.id)) {
-    const authoritativeOutcomes = deliveryOutcomes.filter(
-      (outcome) => outcome.messageId === message.id,
-    );
-    const localOutcomes = timelineById.get(message.id)?.submission.deliveryOutcomes ?? [];
-    timelineById.set(message.id, {
-      storedAt: message.createdAt,
-      submission: {
-        message,
-        deliveryOutcomes:
-          authoritativeOutcomes.length === 0 ? localOutcomes : authoritativeOutcomes,
-      },
-    });
-  }
-  const groupHistory = [...timelineById.values()]
-    .sort(
-      (left, right) =>
-        left.submission.message.groupSeq - right.submission.message.groupSeq ||
-        left.submission.message.createdAt.localeCompare(right.submission.message.createdAt),
-    )
-    .filter((entry) => entry.submission.message.groupSeq > (clearedHistory[group.id] ?? 0));
+  const groupHistory = [...timelineById.values()].sort(
+    (left, right) =>
+      left.submission.message.groupSeq - right.submission.message.groupSeq ||
+      left.submission.message.createdAt.localeCompare(right.submission.message.createdAt),
+  );
   const latestMessageId = groupHistory.at(-1)?.submission.message.id;
-  const latestMessageSequence = groupHistory.at(-1)?.submission.message.groupSeq ?? 0;
-  const unreadCount = Math.max(0, latestMessageSequence - seenSequence);
 
   useEffect(() => {
-    setSeenSequence(latestMessageSequence);
-  }, [group.id]);
-
-  useEffect(() => {
-    if (open) setSeenSequence(latestMessageSequence);
-  }, [latestMessageSequence, open]);
+    if (open && messageState !== undefined) onReadThrough?.(messageState.latestGroupSeq);
+  }, [messageState?.latestGroupSeq, onReadThrough, open]);
 
   const scrollToLatest = () => {
     const viewport = historyRef.current;
@@ -538,6 +523,50 @@ export function MessageWorkspace({
     nearBottomRef.current =
       viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 48;
     if (nearBottomRef.current) setShowJumpToLatest(false);
+    if (viewport.scrollTop <= 48 && hasOlder && !loadingOlder) {
+      const before = groupHistory[0]?.submission.message.groupSeq;
+      if (before === undefined) return;
+      const previousHeight = viewport.scrollHeight;
+      const previousTop = viewport.scrollTop;
+      setLoadingOlder(true);
+      void client
+        .loadMessages(group.id, { limit: DEFAULT_MESSAGE_PAGE_SIZE, before })
+        .then((page) => {
+          setHistory((current) => {
+            const byId = new Map(current.map((entry) => [entry.submission.message.id, entry]));
+            for (const message of page.messages) {
+              byId.set(message.id, {
+                storedAt: message.createdAt,
+                submission: {
+                  message,
+                  deliveryOutcomes: page.deliveryOutcomes.filter(
+                    (outcome) => outcome.messageId === message.id,
+                  ),
+                },
+              });
+            }
+            return [...byId.values()];
+          });
+          setDeliveryOutcomes((current) => [
+            ...current.filter(
+              (outcome) =>
+                !page.deliveryOutcomes.some((next) => next.messageId === outcome.messageId),
+            ),
+            ...page.deliveryOutcomes,
+          ]);
+          setHasOlder(page.pageInfo.hasOlder);
+          requestAnimationFrame(() => {
+            if (historyRef.current !== null) {
+              historyRef.current.scrollTop =
+                historyRef.current.scrollHeight - previousHeight + previousTop;
+            }
+          });
+        })
+        .catch((cause: unknown) =>
+          setError(cause instanceof Error ? cause.message : "Unable to load older messages"),
+        )
+        .finally(() => setLoadingOlder(false));
+    }
   };
 
   const targetMemberIds =
@@ -548,6 +577,8 @@ export function MessageWorkspace({
       : audienceKind === "multicast"
         ? targetMemberIds.length >= 2
         : targetMemberIds.length > 0;
+  const messageBytes = new TextEncoder().encode(body).byteLength;
+  const messageTooLarge = messageBytes > MAX_MESSAGE_TEXT_BYTES;
 
   const setAudience = (kind: AudienceKind) => {
     setAudienceKind(kind);
@@ -590,6 +621,10 @@ export function MessageWorkspace({
         ].slice(0, MAX_MESSAGE_HISTORY);
         return next;
       });
+      setDeliveryOutcomes((current) => [
+        ...current.filter((outcome) => outcome.messageId !== submission.message.id),
+        ...submission.deliveryOutcomes,
+      ]);
       setBody("");
       setError(undefined);
       setComposing(false);
@@ -601,15 +636,19 @@ export function MessageWorkspace({
     }
   };
 
-  const clearHistory = () => {
-    window.localStorage.removeItem(MESSAGE_HISTORY_KEY);
-    setHistory([]);
-    const next = {
-      ...clearedHistory,
-      [group.id]: Math.max(0, ...groupHistory.map((entry) => entry.submission.message.groupSeq)),
-    };
-    window.localStorage.setItem(MESSAGE_HISTORY_CLEARED_KEY, JSON.stringify(next));
-    setClearedHistory(next);
+  const clearHistory = async () => {
+    try {
+      await client.clearMessages(group.id);
+      setHistory((current) =>
+        current.filter((entry) => entry.submission.message.groupId !== group.id),
+      );
+      setDeliveryOutcomes([]);
+      setHasOlder(false);
+      setError(undefined);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to clear message history");
+      throw cause;
+    }
   };
 
   return (
@@ -649,7 +688,7 @@ export function MessageWorkspace({
                   type="button"
                   className="icon-button"
                   aria-label="Clear all message history"
-                  title="Clear browser message cache"
+                  title="Delete stored message history"
                   disabled={groupHistory.length === 0}
                   onClick={() => setConfirmingClear(true)}
                 >
@@ -820,8 +859,12 @@ export function MessageWorkspace({
               </div>
             )}
             <label className="message-body-label">
-              <span>Message body</span>
+              <span>
+                Message body · {messageBytes.toLocaleString()} /{" "}
+                {MAX_MESSAGE_TEXT_BYTES.toLocaleString()} bytes
+              </span>
               <textarea
+                aria-label="Message body"
                 value={body}
                 onChange={(event) => setBody(event.target.value)}
                 rows={3}
@@ -829,6 +872,11 @@ export function MessageWorkspace({
                 required
               />
             </label>
+            {messageTooLarge && (
+              <p className="form-error" role="alert">
+                Message exceeds the UTF-8 byte limit. {OVERSIZED_MESSAGE_GUIDANCE}
+              </p>
+            )}
             <div className="composer-actions">
               {error !== undefined && (
                 <p className="form-error" role="alert">
@@ -846,7 +894,7 @@ export function MessageWorkspace({
               <button
                 type="submit"
                 className="primary-button"
-                disabled={submitting || members.length === 0 || !audienceIsValid}
+                disabled={submitting || members.length === 0 || !audienceIsValid || messageTooLarge}
               >
                 <Send aria-hidden="true" size={16} />
                 {submitting ? "Sending..." : "Send message"}

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { NanasaStore } from "../src/store.js";
-import { TmuxTerminalDelivery } from "../src/terminal-delivery.js";
+import { formatTerminalDelivery, TmuxTerminalDelivery } from "../src/terminal-delivery.js";
 import { TerminalEndpointRegistry } from "../src/terminal-endpoint-registry.js";
 import { TmuxRuntime } from "../src/tmux-runtime.js";
 
@@ -133,8 +133,10 @@ describeTmux("TmuxTerminalDelivery", () => {
       limit: 1,
     })[0]!;
 
+    expect(formatTerminalDelivery(claim)).toContain(
+      `[From: Human | Message: ${claim.message.id} | Conversation: ${claim.message.conversationId} | Reply-To: none | Intent: request]`,
+    );
     await delivery.deliver(claim);
-    await waitForPaneText(serverName, run.terminal!.paneId, "ECHO:[From: Human | Intent: request]");
     await waitForPaneText(serverName, run.terminal!.paneId, "ECHO:safe terminal delivery");
 
     endpoints.begin(run, 1);

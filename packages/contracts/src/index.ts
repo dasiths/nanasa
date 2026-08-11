@@ -3,19 +3,14 @@ import { z } from "zod";
 const IdentifierSchema = z.string().trim().min(1).max(128);
 const TimestampSchema = z.string().datetime({ offset: true });
 
-export const CreateGroupCommandSchema = z.object({
-  name: z.string().trim().min(1).max(100),
-});
+export const MAX_MESSAGE_TEXT_BYTES = 1_048_576;
+export const MAX_MESSAGE_REQUEST_BYTES = 6_356_992;
+export const DEFAULT_MESSAGE_PAGE_SIZE = 20;
+export const MAX_MESSAGE_PAGE_SIZE = 100;
+export const DEFAULT_MESSAGE_RETENTION_PER_GROUP = 1_000;
 
-export type CreateGroupCommand = z.infer<typeof CreateGroupCommandSchema>;
-
-export const UpdateGroupCommandSchema = z
-  .object({
-    name: z.string().trim().min(1).max(100),
-  })
-  .strict();
-
-export type UpdateGroupCommand = z.infer<typeof UpdateGroupCommandSchema>;
+export const OVERSIZED_MESSAGE_GUIDANCE =
+  "Save large content in a file inside the repository checkout shared by the recipients, then send its repository-relative path. Do not send an absolute path or a path outside the repository.";
 
 export const DeleteGroupResultSchema = z
   .object({
@@ -139,10 +134,124 @@ export type AgentTypeConfig = CanonicalAgentTypeConfig;
 
 export const AgentTypeConfigSchema = AgentTypeConfigInputSchema;
 
+export const RoleIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+
+export type RoleId = z.infer<typeof RoleIdSchema>;
+
+export const InstructionPathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(4_096)
+  .refine(
+    (path) =>
+      !path.includes("\0") &&
+      !path.startsWith("/") &&
+      !/^[A-Za-z]:\//.test(path) &&
+      !path.includes("\\") &&
+      path.split("/").every((segment) => segment !== "..") &&
+      path.toLowerCase().endsWith(".md"),
+    "Instruction path must be a repository-relative Markdown (.md) path without traversal",
+  );
+
+export type InstructionPath = z.infer<typeof InstructionPathSchema>;
+
+export const CreateGroupCommandSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  instructions: z.array(InstructionPathSchema).max(32).optional(),
+});
+
+export type CreateGroupCommand = z.infer<typeof CreateGroupCommandSchema>;
+
+export const UpdateGroupCommandSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100).optional(),
+    instructions: z.array(InstructionPathSchema).max(32).optional(),
+  })
+  .strict()
+  .refine((command) => command.name !== undefined || command.instructions !== undefined, {
+    message: "Group update requires at least one field",
+  });
+
+export type UpdateGroupCommand = z.infer<typeof UpdateGroupCommandSchema>;
+
+export const RolePermissionPolicySchema = z.enum(["inherit", "read-only"]);
+
+export type RolePermissionPolicy = z.infer<typeof RolePermissionPolicySchema>;
+
+export const RoleDefinitionSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100),
+    description: z.string().trim().min(1).max(500).optional(),
+    instructions: z.array(InstructionPathSchema).max(32).default([]),
+    permissionPolicy: RolePermissionPolicySchema.default("inherit"),
+  })
+  .strict();
+
+export type RoleDefinition = z.infer<typeof RoleDefinitionSchema>;
+
+export const ConfiguredAgentProfileSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100),
+    agentType: AgentTypeKeySchema,
+    defaultRoleId: RoleIdSchema.optional(),
+    instructions: z.array(InstructionPathSchema).max(32).default([]),
+  })
+  .strict();
+
+export type ConfiguredAgentProfile = z.infer<typeof ConfiguredAgentProfileSchema>;
+
+export const ConfiguredMembershipSchema = z
+  .object({
+    memberId: IdentifierSchema,
+    agentProfileId: IdentifierSchema,
+    alias: z.string().trim().min(1).max(100),
+    roleId: RoleIdSchema.optional(),
+    instructions: z.array(InstructionPathSchema).max(32).default([]),
+  })
+  .strict();
+
+export type ConfiguredMembership = z.infer<typeof ConfiguredMembershipSchema>;
+
+export const ConfiguredGroupSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100),
+    instructions: z.array(InstructionPathSchema).max(32).default([]),
+    memberships: z.record(IdentifierSchema, ConfiguredMembershipSchema).default({}),
+  })
+  .strict();
+
+export type ConfiguredGroup = z.infer<typeof ConfiguredGroupSchema>;
+
+export const MessageConfigSchema = z
+  .object({
+    retentionPerGroup: z
+      .number()
+      .int()
+      .min(1)
+      .max(100_000)
+      .default(DEFAULT_MESSAGE_RETENTION_PER_GROUP),
+  })
+  .strict();
+
+export type MessageConfig = z.infer<typeof MessageConfigSchema>;
+
 export const NanasaConfigSchema = z
   .object({
     version: z.literal(1),
     agentTypes: z.record(AgentTypeKeySchema, AgentTypeConfigSchema),
+    instructions: z.array(InstructionPathSchema).max(32).default([]),
+    roles: z.record(RoleIdSchema, RoleDefinitionSchema).default({}),
+    agentProfiles: z.record(IdentifierSchema, ConfiguredAgentProfileSchema).default({}),
+    groups: z.record(IdentifierSchema, ConfiguredGroupSchema).default({}),
+    messages: MessageConfigSchema.default({
+      retentionPerGroup: DEFAULT_MESSAGE_RETENTION_PER_GROUP,
+    }),
   })
   .strict()
   .superRefine((config, context) => {
@@ -153,6 +262,52 @@ export const NanasaConfigSchema = z
           message: "Agent type key must match its configuration key",
           path: ["agentTypes", key, "key"],
         });
+      }
+    }
+    for (const [profileId, profile] of Object.entries(config.agentProfiles)) {
+      if (config.agentTypes[profile.agentType] === undefined) {
+        context.addIssue({
+          code: "custom",
+          message: `Agent profile references unknown agent type ${profile.agentType}`,
+          path: ["agentProfiles", profileId, "agentType"],
+        });
+      }
+      if (
+        profile.defaultRoleId !== undefined &&
+        config.roles[profile.defaultRoleId] === undefined
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: `Agent profile references unknown role ${profile.defaultRoleId}`,
+          path: ["agentProfiles", profileId, "defaultRoleId"],
+        });
+      }
+    }
+    for (const [groupId, group] of Object.entries(config.groups)) {
+      const memberIds = new Set<string>();
+      for (const [membershipId, membership] of Object.entries(group.memberships)) {
+        if (config.agentProfiles[membership.agentProfileId] === undefined) {
+          context.addIssue({
+            code: "custom",
+            message: `Membership references unknown agent profile ${membership.agentProfileId}`,
+            path: ["groups", groupId, "memberships", membershipId, "agentProfileId"],
+          });
+        }
+        if (membership.roleId !== undefined && config.roles[membership.roleId] === undefined) {
+          context.addIssue({
+            code: "custom",
+            message: `Membership references unknown role ${membership.roleId}`,
+            path: ["groups", groupId, "memberships", membershipId, "roleId"],
+          });
+        }
+        if (memberIds.has(membership.memberId)) {
+          context.addIssue({
+            code: "custom",
+            message: `Group contains duplicate member ID ${membership.memberId}`,
+            path: ["groups", groupId, "memberships", membershipId, "memberId"],
+          });
+        }
+        memberIds.add(membership.memberId);
       }
     }
   });
@@ -209,10 +364,29 @@ export const CreateAgentProfileCommandSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
     agentType: AgentTypeKeySchema,
+    defaultRoleId: RoleIdSchema.optional(),
+    instructions: z.array(InstructionPathSchema).max(32).optional(),
   })
   .strict();
 
 export type CreateAgentProfileCommand = z.infer<typeof CreateAgentProfileCommandSchema>;
+
+export const UpdateAgentProfileCommandSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100).optional(),
+    defaultRoleId: RoleIdSchema.nullable().optional(),
+    instructions: z.array(InstructionPathSchema).max(32).optional(),
+  })
+  .strict()
+  .refine(
+    (command) =>
+      command.name !== undefined ||
+      command.defaultRoleId !== undefined ||
+      command.instructions !== undefined,
+    { message: "Agent profile update requires at least one field" },
+  );
+
+export type UpdateAgentProfileCommand = z.infer<typeof UpdateAgentProfileCommandSchema>;
 
 const CanonicalInternalCreateAgentProfileCommandSchema = CanonicalAgentProfileSchema.omit({
   id: true,
@@ -251,6 +425,7 @@ export const GroupMembershipSchema = z.object({
   memberId: IdentifierSchema,
   agentProfileId: IdentifierSchema,
   alias: z.string().trim().min(1).max(100),
+  roleId: RoleIdSchema.optional(),
   state: MembershipStateSchema,
   joinedAt: TimestampSchema,
   removedAt: TimestampSchema.optional(),
@@ -262,15 +437,26 @@ export const AddGroupMembershipCommandSchema = z.object({
   memberId: IdentifierSchema.optional(),
   agentProfileId: IdentifierSchema,
   alias: z.string().trim().min(1).max(100),
+  roleId: RoleIdSchema.optional(),
+  instructions: z.array(InstructionPathSchema).max(32).optional(),
 });
 
 export type AddGroupMembershipCommand = z.infer<typeof AddGroupMembershipCommandSchema>;
 
 export const UpdateGroupMembershipCommandSchema = z
   .object({
-    alias: z.string().trim().min(1).max(100),
+    alias: z.string().trim().min(1).max(100).optional(),
+    roleId: RoleIdSchema.nullable().optional(),
+    instructions: z.array(InstructionPathSchema).max(32).optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (command) =>
+      command.alias !== undefined ||
+      command.roleId !== undefined ||
+      command.instructions !== undefined,
+    { message: "Membership update requires at least one field" },
+  );
 
 export type UpdateGroupMembershipCommand = z.infer<typeof UpdateGroupMembershipCommandSchema>;
 
@@ -554,6 +740,8 @@ export const AgentStatusSummarySchema = z
     memberId: IdentifierSchema,
     alias: z.string().trim().min(1).max(100),
     agentType: AgentTypeKeySchema,
+    roleId: RoleIdSchema.optional(),
+    roleName: z.string().trim().min(1).max(100).optional(),
     runId: IdentifierSchema.optional(),
     generation: z.number().int().positive().optional(),
     runStatus: RunStatusSchema.optional(),
@@ -705,6 +893,47 @@ export const MessageSenderSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export const MessageBodySchema = z
+  .object({
+    contentType: z.enum(["text/plain", "text/markdown"]),
+    text: z.string().min(1),
+  })
+  .strict()
+  .superRefine((body, context) => {
+    if (!isWellFormedUnicode(body.text)) {
+      context.addIssue({
+        code: "custom",
+        message: "Message text must contain well-formed Unicode",
+        path: ["text"],
+      });
+      return;
+    }
+    const bytes = new TextEncoder().encode(body.text).byteLength;
+    if (bytes > MAX_MESSAGE_TEXT_BYTES) {
+      context.addIssue({
+        code: "custom",
+        message: `Message text exceeds the ${MAX_MESSAGE_TEXT_BYTES}-byte UTF-8 limit. ${OVERSIZED_MESSAGE_GUIDANCE}`,
+        path: ["text"],
+      });
+    }
+  });
+
+export type MessageBody = z.infer<typeof MessageBodySchema>;
+
 export const MessageSchema = z
   .object({
     id: IdentifierSchema,
@@ -714,10 +943,7 @@ export const MessageSchema = z
     intent: MessageIntentSchema,
     sender: MessageSenderSchema,
     audience: AudienceSchema,
-    body: z.object({
-      contentType: z.enum(["text/plain", "text/markdown"]),
-      text: z.string().min(1),
-    }),
+    body: MessageBodySchema,
     delivery: DeliveryPolicySchema,
     replyTo: IdentifierSchema.optional(),
     rootId: IdentifierSchema.optional(),
@@ -743,10 +969,7 @@ export const SubmitMessageCommandSchema = z
     intent: MessageIntentSchema,
     sender: MessageSenderSchema,
     audience: AudienceSchema,
-    body: z.object({
-      contentType: z.enum(["text/plain", "text/markdown"]),
-      text: z.string().min(1),
-    }),
+    body: MessageBodySchema,
     delivery: DeliveryPolicySchema,
     replyTo: IdentifierSchema.optional(),
     rootId: IdentifierSchema.optional(),
@@ -802,6 +1025,51 @@ export const MessageSubmissionResultSchema = z.object({
 
 export type MessageSubmissionResult = z.infer<typeof MessageSubmissionResultSchema>;
 
+export const GroupMessageStateSchema = z
+  .object({
+    groupId: IdentifierSchema,
+    latestGroupSeq: z.number().int().nonnegative(),
+    oldestRetainedGroupSeq: z.number().int().positive().optional(),
+    retainedMessageCount: z.number().int().nonnegative(),
+    activeDeliveryCount: z.number().int().nonnegative(),
+    failedRecipientMemberIds: z.array(IdentifierSchema),
+  })
+  .strict();
+
+export type GroupMessageState = z.infer<typeof GroupMessageStateSchema>;
+
+export const MessagePageInfoSchema = z
+  .object({
+    hasOlder: z.boolean(),
+    hasNewer: z.boolean(),
+    nextBefore: z.number().int().positive().optional(),
+    nextAfter: z.number().int().positive().optional(),
+  })
+  .strict();
+
+export const MessagePageSchema = z
+  .object({
+    groupId: IdentifierSchema,
+    messages: z.array(MessageSchema),
+    deliveryOutcomes: z.array(DeliveryOutcomeSchema),
+    state: GroupMessageStateSchema,
+    pageInfo: MessagePageInfoSchema,
+  })
+  .strict();
+
+export type MessagePage = z.infer<typeof MessagePageSchema>;
+
+export const ClearMessageHistoryResultSchema = z
+  .object({
+    groupId: IdentifierSchema,
+    deletedMessages: z.number().int().nonnegative(),
+    deletedDeliveries: z.number().int().nonnegative(),
+    state: GroupMessageStateSchema,
+  })
+  .strict();
+
+export type ClearMessageHistoryResult = z.infer<typeof ClearMessageHistoryResultSchema>;
+
 export const DomainEventSchema = z.object({
   sequence: z.number().int().positive(),
   id: IdentifierSchema,
@@ -824,6 +1092,7 @@ export const PortalSnapshotSchema = z.object({
   agentStatuses: z.array(AgentStatusSummarySchema).optional(),
   messages: z.array(MessageSchema),
   deliveryOutcomes: z.array(DeliveryOutcomeSchema),
+  messageGroups: z.array(GroupMessageStateSchema).optional(),
   config: NanasaConfigSchema.optional(),
   configStatus: ConfigStatusSchema.optional(),
 });

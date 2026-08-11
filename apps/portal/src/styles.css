@@ -676,6 +676,63 @@ textarea {
   line-height: 1.45;
 }
 
+.agent-settings-dialog {
+  width: min(680px, calc(100vw - 24px));
+}
+
+.agent-settings-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+
+.agent-settings-heading h2 {
+  margin-top: 2px;
+  font-size: 1.2rem;
+}
+
+.agent-settings-section {
+  display: grid;
+  gap: 10px;
+  padding-block: 3px 12px;
+}
+
+.agent-settings-section + .agent-settings-section {
+  border-top: 1px solid var(--line);
+  padding-top: 15px;
+}
+
+.agent-settings-section h3 {
+  font-size: 0.92rem;
+}
+
+.agent-settings-section label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.confirmation-dialog-body > label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.confirmation-dialog-body > .compact-button {
+  justify-self: end;
+}
+
+.agent-settings-section > .compact-button {
+  justify-self: end;
+}
+
 .confirmation-actions {
   display: flex;
   justify-content: flex-end;
@@ -990,7 +1047,7 @@ textarea {
 }
 
 .terminal-tab-select[aria-selected="true"] {
-  border-bottom-color: var(--green);
+  border-bottom-color: var(--blue);
   color: var(--text);
   font-weight: 600;
 }
@@ -1792,5 +1849,15 @@ textarea {
 
   .confirmation-actions button {
     width: 100%;
+  }
+
+  .agent-settings-section > .compact-button {
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .confirmation-dialog-body > .compact-button {
+    width: 100%;
+    justify-self: stretch;
   }
 }

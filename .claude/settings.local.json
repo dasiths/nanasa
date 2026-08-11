@@ -4,7 +4,17 @@
       "Bash(python3 -m json.tool)",
       "Bash(claude mcp *)",
       "mcp__nanasa__nanasa_list_members",
-      "mcp__nanasa__nanasa_send_dm"
+      "mcp__nanasa__nanasa_send_dm",
+      "mcp__nanasa__nanasa_broadcast_group",
+      "Bash(git status *)",
+      "mcp__nanasa__nanasa_list_agent_statuses",
+      "Bash(xargs -I{} stat --format '%Y %y {}' {})",
+      "mcp__nanasa__nanasa_send_multicast",
+      "mcp__nanasa__nanasa_get_agent_status",
+      "mcp__nanasa__nanasa_report_progress",
+      "Bash(git check-ignore *)",
+      "Bash(git restore *)",
+      "Bash(git add *)"
     ]
   }
 }

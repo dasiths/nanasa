@@ -2,7 +2,7 @@
 title: Nanasa
 description: Local coding-agent pool with tmux terminals, authenticated MCP messaging, and coordinator-visible status
 author: Nanasa
-ms.date: 2026-08-10
+ms.date: 2026-08-11
 ms.topic: overview
 ---
 
@@ -135,6 +135,78 @@ relative to `.nanasa/integrations` and may use `{agentType}` and
 `{membershipId}`. Absolute paths, traversal, unknown placeholders, and
 symlinked integration directories are rejected.
 
+Profiles, groups, and memberships are also declared in `.nanasa/config.yaml`.
+Map keys are stable IDs used by run history and member-scoped integration homes:
+
+```yaml
+instructions:
+  - .nanasa/instructions/nanasa-mcp.md
+  - .nanasa/instructions/team.md
+
+roles:
+  implementor:
+    name: Implementor
+    description: Implements assigned changes and validates the result
+    instructions:
+      - .nanasa/instructions/implementor.md
+    permissionPolicy: inherit
+  reviewer:
+    name: Reviewer
+    description: Reviews changes without modifying files
+    instructions:
+      - .nanasa/instructions/reviewer.md
+    permissionPolicy: read-only
+
+agentProfiles:
+  profile_reviewer:
+    name: Reviewer
+    agentType: copilot
+    defaultRoleId: reviewer
+    instructions: []
+
+groups:
+  group_backend:
+    name: Backend
+    instructions:
+      - .nanasa/instructions/groups/backend.md
+    memberships:
+      membership_reviewer:
+        memberId: copilot.reviewer
+        agentProfileId: profile_reviewer
+        alias: Reviewer
+        roleId: reviewer
+        instructions: []
+
+messages:
+  retentionPerGroup: 1000
+```
+
+Portal topology changes update this file atomically, then reconcile SQLite as a
+runtime projection. Run generations, delivery leases, messages, semantic status,
+event ordering, and idempotency remain transactional SQLite state. Existing
+alpha databases are imported into the YAML topology when those sections are
+absent.
+
+Roles describe responsibility independently from the provider profile. A
+membership `roleId` overrides its profile `defaultRoleId`; omitting both leaves
+the member unassigned. Nanasa composes the system-prompt suffix in this order:
+built-in MCP coordination guidance, top-level instructions, group instructions,
+effective role instructions, profile instructions, then membership
+instructions. References must be unique, repository-relative UTF-8 Markdown
+files. Symlinks, traversal, files larger than 64 KiB, and effective suffixes
+larger than 256 KiB are rejected.
+
+Each launch composes a private `system-prompt-suffix.md` and manifest beneath
+the membership integration directory. The suffix always starts with built-in
+Nanasa MCP and incoming-message etiquette, then appends repository-global,
+role, profile, and membership Markdown instructions in that order. Copilot uses a generated custom agent,
+Claude appends the file to its default system prompt, Pi appends the file and
+uses an extension for read-only enforcement, and OpenCode uses a generated
+primary agent. Provider defaults, managed policy, repository instructions,
+authentication, preferences, and unrelated configuration remain active. Change
+a running member's role only after stopping it; Nanasa rejects live role changes
+instead of mutating an active prompt.
+
 Running `nanasa` without a command is equivalent to `nanasa start`. The daemon
 walks upward from the current directory to find `.nanasa/config.yaml`, stores
 durable state beneath that repository, and serves the portal at
@@ -243,6 +315,21 @@ daemon allows only the endpoint index, token, and WebSocket paths, validates
 same-origin upgrades, strips credentials before forwarding, and never exposes
 the loopback upstream address.
 
+Nanasa configures its private tmux server rather than loading `~/.tmux.conf`.
+It enables extended keys and clipboard signaling, advertises xterm extended-key
+and clipboard features, and uses CSI-u on tmux 3.5 or newer. tmux 3.2 through
+3.4 use the supported `modifyOtherKeys` format. Agent PTYs disable software flow
+control so `Ctrl+S` and `Ctrl+Q` reach the active application instead of pausing
+terminal output.
+
+Use the browser or platform terminal shortcuts for clipboard operations, usually
+`Ctrl+Shift+C` and `Ctrl+Shift+V` on Linux and Windows or `Cmd+C` and `Cmd+V` on
+macOS. Plain `Ctrl+C` remains an interrupt sent to the agent. tmux copy mode and
+applications may also use OSC 52 through ttyd; browser focus, clipboard
+permissions, and secure-context policy still apply. Enabling clipboard signaling
+allows terminal applications to replace clipboard contents, so only run trusted
+agent commands.
+
 Every profile command runs directly in its verified owner pane. Interrupt sends
 Ctrl+C to that pane. Message delivery loads text into the pane, enables bracketed
 paste, pastes the content, and sends Enter separately. A successful outcome
@@ -257,9 +344,10 @@ active recipient.
 
 Before terminal injection, Nanasa prepends a trusted sender envelope derived
 from persisted message identity. Agents receive input such as
-`[From: Reviewer | Member: pi.focused-hopper | Intent: request]`; portal messages
-use `From: Human`. MCP callers cannot forge this envelope, and the stored message
-body remains unchanged.
+`[From: Reviewer | Member: pi.focused-hopper | Message: msg_123 | Conversation:
+conv_456 | Reply-To: msg_100 | Intent: request]`; portal messages use `From:
+Human`. MCP callers cannot forge this envelope, and the stored message body
+remains unchanged.
 
 ## Agent status tracking
 
@@ -275,8 +363,8 @@ failed tmux inspections rather than treating them as missing processes.
 
 Nanasa provisions private lifecycle reporters for Claude Code hooks, GitHub
 Copilot CLI user hooks, a second Pi extension, and an in-process OpenCode plugin.
-The Copilot hook is installed under `~/.copilot/hooks` and becomes a no-op in
-processes without Nanasa's run-scoped environment. Reporters send normalized
+The Copilot hook is installed under its repository-local Nanasa integration
+home. Reporters send normalized
 lifecycle names, correlation IDs, coarse errors, and wait labels. They do not
 send prompts, tool arguments, tool output, file paths, transcripts, reasoning,
 or provider headers. Reporter failure never blocks the native TUI; status
@@ -298,6 +386,22 @@ phase, progress context, and attention independently of terminal run controls.
 Reporter replay coverage is pinned to Claude Code 2.1.220, GitHub Copilot CLI
 1.0.79, Pi 0.83.0 with `pi-mcp-adapter` 2.18.0, and OpenCode 1.18.15.
 
+## Message retention and limits
+
+Message text is limited to 1,048,576 UTF-8 bytes across the portal, REST API,
+and MCP tools. Oversized requests return a helpful error. Place large content in
+a file inside the repository checkout shared by recipients, then send its
+repository-relative path. Nanasa does not automatically open paths supplied in
+messages, and a path on a remote MCP client's machine is not visible to agents
+until the content reaches the shared checkout.
+
+SQLite retains the newest `messages.retentionPerGroup` messages for each group,
+with a default of 1,000. Sequence numbers remain monotonic after retention or
+history deletion. The portal loads the latest 20 messages, opens at the newest
+message, and fetches older pages as the reader scrolls upward. Clearing history
+from the portal deletes the group's stored messages and delivery outcomes for
+all portal sessions.
+
 ## MCP messaging
 
 Enable Streamable HTTP MCP at `/mcp` with `nanasa start --mcp` or
@@ -307,8 +411,8 @@ TypeScript server and Node packages.
 
 Nanasa exposes these tools:
 
-* `nanasa.list_members` returns active member IDs, aliases, agent types, current
-  run status, and which member is the authenticated caller
+* `nanasa.list_members` returns active member IDs, aliases, effective roles,
+  agent types, current run status, and which member is the authenticated caller
 * `nanasa.list_agent_statuses` returns compact semantic and process status for
   every active member, optionally limited to agents needing attention
 * `nanasa.get_agent_status` returns one member's wait, progress, evidence,
@@ -357,19 +461,29 @@ Client integration follows each CLI's supported configuration contract:
 
 * GitHub Copilot CLI receives a generated HTTP MCP config through
   `--additional-mcp-config`; `COPILOT_HOME` and `COPILOT_CACHE_HOME` point to
-  its isolated Nanasa home
+  its isolated Nanasa home, and `--agent` selects the generated role prompt
 * Claude Code uses an isolated `CLAUDE_CONFIG_DIR` with a generated user MCP
-  entry; direct Claude and `make claude-copilot` launches use the same path
+  entry and `--append-system-prompt-file`; direct Claude and
+  `make claude-copilot` launches use the same path
 * Pi uses `PI_CODING_AGENT_DIR` and the pinned `pi-mcp-adapter` extension, with
-  Nanasa tools registered directly
+  Nanasa tools registered directly and the role prompt appended natively
 * OpenCode receives a generated remote MCP entry through `OPENCODE_CONFIG` and
-  isolated XDG config, data, state, and cache roots
+  isolated XDG config, data, state, and cache roots; a generated primary agent
+  references the effective prompt file
 
 Nanasa does not copy or link provider credentials into generated
 configuration. Use `nanasa auth` to authenticate the native CLI in the selected
 home, or provide a provider-supported credential through the inherited process
 environment. Coding-agent sessions launched outside Nanasa continue using
 their normal provider homes and do not load Nanasa-generated hooks or plugins.
+
+Provider homes are persistent and not treated as generated scratch space.
+Nanasa replaces only files or keys it owns: its named Copilot hook files,
+`mcpServers.nanasa` for Claude and Pi, `mcp.nanasa` for OpenCode, and its named
+status reporter assets. Provider onboarding, themes, authentication, sessions,
+models, plugins, user hooks, other MCP servers, and unrelated settings are
+preserved across repeated provisioning. Unsafe or malformed shared provider
+configuration causes launch to fail instead of being overwritten.
 
 Operator clients authenticate with `Authorization: Bearer <token>`. Configure
 that token with `NANASA_MCP_OPERATOR_TOKEN`; it must contain at least 32
@@ -394,6 +508,20 @@ The Add agent form loads agent types from `.nanasa/config.yaml`. New configured
 keys appear without a portal code change, and existing profiles show both the
 configured display name and stable key.
 
+New-agent creation also accepts a profile default role, profile Markdown
+instruction files, a membership role override, and assignment-specific Markdown
+instruction files. Instruction paths are entered one per line and must resolve
+to repository-relative `.md` files. Existing member rows expose an Agent
+settings dialog with separate save actions for the membership and its reusable
+profile. Profile changes affect every membership using that profile. Prompt-
+affecting role or instruction edits require affected agents to be stopped;
+aliases and display names remain editable while agents run.
+
+Group creation accepts shared group Markdown instruction files, and the selected
+group's Settings action edits both its name and those files. Group instructions
+apply to every member after the global suffix and before role-specific guidance.
+Changing them requires all agents in the group to be stopped.
+
 Use **Start all** in the selected group header to start every active member that
 is not already running. The result panel reports each member as started, already
 running, or failed. Repeated clicks while the operation is pending reuse one
@@ -414,9 +542,13 @@ show both alias and stable member ID; hovering an initials badge shows that ID.
 The newest message remains at the bottom, while a new-message control preserves
 position when older history is being read.
 
-Browser storage caches immediate portal submissions and records local Clear All
-markers. Clearing history hides current messages only in that browser; the
-authoritative daemon records remain available for operational history.
+Browser storage records a per-repository, per-group read cursor. Rail and
+launcher badges count retained messages after that cursor, so read messages stay
+read across refreshes and another tab on the same browser. Selecting a group does
+not mark it read; opening its Messages overlay does. Retention and authoritative
+history deletion cannot recreate phantom unread counts. Clearing history deletes
+the group's messages and delivery outcomes from the daemon for every portal
+session.
 
 The bottom-right Messages launcher opens independently of terminal tabs and grid
 layout. It remembers its open state and shows an unread badge while closed. Its

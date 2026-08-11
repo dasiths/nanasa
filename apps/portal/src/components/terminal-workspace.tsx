@@ -1,4 +1,9 @@
-import type { AgentRun, GroupMembership, TerminalEndpointState } from "@nanasa/contracts";
+import type {
+  AgentRun,
+  AgentStatusSummary,
+  GroupMembership,
+  TerminalEndpointState,
+} from "@nanasa/contracts";
 import { CircleAlert, Copy, Grid2X2, LoaderCircle, Monitor, RefreshCw, Rows3 } from "lucide-react";
 import { useState } from "react";
 
@@ -93,6 +98,7 @@ interface TerminalWorkspaceProps {
   client: PortalClient;
   members: GroupMembership[];
   runs: AgentRun[];
+  agentStatuses?: AgentStatusSummary[];
   connectionRevision?: number;
   suspended?: boolean;
 }
@@ -101,6 +107,7 @@ export function TerminalWorkspace({
   client,
   members,
   runs,
+  agentStatuses = [],
   connectionRevision = 0,
   suspended = false,
 }: TerminalWorkspaceProps) {
@@ -122,6 +129,10 @@ export function TerminalWorkspace({
     : availableRuns[0]?.id;
   const memberAlias = (run: AgentRun) =>
     members.find((member) => member.memberId === run.memberId)?.alias ?? run.memberId;
+  const displayStatus = (run: AgentRun) =>
+    agentStatuses.find(
+      (status) => status.groupId === run.groupId && status.memberId === run.memberId,
+    )?.state ?? run.status;
 
   if (availableRuns.length === 0) {
     return (
@@ -146,7 +157,11 @@ export function TerminalWorkspace({
                 aria-selected={run.id === activeRunId}
                 onClick={() => setSelectedRunId(run.id)}
               >
-                <span className={`status-dot status-${run.status}`} aria-hidden="true" />
+                <span
+                  className={`status-dot status-${displayStatus(run)}`}
+                  title={displayStatus(run).replaceAll("_", " ")}
+                  aria-label={`${displayStatus(run).replaceAll("_", " ")} agent status`}
+                />
                 <span>{memberAlias(run)}</span>
                 <small title={run.memberId}>{run.memberId}</small>
               </button>

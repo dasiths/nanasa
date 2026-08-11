@@ -45,6 +45,86 @@ describe("terminal endpoint API", () => {
 });
 
 describe("portal operations API", () => {
+  it("updates reusable profile role and Markdown instruction defaults", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: "profile/one",
+        name: "Reviewer",
+        agentType: "copilot",
+        kind: "copilot",
+        command: "copilot",
+        args: [],
+        environment: {},
+        createdAt: "2026-08-10T08:00:00.000Z",
+        updatedAt: "2026-08-10T08:01:00.000Z",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.updateAgentProfile("profile/one", {
+      name: " Reviewer ",
+      defaultRoleId: "reviewer",
+      instructions: [".nanasa/instructions/profiles/reviewer.md"],
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/agent-profiles/profile%2Fone",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          name: "Reviewer",
+          defaultRoleId: "reviewer",
+          instructions: [".nanasa/instructions/profiles/reviewer.md"],
+        }),
+      }),
+    );
+  });
+
+  it("loads cursor pages and clears authoritative message history", async () => {
+    const state = {
+      groupId: "group/one",
+      latestGroupSeq: 7,
+      retainedMessageCount: 0,
+      activeDeliveryCount: 0,
+      failedRecipientMemberIds: [],
+    };
+    const responses = [
+      {
+        groupId: "group/one",
+        messages: [],
+        deliveryOutcomes: [],
+        state,
+        pageInfo: { hasOlder: false, hasNewer: false },
+      },
+      { groupId: "group/one", deletedMessages: 7, deletedDeliveries: 8, state },
+    ];
+    const fetchMock = vi.fn().mockImplementation(async () => ({
+      ok: true,
+      json: async () => responses.shift(),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.loadMessages("group/one", { limit: 20, before: 42 });
+    await api.clearMessages("group/one");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/groups/group%2Fone/messages?limit=20&before=42",
+      undefined,
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/groups/group%2Fone/messages",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json; charset=utf-8",
+        }),
+      }),
+    );
+  });
+
   it("sends encoded group and membership CRUD commands", async () => {
     const responses = [
       {

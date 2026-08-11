@@ -12,7 +12,9 @@ import {
   DeleteGroupResultSchema,
   DeliveryModeSchema,
   DeliveryOutcomeSchema,
+  InstructionPathSchema,
   InterruptAgentRunCommandSchema,
+  MAX_MESSAGE_TEXT_BYTES,
   MessageSchema,
   NanasaConfigSchema,
   StartAgentRunCommandSchema,
@@ -49,6 +51,39 @@ const baseMessage = {
 } as const;
 
 describe("message policy contracts", () => {
+  it("enforces message size in UTF-8 bytes and rejects malformed Unicode", () => {
+    expect(
+      MessageSchema.safeParse({
+        ...baseMessage,
+        body: { contentType: "text/plain", text: "a".repeat(MAX_MESSAGE_TEXT_BYTES) },
+      }).success,
+    ).toBe(true);
+    expect(
+      MessageSchema.safeParse({
+        ...baseMessage,
+        body: { contentType: "text/plain", text: "a".repeat(MAX_MESSAGE_TEXT_BYTES + 1) },
+      }).success,
+    ).toBe(false);
+    expect(
+      MessageSchema.safeParse({
+        ...baseMessage,
+        body: { contentType: "text/plain", text: "é".repeat(MAX_MESSAGE_TEXT_BYTES / 2) },
+      }).success,
+    ).toBe(true);
+    expect(
+      MessageSchema.safeParse({
+        ...baseMessage,
+        body: { contentType: "text/plain", text: "é".repeat(MAX_MESSAGE_TEXT_BYTES / 2 + 1) },
+      }).success,
+    ).toBe(false);
+    expect(
+      MessageSchema.safeParse({
+        ...baseMessage,
+        body: { contentType: "text/plain", text: "\ud800" },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts legacy modes but projects delivery as implicit terminal injection", () => {
     expect(MessageSchema.parse(baseMessage).delivery).toEqual({});
     expect(DeliveryModeSchema.parse("terminal")).toBe("terminal");
@@ -380,6 +415,9 @@ describe("configuration contracts", () => {
     expect(AgentCapabilitySchema.safeParse("terminal").success).toBe(false);
     expect(NanasaConfigSchema.parse(config)).toEqual({
       version: 1,
+      instructions: [],
+      roles: {},
+      agentProfiles: {},
       agentTypes: {
         copilot: {
           key: "copilot",
@@ -398,6 +436,8 @@ describe("configuration contracts", () => {
           environment: {},
         },
       },
+      groups: {},
+      messages: { retentionPerGroup: 1_000 },
     });
     expect(
       NanasaConfigSchema.safeParse({
@@ -440,6 +480,9 @@ describe("configuration contracts", () => {
       }),
     ).toEqual({
       version: 1,
+      instructions: [],
+      roles: {},
+      agentProfiles: {},
       agentTypes: {
         pi: {
           key: "pi",
@@ -450,7 +493,110 @@ describe("configuration contracts", () => {
           environment: {},
         },
       },
+      groups: {},
+      messages: { retentionPerGroup: 1_000 },
     });
+  });
+
+  it("validates declarative topology references and retention", () => {
+    expect(
+      NanasaConfigSchema.parse({
+        version: 1,
+        agentTypes: config.agentTypes,
+        agentProfiles: {
+          profile_one: { name: "Builder", agentType: "copilot" },
+        },
+        groups: {
+          group_one: {
+            name: "Team",
+            memberships: {
+              membership_one: {
+                memberId: "copilot.builder",
+                agentProfileId: "profile_one",
+                alias: "Builder",
+              },
+            },
+          },
+        },
+        messages: { retentionPerGroup: 20 },
+      }),
+    ).toMatchObject({ messages: { retentionPerGroup: 20 } });
+    expect(
+      NanasaConfigSchema.safeParse({
+        version: 1,
+        agentTypes: config.agentTypes,
+        agentProfiles: {},
+        groups: {
+          group_one: {
+            name: "Team",
+            memberships: {
+              membership_one: {
+                memberId: "copilot.builder",
+                agentProfileId: "missing",
+                alias: "Builder",
+              },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("resolves reusable role references with layered instruction defaults", () => {
+    const parsed = NanasaConfigSchema.parse({
+      version: 1,
+      agentTypes: config.agentTypes,
+      instructions: [".nanasa/instructions/team.md"],
+      roles: {
+        reviewer: {
+          name: "Reviewer",
+          instructions: [".nanasa/instructions/reviewer.md"],
+          permissionPolicy: "read-only",
+        },
+      },
+      agentProfiles: {
+        profile_one: {
+          name: "Builder",
+          agentType: "copilot",
+          defaultRoleId: "reviewer",
+        },
+      },
+      groups: {
+        group_one: {
+          name: "Team",
+          memberships: {
+            membership_one: {
+              memberId: "copilot.reviewer",
+              agentProfileId: "profile_one",
+              alias: "Reviewer",
+            },
+          },
+        },
+      },
+    });
+
+    expect(parsed.roles.reviewer).toMatchObject({
+      permissionPolicy: "read-only",
+      instructions: [".nanasa/instructions/reviewer.md"],
+    });
+    expect(parsed.agentProfiles.profile_one?.instructions).toEqual([]);
+    expect(parsed.groups.group_one?.memberships.membership_one?.instructions).toEqual([]);
+    expect(
+      NanasaConfigSchema.safeParse({
+        ...parsed,
+        agentProfiles: {
+          ...parsed.agentProfiles,
+          profile_one: { ...parsed.agentProfiles.profile_one, defaultRoleId: "missing-role" },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts only Markdown instruction paths", () => {
+    expect(InstructionPathSchema.parse(".nanasa/instructions/team.md")).toBe(
+      ".nanasa/instructions/team.md",
+    );
+    expect(InstructionPathSchema.safeParse(".nanasa/instructions/team.txt").success).toBe(false);
   });
 
   it("accepts member and custom repository-local configuration homes", () => {

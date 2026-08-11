@@ -44,6 +44,7 @@ async function createFixture() {
       memberId,
       agentProfileId: profile.id,
       alias: memberId,
+      ...(memberId === "sender" ? { roleId: "reviewer" } : {}),
     });
   }
   const run = daemon.store.createRunForMembership(group.id, "sender").run;
@@ -99,6 +100,19 @@ async function callTool(
 }
 
 describe("Streamable HTTP MCP", () => {
+  it("returns repository-path guidance when a tool message exceeds the UTF-8 limit", async () => {
+    const { daemon, agentToken } = await createFixture();
+    const response = await callTool(daemon, agentToken, "nanasa.send_dm", {
+      recipientMemberId: "alpha",
+      text: "x".repeat(1_048_577),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result).toMatchObject({ isError: true });
+    expect(response.json().result.content[0].text).toContain("repository-relative path");
+    await daemon.app.close();
+  });
+
   it("initializes, lists tools, and rejects invalid Host, Origin, and bearer credentials", async () => {
     const { daemon } = await createFixture();
     const initialized = await mcpRequest(daemon, operatorToken, "initialize", {
@@ -108,6 +122,7 @@ describe("Streamable HTTP MCP", () => {
     });
     expect(initialized.statusCode).toBe(200);
     expect(initialized.body).toContain('"name":"nanasa"');
+    expect(initialized.body).toContain("nanasa.list_members");
 
     const listed = await mcpRequest(daemon, operatorToken, "tools/list", {});
     expect(listed.statusCode).toBe(200);
@@ -206,6 +221,8 @@ describe("Streamable HTTP MCP", () => {
           memberId: "sender",
           alias: "sender",
           agentType: "fixture",
+          roleId: "reviewer",
+          roleName: "Reviewer",
           runStatus: "starting",
           isCaller: true,
         },
@@ -272,7 +289,12 @@ describe("Streamable HTTP MCP", () => {
       statuses: [
         { memberId: "alpha", state: "not_started" },
         { memberId: "beta", state: "not_started" },
-        { memberId: "sender", state: "starting" },
+        {
+          memberId: "sender",
+          roleId: "reviewer",
+          roleName: "Reviewer",
+          state: "starting",
+        },
       ],
     });
     const detail = await callTool(daemon, agentToken, "nanasa.get_agent_status", {
