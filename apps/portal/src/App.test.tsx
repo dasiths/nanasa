@@ -10,7 +10,7 @@ import type {
 } from "@nanasa/contracts";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App.js";
 import type { PortalClient } from "./api.js";
@@ -253,11 +253,23 @@ async function openMessageComposer(user: ReturnType<typeof userEvent.setup>) {
   return screen.getByRole("dialog", { name: "New message" });
 }
 
+async function chooseRowAction(
+  user: ReturnType<typeof userEvent.setup>,
+  menuLabel: string,
+  actionLabel: string,
+) {
+  await user.click(screen.getByRole("button", { name: menuLabel }));
+  const menu = screen.getByRole("menu", { name: menuLabel });
+  await user.click(within(menu).getByRole("menuitem", { name: actionLabel }));
+}
+
 describe("portal application", () => {
   beforeEach(() => {
     window.localStorage.clear();
     window.localStorage.setItem(MESSAGE_OVERLAY_OPEN_KEY, "true");
   });
+
+  afterEach(() => vi.restoreAllMocks());
 
   it("refreshes the snapshot when the domain event socket connects", async () => {
     const client = createClient();
@@ -277,7 +289,7 @@ describe("portal application", () => {
     render(<App client={client} />);
 
     await screen.findByRole("heading", { name: "Backend" });
-    await user.click(screen.getByRole("button", { name: "Rename group Backend" }));
+    await chooseRowAction(user, "Actions for group Backend", "Rename group Backend");
     const groupName = screen.getByRole("textbox", { name: "group name for Backend" });
     await user.clear(groupName);
     await user.type(groupName, "Platform{Enter}");
@@ -285,10 +297,10 @@ describe("portal application", () => {
       expect(client.updateGroup).toHaveBeenCalledWith("group-backend", { name: "Platform" }),
     );
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Rename group Backend" })).toHaveFocus(),
+      expect(screen.getByRole("button", { name: "Actions for group Backend" })).toHaveFocus(),
     );
 
-    await user.click(screen.getByRole("button", { name: "Rename agent Reviewer" }));
+    await chooseRowAction(user, "Actions for agent Reviewer", "Rename agent Reviewer");
     const alias = screen.getByRole("textbox", { name: "agent alias for Reviewer" });
     await user.clear(alias);
     await user.type(alias, "Quality reviewer{Escape}");
@@ -297,7 +309,7 @@ describe("portal application", () => {
       screen.queryByRole("textbox", { name: "agent alias for Reviewer" }),
     ).not.toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Rename agent Reviewer" })).toHaveFocus(),
+      expect(screen.getByRole("button", { name: "Actions for agent Reviewer" })).toHaveFocus(),
     );
   });
 
@@ -328,7 +340,7 @@ describe("portal application", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Rename group Backend" }));
+    await chooseRowAction(user, "Actions for group Backend", "Rename group Backend");
     const input = screen.getByRole("textbox", { name: "group name for Backend" });
     await user.clear(input);
     await user.type(input, "Platform");
@@ -344,7 +356,7 @@ describe("portal application", () => {
 
     resolveRename();
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Rename group Backend" })).toHaveFocus(),
+      expect(screen.getByRole("button", { name: "Actions for group Backend" })).toHaveFocus(),
     );
   });
 
@@ -358,9 +370,50 @@ describe("portal application", () => {
     render(<App client={createClient()} />);
 
     await screen.findByRole("heading", { name: "Backend" });
-    await user.click(screen.getByRole("button", { name: "Copy member ID builder" }));
+    await chooseRowAction(user, "Actions for agent Builder", "Copy member ID builder");
 
     expect(writeText).toHaveBeenCalledWith("builder");
+  });
+
+  it("keeps row actions keyboard accessible without obscuring labels", async () => {
+    const user = userEvent.setup();
+    render(<App client={createClient()} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    const tree = screen.getByRole("navigation", { name: "Group tree" });
+    expect(within(tree).getByText("Backend")).toBeVisible();
+    expect(within(tree).getByText("Builder")).toBeVisible();
+
+    const groupTrigger = screen.getByRole("button", { name: "Actions for group Backend" });
+    groupTrigger.focus();
+    await user.keyboard("{Enter}");
+    const groupMenu = screen.getByRole("menu", { name: "Actions for group Backend" });
+    const addAgent = within(groupMenu).getByRole("menuitem", { name: "Add agent to Backend" });
+    const groupSettings = within(groupMenu).getByRole("menuitem", {
+      name: "Edit group settings Backend",
+    });
+    await waitFor(() => expect(addAgent).toHaveFocus());
+    await user.keyboard("{ArrowDown}");
+    expect(groupSettings).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(within(groupMenu).getByRole("menuitem", { name: "Delete group Backend" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(groupTrigger).toHaveFocus());
+    expect(
+      screen.queryByRole("menu", { name: "Actions for group Backend" }),
+    ).not.toBeInTheDocument();
+
+    const agentTrigger = screen.getByRole("button", { name: "Actions for agent Builder" });
+    agentTrigger.focus();
+    await user.keyboard("{Enter}");
+    const agentMenu = screen.getByRole("menu", { name: "Actions for agent Builder" });
+    await waitFor(() =>
+      expect(
+        within(agentMenu).getByRole("menuitem", { name: "Copy member ID builder" }),
+      ).toHaveFocus(),
+    );
+    await user.keyboard("{ArrowUp}");
+    expect(within(agentMenu).getByRole("menuitem", { name: "Remove agent Builder" })).toHaveFocus();
   });
 
   it("requires a dialog confirmation before removing a membership", async () => {
@@ -369,7 +422,7 @@ describe("portal application", () => {
     render(<App client={client} />);
 
     await screen.findByRole("heading", { name: "Backend" });
-    await user.click(screen.getByRole("button", { name: "Remove agent Reviewer" }));
+    await chooseRowAction(user, "Actions for agent Reviewer", "Remove agent Reviewer");
     const dialog = screen.getByRole("dialog", { name: "Remove Reviewer?" });
     expect(dialog).toHaveTextContent("reusable agent profile remains available");
     expect(client.removeMembership).not.toHaveBeenCalled();
@@ -395,7 +448,7 @@ describe("portal application", () => {
     render(<App client={client} />);
 
     await screen.findByRole("heading", { name: "Backend" });
-    await user.click(screen.getByRole("button", { name: "Delete group Backend" }));
+    await chooseRowAction(user, "Actions for group Backend", "Delete group Backend");
     const dialog = screen.getByRole("dialog", { name: "Delete Backend?" });
     expect(dialog).toHaveTextContent("0 runs will stop before 2 memberships and 0 messages");
     await user.click(screen.getByRole("button", { name: "Delete group" }));
@@ -441,7 +494,7 @@ describe("portal application", () => {
     render(<App client={client} />);
 
     await screen.findByRole("heading", { name: "Backend" });
-    await user.click(screen.getByRole("button", { name: "Edit group settings Backend" }));
+    await chooseRowAction(user, "Actions for group Backend", "Edit group settings Backend");
     const dialog = screen.getByRole("dialog", { name: "Backend" });
     const name = within(dialog).getByLabelText("Group name");
     await user.clear(name);
@@ -464,7 +517,7 @@ describe("portal application", () => {
     render(<App client={createClient()} />);
 
     await screen.findByRole("heading", { name: "Backend" });
-    await user.click(screen.getByRole("button", { name: "Add agent to Backend" }));
+    await chooseRowAction(user, "Actions for group Backend", "Add agent to Backend");
 
     expect(screen.getByLabelText("Member alias")).toBeInTheDocument();
     expect(screen.getByLabelText("Profile source")).toBeInTheDocument();
@@ -476,7 +529,7 @@ describe("portal application", () => {
     const client = createClient();
     render(<App client={client} />);
     await screen.findByRole("heading", { name: "Backend" });
-    await user.click(screen.getByRole("button", { name: "Add agent to Backend" }));
+    await chooseRowAction(user, "Actions for group Backend", "Add agent to Backend");
     await user.type(screen.getByLabelText("Member alias"), "Security reviewer");
     await user.selectOptions(screen.getByLabelText("Role override"), "reviewer");
     await user.click(screen.getByRole("button", { name: "Add member" }));
@@ -531,7 +584,7 @@ describe("portal application", () => {
     render(<App client={client} />);
 
     await screen.findByRole("heading", { name: "Backend" });
-    await user.click(screen.getByRole("button", { name: "Add agent to Backend" }));
+    await chooseRowAction(user, "Actions for group Backend", "Add agent to Backend");
     await user.selectOptions(screen.getByLabelText("Profile source"), "new");
     await user.type(screen.getByLabelText("Member alias"), `${agentType} member`);
     await user.type(screen.getByLabelText("Profile name"), `${agentType} profile`);
@@ -552,7 +605,7 @@ describe("portal application", () => {
     render(<App client={client} />);
 
     await screen.findByRole("heading", { name: "Backend" });
-    await user.click(screen.getByRole("button", { name: "Add agent to Backend" }));
+    await chooseRowAction(user, "Actions for group Backend", "Add agent to Backend");
     await user.selectOptions(screen.getByLabelText("Profile source"), "new");
     await user.type(screen.getByLabelText("Member alias"), "Security reviewer");
     await user.type(screen.getByLabelText("Profile name"), "Review profile");
@@ -615,7 +668,7 @@ describe("portal application", () => {
     render(<App client={client} />);
 
     await screen.findByRole("heading", { name: "Backend" });
-    await user.click(screen.getByRole("button", { name: "Edit agent settings Reviewer" }));
+    await chooseRowAction(user, "Actions for agent Reviewer", "Edit agent settings Reviewer");
     const dialog = screen.getByRole("dialog", { name: "Reviewer" });
 
     const alias = within(dialog).getByLabelText("Member alias");
@@ -703,7 +756,8 @@ describe("portal application", () => {
     ["failed", "failed", "Retry Builder"],
   ] as const)(
     "renders %s recovery status with the correct action",
-    (recoveryPhase, runStatus, actionName) => {
+    async (recoveryPhase, runStatus, actionName) => {
+      const user = userEvent.setup();
       const run: AgentRun = {
         id: `run-${recoveryPhase}`,
         groupId: "group-backend",
@@ -740,8 +794,12 @@ describe("portal application", () => {
         "title",
         "daemon_restart",
       );
-      expect(screen.getByRole("button", { name: actionName })).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Start Builder" })).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Actions for agent Builder" }));
+      const menu = screen.getByRole("menu", { name: "Actions for agent Builder" });
+      expect(within(menu).getByRole("menuitem", { name: actionName })).toBeInTheDocument();
+      expect(
+        within(menu).queryByRole("menuitem", { name: "Start Builder" }),
+      ).not.toBeInTheDocument();
     },
   );
 
@@ -805,20 +863,28 @@ describe("portal application", () => {
       screen.getByText(/^waiting · permission · decision required · validation/),
     ).toHaveAttribute("title", "Implementation complete");
     expect(screen.getByLabelText("Builder needs decision required")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Stop Builder" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Actions for agent Builder" }));
+    expect(
+      within(screen.getByRole("menu", { name: "Actions for agent Builder" })).getByRole(
+        "menuitem",
+        { name: "Stop Builder" },
+      ),
+    ).toBeInTheDocument();
+    await user.keyboard("{Escape}");
 
     const memberButton = screen.getByText("builder").closest("button");
     expect(memberButton).not.toBeNull();
-    await user.hover(memberButton as HTMLButtonElement);
-    let tooltip = screen.getByRole("tooltip");
-    expect(within(tooltip).getByText("decision required")).toBeInTheDocument();
-    expect(within(tooltip).getByText("Implementation complete")).toBeInTheDocument();
-
-    await user.unhover(memberButton as HTMLButtonElement);
-    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
-    fireEvent.focus(memberButton as HTMLButtonElement);
-    tooltip = screen.getByRole("tooltip");
-    expect(within(tooltip).getByText("builder")).toBeInTheDocument();
+    await user.click(memberButton as HTMLButtonElement);
+    const details = screen.getByRole("dialog", { name: "Agent details for Builder" });
+    await waitFor(() => expect(details).toHaveFocus());
+    expect(within(details).getByText("decision required")).toBeInTheDocument();
+    expect(within(details).getByText("Implementation complete")).toBeInTheDocument();
+    expect(within(details).getByText("builder")).toBeInTheDocument();
+    await user.click(within(details).getByRole("button", { name: "Close details for Builder" }));
+    expect(
+      screen.queryByRole("dialog", { name: "Agent details for Builder" }),
+    ).not.toBeInTheDocument();
+    await waitFor(() => expect(memberButton).toHaveFocus());
   });
 
   it("counts explicit input separately from ordinary waiting", async () => {
@@ -873,7 +939,8 @@ describe("portal application", () => {
     expect(screen.getByText(/^waiting · settled/)).toBeInTheDocument();
   });
 
-  it("offers Start for a normally stopped desired-stopped run", () => {
+  it("offers Start for a normally stopped desired-stopped run", async () => {
+    const user = userEvent.setup();
     const stoppedRun: AgentRun = {
       id: "run-stopped",
       groupId: "group-backend",
@@ -905,8 +972,20 @@ describe("portal application", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Start Builder" })).toBeInTheDocument();
-    expect(screen.getByText(/GitHub Copilot \(copilot\)/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Actions for agent Builder" }));
+    expect(
+      within(screen.getByRole("menu", { name: "Actions for agent Builder" })).getByRole(
+        "menuitem",
+        { name: "Start Builder" },
+      ),
+    ).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "View details for Builder" }));
+    expect(
+      within(screen.getByRole("dialog", { name: "Agent details for Builder" })).getByText(
+        /GitHub Copilot \(copilot\)/,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("persists and synchronizes the selected theme", async () => {
@@ -948,6 +1027,9 @@ describe("portal application", () => {
 
   it("keeps floating Messages open across the workspace and restores launcher focus", async () => {
     const user = userEvent.setup();
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
+      return this.classList.contains("message-history") ? 1_000 : 0;
+    });
     render(<App client={createClient()} />);
 
     expect(await screen.findByTestId("terminal-surface")).toBeInTheDocument();
@@ -964,6 +1046,9 @@ describe("portal application", () => {
     expect(screen.queryByRole("region", { name: "Messages" })).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Messages" })).toHaveFocus());
     await user.click(screen.getByRole("button", { name: "Messages" }));
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: "Message history" }).scrollTop).toBe(1_000),
+    );
     expect(window.localStorage.getItem(MESSAGE_OVERLAY_OPEN_KEY)).toBe("true");
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("region", { name: "Messages" })).not.toBeInTheDocument();

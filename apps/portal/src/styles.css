@@ -263,7 +263,8 @@ h2 {
 }
 
 .tree-group-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 32px;
   align-items: stretch;
   min-height: 36px;
   border-radius: 5px;
@@ -344,8 +345,9 @@ h2 {
 }
 
 .member-row {
-  display: flex;
-  min-height: 37px;
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) auto 32px;
+  min-height: 58px;
   align-items: center;
   gap: 7px;
   padding-left: 7px;
@@ -387,16 +389,23 @@ h2 {
   box-shadow: 0 10px 30px var(--panel-shadow);
   padding: 11px 12px;
   color: var(--text);
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .member-status-popover-heading {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto 28px;
   align-items: center;
   gap: 7px;
   border-bottom: 1px solid var(--line);
   padding-bottom: 8px;
+}
+
+.status-popover-close {
+  width: 26px;
+  height: 26px;
+  border-color: transparent;
+  background: transparent;
 }
 
 .member-status-popover-heading strong {
@@ -493,23 +502,53 @@ h2 {
   color: var(--amber);
 }
 
-.member-action {
-  width: 27px;
-  height: 27px;
-  flex-basis: 27px;
+.action-menu-anchor {
+  display: grid;
+  place-items: center;
+}
+
+.row-action-trigger {
+  width: 28px;
+  height: 28px;
   border-color: transparent;
   background: transparent;
 }
 
-.tree-actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 1px;
+.row-action-menu {
+  position: fixed;
+  z-index: 50;
+  display: grid;
+  width: 208px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 10px 30px var(--panel-shadow);
+  padding: 5px;
 }
 
-.member-actions {
-  padding-right: 2px;
+.action-menu-item {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  min-height: 36px;
+  align-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  padding: 6px 8px;
+  color: var(--text);
+  text-align: left;
+}
+
+.action-menu-item:hover,
+.action-menu-item:focus-visible {
+  background: var(--surface-muted);
+  color: var(--green);
+}
+
+.action-menu-item.danger-action {
+  color: var(--danger-text);
 }
 
 .danger-action {
@@ -519,16 +558,6 @@ h2 {
 .danger-action:hover {
   border-color: var(--red);
   color: var(--red);
-}
-
-.group-action {
-  width: 28px;
-  height: 28px;
-  flex-basis: 28px;
-  align-self: center;
-  margin-right: 4px;
-  border-color: transparent;
-  background: transparent;
 }
 
 .inline-rename {

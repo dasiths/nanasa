@@ -33,24 +33,28 @@ test("group and member rename and delete workflows require confirmation", async 
     await route.continue();
   });
 
-  await page.getByRole("button", { name: "Rename group CRUD team" }).click();
+  await page.getByRole("button", { name: "Actions for group CRUD team" }).click();
+  await page.getByRole("menuitem", { name: "Rename group CRUD team" }).click();
   const groupName = page.getByRole("textbox", { name: "group name for CRUD team" });
   await groupName.fill("Renamed team");
   await groupName.press("Enter");
   await expect(page.getByRole("heading", { name: "Renamed team" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Rename agent Original agent" }).click();
+  await page.getByRole("button", { name: "Actions for agent Original agent" }).click();
+  await page.getByRole("menuitem", { name: "Rename agent Original agent" }).click();
   const agentAlias = page.getByRole("textbox", { name: "agent alias for Original agent" });
   await agentAlias.fill("Renamed agent");
   await agentAlias.press("Enter");
-  await expect(page.getByRole("button", { name: "Remove agent Renamed agent" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Actions for agent Renamed agent" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Remove agent Renamed agent" }).click();
+  await page.getByRole("button", { name: "Actions for agent Renamed agent" }).click();
+  await page.getByRole("menuitem", { name: "Remove agent Renamed agent" }).click();
   const memberDialog = page.getByRole("dialog", { name: "Remove Renamed agent?" });
   await expect(memberDialog).toContainText("membership will be removed");
   await memberDialog.getByRole("button", { name: "Cancel" }).click();
-  await expect(page.getByRole("button", { name: "Remove agent Renamed agent" })).toBeVisible();
-  await page.getByRole("button", { name: "Remove agent Renamed agent" }).click();
+  await expect(page.getByRole("button", { name: "Actions for agent Renamed agent" })).toBeVisible();
+  await page.getByRole("button", { name: "Actions for agent Renamed agent" }).click();
+  await page.getByRole("menuitem", { name: "Remove agent Renamed agent" }).click();
   const memberRunBeforeDelete = (await nanasa.snapshot()).runs
     .filter((run) => run.memberId === members[0]!.memberId && run.status === "running")
     .sort((left, right) => right.generation - left.generation)[0];
@@ -60,7 +64,9 @@ test("group and member rename and delete workflows require confirmation", async 
     .getByRole("dialog", { name: "Remove Renamed agent?" })
     .getByRole("button", { name: "Remove agent" })
     .click();
-  await expect(page.getByRole("button", { name: "Remove agent Renamed agent" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Actions for agent Renamed agent" })).toHaveCount(
+    0,
+  );
   expect(paneExpectedStopped).toBeUndefined();
 
   const afterMemberRemoval = await nanasa.snapshot();
@@ -77,12 +83,14 @@ test("group and member rename and delete workflows require confirmation", async 
     expect.arrayContaining([...profileIds]),
   );
 
-  await page.getByRole("button", { name: "Delete group Renamed team" }).click();
+  await page.getByRole("button", { name: "Actions for group Renamed team" }).click();
+  await page.getByRole("menuitem", { name: "Delete group Renamed team" }).click();
   const groupDialog = page.getByRole("dialog", { name: "Delete Renamed team?" });
   await expect(groupDialog).toContainText("runs will stop before");
   await groupDialog.getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByRole("heading", { name: "Renamed team" })).toBeVisible();
-  await page.getByRole("button", { name: "Delete group Renamed team" }).click();
+  await page.getByRole("button", { name: "Actions for group Renamed team" }).click();
+  await page.getByRole("menuitem", { name: "Delete group Renamed team" }).click();
   const groupRunBeforeDelete = (await nanasa.snapshot()).runs
     .filter((run) => run.memberId === members[1]!.memberId && run.status === "running")
     .sort((left, right) => right.generation - left.generation)[0];

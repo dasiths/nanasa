@@ -505,6 +505,12 @@ export function MessageWorkspace({
   };
 
   useEffect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(scrollToLatest);
+    return () => cancelAnimationFrame(frame);
+  }, [group.id, open]);
+
+  useEffect(() => {
     const previous = previousTimelineRef.current;
     const groupChanged = previous.groupId !== group.id;
     const messageChanged = previous.latestId !== latestMessageId;

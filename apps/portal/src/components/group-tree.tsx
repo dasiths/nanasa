@@ -19,6 +19,7 @@ import {
   CircleAlert,
   CircleStop,
   Copy,
+  EllipsisVertical,
   Pencil,
   Play,
   Plus,
@@ -28,7 +29,15 @@ import {
   UserPlus,
   X,
 } from "lucide-react";
-import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 
 import { copyToClipboard } from "../copy-to-clipboard.js";
@@ -86,6 +95,124 @@ type DestructiveTarget =
       messageCount: number;
     }
   | { kind: "member"; groupId: string; memberId: string; name: string };
+
+interface ActionMenuProps {
+  label: string;
+  itemCount: number;
+  triggerId?: string;
+  children: ReactNode;
+}
+
+function ActionMenu({ label, itemCount, triggerId, children }: ActionMenuProps) {
+  const menuId = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ left: number; top: number }>();
+
+  const close = (restoreFocus = false) => {
+    setPosition(undefined);
+    if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus());
+  };
+
+  const open = () => {
+    const trigger = triggerRef.current;
+    if (trigger === null) return;
+    const bounds = trigger.getBoundingClientRect();
+    const width = 208;
+    const estimatedHeight = Math.min(itemCount * 38 + 10, window.innerHeight - 16);
+    setPosition({
+      left: Math.max(8, Math.min(bounds.right - width, window.innerWidth - width - 8)),
+      top:
+        bounds.bottom + 4 + estimatedHeight <= window.innerHeight - 8
+          ? bounds.bottom + 4
+          : Math.max(8, bounds.top - estimatedHeight - 4),
+    });
+  };
+
+  useEffect(() => {
+    if (position === undefined) return;
+    const frame = requestAnimationFrame(() => {
+      menuRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    });
+    const closeOnPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      close();
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      close(true);
+    };
+    const closeOnViewportChange = () => close();
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", closeOnViewportChange);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", closeOnViewportChange);
+    };
+  }, [position]);
+
+  const moveFocus = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const items = [
+      ...(menuRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? []),
+    ];
+    if (items.length === 0) return;
+    event.preventDefault();
+    const currentIndex = items.findIndex((item) => item === document.activeElement);
+    const nextIndex =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? items.length - 1
+          : event.key === "ArrowDown"
+            ? (currentIndex + 1) % items.length
+            : (currentIndex - 1 + items.length) % items.length;
+    items[nextIndex]?.focus();
+  };
+
+  return (
+    <div className="action-menu-anchor">
+      <button
+        ref={triggerRef}
+        id={triggerId}
+        type="button"
+        className="icon-button row-action-trigger"
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={position !== undefined}
+        aria-controls={position === undefined ? undefined : menuId}
+        title={label}
+        onClick={() => (position === undefined ? open() : close())}
+      >
+        <EllipsisVertical aria-hidden="true" size={16} />
+      </button>
+      {position !== undefined &&
+        createPortal(
+          <div
+            ref={menuRef}
+            id={menuId}
+            role="menu"
+            aria-label={label}
+            className="row-action-menu"
+            style={position}
+            onClick={(event) => {
+              if ((event.target as Element).closest("button") !== null) close();
+            }}
+            onKeyDown={moveFocus}
+          >
+            {children}
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+}
 
 function parseInstructionPaths(value: string): string[] {
   const paths = value
@@ -782,7 +909,7 @@ export function GroupTree({
   }>();
   const [destructiveTarget, setDestructiveTarget] = useState<DestructiveTarget>();
   const [statusPopover, setStatusPopover] = useState<{
-    memberId: string;
+    membershipId: string;
     left: number;
     top: number;
   }>();
@@ -819,16 +946,47 @@ export function GroupTree({
     });
   };
 
-  const showStatusPopover = (memberId: string, element: HTMLElement) => {
+  const toggleStatusPopover = (membershipId: string, element: HTMLElement) => {
+    if (statusPopover?.membershipId === membershipId) {
+      setStatusPopover(undefined);
+      return;
+    }
     const bounds = element.getBoundingClientRect();
     const width = Math.min(320, window.innerWidth - 16);
     const opensRight = bounds.right + 8 + width <= window.innerWidth - 8;
     setStatusPopover({
-      memberId,
+      membershipId,
       left: opensRight ? bounds.right + 8 : Math.max(8, window.innerWidth - width - 8),
       top: Math.max(8, Math.min(bounds.top, window.innerHeight - 300)),
     });
   };
+
+  useEffect(() => {
+    const active = statusPopover;
+    if (active === undefined) return;
+    const trigger = document.getElementById(`member-status-trigger-${active.membershipId}`);
+    const popover = document.getElementById(`member-status-${active.membershipId}`);
+    const frame = requestAnimationFrame(() => popover?.focus());
+    const closeOnPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (trigger?.contains(target) || popover?.contains(target)) return;
+      setStatusPopover(undefined);
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setStatusPopover(undefined);
+      requestAnimationFrame(() => trigger?.focus());
+    };
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [statusPopover]);
 
   return (
     <>
@@ -885,7 +1043,7 @@ export function GroupTree({
                     initialValue={editTarget.name}
                     onCancel={() => setEditTarget(undefined)}
                     onRestoreFocus={() =>
-                      document.getElementById(`rename-group-${group.id}`)?.focus()
+                      document.getElementById(`group-actions-${group.id}`)?.focus()
                     }
                     onSave={(name) => onRenameGroup(group.id, name)}
                   />
@@ -908,43 +1066,50 @@ export function GroupTree({
                     )}
                   </button>
                 )}
-                {selectedGroupId === group.id && editTarget?.groupId !== group.id && (
-                  <div className="tree-actions">
+                {editTarget?.groupId !== group.id && (
+                  <ActionMenu
+                    label={`Actions for group ${group.name}`}
+                    itemCount={4}
+                    triggerId={`group-actions-${group.id}`}
+                  >
                     <button
                       type="button"
-                      className="icon-button group-action"
+                      role="menuitem"
+                      className="action-menu-item"
                       aria-label={`Add agent to ${group.name}`}
-                      title={`Add agent to ${group.name}`}
                       onClick={() => setShowAddAgent(true)}
                     >
                       <UserPlus aria-hidden="true" size={15} />
+                      <span>Add agent</span>
                     </button>
                     <button
                       type="button"
-                      className="icon-button group-action"
+                      role="menuitem"
+                      className="action-menu-item"
                       aria-label={`Edit group settings ${group.name}`}
-                      title={`Settings for ${group.name}`}
                       onClick={() => setSettingsGroupId(group.id)}
                     >
                       <Settings2 aria-hidden="true" size={14} />
+                      <span>Group settings</span>
                     </button>
                     <button
                       id={`rename-group-${group.id}`}
                       type="button"
-                      className="icon-button group-action"
+                      role="menuitem"
+                      className="action-menu-item"
                       aria-label={`Rename group ${group.name}`}
-                      title={`Rename ${group.name}`}
                       onClick={() =>
                         setEditTarget({ kind: "group", groupId: group.id, name: group.name })
                       }
                     >
                       <Pencil aria-hidden="true" size={14} />
+                      <span>Rename</span>
                     </button>
                     <button
                       type="button"
-                      className="icon-button group-action danger-action"
+                      role="menuitem"
+                      className="action-menu-item danger-action"
                       aria-label={`Delete group ${group.name}`}
-                      title={`Delete ${group.name}`}
                       onClick={() =>
                         setDestructiveTarget({
                           kind: "group",
@@ -961,8 +1126,9 @@ export function GroupTree({
                       }
                     >
                       <Trash2 aria-hidden="true" size={14} />
+                      <span>Delete group</span>
                     </button>
-                  </div>
+                  </ActionMenu>
                 )}
               </div>
               {expanded && (
@@ -1001,24 +1167,9 @@ export function GroupTree({
                       .filter((value): value is string => value !== undefined)
                       .join(" · ");
                     const popoverId = `member-status-${member.id}`;
-                    const popoverVisible = statusPopover?.memberId === member.memberId;
+                    const popoverVisible = statusPopover?.membershipId === member.id;
                     return (
-                      <div
-                        className="member-row"
-                        key={member.id}
-                        onMouseEnter={(event) =>
-                          showStatusPopover(member.memberId, event.currentTarget)
-                        }
-                        onMouseLeave={() => setStatusPopover(undefined)}
-                        onFocusCapture={(event) =>
-                          showStatusPopover(member.memberId, event.currentTarget)
-                        }
-                        onBlurCapture={(event) => {
-                          if (!event.currentTarget.contains(event.relatedTarget)) {
-                            setStatusPopover(undefined);
-                          }
-                        }}
-                      >
+                      <div className="member-row" key={member.id}>
                         <span className={`status-dot status-${semanticLabel}`} aria-hidden="true" />
                         {editTarget?.kind === "member" &&
                         editTarget.groupId === group.id &&
@@ -1029,26 +1180,30 @@ export function GroupTree({
                             onCancel={() => setEditTarget(undefined)}
                             onRestoreFocus={() =>
                               document
-                                .getElementById(`rename-member-${group.id}-${member.memberId}`)
+                                .getElementById(`member-actions-${group.id}-${member.memberId}`)
                                 ?.focus()
                             }
                             onSave={(alias) => onRenameAgent(group.id, member.memberId, alias)}
                           />
                         ) : (
                           <button
+                            id={`member-status-trigger-${member.id}`}
                             type="button"
                             className="member-select"
-                            aria-describedby={popoverVisible ? popoverId : undefined}
-                            onClick={() => onSelectGroup(group.id)}
+                            aria-label={`View details for ${member.alias}`}
+                            aria-haspopup="dialog"
+                            aria-expanded={popoverVisible}
+                            aria-controls={popoverVisible ? popoverId : undefined}
+                            onClick={(event) => {
+                              onSelectGroup(group.id);
+                              toggleStatusPopover(member.id, event.currentTarget);
+                            }}
                           >
                             <span>{member.alias}</span>
                             <code title={member.memberId}>{member.memberId}</code>
                             <small title={statusTitle || undefined}>
                               {semanticLabel}
                               {semanticDetail.length > 0 && ` · ${semanticDetail}`}
-                              {configuredType !== undefined &&
-                                ` · ${configuredType.name} (${configuredType.key})`}
-                              {member.roleId !== undefined && ` · ${role?.name ?? member.roleId}`}
                               {run?.recoveryNotBefore !== undefined &&
                                 ` · retry ${new Date(run.recoveryNotBefore).toLocaleTimeString()}`}
                             </small>
@@ -1058,7 +1213,9 @@ export function GroupTree({
                           createPortal(
                             <div
                               id={popoverId}
-                              role="tooltip"
+                              role="dialog"
+                              aria-label={`Agent details for ${member.alias}`}
+                              tabIndex={-1}
                               className="member-status-popover"
                               style={{ left: statusPopover.left, top: statusPopover.top }}
                             >
@@ -1069,6 +1226,21 @@ export function GroupTree({
                                 />
                                 <strong>{member.alias}</strong>
                                 <span>{semanticLabel.replaceAll("_", " ")}</span>
+                                <button
+                                  type="button"
+                                  className="icon-button status-popover-close"
+                                  aria-label={`Close details for ${member.alias}`}
+                                  onClick={() => {
+                                    setStatusPopover(undefined);
+                                    requestAnimationFrame(() =>
+                                      document
+                                        .getElementById(`member-status-trigger-${member.id}`)
+                                        ?.focus(),
+                                    );
+                                  }}
+                                >
+                                  <X aria-hidden="true" size={14} />
+                                </button>
                               </div>
                               <dl>
                                 <div>
@@ -1157,24 +1329,29 @@ export function GroupTree({
                           />
                         )}
                         {editTarget?.kind !== "member" && (
-                          <div className="tree-actions member-actions">
+                          <ActionMenu
+                            label={`Actions for agent ${member.alias}`}
+                            itemCount={action === "none" ? 4 : 5}
+                            triggerId={`member-actions-${group.id}-${member.memberId}`}
+                          >
                             <button
                               type="button"
-                              className="icon-button member-action"
+                              role="menuitem"
+                              className="action-menu-item"
                               aria-label={`Copy member ID ${member.memberId}`}
-                              title={`Copy ${member.memberId}`}
                               onClick={() =>
                                 void copyToClipboard(member.memberId).catch(() => undefined)
                               }
                             >
                               <Copy aria-hidden="true" size={14} />
+                              <span>Copy member ID</span>
                             </button>
                             {action !== "none" && (
                               <button
                                 type="button"
-                                className="icon-button member-action"
+                                role="menuitem"
+                                className="action-menu-item"
                                 aria-label={`${action === "retry" ? "Retry" : action === "stop" ? "Stop" : "Start"} ${member.alias}`}
-                                title={`${action === "retry" ? "Retry recovery for" : action === "stop" ? "Stop" : "Start"} ${member.alias}`}
                                 disabled={busyAction === actionKey}
                                 onClick={() => {
                                   const operation =
@@ -1191,13 +1368,20 @@ export function GroupTree({
                                 ) : (
                                   <Play aria-hidden="true" size={15} />
                                 )}
+                                <span>
+                                  {action === "retry"
+                                    ? "Retry recovery"
+                                    : action === "stop"
+                                      ? "Stop agent"
+                                      : "Start agent"}
+                                </span>
                               </button>
                             )}
                             <button
                               type="button"
-                              className="icon-button member-action"
+                              role="menuitem"
+                              className="action-menu-item"
                               aria-label={`Edit agent settings ${member.alias}`}
-                              title={`Settings for ${member.alias}`}
                               onClick={() =>
                                 setSettingsTarget({
                                   groupId: group.id,
@@ -1206,13 +1390,13 @@ export function GroupTree({
                               }
                             >
                               <Settings2 aria-hidden="true" size={14} />
+                              <span>Agent settings</span>
                             </button>
                             <button
-                              id={`rename-member-${group.id}-${member.memberId}`}
                               type="button"
-                              className="icon-button member-action"
+                              role="menuitem"
+                              className="action-menu-item"
                               aria-label={`Rename agent ${member.alias}`}
-                              title={`Rename ${member.alias}`}
                               onClick={() =>
                                 setEditTarget({
                                   kind: "member",
@@ -1223,12 +1407,13 @@ export function GroupTree({
                               }
                             >
                               <Pencil aria-hidden="true" size={14} />
+                              <span>Rename</span>
                             </button>
                             <button
                               type="button"
-                              className="icon-button member-action danger-action"
+                              role="menuitem"
+                              className="action-menu-item danger-action"
                               aria-label={`Remove agent ${member.alias}`}
-                              title={`Remove ${member.alias}`}
                               onClick={() =>
                                 setDestructiveTarget({
                                   kind: "member",
@@ -1239,8 +1424,9 @@ export function GroupTree({
                               }
                             >
                               <Trash2 aria-hidden="true" size={14} />
+                              <span>Remove agent</span>
                             </button>
-                          </div>
+                          </ActionMenu>
                         )}
                       </div>
                     );
