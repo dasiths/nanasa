@@ -166,7 +166,13 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       ? {}
       : {
           runtimeProvisioner: new AgentRuntimeProvisioner({
-            agentsDirectory: join(loadedConfig.repoRoot, ".nanasa", "agents"),
+            integrationsDirectory: loadedConfig.integrationsDirectory,
+            agentConfigHomes: Object.fromEntries(
+              Object.entries(loadedConfig.config.agentTypes).map(([key, agentType]) => [
+                key,
+                agentType.agentConfigHome,
+              ]),
+            ),
             mcpEndpointUrl,
           }),
           runtimeEnvironment: (run) => ({

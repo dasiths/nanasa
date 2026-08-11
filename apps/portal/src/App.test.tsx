@@ -37,6 +37,7 @@ const config: NanasaConfig = {
       name: "GitHub Copilot",
       kind: "copilot",
       command: ["copilot", "--acp", "--stdio"],
+      agentConfigHome: { scope: "agent-type" },
       environment: {},
     },
     "claude-copilot": {
@@ -44,6 +45,7 @@ const config: NanasaConfig = {
       name: "Claude through Copilot",
       kind: "claude-code",
       command: ["make", "claude-copilot"],
+      agentConfigHome: { scope: "agent-type" },
       environment: {},
     },
     "custom-agent": {
@@ -51,6 +53,7 @@ const config: NanasaConfig = {
       name: "Custom reviewer",
       kind: "opencode",
       command: ["custom-reviewer"],
+      agentConfigHome: { scope: "agent-type" },
       environment: {},
     },
   },

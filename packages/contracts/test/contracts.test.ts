@@ -386,6 +386,7 @@ describe("configuration contracts", () => {
           name: "GitHub Copilot",
           kind: "copilot",
           command: ["copilot"],
+          agentConfigHome: { scope: "agent-type" },
           environment: {},
         },
         opencode: {
@@ -393,6 +394,7 @@ describe("configuration contracts", () => {
           name: "OpenCode",
           kind: "opencode",
           command: ["opencode"],
+          agentConfigHome: { scope: "agent-type" },
           environment: {},
         },
       },
@@ -444,9 +446,43 @@ describe("configuration contracts", () => {
           name: "Pi",
           kind: "pi",
           command: ["pi"],
+          agentConfigHome: { scope: "agent-type" },
           environment: {},
         },
       },
+    });
+  });
+
+  it("accepts member and custom repository-local configuration homes", () => {
+    const member = NanasaConfigSchema.parse({
+      version: 1,
+      agentTypes: {
+        pi: {
+          key: "pi",
+          name: "Pi",
+          kind: "pi",
+          command: ["pi"],
+          agentConfigHome: { scope: "member" },
+        },
+      },
+    });
+    expect(member.agentTypes.pi.agentConfigHome).toEqual({ scope: "member" });
+
+    const custom = NanasaConfigSchema.parse({
+      version: 1,
+      agentTypes: {
+        copilot: {
+          key: "copilot",
+          name: "Copilot",
+          kind: "copilot",
+          command: ["copilot"],
+          agentConfigHome: { scope: "custom", path: "homes/{agentType}/{membershipId}" },
+        },
+      },
+    });
+    expect(custom.agentTypes.copilot.agentConfigHome).toEqual({
+      scope: "custom",
+      path: "homes/{agentType}/{membershipId}",
     });
   });
 

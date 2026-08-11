@@ -8,7 +8,6 @@ import { build } from "esbuild";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputDirectory = join(root, "dist");
-const daemonOutputDirectory = join(outputDirectory, "daemon");
 const portalDirectory = join(root, "apps", "portal");
 const portalRequire = createRequire(join(portalDirectory, "package.json"));
 const vitePath = join(dirname(portalRequire.resolve("vite/package.json")), "bin", "vite.js");
@@ -25,17 +24,18 @@ function runNode(modulePath, args, cwd = root) {
 }
 
 rmSync(outputDirectory, { recursive: true, force: true });
-mkdirSync(daemonOutputDirectory, { recursive: true });
+mkdirSync(outputDirectory, { recursive: true });
 
 await build({
   absWorkingDir: root,
   bundle: true,
   entryPoints: {
-    index: "apps/daemon/src/index.ts",
+    "daemon/index": "apps/daemon/src/index.ts",
+    "cli/admin": "apps/daemon/src/cli-admin.ts",
   },
   external: ["@fastify/*", "@modelcontextprotocol/*", "fastify", "ws", "yaml", "zod"],
   format: "esm",
-  outdir: daemonOutputDirectory,
+  outdir: outputDirectory,
   platform: "node",
   sourcemap: false,
   target: "node22",

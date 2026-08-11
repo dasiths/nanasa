@@ -60,6 +60,7 @@ describe("Nanasa configuration", () => {
       key: "copilot",
       command: ["copilot"],
       cwd: repository,
+      agentConfigHome: { scope: "agent-type" },
     });
     expect(Object.keys(first.config.agentTypes.copilot)).not.toEqual(
       expect.arrayContaining(["adapter", "capabilities", "recovery"]),
@@ -85,6 +86,7 @@ describe("Nanasa configuration", () => {
           kind: "opencode",
           command: ["opencode"],
           cwd: repository,
+          agentConfigHome: { scope: "agent-type" },
           environment: {},
         },
       },
@@ -100,6 +102,49 @@ describe("Nanasa configuration", () => {
     rmSync(join(repository, ".nanasa", "config.yaml"));
     expect(discoverRepositoryRoot(child)).toBe(repository);
     expect(nanasaPaths(repository).configPath).toBe(join(repository, ".nanasa", "config.yaml"));
+  });
+
+  it("loads member and repository-local custom configuration homes", () => {
+    const memberRepository = temporaryRepository(
+      validConfig("    agentConfigHome: { scope: member }\n"),
+    );
+    expect(loadNanasaConfig(memberRepository).config.agentTypes.copilot.agentConfigHome).toEqual({
+      scope: "member",
+    });
+
+    const customRepository = temporaryRepository(
+      validConfig(
+        '    agentConfigHome: { scope: custom, path: "homes/{agentType}/{membershipId}" }\n',
+      ),
+    );
+    expect(loadNanasaConfig(customRepository).config.agentTypes.copilot.agentConfigHome).toEqual({
+      scope: "custom",
+      path: "homes/{agentType}/{membershipId}",
+    });
+  });
+
+  it("rejects agent types that resolve to the same configuration home", () => {
+    const repository = temporaryRepository(`version: 1
+agentTypes:
+  first:
+    name: First
+    kind: copilot
+    command: [copilot]
+    agentConfigHome: { scope: custom, path: shared }
+  second:
+    name: Second
+    kind: pi
+    command: [pi]
+    agentConfigHome: { scope: custom, path: shared }
+`);
+
+    expect(() => loadNanasaConfig(repository)).toThrowError(
+      expect.objectContaining({
+        status: expect.objectContaining({
+          diagnostics: [expect.objectContaining({ code: "agent_config_home_collision" })],
+        }),
+      }),
+    );
   });
 
   it.each([
@@ -146,6 +191,26 @@ agentTypes:
         .replace("capabilities: [queue]", "capabilities: [queue, steer]"),
     ],
     ["dangerous environment", validConfig("    environment: { NODE_OPTIONS: --inspect }\n")],
+    [
+      "external configuration home",
+      validConfig("    agentConfigHome: { scope: custom, path: ../../outside }\n"),
+    ],
+    [
+      "unknown configuration home placeholder",
+      validConfig('    agentConfigHome: { scope: custom, path: "homes/{runId}" }\n'),
+    ],
+    [
+      "Windows absolute configuration home",
+      validConfig('    agentConfigHome: { scope: custom, path: "C:\\\\outside" }\n'),
+    ],
+    [
+      "reserved configuration home namespace",
+      validConfig("    agentConfigHome: { scope: custom, path: members/shared }\n"),
+    ],
+    [
+      "integration root as configuration home",
+      validConfig("    agentConfigHome: { scope: custom, path: . }\n"),
+    ],
   ])("rejects %s", (_name, source) => {
     const repository = temporaryRepository(source);
     expect(() => loadNanasaConfig(repository)).toThrow(ConfigLoadError);

@@ -67,6 +67,8 @@ Install Nanasa in the repository where you want to manage agents:
 ```bash
 npm install --save-dev nanasa
 npx nanasa init
+npx nanasa setup
+npx nanasa doctor
 npx nanasa start
 ```
 
@@ -74,9 +76,64 @@ npx nanasa start
 `.nanasa/config.yaml` only when it is absent. It never overwrites configuration
 or runtime state. Edit the generated agent commands for the CLIs available in
 your environment, then commit `.nanasa/config.yaml`. Ignore `.nanasa/state/` and
-`.nanasa/runtime/`, and `.nanasa/agents/`; they contain SQLite state, the MCP
-signing secret, ttyd manifests, and persistent per-membership agent
-configuration for one checkout.
+`.nanasa/runtime/`, and `.nanasa/integrations/`; they contain SQLite state, the
+MCP signing secret, ttyd manifests, provider authentication state, generated
+hooks and extensions, and persistent agent configuration for one checkout.
+
+`nanasa setup` validates the configuration and creates private integration
+homes without starting an agent or changing provider-global settings. `nanasa
+doctor` checks configured commands, ttyd, and integration directory ownership
+and permissions. Authenticate a configured CLI inside its isolated home with:
+
+```bash
+npx nanasa auth copilot
+```
+
+The command launches the configured provider command and leaves its native
+login flow in control. Environment credentials supported by the provider are
+inherited without being copied into Nanasa files. A member-scoped home requires
+the stable membership ID:
+
+```bash
+npx nanasa auth copilot --member membership_example
+```
+
+### Agent configuration homes
+
+Each agent type can select how provider configuration, authentication, and
+session state are shared. Omitting `agentConfigHome` uses `agent-type` scope.
+
+```yaml
+agentTypes:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+    command: [copilot]
+    cwd: .
+    agentConfigHome: { scope: agent-type }
+
+  isolated-reviewer:
+    name: Isolated reviewer
+    kind: copilot
+    command: [copilot]
+    cwd: .
+    agentConfigHome: { scope: member }
+
+  custom-home:
+    name: Custom home
+    kind: pi
+    command: [pi]
+    cwd: .
+    agentConfigHome:
+      scope: custom
+      path: homes/{agentType}/{membershipId}
+```
+
+`agent-type` shares one home between members of that configured type. `member`
+uses a stable home for each membership across run restarts. `custom` paths are
+relative to `.nanasa/integrations` and may use `{agentType}` and
+`{membershipId}`. Absolute paths, traversal, unknown placeholders, and
+symlinked integration directories are rejected.
 
 Running `nanasa` without a command is equivalent to `nanasa start`. The daemon
 walks upward from the current directory to find `.nanasa/config.yaml`, stores
@@ -89,6 +146,10 @@ The installed command accepts these options:
 * `--port <port>` overrides `NANASA_PORT`
 * `--mcp` enables authenticated MCP at `NANASA_MCP_PATH` (default `/mcp`)
 * `--ttyd-path <path>` overrides `NANASA_TTYD_PATH`
+
+The installed command also supports `setup`, `doctor`, and `auth` as described
+above. These commands operate only beneath the repository's `.nanasa`
+directory.
 
 ### Workspace development
 
@@ -286,26 +347,29 @@ enabled:
 * `NANASA_STATUS_URL` is the authenticated lifecycle reporter endpoint
 
 Nanasa also registers its MCP endpoint with each supported CLI before launch.
-Generated files live under `.nanasa/agents/<membership-id>/`, contain only an
+Generated files live under `.nanasa/integrations/`, contain only an
 environment-variable placeholder for the bearer token, and use private file
-permissions. The generation capability remains only in the process environment.
-The same membership directory is reused after run and daemon restarts.
+permissions. The generation capability remains only in the process
+environment. Shared or membership-specific provider homes are reused after run
+and daemon restarts.
 
 Client integration follows each CLI's supported configuration contract:
 
 * GitHub Copilot CLI receives a generated HTTP MCP config through
-  `--additional-mcp-config`
+  `--additional-mcp-config`; `COPILOT_HOME` and `COPILOT_CACHE_HOME` point to
+  its isolated Nanasa home
 * Claude Code uses an isolated `CLAUDE_CONFIG_DIR` with a generated user MCP
   entry; direct Claude and `make claude-copilot` launches use the same path
 * Pi uses `PI_CODING_AGENT_DIR` and the pinned `pi-mcp-adapter` extension, with
   Nanasa tools registered directly
-* OpenCode receives a generated remote MCP entry through `OPENCODE_CONFIG`
+* OpenCode receives a generated remote MCP entry through `OPENCODE_CONFIG` and
+  isolated XDG config, data, state, and cache roots
 
-Nanasa does not copy provider credentials into generated configuration. It uses
-the CLI's existing credential store or inherited authentication environment.
-When Claude or Pi uses a regular current-user credential file, the persistent
-agent directory contains a narrow symlink to that file rather than a copied
-secret or linked configuration tree.
+Nanasa does not copy or link provider credentials into generated
+configuration. Use `nanasa auth` to authenticate the native CLI in the selected
+home, or provide a provider-supported credential through the inherited process
+environment. Coding-agent sessions launched outside Nanasa continue using
+their normal provider homes and do not load Nanasa-generated hooks or plugins.
 
 Operator clients authenticate with `Authorization: Bearer <token>`. Configure
 that token with `NANASA_MCP_OPERATOR_TOKEN`; it must contain at least 32

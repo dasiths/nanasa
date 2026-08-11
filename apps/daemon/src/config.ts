@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   AdapterKindSchema,
   AgentCapabilitySchema,
+  AgentConfigHomeSchema,
   AgentKindSchema,
   AgentTypeConfigSchema,
   type ConfigDiagnostic,
@@ -16,6 +17,7 @@ import {
 } from "@nanasa/contracts";
 import { isScalar, LineCounter, parseDocument, visit } from "yaml";
 import { z } from "zod";
+import { resolveAgentConfigHome, validateAgentConfigHome } from "./agent-config-home.js";
 
 const CONFIG_RELATIVE_PATH = join(".nanasa", "config.yaml");
 const MAX_CONFIG_BYTES = 256 * 1024;
@@ -30,6 +32,7 @@ const RawAgentTypeConfigSchema = z
     adapter: AdapterKindSchema.optional(),
     command: z.array(z.string().min(1).max(4_096)).min(1).max(64),
     cwd: z.string().min(1).max(4_096).optional(),
+    agentConfigHome: AgentConfigHomeSchema.default({ scope: "agent-type" }),
     environment: z
       .record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string().max(16_384))
       .default({}),
@@ -53,6 +56,7 @@ export interface NanasaPaths {
   stateDirectory: string;
   dataPath: string;
   runtimeDirectory: string;
+  integrationsDirectory: string;
 }
 
 export interface LoadedNanasaConfig extends NanasaPaths {
@@ -105,6 +109,7 @@ export function nanasaPaths(repoRoot: string): NanasaPaths {
     stateDirectory,
     dataPath: join(stateDirectory, "nanasa.sqlite"),
     runtimeDirectory: join(root, ".nanasa", "runtime"),
+    integrationsDirectory: join(root, ".nanasa", "integrations"),
   };
 }
 
@@ -177,6 +182,11 @@ function validateAgentType(agentType: RawAgentTypeConfig): string | undefined {
   }
   if (agentType.adapter === "pi-rpc" && agentType.kind !== "pi") {
     return "The pi-rpc adapter requires pi compatibility";
+  }
+  try {
+    validateAgentConfigHome(agentType.agentConfigHome);
+  } catch (error) {
+    return error instanceof Error ? error.message : "Invalid agent configuration home";
   }
   return undefined;
 }
@@ -308,6 +318,28 @@ function parseConfig(source: string, paths: NanasaPaths): NanasaConfig {
       return [key, normalized.data];
     }),
   );
+  const resolvedHomes = new Map<string, string>();
+  for (const [key, agentType] of Object.entries(agentTypes)) {
+    const home = resolveAgentConfigHome(
+      paths.integrationsDirectory,
+      key,
+      agentType.agentConfigHome,
+      "membership_validation",
+    );
+    const existingKey = resolvedHomes.get(home);
+    if (existingKey !== undefined) {
+      throw new ConfigLoadError(
+        errorStatus(paths, [
+          diagnostic(
+            "agent_config_home_collision",
+            `Agent configuration home collides with ${existingKey}`,
+            ["agentTypes", key, "agentConfigHome"],
+          ),
+        ]),
+      );
+    }
+    resolvedHomes.set(home, key);
+  }
   return NanasaConfigSchema.parse({ version: parsed.data.version, agentTypes });
 }
 

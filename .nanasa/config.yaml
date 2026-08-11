@@ -5,23 +5,28 @@ agentTypes:
     kind: copilot
     command: [copilot]
     cwd: .
+    agentConfigHome: { scope: agent-type }
   pi:
     name: Pi
     kind: pi
     command: [pi]
     cwd: .
+    agentConfigHome: { scope: agent-type }
   opencode:
     name: OpenCode
     kind: opencode
     command: [opencode]
     cwd: .
+    agentConfigHome: { scope: agent-type }
   claude-code:
     name: Claude Code
     kind: claude-code
     command: [claude]
     cwd: .
+    agentConfigHome: { scope: agent-type }
   claude-copilot:
     name: Claude Code via Copilot
     kind: claude-code
     command: [make, claude-copilot]
     cwd: .
+    agentConfigHome: { scope: agent-type }

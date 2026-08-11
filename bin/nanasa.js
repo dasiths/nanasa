@@ -11,10 +11,16 @@ const configRelativePath = join(".nanasa", "config.yaml");
 function usage() {
   return `Usage: nanasa [start] [options]
        nanasa init
+       nanasa setup
+       nanasa doctor
+       nanasa auth <agent-type> [--member <membership-id>]
 
 Commands:
   start              Start the daemon and portal (default)
   init               Create .nanasa/config.yaml when absent
+  setup              Prepare repository-local integration homes
+  doctor             Validate configuration, commands, and integration paths
+  auth               Launch an agent CLI in its isolated home
 
 Options:
   --host <host>       Listen host; MCP requires loopback (default: 127.0.0.1)
@@ -23,6 +29,17 @@ Options:
   --ttyd-path <path>  ttyd executable (default: NANASA_TTYD_PATH or ttyd)
   -h, --help          Show this help
   -v, --version       Show the installed version`;
+}
+
+function ensureNanasaIgnore(root) {
+  const path = join(root, ".nanasa", ".gitignore");
+  const required = ["/integrations/", "/runtime/", "/state/"];
+  const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
+  const lines = new Set(existing.split(/\r?\n/).filter(Boolean));
+  const missing = required.filter((entry) => !lines.has(entry));
+  if (missing.length === 0) return;
+  const prefix = existing.length === 0 || existing.endsWith("\n") ? existing : `${existing}\n`;
+  writeFileSync(path, `${prefix}${missing.join("\n")}\n`, { encoding: "utf8", mode: 0o644 });
 }
 
 function parentDirectories(startPath) {
@@ -54,6 +71,7 @@ function initialize(startPath, output = process.stdout) {
   const root = findInitializationRoot(startPath);
   const configPath = join(root, configRelativePath);
   if (existsSync(configPath)) {
+    ensureNanasaIgnore(root);
     output.write(`Nanasa configuration already exists at ${configPath}\n`);
     return configPath;
   }
@@ -70,7 +88,27 @@ function initialize(startPath, output = process.stdout) {
     throw error;
   }
   output.write(`Created ${configPath}\n`);
+  ensureNanasaIgnore(root);
   return configPath;
+}
+
+async function loadAdmin() {
+  return import(join(packageRoot, "dist", "cli", "admin.js"));
+}
+
+function parseAuthOptions(args) {
+  const [agentType, ...options] = args;
+  if (agentType === undefined || agentType.startsWith("-")) {
+    throw new Error("nanasa auth requires an agent type");
+  }
+  let membershipId;
+  for (let index = 0; index < options.length; index += 1) {
+    const option = options[index];
+    if (option !== "--member") throw new Error(`Unknown auth option: ${option}`);
+    membershipId = optionValue(options, index, option);
+    index += 1;
+  }
+  return { agentType, membershipId };
 }
 
 function optionValue(args, index, option) {
@@ -174,6 +212,27 @@ export async function main(args = process.argv.slice(2), startPath = process.cwd
   if (command === "init") {
     if (rest.length > 0) throw new Error("nanasa init does not accept options");
     initialize(startPath);
+    return;
+  }
+  if (["setup", "doctor", "auth"].includes(command)) {
+    const repositoryRoot = findConfigRoot(startPath);
+    if (repositoryRoot === undefined) {
+      throw new Error(
+        `No .nanasa/config.yaml found from ${resolve(startPath)}. Run nanasa init first.`,
+      );
+    }
+    ensureNanasaIgnore(repositoryRoot);
+    const admin = await loadAdmin();
+    if (command === "setup") {
+      if (rest.length > 0) throw new Error("nanasa setup does not accept options");
+      admin.setupIntegrations(repositoryRoot);
+    } else if (command === "doctor") {
+      if (rest.length > 0) throw new Error("nanasa doctor does not accept options");
+      admin.doctorIntegrations(repositoryRoot);
+    } else {
+      const options = parseAuthOptions(rest);
+      admin.authenticateAgent(repositoryRoot, options.agentType, options.membershipId);
+    }
     return;
   }
   if (command.startsWith("--")) {

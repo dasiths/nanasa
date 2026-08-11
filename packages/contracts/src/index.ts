@@ -58,6 +58,19 @@ export type AdapterKind = z.infer<typeof AdapterKindSchema>;
 export type RecoveryPolicy = z.infer<typeof RecoveryPolicySchema>;
 export type AgentCapability = z.infer<typeof AgentCapabilitySchema>;
 
+export const AgentConfigHomeSchema = z.discriminatedUnion("scope", [
+  z.object({ scope: z.literal("agent-type") }).strict(),
+  z.object({ scope: z.literal("member") }).strict(),
+  z
+    .object({
+      scope: z.literal("custom"),
+      path: z.string().trim().min(1).max(4_096),
+    })
+    .strict(),
+]);
+
+export type AgentConfigHome = z.infer<typeof AgentConfigHomeSchema>;
+
 const EnvironmentSchema = z.record(
   z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
   z.string().max(16_384),
@@ -71,6 +84,7 @@ const AgentTypeConfigInputSchema = z
     adapter: AdapterKindSchema.optional(),
     command: z.array(z.string().min(1).max(4_096)).min(1).max(64),
     cwd: z.string().min(1).max(4_096).optional(),
+    agentConfigHome: AgentConfigHomeSchema.default({ scope: "agent-type" }),
     environment: EnvironmentSchema.default({}),
     recovery: RecoveryPolicySchema.optional(),
     capabilities: z.array(AgentCapabilitySchema).min(1).max(2).optional(),
@@ -115,6 +129,7 @@ const AgentTypeConfigInputSchema = z
     kind: config.kind,
     command: config.command,
     ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
+    agentConfigHome: config.agentConfigHome,
     environment: config.environment,
   }));
 
