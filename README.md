@@ -1,6 +1,6 @@
 ---
 title: Nanasa
-description: Local terminal-only coding-agent pool with a Fastify daemon, React portal, and authenticated MCP messaging
+description: Local coding-agent pool with tmux terminals, authenticated MCP messaging, and coordinator-visible status
 author: Nanasa
 ms.date: 2026-08-10
 ms.topic: overview
@@ -13,7 +13,7 @@ coding-agent terminals. The name means "wisdom" or "intellect" in Sinhala.
 
 Nanasa is in early development. The current vertical slice manages groups,
 agent profiles, memberships, tmux-backed runs, terminal access, and structured
-message records. Interfaces and configuration may change.
+message and status records. Interfaces and configuration may change.
 
 Every configured agent launches as its command directly in a tmux pane. Nanasa
 does not start model-specific subprocess protocols. Portal and MCP messages use
@@ -200,6 +200,43 @@ from persisted message identity. Agents receive input such as
 use `From: Human`. MCP callers cannot forge this envelope, and the stored message
 body remains unchanged.
 
+## Agent status tracking
+
+Nanasa tracks process lifecycle and semantic agent activity as separate
+dimensions. Run status (`starting`, `running`, `stopping`, `stopped`, or
+`failed`) describes the tmux-owned process. Agent status describes what the
+harness reports: `not_started`, `starting`, `working`, `waiting`, `idle`,
+`suspected_stuck`, `stopped`, or `crashed`.
+
+Tmux remains the process authority. Nanasa verifies each pane's run ID and
+generation, records retained exit status or signal before recovery, and ignores
+failed tmux inspections rather than treating them as missing processes.
+
+Nanasa provisions private lifecycle reporters for Claude Code hooks, GitHub
+Copilot CLI user hooks, a second Pi extension, and an in-process OpenCode plugin.
+The Copilot hook is installed under `~/.copilot/hooks` and becomes a no-op in
+processes without Nanasa's run-scoped environment. Reporters send normalized
+lifecycle names, correlation IDs, coarse errors, and wait labels. They do not
+send prompts, tool arguments, tool output, file paths, transcripts, reasoning,
+or provider headers. Reporter failure never blocks the native TUI; status
+degrades to process-only evidence.
+
+Explicit permission, question, elicitation, and plan-approval requests produce
+`waiting`. Silence cannot turn an outstanding request into
+`suspected_stuck`. A working agent becomes suspected stuck only after its
+semantic lease expires and two reconciliation probes find no progress. This is
+a low-confidence inference, not a definitive harness state.
+
+Settled events produce `waiting` with no attention requirement, not automatic
+task success. Explicit questions and decisions also use `waiting`, with
+`input_required` or `decision_required` attention. Agents can publish task
+checkpoints with `nanasa.report_progress`, including stage, summary, next step,
+blocker, and an optional final outcome. The portal displays semantic state,
+phase, progress context, and attention independently of terminal run controls.
+
+Reporter replay coverage is pinned to Claude Code 2.1.220, GitHub Copilot CLI
+1.0.79, Pi 0.83.0 with `pi-mcp-adapter` 2.18.0, and OpenCode 1.18.15.
+
 ## MCP messaging
 
 Enable Streamable HTTP MCP at `/mcp` with `nanasa start --mcp` or
@@ -211,6 +248,12 @@ Nanasa exposes these tools:
 
 * `nanasa.list_members` returns active member IDs, aliases, agent types, current
   run status, and which member is the authenticated caller
+* `nanasa.list_agent_statuses` returns compact semantic and process status for
+  every active member, optionally limited to agents needing attention
+* `nanasa.get_agent_status` returns one member's wait, progress, evidence,
+  process exit details, and recent transitions
+* `nanasa.report_progress` records the authenticated agent's task checkpoint,
+  next step, blocker, or final outcome
 * `nanasa.send_dm` requires `recipientMemberId` and sends to one active member
 * `nanasa.send_multicast` requires `recipientMemberIds` with at least two unique
   active members
@@ -234,12 +277,13 @@ protects its directory with mode `0700`. Stopping or replacing a run, changing
 its desired state, or removing its membership revokes the capability during the
 next request.
 
-Agent commands receive two non-persisted environment variables when MCP is
+Agent commands receive three non-persisted environment variables when MCP is
 enabled:
 
 * `NANASA_MCP_URL` is the configured Streamable HTTP endpoint
 * `NANASA_MCP_TOKEN` is a signed capability bound to the run, generation,
   member, and group
+* `NANASA_STATUS_URL` is the authenticated lifecycle reporter endpoint
 
 Nanasa also registers its MCP endpoint with each supported CLI before launch.
 Generated files live under `.nanasa/agents/<membership-id>/`, contain only an

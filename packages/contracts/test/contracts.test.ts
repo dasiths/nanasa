@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   AgentCapabilitySchema,
   AgentProfileSchema,
+  AgentProgressReportCommandSchema,
   AgentRunSchema,
+  AgentStatusDetailSchema,
+  AgentStatusEventInputSchema,
   ConfigStatusSchema,
   CreateAgentProfileCommandSchema,
   DeleteGroupResultSchema,
@@ -252,6 +255,97 @@ describe("agent run contracts", () => {
         updatedAt: "2026-08-10T12:00:00Z",
       }),
     ).not.toMatchObject({ adapter: expect.anything(), capabilities: expect.anything() });
+  });
+});
+
+describe("agent status contracts", () => {
+  it("accepts normalized correlated tool and wait events", () => {
+    expect(
+      AgentStatusEventInputSchema.parse({
+        version: 1,
+        eventId: "event_1",
+        source: "claude-code",
+        reporterVersion: "1",
+        event: "tool.started",
+        operationId: "tool_1",
+        data: { tool: "Bash" },
+      }),
+    ).toMatchObject({ event: "tool.started", operationId: "tool_1" });
+    expect(
+      AgentStatusEventInputSchema.parse({
+        version: 1,
+        eventId: "event_2",
+        source: "opencode",
+        reporterVersion: "1",
+        event: "wait.opened",
+        requestId: "request_1",
+        data: {
+          waitKind: "permission",
+          summary: "Permission required",
+          replyChannel: "terminal",
+        },
+      }),
+    ).toMatchObject({ event: "wait.opened", requestId: "request_1" });
+  });
+
+  it("rejects missing correlation, caller identity, and unknown metadata", () => {
+    expect(
+      AgentStatusEventInputSchema.safeParse({
+        version: 1,
+        eventId: "event_1",
+        source: "pi",
+        reporterVersion: "1",
+        event: "tool.started",
+      }).success,
+    ).toBe(false);
+    expect(
+      AgentStatusEventInputSchema.safeParse({
+        version: 1,
+        eventId: "event_2",
+        source: "copilot",
+        reporterVersion: "1",
+        event: "session.ready",
+        runId: "forged",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts bounded cooperative progress and status details", () => {
+    expect(
+      AgentProgressReportCommandSchema.parse({
+        stage: "validation",
+        summary: "Focused tests pass",
+        nextStep: "Run typecheck",
+      }),
+    ).toMatchObject({ stage: "validation" });
+    expect(
+      AgentStatusDetailSchema.parse({
+        groupId: "group_1",
+        memberId: "member_1",
+        alias: "Reviewer",
+        agentType: "claude-code",
+        runId: "run_1",
+        generation: 1,
+        runStatus: "running",
+        state: "waiting",
+        phase: "permission",
+        outcome: "unknown",
+        confidence: "high",
+        attention: "decision_required",
+        observedAt: "2026-08-11T12:00:00Z",
+        stateChangedAt: "2026-08-11T12:00:00Z",
+        openWait: {
+          requestId: "request_1",
+          kind: "permission",
+          summary: "Permission required",
+          replyChannel: "terminal",
+          openedAt: "2026-08-11T12:00:00Z",
+        },
+        cleanEndSeen: false,
+        evidence: [],
+        recentTransitions: [],
+      }),
+    ).toMatchObject({ state: "waiting", attention: "decision_required" });
   });
 });
 

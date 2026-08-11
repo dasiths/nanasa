@@ -1,6 +1,10 @@
 import { hostHeaderValidation, originValidation, toNodeHandler } from "@modelcontextprotocol/node";
 import { type AuthInfo, createMcpHandler, McpServer } from "@modelcontextprotocol/server";
-import { type MessageSubmissionResult, SubmitMessageCommandSchema } from "@nanasa/contracts";
+import {
+  AgentProgressReportCommandSchema,
+  type MessageSubmissionResult,
+  SubmitMessageCommandSchema,
+} from "@nanasa/contracts";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
@@ -30,6 +34,15 @@ const MulticastMessageSchema = MessageFieldsSchema.extend({
     .refine((ids) => new Set(ids).size === ids.length),
 });
 const ListMembersSchema = z.object({ groupId: IdentifierSchema.optional() }).strict();
+const ListAgentStatusesSchema = z
+  .object({
+    groupId: IdentifierSchema.optional(),
+    attentionOnly: z.boolean().default(false),
+  })
+  .strict();
+const GetAgentStatusSchema = z
+  .object({ groupId: IdentifierSchema.optional(), memberId: IdentifierSchema })
+  .strict();
 
 export interface McpRouteOptions {
   path: string;
@@ -158,6 +171,52 @@ function listMembersResult(
   };
 }
 
+function listAgentStatusesResult(
+  principal: McpPrincipal,
+  options: McpRouteOptions,
+  input: z.infer<typeof ListAgentStatusesSchema>,
+) {
+  const groupId = targetGroup(principal, input.groupId);
+  const statuses = options.store
+    .listAgentStatuses(groupId)
+    .filter((status) => !input.attentionOnly || status.attention !== "none");
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text:
+          statuses.length === 0
+            ? "No matching agent statuses."
+            : statuses
+                .map(
+                  (status) =>
+                    `${status.alias} (${status.memberId}) · ${status.state}/${status.phase} · ${status.attention}`,
+                )
+                .join("\n"),
+      },
+    ],
+    structuredContent: { groupId, statuses },
+  };
+}
+
+function getAgentStatusResult(
+  principal: McpPrincipal,
+  options: McpRouteOptions,
+  input: z.infer<typeof GetAgentStatusSchema>,
+) {
+  const groupId = targetGroup(principal, input.groupId);
+  const status = options.store.getAgentStatus(groupId, input.memberId);
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `${status.alias} is ${status.state}/${status.phase} with ${status.attention} attention.${status.lastProgressSummary === undefined ? "" : ` Last progress: ${status.lastProgressSummary}`}`,
+      },
+    ],
+    structuredContent: { groupId, status },
+  };
+}
+
 function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): McpServer {
   const server = new McpServer({ name: "nanasa", version: "0.0.0" });
   server.registerTool(
@@ -168,6 +227,76 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
       inputSchema: ListMembersSchema,
     },
     async (input) => listMembersResult(principal, options, input),
+  );
+  server.registerTool(
+    "nanasa.list_agent_statuses",
+    {
+      description:
+        "List current semantic and process status for active group agents, optionally limited to agents needing attention",
+      inputSchema: ListAgentStatusesSchema,
+    },
+    async (input) => listAgentStatusesResult(principal, options, input),
+  );
+  server.registerTool(
+    "nanasa.get_agent_status",
+    {
+      description:
+        "Inspect one active group agent's status, current wait, progress, evidence, and recent transitions",
+      inputSchema: GetAgentStatusSchema,
+    },
+    async (input) => {
+      try {
+        return getAgentStatusResult(principal, options, input);
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: error instanceof Error ? error.message : "Agent status lookup failed",
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+  server.registerTool(
+    "nanasa.report_progress",
+    {
+      description:
+        "Report the caller's current task stage, progress summary, next step, blocker, or final outcome",
+      inputSchema: AgentProgressReportCommandSchema,
+    },
+    async (input) => {
+      if (principal.kind !== "agent") {
+        return {
+          content: [{ type: "text" as const, text: "Only agents can report progress." }],
+          isError: true,
+        };
+      }
+      try {
+        const status = options.store.reportAgentProgress(principal, input);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Progress recorded for ${status.alias} at ${status.progressStage}.`,
+            },
+          ],
+          structuredContent: { status },
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: error instanceof Error ? error.message : "Progress report failed",
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
   );
   server.registerTool(
     "nanasa.send_dm",

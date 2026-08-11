@@ -26,6 +26,18 @@ interface OwnedPaneStatus {
   currentCommand: string;
 }
 
+interface ReconciledPaneStatus {
+  sessionId: string;
+  windowId: string;
+  dead: string;
+  runId: string;
+  generation: string;
+  pid: string;
+  deadStatus: string;
+  deadSignal: string;
+  deadTime: string;
+}
+
 const TERMINAL_SUBMIT_DELAY_MS = 500;
 
 function shellQuote(value: string): string {
@@ -297,16 +309,41 @@ export class TmuxRuntime {
 
   async #reconcile(markOrphanedStarting: boolean): Promise<void> {
     const result = await this.#tmux(
-      ["list-panes", "-a", "-F", "#{session_id}\t#{window_id}\t#{pane_id}\t#{pane_dead}"],
+      [
+        "list-panes",
+        "-a",
+        "-F",
+        "#{session_id}\t#{window_id}\t#{pane_id}\t#{pane_dead}\t#{@nanasa-run-id}\t#{@nanasa-generation}\t#{pane_pid}\t#{pane_dead_status}\t#{pane_dead_signal}\t#{pane_dead_time}",
+      ],
       true,
     );
-    const panes = new Map<string, Array<{ sessionId: string; windowId: string; dead: string }>>();
-    for (const line of result.exitCode === 0
-      ? result.stdout.trim().split("\n").filter(Boolean)
-      : []) {
-      const [sessionId = "", windowId = "", paneId = "", dead = ""] = line.split("\t");
+    if (result.exitCode !== 0) return;
+    const panes = new Map<string, ReconciledPaneStatus[]>();
+    for (const line of result.stdout.trim().split("\n").filter(Boolean)) {
+      const [
+        sessionId = "",
+        windowId = "",
+        paneId = "",
+        dead = "",
+        runId = "",
+        generation = "",
+        pid = "",
+        deadStatus = "",
+        deadSignal = "",
+        deadTime = "",
+      ] = line.split("\t");
       const records = panes.get(paneId) ?? [];
-      records.push({ sessionId, windowId, dead });
+      records.push({
+        sessionId,
+        windowId,
+        dead,
+        runId,
+        generation,
+        pid,
+        deadStatus,
+        deadSignal,
+        deadTime,
+      });
       panes.set(paneId, records);
     }
 
@@ -325,14 +362,47 @@ export class TmuxRuntime {
         .get(binding.paneId)
         ?.find(
           (candidate) =>
-            candidate.sessionId === binding.sessionId && candidate.windowId === binding.windowId,
+            candidate.sessionId === binding.sessionId &&
+            candidate.windowId === binding.windowId &&
+            candidate.runId === run.id &&
+            candidate.generation === String(run.generation),
         );
-      if (pane === undefined || pane.dead === "1") {
+      if (pane === undefined) {
+        this.#store.recordProcessStatus(run.id, {
+          event: "process.missing",
+          eventId: `process-missing-${run.generation}`,
+          observedAt: new Date().toISOString(),
+        });
         if (run.desiredState !== "running") {
           this.#store.updateRunStatus(run.id, "stopped", { reason: "tmux_pane_exited" });
         }
         continue;
       }
+      if (pane.dead === "1") {
+        const parsedExitCode = /^-?\d+$/.test(pane.deadStatus)
+          ? Number.parseInt(pane.deadStatus, 10)
+          : undefined;
+        this.#store.recordProcessStatus(run.id, {
+          event: "process.exited",
+          eventId: `process-exited-${run.generation}-${pane.deadTime || pane.pid || "observed"}`,
+          observedAt:
+            pane.deadTime.length > 0 && !Number.isNaN(Date.parse(pane.deadTime))
+              ? new Date(pane.deadTime).toISOString()
+              : new Date().toISOString(),
+          ...(parsedExitCode === undefined ? {} : { exitCode: parsedExitCode }),
+          ...(pane.deadSignal.length === 0 ? {} : { signal: pane.deadSignal }),
+          operatorStopped: run.desiredState !== "running",
+        });
+        if (run.desiredState !== "running") {
+          this.#store.updateRunStatus(run.id, "stopped", { reason: "tmux_pane_exited" });
+        }
+        continue;
+      }
+      this.#store.recordProcessStatus(run.id, {
+        event: "process.alive",
+        eventId: `process-alive-${run.generation}`,
+        observedAt: new Date().toISOString(),
+      });
       if (run.status === "starting") {
         this.#store.updateRunStatus(run.id, "running");
       }

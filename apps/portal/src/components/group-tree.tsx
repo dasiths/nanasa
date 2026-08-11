@@ -2,7 +2,6 @@ import type {
   AgentProfile,
   AgentRun,
   Group,
-  GroupMembership,
   NanasaConfig,
   PortalSnapshot,
 } from "@nanasa/contracts";
@@ -22,8 +21,10 @@ import {
   X,
 } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { copyToClipboard } from "../copy-to-clipboard.js";
+import { memberStatusView } from "../member-status.js";
 
 export interface AddAgentInput {
   groupId: string;
@@ -202,17 +203,6 @@ function ConfirmRemovalDialog({
       </div>
     </dialog>
   );
-}
-
-function currentRun(runs: AgentRun[], member: GroupMembership): AgentRun | undefined {
-  return runs
-    .filter((run) => run.groupId === member.groupId && run.memberId === member.memberId)
-    .sort((left, right) => right.generation - left.generation)[0];
-}
-
-function statusLabel(run: AgentRun | undefined): string {
-  if (run === undefined) return "offline";
-  return run.recoveryPhase === "idle" ? run.status : run.recoveryPhase;
 }
 
 const activeRecoveryPhases = new Set(["reconciling", "resuming", "restarting"]);
@@ -396,6 +386,11 @@ export function GroupTree({
   const [showAddAgent, setShowAddAgent] = useState(false);
   const [editTarget, setEditTarget] = useState<EditTarget>();
   const [destructiveTarget, setDestructiveTarget] = useState<DestructiveTarget>();
+  const [statusPopover, setStatusPopover] = useState<{
+    memberId: string;
+    left: number;
+    top: number;
+  }>();
   const failedMemberIds = new Set(
     snapshot.deliveryOutcomes
       .filter((outcome) => ["failed", "dead-letter", "rejected"].includes(outcome.status))
@@ -408,6 +403,17 @@ export function GroupTree({
       if (next.has(groupId)) next.delete(groupId);
       else next.add(groupId);
       return next;
+    });
+  };
+
+  const showStatusPopover = (memberId: string, element: HTMLElement) => {
+    const bounds = element.getBoundingClientRect();
+    const width = Math.min(320, window.innerWidth - 16);
+    const opensRight = bounds.right + 8 + width <= window.innerWidth - 8;
+    setStatusPopover({
+      memberId,
+      left: opensRight ? bounds.right + 8 : Math.max(8, window.innerWidth - width - 8),
+      top: Math.max(8, Math.min(bounds.top, window.innerHeight - 300)),
     });
   };
 
@@ -541,7 +547,11 @@ export function GroupTree({
                 <div className="tree-members">
                   {members.length === 0 && <p className="tree-empty">No members</p>}
                   {members.map((member) => {
-                    const run = currentRun(snapshot.runs, member);
+                    const {
+                      run,
+                      status: agentStatus,
+                      label: semanticLabel,
+                    } = memberStatusView(snapshot.agentStatuses, snapshot.runs, member);
                     const action = runAction(run);
                     const actionKey = `${group.id}:${member.memberId}`;
                     const profile = snapshot.agentProfiles.find(
@@ -550,12 +560,42 @@ export function GroupTree({
                     const configuredType =
                       profile === undefined ? undefined : config.agentTypes[profile.agentType];
                     const recoveryDetail = run?.recoveryReason;
+                    const semanticDetail = [
+                      agentStatus?.phase,
+                      agentStatus?.attention === "none"
+                        ? undefined
+                        : agentStatus?.attention.replaceAll("_", " "),
+                      agentStatus?.progressStage,
+                    ]
+                      .filter((value): value is string => value !== undefined)
+                      .join(" · ");
+                    const statusTitle = [
+                      recoveryDetail,
+                      agentStatus?.blocker,
+                      agentStatus?.lastProgressSummary,
+                    ]
+                      .filter((value): value is string => value !== undefined)
+                      .join(" · ");
+                    const popoverId = `member-status-${member.id}`;
+                    const popoverVisible = statusPopover?.memberId === member.memberId;
                     return (
-                      <div className="member-row" key={member.id}>
-                        <span
-                          className={`status-dot status-${statusLabel(run)}`}
-                          aria-hidden="true"
-                        />
+                      <div
+                        className="member-row"
+                        key={member.id}
+                        onMouseEnter={(event) =>
+                          showStatusPopover(member.memberId, event.currentTarget)
+                        }
+                        onMouseLeave={() => setStatusPopover(undefined)}
+                        onFocusCapture={(event) =>
+                          showStatusPopover(member.memberId, event.currentTarget)
+                        }
+                        onBlurCapture={(event) => {
+                          if (!event.currentTarget.contains(event.relatedTarget)) {
+                            setStatusPopover(undefined);
+                          }
+                        }}
+                      >
+                        <span className={`status-dot status-${semanticLabel}`} aria-hidden="true" />
                         {editTarget?.kind === "member" &&
                         editTarget.groupId === group.id &&
                         editTarget.memberId === member.memberId ? (
@@ -574,12 +614,14 @@ export function GroupTree({
                           <button
                             type="button"
                             className="member-select"
+                            aria-describedby={popoverVisible ? popoverId : undefined}
                             onClick={() => onSelectGroup(group.id)}
                           >
                             <span>{member.alias}</span>
                             <code title={member.memberId}>{member.memberId}</code>
-                            <small title={recoveryDetail}>
-                              {statusLabel(run)}
+                            <small title={statusTitle || undefined}>
+                              {semanticLabel}
+                              {semanticDetail.length > 0 && ` · ${semanticDetail}`}
                               {configuredType !== undefined &&
                                 ` · ${configuredType.name} (${configuredType.key})`}
                               {run?.recoveryNotBefore !== undefined &&
@@ -587,10 +629,101 @@ export function GroupTree({
                             </small>
                           </button>
                         )}
-                        {failedMemberIds.has(member.memberId) && (
+                        {popoverVisible &&
+                          createPortal(
+                            <div
+                              id={popoverId}
+                              role="tooltip"
+                              className="member-status-popover"
+                              style={{ left: statusPopover.left, top: statusPopover.top }}
+                            >
+                              <div className="member-status-popover-heading">
+                                <span
+                                  className={`status-dot status-${semanticLabel}`}
+                                  aria-hidden="true"
+                                />
+                                <strong>{member.alias}</strong>
+                                <span>{semanticLabel.replaceAll("_", " ")}</span>
+                              </div>
+                              <dl>
+                                <div>
+                                  <dt>Member ID</dt>
+                                  <dd>{member.memberId}</dd>
+                                </div>
+                                <div>
+                                  <dt>Agent type</dt>
+                                  <dd>
+                                    {configuredType === undefined
+                                      ? (profile?.agentType ?? "Unknown")
+                                      : `${configuredType.name} (${configuredType.key})`}
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt>Semantic status</dt>
+                                  <dd>
+                                    {semanticLabel.replaceAll("_", " ")}
+                                    {agentStatus === undefined
+                                      ? ""
+                                      : ` / ${agentStatus.phase.replaceAll("_", " ")}`}
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt>Terminal</dt>
+                                  <dd>
+                                    {run === undefined
+                                      ? "Not started"
+                                      : `${run.status} / ${run.recoveryPhase}`}
+                                  </dd>
+                                </div>
+                                {agentStatus !== undefined && (
+                                  <>
+                                    <div>
+                                      <dt>Confidence</dt>
+                                      <dd>{agentStatus.confidence}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Attention</dt>
+                                      <dd>{agentStatus.attention.replaceAll("_", " ")}</dd>
+                                    </div>
+                                  </>
+                                )}
+                                {agentStatus?.lastProgressSummary !== undefined && (
+                                  <div>
+                                    <dt>Progress</dt>
+                                    <dd>{agentStatus.lastProgressSummary}</dd>
+                                  </div>
+                                )}
+                                {agentStatus?.blocker !== undefined && (
+                                  <div>
+                                    <dt>Blocker</dt>
+                                    <dd>{agentStatus.blocker}</dd>
+                                  </div>
+                                )}
+                                {agentStatus?.nextStep !== undefined && (
+                                  <div>
+                                    <dt>Next step</dt>
+                                    <dd>{agentStatus.nextStep}</dd>
+                                  </div>
+                                )}
+                                {agentStatus?.lastActivityKind !== undefined && (
+                                  <div>
+                                    <dt>Last activity</dt>
+                                    <dd>{agentStatus.lastActivityKind.replaceAll("_", " ")}</dd>
+                                  </div>
+                                )}
+                              </dl>
+                            </div>,
+                            document.body,
+                          )}
+                        {(failedMemberIds.has(member.memberId) ||
+                          (agentStatus !== undefined && agentStatus.attention !== "none")) && (
                           <CircleAlert
                             className="attention-icon"
-                            aria-label="Delivery needs attention"
+                            aria-label={
+                              agentStatus !== undefined && agentStatus.attention !== "none"
+                                ? `${member.alias} needs ${agentStatus.attention.replaceAll("_", " ")}`
+                                : "Delivery needs attention"
+                            }
                             size={15}
                           />
                         )}

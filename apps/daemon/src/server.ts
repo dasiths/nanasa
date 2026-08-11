@@ -15,6 +15,7 @@ import {
 } from "@nanasa/contracts";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 import { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
+import { registerAgentStatusRoutes } from "./agent-status-routes.js";
 import { discoverAndLoadNanasaConfig, type LoadedNanasaConfig } from "./config.js";
 import { DeliveryDispatcher } from "./delivery-dispatcher.js";
 import { McpCredentialIssuer } from "./mcp-auth.js";
@@ -39,6 +40,7 @@ export interface DaemonOptions {
   tmuxPath?: string;
   ttydPath?: string;
   reconcileIntervalMs?: number;
+  statusEndpointUrl?: string;
   servePortal?: boolean;
   portalAssetsPath?: string;
   mcp?: {
@@ -124,6 +126,18 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     throw new Error("MCP path must be an absolute URL path");
   }
   const mcpEndpointUrl = options.mcp?.endpointUrl ?? `http://127.0.0.1:3210${mcpPath}`;
+  const statusEndpointUrl =
+    options.statusEndpointUrl ?? "http://127.0.0.1:3210/api/agent-status/events";
+  const statusEndpoint = new URL(statusEndpointUrl);
+  if (
+    statusEndpoint.protocol !== "http:" ||
+    !["127.0.0.1", "localhost", "[::1]"].includes(statusEndpoint.hostname) ||
+    statusEndpoint.pathname !== "/api/agent-status/events" ||
+    statusEndpoint.search.length > 0 ||
+    statusEndpoint.hash.length > 0
+  ) {
+    throw new Error("The agent status endpoint must be the exact loopback ingestion URL");
+  }
   const mcpEndpoint = validateMcpEndpointConfiguration({
     enabled: options.mcp?.enabled === true,
     endpointUrl: mcpEndpointUrl,
@@ -158,6 +172,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
           runtimeEnvironment: (run) => ({
             NANASA_MCP_URL: mcpEndpointUrl,
             NANASA_MCP_TOKEN: mcpCredentials.issueAgent(run),
+            NANASA_STATUS_URL: statusEndpointUrl,
           }),
         }),
   });
@@ -208,6 +223,12 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
 
   app.get("/health", async () => ({ status: "ok" }));
   if (mcpCredentials !== undefined) {
+    registerAgentStatusRoutes(app, {
+      path: "/api/agent-status/events",
+      allowedHostnames: [statusEndpoint.hostname],
+      credentials: mcpCredentials,
+      store,
+    });
     registerMcpRoutes(app, {
       path: mcpPath,
       endpointUrl: mcpEndpointUrl,

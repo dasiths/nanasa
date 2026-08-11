@@ -1,0 +1,7 @@
+{
+  "harness": "claude-code",
+  "version": "2.1.220",
+  "reporterVersion": "1",
+  "captureDate": "2026-08-11",
+  "scenario": "lifecycle-tool-wait"
+}

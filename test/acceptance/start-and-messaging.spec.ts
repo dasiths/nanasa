@@ -87,6 +87,9 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
   );
   expect(tools.result?.tools?.map((tool) => tool.name)).toEqual([
     "nanasa.list_members",
+    "nanasa.list_agent_statuses",
+    "nanasa.get_agent_status",
+    "nanasa.report_progress",
     "nanasa.send_dm",
     "nanasa.send_multicast",
     "nanasa.broadcast_group",

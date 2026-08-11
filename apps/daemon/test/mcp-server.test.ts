@@ -113,6 +113,9 @@ describe("Streamable HTTP MCP", () => {
     expect(listed.statusCode).toBe(200);
     expect(listed.json().result.tools.map((tool: { name: string }) => tool.name)).toEqual([
       "nanasa.list_members",
+      "nanasa.list_agent_statuses",
+      "nanasa.get_agent_status",
+      "nanasa.report_progress",
       "nanasa.send_dm",
       "nanasa.send_multicast",
       "nanasa.broadcast_group",
@@ -258,6 +261,83 @@ describe("Streamable HTTP MCP", () => {
     });
     expect(impersonated.json()).toMatchObject({ result: { isError: true } });
     expect(daemon.store.getSnapshot().messages).toHaveLength(1);
+    await daemon.app.close();
+  });
+
+  it("exposes group statuses and records only agent-authored progress", async () => {
+    const { daemon, run, agentToken } = await createFixture();
+    const listed = await callTool(daemon, agentToken, "nanasa.list_agent_statuses", {});
+    expect(listed.json().result.structuredContent).toMatchObject({
+      groupId: run.groupId,
+      statuses: [
+        { memberId: "alpha", state: "not_started" },
+        { memberId: "beta", state: "not_started" },
+        { memberId: "sender", state: "starting" },
+      ],
+    });
+    const detail = await callTool(daemon, agentToken, "nanasa.get_agent_status", {
+      memberId: "sender",
+    });
+    expect(detail.json().result.structuredContent.status).toMatchObject({
+      memberId: "sender",
+      state: "starting",
+      evidence: [{ kind: "spawn.requested" }],
+    });
+
+    const progress = await callTool(daemon, agentToken, "nanasa.report_progress", {
+      stage: "implementation",
+      summary: "Status APIs implemented",
+      nextStep: "Add reporters",
+    });
+    expect(progress.json().result.structuredContent.status).toMatchObject({
+      memberId: "sender",
+      state: "working",
+      progressStage: "implementation",
+      lastProgressSummary: "Status APIs implemented",
+    });
+    const rejected = await callTool(daemon, operatorToken, "nanasa.report_progress", {
+      stage: "forged",
+      summary: "Operator cannot impersonate an agent",
+    });
+    expect(rejected.json()).toMatchObject({ result: { isError: true } });
+    await daemon.app.close();
+  });
+
+  it("authenticates and deduplicates reporter events without accepting caller identity", async () => {
+    const { daemon, agentToken } = await createFixture();
+    const payload = {
+      version: 1,
+      eventId: "session-ready-1",
+      source: "claude-code",
+      reporterVersion: "1",
+      event: "session.ready",
+      data: {},
+    };
+    const submit = (token: string, body: unknown) =>
+      daemon.app.inject({
+        method: "POST",
+        url: "/api/agent-status/events",
+        headers: {
+          host: "127.0.0.1:3210",
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        payload: body,
+      });
+
+    expect(await submit(agentToken, payload)).toMatchObject({ statusCode: 202 });
+    const duplicate = await submit(agentToken, payload);
+    expect(duplicate.json()).toMatchObject({ duplicate: true, status: { state: "waiting" } });
+    expect((await submit(operatorToken, payload)).statusCode).toBe(403);
+    expect(
+      (
+        await submit(agentToken, {
+          ...payload,
+          eventId: "forged-identity",
+          runId: "another-run",
+        })
+      ).statusCode,
+    ).toBe(400);
     await daemon.app.close();
   });
 

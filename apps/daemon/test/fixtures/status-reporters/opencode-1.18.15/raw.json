@@ -1,0 +1,41 @@
+[
+  { "type": "session.created", "properties": { "info": { "id": "opencode-session" } } },
+  {
+    "type": "session.status",
+    "properties": { "sessionID": "opencode-session", "status": { "type": "busy" } }
+  },
+  {
+    "type": "message.part.updated",
+    "properties": {
+      "part": {
+        "type": "tool",
+        "sessionID": "opencode-session",
+        "callID": "opencode-tool-1",
+        "tool": "bash",
+        "state": { "status": "running" }
+      }
+    }
+  },
+  {
+    "type": "permission.asked",
+    "properties": { "sessionID": "opencode-session", "id": "opencode-permission-1" }
+  },
+  {
+    "type": "permission.replied",
+    "properties": { "sessionID": "opencode-session", "requestID": "opencode-permission-1" }
+  },
+  {
+    "type": "message.part.updated",
+    "properties": {
+      "part": {
+        "type": "tool",
+        "sessionID": "opencode-session",
+        "callID": "opencode-tool-1",
+        "tool": "bash",
+        "state": { "status": "completed" }
+      }
+    }
+  },
+  { "type": "session.idle", "properties": { "sessionID": "opencode-session" } },
+  { "type": "session.deleted", "properties": { "sessionID": "opencode-session" } }
+]

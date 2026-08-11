@@ -81,6 +81,8 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
     page.getByRole("button", { name: "Start all non-running agents in Responsive team" }),
   ).toBeVisible();
 
+  await page.getByRole("button", { name: "Close messages" }).click();
+  await expect(page.getByRole("region", { name: "Messages overlay" })).toHaveCount(0);
   await page.getByRole("button", { name: "Remove agent Narrow" }).click();
   const memberDialog = page.getByRole("dialog", { name: "Remove Narrow?" });
   await expect(memberDialog).toBeVisible();

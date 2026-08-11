@@ -1,0 +1,174 @@
+export const STATUS_REPORTER_VERSION = "1";
+
+export const HOOK_STATUS_REPORTER_SOURCE = String.raw`import { createHash, randomUUID } from "node:crypto";
+
+const source = process.argv[2];
+const configuredEvent = process.argv[3];
+const chunks = [];
+let size = 0;
+for await (const chunk of process.stdin) {
+  size += chunk.length;
+  if (size > 1024 * 1024) process.exit(0);
+  chunks.push(chunk);
+}
+
+function stableId(...parts) {
+  return createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 32);
+}
+
+function base(input, event, fields = {}) {
+  return {
+    version: 1,
+    eventId: randomUUID(),
+    source,
+    reporterVersion: "1",
+    event,
+    occurredAt: new Date().toISOString(),
+    ...(input.session_id || input.sessionId ? { sessionId: input.session_id || input.sessionId } : {}),
+    ...fields,
+  };
+}
+
+function normalize(input) {
+  const name = configuredEvent || input.hook_event_name || input.eventName || input.event_name;
+  const tool = input.tool_name || input.toolName;
+  const session = input.session_id || input.sessionId || "session";
+  const operation = input.tool_use_id || input.toolUseId || stableId(source, session, tool || "tool");
+  const permission = stableId(source, session, "permission");
+  const events = [];
+  if (name === "SessionStart" || name === "sessionStart") events.push(base(input, "session.ready"));
+  else if (name === "UserPromptSubmit" || name === "userPromptSubmitted") events.push(base(input, "turn.started"));
+  else if (name === "PreToolUse" || name === "preToolUse") {
+    if (tool === "AskUserQuestion" || tool === "ask_user") {
+      events.push(base(input, "wait.opened", { requestId: operation, data: { waitKind: "question", summary: "Agent question requires input", replyChannel: "terminal" } }));
+    } else if (tool === "ExitPlanMode") {
+      events.push(base(input, "wait.opened", { requestId: operation, data: { waitKind: "plan_approval", summary: "Plan approval required", replyChannel: "terminal" } }));
+    } else {
+      events.push(base(input, "tool.started", { operationId: operation, data: { ...(tool ? { tool } : {}) } }));
+    }
+  } else if (name === "PermissionRequest" || name === "permissionRequest") {
+    events.push(base(input, "wait.opened", { requestId: permission, data: { waitKind: "permission", summary: "Tool permission required", replyChannel: "terminal" } }));
+  } else if (["PostToolUse", "postToolUse", "PostToolUseFailure", "postToolUseFailure"].includes(name)) {
+    const failed = name === "PostToolUseFailure" || name === "postToolUseFailure";
+    if (tool === "AskUserQuestion" || tool === "ask_user" || tool === "ExitPlanMode") {
+      events.push(base(input, "wait.closed", { requestId: operation, data: {} }));
+    } else {
+      events.push(base(input, failed ? "tool.failed" : "tool.finished", { operationId: operation, data: { ...(tool ? { tool } : {}) } }));
+    }
+    events.push(base(input, "wait.closed", { requestId: permission, data: {} }));
+  } else if (name === "Stop" || name === "agentStop") {
+    const activeCount = Array.isArray(input.background_tasks) ? input.background_tasks.length : 0;
+    events.push(base(input, "wait.closed", { requestId: permission, data: {} }));
+    events.push(base(input, "turn.settled", { data: { activeCount } }));
+  } else if (name === "StopFailure" || name === "errorOccurred") {
+    const fatal = input.recoverable === false;
+    events.push(base(input, "failure.observed", { data: { ...(input.error ? { errorClass: typeof input.error === "string" ? input.error : input.error.name } : {}), fatal } }));
+  } else if (name === "PreCompact" || name === "preCompact") events.push(base(input, "compaction.started"));
+  else if (name === "PostCompact") events.push(base(input, "compaction.finished"));
+  else if (name === "Elicitation") {
+    const requestId = input.elicitation_id || stableId(source, session, "elicitation");
+    events.push(base(input, "wait.opened", { requestId, data: { waitKind: "elicitation", summary: "MCP elicitation requires input", replyChannel: "terminal" } }));
+  } else if (name === "ElicitationResult") {
+    const requestId = input.elicitation_id || stableId(source, session, "elicitation");
+    events.push(base(input, "wait.closed", { requestId, data: {} }));
+  } else if (name === "SessionEnd" || name === "sessionEnd") events.push(base(input, "session.ended"));
+  return events;
+}
+
+async function send(event) {
+  const url = process.env.NANASA_STATUS_URL;
+  const token = process.env.NANASA_MCP_TOKEN;
+  if (!url || !token) return;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 500);
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify(event),
+      signal: controller.signal,
+    });
+  } catch {}
+  finally { clearTimeout(timeout); }
+}
+
+try {
+  const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  for (const event of normalize(input)) await send(event);
+} catch {}
+`;
+
+export const PI_STATUS_REPORTER_SOURCE = String.raw`function reporter() {
+  const url = process.env.NANASA_STATUS_URL;
+  const token = process.env.NANASA_MCP_TOKEN;
+  let sessionId;
+  let heartbeat;
+  const send = (event, fields = {}) => {
+    if (!url || !token) return;
+    const envelope = { version: 1, eventId: crypto.randomUUID(), source: "pi", reporterVersion: "1", event, occurredAt: new Date().toISOString(), ...(sessionId ? { sessionId } : {}), ...fields };
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1000);
+    void fetch(url, { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify(envelope), signal: controller.signal }).catch(() => undefined).finally(() => clearTimeout(timeout));
+  };
+  return (pi) => {
+    pi.on("session_start", (_event, ctx) => {
+      sessionId = ctx.sessionManager.getSessionId();
+      send("session.ready");
+      clearInterval(heartbeat);
+      heartbeat = setInterval(() => send("heartbeat"), 15000);
+      heartbeat.unref?.();
+    });
+    pi.on("agent_start", () => send("turn.started"));
+    pi.on("tool_execution_start", (event) => send("tool.started", { operationId: event.toolCallId, data: { tool: event.toolName } }));
+    pi.on("tool_execution_end", (event) => send(event.isError ? "tool.failed" : "tool.finished", { operationId: event.toolCallId, data: { tool: event.toolName } }));
+    pi.on("session_before_compact", () => send("compaction.started"));
+    pi.on("session_compact", () => send("compaction.finished"));
+    pi.on("agent_settled", () => send("turn.settled"));
+    pi.on("session_shutdown", () => { send("session.ended"); clearInterval(heartbeat); heartbeat = undefined; });
+  };
+}
+export default reporter();
+`;
+
+export const OPENCODE_STATUS_REPORTER_SOURCE = String.raw`export const NanasaStatusPlugin = async () => {
+  const url = process.env.NANASA_STATUS_URL;
+  const token = process.env.NANASA_MCP_TOKEN;
+  const sessions = new Set();
+  const send = (event, sessionId, fields = {}) => {
+    if (!url || !token) return;
+    const envelope = { version: 1, eventId: crypto.randomUUID(), source: "opencode", reporterVersion: "1", event, occurredAt: new Date().toISOString(), ...(sessionId ? { sessionId } : {}), ...fields };
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1000);
+    void fetch(url, { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify(envelope), signal: controller.signal }).catch(() => undefined).finally(() => clearTimeout(timeout));
+  };
+  const heartbeat = setInterval(() => { for (const sessionId of sessions) send("heartbeat", sessionId); }, 15000);
+  heartbeat.unref?.();
+  return {
+    event: async ({ event }) => {
+      const properties = event.properties || {};
+      const sessionId = properties.sessionID || properties.sessionId || properties.info?.id || properties.part?.sessionID;
+      if (event.type === "session.created" || event.type === "server.connected") { if (sessionId) sessions.add(sessionId); send("session.ready", sessionId); }
+      else if (event.type === "session.status") {
+        const status = properties.status || {};
+        if (status.type === "busy") send("turn.started", sessionId);
+        else if (status.type === "idle") send("turn.settled", sessionId);
+        else if (status.type === "retry") send("retry.observed", sessionId, { data: { ...(status.next ? { retryAt: new Date(status.next).toISOString() } : {}) } });
+      } else if (event.type === "session.idle") send("turn.settled", sessionId);
+      else if (event.type === "permission.asked") send("wait.opened", sessionId, { requestId: properties.id, data: { waitKind: "permission", summary: "Tool permission required", replyChannel: "terminal" } });
+      else if (event.type === "permission.replied") send("wait.closed", sessionId, { requestId: properties.requestID, data: {} });
+      else if (event.type === "question.asked") send("wait.opened", sessionId, { requestId: properties.id, data: { waitKind: "question", summary: "Agent question requires input", replyChannel: "terminal" } });
+      else if (event.type === "question.replied" || event.type === "question.rejected") send("wait.closed", sessionId, { requestId: properties.requestID, data: {} });
+      else if (event.type === "message.part.updated" && properties.part?.type === "tool") {
+        const part = properties.part;
+        const state = part.state?.status || part.state?.type;
+        const operationId = part.callID;
+        if (operationId && (state === "pending" || state === "running")) send("tool.started", sessionId, { operationId, data: { tool: part.tool } });
+        else if (operationId && state === "completed") send("tool.finished", sessionId, { operationId, data: { tool: part.tool } });
+        else if (operationId && state === "error") send("tool.failed", sessionId, { operationId, data: { tool: part.tool } });
+      } else if (event.type === "session.error") send("failure.observed", sessionId, { data: { errorClass: properties.error?.name || "session_error" } });
+      else if (event.type === "session.deleted") { send("session.ended", sessionId); if (sessionId) sessions.delete(sessionId); }
+    },
+  };
+};
+export default NanasaStatusPlugin;
+`;

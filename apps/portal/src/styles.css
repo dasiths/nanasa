@@ -375,6 +375,71 @@ h2 {
   white-space: nowrap;
 }
 
+.member-status-popover {
+  position: fixed;
+  z-index: 30;
+  width: min(320px, calc(100vw - 16px));
+  max-height: min(360px, calc(100vh - 16px));
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 10px 30px var(--panel-shadow);
+  padding: 11px 12px;
+  color: var(--text);
+  pointer-events: none;
+}
+
+.member-status-popover-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+.member-status-popover-heading strong {
+  overflow-wrap: anywhere;
+}
+
+.member-status-popover-heading > span:last-child {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-transform: capitalize;
+}
+
+.member-status-popover dl {
+  display: grid;
+  gap: 6px;
+  margin: 9px 0 0;
+}
+
+.member-status-popover dl > div {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.member-status-popover dt {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.member-status-popover dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.75rem;
+  text-transform: capitalize;
+}
+
+.member-status-popover dd:first-letter {
+  text-transform: uppercase;
+}
+
 .status-dot,
 .connection-dot {
   display: inline-block;
@@ -386,11 +451,13 @@ h2 {
 }
 
 .status-running,
+.status-working,
 .connection-ready {
   background: #2e966f;
 }
 
 .status-starting,
+.status-waiting,
 .status-stopping,
 .status-reconciling,
 .status-resuming,
@@ -401,6 +468,8 @@ h2 {
 }
 
 .status-failed,
+.status-crashed,
+.status-suspected_stuck,
 .connection-unavailable,
 .connection-stopped {
   background: #c34c42;
@@ -408,6 +477,15 @@ h2 {
 
 .status-recovered {
   background: #2e966f;
+}
+
+.status-idle {
+  background: #4f86a6;
+}
+
+.status-not_started,
+.status-stopped {
+  background: var(--line-strong);
 }
 
 .attention-icon {
@@ -646,6 +724,23 @@ textarea {
   margin-top: 3px;
   color: var(--text-muted);
   font-size: 0.78rem;
+}
+
+.group-status-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.group-status-summary span + span::before {
+  margin-right: 10px;
+  color: var(--line-strong);
+  content: "/";
+}
+
+.group-status-summary .needs-attention {
+  color: var(--amber);
+  font-weight: 700;
 }
 
 .header-actions {

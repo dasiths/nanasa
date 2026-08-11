@@ -1,0 +1,8 @@
+{"sessionId":"copilot-session","timestamp":1786430000000,"cwd":"/workspace"}
+{"sessionId":"copilot-session","timestamp":1786430000001,"cwd":"/workspace","prompt":"<redacted>"}
+{"sessionId":"copilot-session","timestamp":1786430000002,"cwd":"/workspace","toolName":"bash","toolArgs":{}}
+{"sessionId":"copilot-session","timestamp":1786430000003,"cwd":"/workspace","toolName":"bash","toolArgs":{},"toolResult":{}}
+{"sessionId":"copilot-session","timestamp":1786430000004,"cwd":"/workspace","toolName":"bash","toolArgs":{}}
+{"sessionId":"copilot-session","timestamp":1786430000005,"cwd":"/workspace","toolName":"bash","toolArgs":{},"error":"<redacted>"}
+{"sessionId":"copilot-session","timestamp":1786430000006,"cwd":"/workspace","transcriptPath":"<redacted>","stopReason":"end_turn","stop_hook_active":false}
+{"sessionId":"copilot-session","timestamp":1786430000007,"cwd":"/workspace","reason":"complete"}

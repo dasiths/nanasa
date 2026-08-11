@@ -7,8 +7,16 @@ import {
   AddGroupMembershipCommandSchema,
   type AgentProfile,
   AgentProfileSchema,
+  type AgentProgressReportCommand,
+  AgentProgressReportCommandSchema,
   type AgentRun,
   AgentRunSchema,
+  type AgentStatusDetail,
+  AgentStatusDetailSchema,
+  type AgentStatusEventInput,
+  AgentStatusEventInputSchema,
+  type AgentStatusSummary,
+  AgentStatusSummarySchema,
   type AgentTypeConfig,
   type ConfigStatus,
   type CreateAgentProfileCommand,
@@ -48,6 +56,12 @@ import {
   UpdateGroupMembershipCommandSchema,
 } from "@nanasa/contracts";
 
+import {
+  type AgentStatusReducerState,
+  createAgentStatusReducerState,
+  type ProcessStatusObservation,
+  reduceAgentStatus,
+} from "./agent-status-reducer.js";
 import { dockerMemberName, formatMemberId, type MemberNameGenerator } from "./member-id.js";
 
 interface Parser<T> {
@@ -159,7 +173,25 @@ interface DeliveryRow {
   updated_at: string;
 }
 
-const DATABASE_SCHEMA_VERSION = 1;
+interface AgentStatusCurrentRow {
+  reducer_state_json: string;
+}
+
+const DATABASE_SCHEMA_VERSION = 2;
+
+export interface AgentStatusIdentity {
+  groupId: string;
+  memberId: string;
+  runId: string;
+  generation: number;
+}
+
+export interface AgentStatusIngestResult {
+  accepted: true;
+  duplicate: boolean;
+  observedAt: string;
+  status: AgentStatusDetail;
+}
 
 export interface DeliveryClaim {
   delivery: DeliveryOutcome;
@@ -201,6 +233,31 @@ export class DomainError extends Error {
 }
 
 export type DomainEventListener = (event: DomainEvent) => void;
+
+function agentStatusSummary(detail: AgentStatusDetail): AgentStatusSummary {
+  return AgentStatusSummarySchema.parse({
+    groupId: detail.groupId,
+    memberId: detail.memberId,
+    alias: detail.alias,
+    agentType: detail.agentType,
+    runId: detail.runId,
+    generation: detail.generation,
+    runStatus: detail.runStatus,
+    state: detail.state,
+    phase: detail.phase,
+    outcome: detail.outcome,
+    confidence: detail.confidence,
+    attention: detail.attention,
+    observedAt: detail.observedAt,
+    stateChangedAt: detail.stateChangedAt,
+    lastActivityAt: detail.lastActivityAt,
+    lastActivityKind: detail.lastActivityKind,
+    lastProgressSummary: detail.lastProgressSummary,
+    progressStage: detail.progressStage,
+    nextStep: detail.nextStep,
+    blocker: detail.blocker,
+  });
+}
 
 export class NanasaStore {
   readonly #database: DatabaseSync;
@@ -316,6 +373,21 @@ export class NanasaStore {
           .run(groupId);
         const deletedMessages = this.#database
           .prepare("DELETE FROM messages WHERE group_id = ?")
+          .run(groupId);
+        this.#database
+          .prepare(
+            "DELETE FROM agent_task_reports WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?)",
+          )
+          .run(groupId);
+        this.#database
+          .prepare(
+            "DELETE FROM agent_status_events WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?)",
+          )
+          .run(groupId);
+        this.#database
+          .prepare(
+            "DELETE FROM agent_status_current WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?)",
+          )
           .run(groupId);
         const deletedRuns = this.#database
           .prepare("DELETE FROM runs WHERE group_id = ?")
@@ -608,6 +680,10 @@ export class NanasaStore {
           input.startedAt,
           input.stoppedAt ?? null,
         );
+      this.#upsertAgentStatusState(
+        input,
+        createAgentStatusReducerState(input.id, input.generation, input.startedAt),
+      );
       return {
         result: input,
         event: this.#appendEvent("run.created", "run", input.id, { run: input }),
@@ -680,6 +756,20 @@ export class NanasaStore {
 
   public getGroup(groupId: string): Group {
     return this.#requireGroup(groupId);
+  }
+
+  public listAgentStatuses(groupId: string): AgentStatusSummary[] {
+    this.#requireGroup(groupId);
+    return this.listActiveMemberships(groupId)
+      .sort((left, right) => left.memberId.localeCompare(right.memberId))
+      .map((membership) =>
+        agentStatusSummary(this.#getAgentStatusDetail(groupId, membership.memberId)),
+      );
+  }
+
+  public getAgentStatus(groupId: string, memberId: string): AgentStatusDetail {
+    this.#requireGroup(groupId);
+    return this.#getAgentStatusDetail(groupId, memberId);
   }
 
   public getActiveRun(groupId: string, memberId: string): AgentRun | undefined {
@@ -817,7 +907,164 @@ export class NanasaStore {
       };
     });
     this.#publish(event);
+    if (status === "running") {
+      this.recordProcessStatus(runId, {
+        event: "process.alive",
+        eventId: `process-alive-${current.generation}`,
+        observedAt: new Date().toISOString(),
+      });
+    } else if (status === "stopped" || status === "failed") {
+      this.recordProcessStatus(runId, {
+        event: "process.exited",
+        eventId: `process-exited-${current.generation}-${status}`,
+        observedAt: new Date().toISOString(),
+        operatorStopped: status === "stopped",
+      });
+    }
     return result;
+  }
+
+  public ingestAgentStatusEvent(
+    identity: AgentStatusIdentity,
+    event: AgentStatusEventInput,
+  ): AgentStatusIngestResult {
+    const input = AgentStatusEventInputSchema.parse(event);
+    const observedAt = new Date().toISOString();
+    const completed = this.#transaction(() => {
+      const run = this.#requireCurrentAgentStatusRun(identity);
+      const duplicate = this.#database
+        .prepare(
+          `SELECT 1 FROM agent_status_events
+           WHERE run_id = ? AND generation = ? AND event_id = ?`,
+        )
+        .get(run.id, run.generation, input.eventId);
+      if (duplicate !== undefined) {
+        return {
+          status: this.#getAgentStatusDetail(run.groupId, run.memberId),
+          duplicate: true,
+          domainEvents: [] as DomainEvent[],
+        };
+      }
+      const previous = this.#agentStatusState(run);
+      const next = reduceAgentStatus(previous, {
+        event: "reporter.event",
+        observedAt,
+        input,
+      });
+      this.#insertAgentStatusEvent(
+        run,
+        input.eventId,
+        input.source,
+        input.event,
+        observedAt,
+        input,
+      );
+      this.#upsertAgentStatusState(run, next);
+      this.#trimAgentStatusEvents(run.id, run.generation);
+      return {
+        status: this.#getAgentStatusDetail(run.groupId, run.memberId),
+        duplicate: false,
+        domainEvents: this.#appendAgentStatusDomainEvents(run, previous, next),
+      };
+    });
+    for (const domainEvent of completed.domainEvents) this.#publish(domainEvent);
+    return {
+      accepted: true,
+      duplicate: completed.duplicate,
+      observedAt,
+      status: completed.status,
+    };
+  }
+
+  public reportAgentProgress(
+    identity: AgentStatusIdentity,
+    report: AgentProgressReportCommand,
+  ): AgentStatusDetail {
+    const input = AgentProgressReportCommandSchema.parse(report);
+    const observedAt = new Date().toISOString();
+    const completed = this.#transaction(() => {
+      const run = this.#requireCurrentAgentStatusRun(identity);
+      const eventId = `progress_${randomUUID()}`;
+      this.#database
+        .prepare(
+          `INSERT INTO agent_task_reports
+             (id, run_id, generation, stage, summary, next_step, blocker, outcome, reported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          eventId,
+          run.id,
+          run.generation,
+          input.stage,
+          input.summary,
+          input.nextStep ?? null,
+          input.blocker ?? null,
+          input.outcome ?? null,
+          observedAt,
+        );
+      const previous = this.#agentStatusState(run);
+      const next = reduceAgentStatus(previous, {
+        event: "progress.reported",
+        eventId,
+        observedAt,
+        report: input,
+      });
+      this.#insertAgentStatusEvent(
+        run,
+        eventId,
+        "status_api",
+        "progress.reported",
+        observedAt,
+        input,
+      );
+      this.#upsertAgentStatusState(run, next);
+      this.#trimAgentStatusEvents(run.id, run.generation);
+      return {
+        status: this.#getAgentStatusDetail(run.groupId, run.memberId),
+        domainEvents: this.#appendAgentStatusDomainEvents(run, previous, next),
+      };
+    });
+    for (const domainEvent of completed.domainEvents) this.#publish(domainEvent);
+    return completed.status;
+  }
+
+  public recordProcessStatus(
+    runId: string,
+    observation: ProcessStatusObservation,
+  ): AgentStatusDetail {
+    const completed = this.#transaction(() => {
+      const run = this.getRun(runId);
+      const duplicate = this.#database
+        .prepare(
+          `SELECT 1 FROM agent_status_events
+           WHERE run_id = ? AND generation = ? AND event_id = ?`,
+        )
+        .get(run.id, run.generation, observation.eventId);
+      if (duplicate !== undefined) {
+        return {
+          status: this.#getAgentStatusDetail(run.groupId, run.memberId),
+          domainEvents: [] as DomainEvent[],
+        };
+      }
+      const previous = this.#agentStatusState(run);
+      const next = reduceAgentStatus(previous, observation);
+      this.#insertAgentStatusEvent(
+        run,
+        observation.eventId,
+        "process",
+        observation.event,
+        observation.observedAt,
+        observation,
+      );
+      this.#upsertAgentStatusState(run, next);
+      this.#trimAgentStatusEvents(run.id, run.generation);
+      return {
+        status: this.#getAgentStatusDetail(run.groupId, run.memberId),
+        domainEvents: this.#appendAgentStatusDomainEvents(run, previous, next),
+      };
+    });
+    for (const domainEvent of completed.domainEvents) this.#publish(domainEvent);
+    return completed.status;
   }
 
   public transitionRunRecovery(
@@ -1328,6 +1575,7 @@ export class NanasaStore {
         .all() as unknown as MessageRow[]
     ).map((row) => this.#hydrateMessage(row));
     const deliveryOutcomes = this.listDeliveries();
+    const agentStatuses = groups.flatMap((group) => this.listAgentStatuses(group.id));
     const sequenceRow = this.#database
       .prepare("SELECT COALESCE(MAX(sequence), 0) AS sequence FROM domain_events")
       .get() as unknown as { sequence: number };
@@ -1339,6 +1587,7 @@ export class NanasaStore {
       agentProfiles,
       memberships,
       runs,
+      agentStatuses,
       messages,
       deliveryOutcomes,
       ...(this.#config === undefined ? {} : { config: this.#config }),
@@ -1493,6 +1742,200 @@ export class NanasaStore {
         null,
         outcome.updatedAt,
       );
+  }
+
+  #requireCurrentAgentStatusRun(identity: AgentStatusIdentity): AgentRun {
+    const run = this.getRun(identity.runId);
+    const membership = this.#getMembershipRow(identity.groupId, identity.memberId);
+    const active = this.getActiveRun(identity.groupId, identity.memberId);
+    if (
+      run.groupId !== identity.groupId ||
+      run.memberId !== identity.memberId ||
+      run.generation !== identity.generation ||
+      run.desiredState !== "running" ||
+      !["starting", "running"].includes(run.status) ||
+      membership?.state !== "active" ||
+      active?.id !== run.id ||
+      active.generation !== run.generation
+    ) {
+      throw new DomainError(
+        "status_generation_fenced",
+        "The agent status generation is no longer authoritative",
+        409,
+      );
+    }
+    return run;
+  }
+
+  #insertAgentStatusEvent(
+    run: AgentRun,
+    eventId: string,
+    source: string,
+    kind: string,
+    observedAt: string,
+    payload: unknown,
+  ): void {
+    const sourceOccurredAt =
+      typeof payload === "object" &&
+      payload !== null &&
+      "occurredAt" in payload &&
+      typeof payload.occurredAt === "string"
+        ? payload.occurredAt
+        : null;
+    this.#database
+      .prepare(
+        `INSERT INTO agent_status_events
+           (event_id, run_id, generation, source, kind, source_occurred_at,
+            observed_at, payload_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        eventId,
+        run.id,
+        run.generation,
+        source,
+        kind,
+        sourceOccurredAt,
+        observedAt,
+        JSON.stringify(payload),
+      );
+  }
+
+  #trimAgentStatusEvents(runId: string, generation: number): void {
+    this.#database
+      .prepare(
+        `DELETE FROM agent_status_events
+         WHERE run_id = ? AND generation = ? AND sequence NOT IN (
+           SELECT sequence FROM agent_status_events
+           WHERE run_id = ? AND generation = ?
+           ORDER BY sequence DESC LIMIT 256
+         )`,
+      )
+      .run(runId, generation, runId, generation);
+  }
+
+  #appendAgentStatusDomainEvents(
+    run: AgentRun,
+    previous: AgentStatusReducerState,
+    next: AgentStatusReducerState,
+  ): DomainEvent[] {
+    const material =
+      previous.state !== next.state ||
+      previous.phase !== next.phase ||
+      previous.attention !== next.attention ||
+      previous.outcome !== next.outcome ||
+      previous.lastProgressSummary !== next.lastProgressSummary ||
+      previous.blocker !== next.blocker;
+    if (!material) return [];
+    const status = agentStatusSummary(this.#getAgentStatusDetail(run.groupId, run.memberId));
+    const events = [this.#appendEvent("agent-status.changed", "run", run.id, { status })];
+    if (
+      previous.attention !== next.attention &&
+      ["input_required", "decision_required", "progress_stale", "process_failed"].includes(
+        next.attention,
+      )
+    ) {
+      events.push(this.#appendEvent("agent-status.attention-required", "run", run.id, { status }));
+    }
+    return events;
+  }
+
+  #agentStatusState(run: AgentRun): AgentStatusReducerState {
+    const row = this.#database
+      .prepare("SELECT reducer_state_json FROM agent_status_current WHERE run_id = ?")
+      .get(run.id) as unknown as AgentStatusCurrentRow | undefined;
+    return row === undefined
+      ? createAgentStatusReducerState(run.id, run.generation, run.startedAt)
+      : (JSON.parse(row.reducer_state_json) as AgentStatusReducerState);
+  }
+
+  #upsertAgentStatusState(run: AgentRun, state: AgentStatusReducerState): void {
+    const serialized = JSON.stringify(state);
+    this.#database
+      .prepare(
+        `INSERT INTO agent_status_current
+           (run_id, generation, status_json, reducer_state_json, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(run_id) DO UPDATE SET
+           generation = excluded.generation,
+           status_json = excluded.status_json,
+           reducer_state_json = excluded.reducer_state_json,
+           updated_at = excluded.updated_at`,
+      )
+      .run(run.id, run.generation, serialized, serialized, state.observedAt);
+  }
+
+  #getAgentStatusDetail(groupId: string, memberId: string): AgentStatusDetail {
+    const membership = this.#getMembershipRow(groupId, memberId);
+    if (membership === undefined || membership.state !== "active") {
+      throw new DomainError("membership_not_active", "The member is not active", 404);
+    }
+    const hydratedMembership = this.#hydrateMembership(membership);
+    const profile = this.#requireAgentProfile(membership.agent_profile_id);
+    const run = this.getLatestRunForMembership(groupId, memberId);
+    if (run === undefined) {
+      return AgentStatusDetailSchema.parse({
+        groupId,
+        memberId,
+        alias: hydratedMembership.alias,
+        agentType: profile.agentType,
+        state: "not_started",
+        phase: "startup",
+        outcome: "unknown",
+        confidence: "high",
+        attention: "none",
+        observedAt: hydratedMembership.joinedAt,
+        stateChangedAt: hydratedMembership.joinedAt,
+        cleanEndSeen: false,
+        evidence: [
+          {
+            source: "scheduler",
+            kind: "membership.active",
+            observedAt: hydratedMembership.joinedAt,
+            confidence: "high",
+          },
+        ],
+        recentTransitions: [],
+      });
+    }
+    const state = this.#agentStatusState(run);
+    const persistedState = state.state === "idle" ? "waiting" : state.state;
+    const statusState =
+      run.status === "stopped" && !["stopped", "crashed"].includes(persistedState)
+        ? "stopped"
+        : run.status === "failed" && !["stopped", "crashed"].includes(persistedState)
+          ? "crashed"
+          : persistedState;
+    return AgentStatusDetailSchema.parse({
+      groupId,
+      memberId,
+      alias: hydratedMembership.alias,
+      agentType: profile.agentType,
+      runId: run.id,
+      generation: run.generation,
+      runStatus: run.status,
+      state: statusState,
+      phase: statusState === "stopped" || statusState === "crashed" ? "exited" : state.phase,
+      outcome: statusState === "crashed" && state.outcome === "unknown" ? "failed" : state.outcome,
+      confidence: state.confidence,
+      attention: statusState === "crashed" ? "process_failed" : state.attention,
+      lastActivityAt: state.lastActivityAt,
+      lastActivityKind: state.lastActivityKind,
+      observedAt: state.observedAt,
+      stateChangedAt: state.stateChangedAt,
+      lastProgressSummary: state.lastProgressSummary,
+      progressStage: state.progressStage,
+      nextStep: state.nextStep,
+      blocker: state.blocker,
+      semanticLeaseExpiresAt: state.semanticLeaseExpiresAt,
+      transportLeaseExpiresAt: state.transportLeaseExpiresAt,
+      openWait: state.openWaits[0],
+      processExitCode: state.processExitCode,
+      processSignal: state.processSignal,
+      cleanEndSeen: state.cleanEndSeen,
+      evidence: state.evidence,
+      recentTransitions: state.recentTransitions,
+    });
   }
 
   #appendEvent(
@@ -1702,6 +2145,12 @@ export class NanasaStore {
   }
 
   #migrate(): void {
+    const initialVersion = this.#database.prepare("PRAGMA user_version").get() as unknown as {
+      user_version: number;
+    };
+    if (initialVersion.user_version > DATABASE_SCHEMA_VERSION) {
+      throw new Error(`Unsupported database schema version ${initialVersion.user_version}`);
+    }
     this.#database.exec(`
       CREATE TABLE IF NOT EXISTS groups (
         id TEXT PRIMARY KEY,
@@ -1824,6 +2273,7 @@ export class NanasaStore {
     `);
     this.#migrateLegacyColumns();
     this.#migrateTerminalRuntime();
+    this.#migrateAgentStatusFoundation();
   }
 
   #migrateLegacyColumns(): void {
@@ -1903,10 +2353,7 @@ export class NanasaStore {
     const version = this.#database.prepare("PRAGMA user_version").get() as unknown as {
       user_version: number;
     };
-    if (version.user_version === DATABASE_SCHEMA_VERSION) return;
-    if (version.user_version > DATABASE_SCHEMA_VERSION) {
-      throw new Error(`Unsupported database schema version ${version.user_version}`);
-    }
+    if (version.user_version >= 1) return;
 
     this.#transaction(() => {
       this.#database.exec(`
@@ -1952,6 +2399,56 @@ export class NanasaStore {
         WHERE status IN ('queued', 'retrying', 'received', 'delivering');
 
         PRAGMA user_version = 1;
+      `);
+    });
+  }
+
+  #migrateAgentStatusFoundation(): void {
+    const version = this.#database.prepare("PRAGMA user_version").get() as unknown as {
+      user_version: number;
+    };
+    if (version.user_version >= 2) return;
+    this.#transaction(() => {
+      this.#database.exec(`
+        CREATE TABLE IF NOT EXISTS agent_status_events (
+          sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_id TEXT NOT NULL,
+          run_id TEXT NOT NULL REFERENCES runs(id),
+          generation INTEGER NOT NULL,
+          source TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          source_occurred_at TEXT,
+          observed_at TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          UNIQUE (run_id, generation, event_id)
+        ) STRICT;
+
+        CREATE TABLE IF NOT EXISTS agent_status_current (
+          run_id TEXT PRIMARY KEY REFERENCES runs(id),
+          generation INTEGER NOT NULL,
+          status_json TEXT NOT NULL,
+          reducer_state_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE TABLE IF NOT EXISTS agent_task_reports (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL REFERENCES runs(id),
+          generation INTEGER NOT NULL,
+          stage TEXT NOT NULL,
+          summary TEXT NOT NULL,
+          next_step TEXT,
+          blocker TEXT,
+          outcome TEXT,
+          reported_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS agent_status_events_run_sequence
+          ON agent_status_events (run_id, generation, sequence);
+        CREATE INDEX IF NOT EXISTS agent_task_reports_run_time
+          ON agent_task_reports (run_id, generation, reported_at);
+
+        PRAGMA user_version = 2;
       `);
     });
   }

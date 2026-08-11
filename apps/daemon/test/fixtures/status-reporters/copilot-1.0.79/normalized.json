@@ -1,0 +1,37 @@
+[
+  { "event": "session.ready", "sessionId": "copilot-session" },
+  { "event": "turn.started", "sessionId": "copilot-session" },
+  {
+    "event": "tool.started",
+    "sessionId": "copilot-session",
+    "operationId": "<stable-tool>",
+    "data": { "tool": "bash" }
+  },
+  {
+    "event": "tool.finished",
+    "sessionId": "copilot-session",
+    "operationId": "<stable-tool>",
+    "data": { "tool": "bash" }
+  },
+  { "event": "wait.closed", "sessionId": "copilot-session", "requestId": "<stable-permission>" },
+  {
+    "event": "wait.opened",
+    "sessionId": "copilot-session",
+    "requestId": "<stable-permission>",
+    "data": {
+      "waitKind": "permission",
+      "summary": "Tool permission required",
+      "replyChannel": "terminal"
+    }
+  },
+  {
+    "event": "tool.failed",
+    "sessionId": "copilot-session",
+    "operationId": "<stable-tool>",
+    "data": { "tool": "bash" }
+  },
+  { "event": "wait.closed", "sessionId": "copilot-session", "requestId": "<stable-permission>" },
+  { "event": "wait.closed", "sessionId": "copilot-session", "requestId": "<stable-permission>" },
+  { "event": "turn.settled", "sessionId": "copilot-session", "data": { "activeCount": 0 } },
+  { "event": "session.ended", "sessionId": "copilot-session" }
+]

@@ -108,6 +108,7 @@ async function start(): Promise<void> {
   const mcpOperatorToken = process.env.NANASA_MCP_OPERATOR_TOKEN;
   const mcpEndpointUrl =
     process.env.NANASA_MCP_URL ?? `http://${hostForUrl(host)}:${port}${mcpPath}`;
+  const statusEndpointUrl = `http://${hostForUrl(host)}:${port}/api/agent-status/events`;
   validateMcpStartupConfiguration({
     enabled: mcpEnabled,
     listenHost: host,
@@ -129,6 +130,7 @@ async function start(): Promise<void> {
     logger: true,
     tmuxServerName,
     ttydPath,
+    statusEndpointUrl,
     servePortal,
     portalAssetsPath,
     mcp: {

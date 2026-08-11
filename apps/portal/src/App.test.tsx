@@ -525,6 +525,134 @@ describe("portal application", () => {
     },
   );
 
+  it("renders semantic status, progress context, and attention independently of run controls", async () => {
+    const user = userEvent.setup();
+    const run: AgentRun = {
+      id: "run-waiting",
+      groupId: "group-backend",
+      memberId: "builder",
+      agentProfileId: profile.id,
+      generation: 1,
+      status: "running",
+      desiredState: "running",
+      recoveryPhase: "idle",
+      recoveryAttempts: 0,
+      startedAt: timestamp,
+    };
+    render(
+      <GroupTree
+        snapshot={{
+          ...snapshot,
+          memberships: memberships.slice(0, 1),
+          runs: [run],
+          agentStatuses: [
+            {
+              groupId: "group-backend",
+              memberId: "builder",
+              alias: "Builder",
+              agentType: "copilot",
+              runId: run.id,
+              generation: 1,
+              runStatus: "running",
+              state: "waiting",
+              phase: "permission",
+              outcome: "unknown",
+              confidence: "high",
+              attention: "decision_required",
+              observedAt: timestamp,
+              stateChangedAt: timestamp,
+              progressStage: "validation",
+              lastProgressSummary: "Implementation complete",
+            },
+          ],
+        }}
+        config={config}
+        selectedGroupId="group-backend"
+        unreadCounts={new Map()}
+        onSelectGroup={vi.fn()}
+        onCreateGroup={vi.fn()}
+        onRenameGroup={vi.fn()}
+        onDeleteGroup={vi.fn()}
+        onAddAgent={vi.fn()}
+        onRenameAgent={vi.fn()}
+        onRemoveAgent={vi.fn()}
+        onStartRun={vi.fn()}
+        onStopRun={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText(/^waiting · permission · decision required · validation/),
+    ).toHaveAttribute("title", "Implementation complete");
+    expect(screen.getByLabelText("Builder needs decision required")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop Builder" })).toBeInTheDocument();
+
+    const memberButton = screen.getByText("builder").closest("button");
+    expect(memberButton).not.toBeNull();
+    await user.hover(memberButton as HTMLButtonElement);
+    let tooltip = screen.getByRole("tooltip");
+    expect(within(tooltip).getByText("decision required")).toBeInTheDocument();
+    expect(within(tooltip).getByText("Implementation complete")).toBeInTheDocument();
+
+    await user.unhover(memberButton as HTMLButtonElement);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    fireEvent.focus(memberButton as HTMLButtonElement);
+    tooltip = screen.getByRole("tooltip");
+    expect(within(tooltip).getByText("builder")).toBeInTheDocument();
+  });
+
+  it("counts explicit input separately from ordinary waiting", async () => {
+    const client = createClient();
+    vi.mocked(client.loadSnapshot).mockResolvedValue({
+      ...snapshot,
+      agentStatuses: [
+        {
+          groupId: "group-backend",
+          memberId: "builder",
+          alias: "Builder",
+          agentType: "copilot",
+          runId: "run-builder",
+          generation: 1,
+          runStatus: "running",
+          state: "waiting",
+          phase: "question",
+          outcome: "unknown",
+          confidence: "high",
+          attention: "input_required",
+          observedAt: timestamp,
+          stateChangedAt: timestamp,
+        },
+        {
+          groupId: "group-backend",
+          memberId: "reviewer",
+          alias: "Reviewer",
+          agentType: "copilot",
+          runId: "run-reviewer",
+          generation: 1,
+          runStatus: "running",
+          state: "waiting",
+          phase: "settled",
+          outcome: "unknown",
+          confidence: "high",
+          attention: "none",
+          observedAt: timestamp,
+          stateChangedAt: timestamp,
+        },
+      ],
+    });
+
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+
+    expect(screen.getByText("2 waiting")).toBeInTheDocument();
+    expect(screen.getByText("1 needs attention")).toHaveAttribute(
+      "title",
+      "Builder: input required",
+    );
+    expect(screen.getByText(/^waiting · question · input required/)).toBeInTheDocument();
+    expect(screen.getByText(/^waiting · settled/)).toBeInTheDocument();
+  });
+
   it("offers Start for a normally stopped desired-stopped run", () => {
     const stoppedRun: AgentRun = {
       id: "run-stopped",

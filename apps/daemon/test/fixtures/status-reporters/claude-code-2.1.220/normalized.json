@@ -1,0 +1,37 @@
+[
+  { "event": "session.ready", "sessionId": "claude-session" },
+  { "event": "turn.started", "sessionId": "claude-session" },
+  {
+    "event": "tool.started",
+    "sessionId": "claude-session",
+    "operationId": "claude-tool-1",
+    "data": { "tool": "Bash" }
+  },
+  {
+    "event": "tool.finished",
+    "sessionId": "claude-session",
+    "operationId": "claude-tool-1",
+    "data": { "tool": "Bash" }
+  },
+  { "event": "wait.closed", "sessionId": "claude-session", "requestId": "<stable-permission>" },
+  {
+    "event": "wait.opened",
+    "sessionId": "claude-session",
+    "requestId": "<stable-permission>",
+    "data": {
+      "waitKind": "permission",
+      "summary": "Tool permission required",
+      "replyChannel": "terminal"
+    }
+  },
+  {
+    "event": "tool.finished",
+    "sessionId": "claude-session",
+    "operationId": "claude-tool-2",
+    "data": { "tool": "Bash" }
+  },
+  { "event": "wait.closed", "sessionId": "claude-session", "requestId": "<stable-permission>" },
+  { "event": "wait.closed", "sessionId": "claude-session", "requestId": "<stable-permission>" },
+  { "event": "turn.settled", "sessionId": "claude-session", "data": { "activeCount": 0 } },
+  { "event": "session.ended", "sessionId": "claude-session" }
+]

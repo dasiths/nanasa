@@ -11,6 +11,11 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentProfile, GroupMembership } from "@nanasa/contracts";
+import {
+  HOOK_STATUS_REPORTER_SOURCE,
+  OPENCODE_STATUS_REPORTER_SOURCE,
+  PI_STATUS_REPORTER_SOURCE,
+} from "./status-reporter-assets.js";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -24,6 +29,7 @@ export interface AgentRuntimeProvisionerOptions {
   agentsDirectory: string;
   mcpEndpointUrl: string;
   piExtensionPath?: string;
+  copilotHomePath?: string;
   claudeCredentialsPath?: string;
   piAuthPath?: string;
 }
@@ -49,6 +55,30 @@ function writePrivateJson(path: string, value: unknown): void {
   });
   renameSync(temporaryPath, path);
   chmodSync(path, FILE_MODE);
+}
+
+function writePrivateText(path: string, value: string): void {
+  ensurePrivateDirectory(dirname(path));
+  const temporaryPath = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporaryPath, value.endsWith("\n") ? value : `${value}\n`, {
+    encoding: "utf8",
+    mode: FILE_MODE,
+  });
+  renameSync(temporaryPath, path);
+  chmodSync(path, FILE_MODE);
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function commandHook(scriptPath: string, source: "claude-code" | "copilot", eventName: string) {
+  return {
+    type: "command",
+    command: process.execPath,
+    args: [scriptPath, source, eventName],
+    timeout: 2,
+  };
 }
 
 function linkCredential(source: string, target: string): void {
@@ -77,6 +107,10 @@ export class AgentRuntimeProvisioner {
 
     switch (profile.kind) {
       case "copilot": {
+        const copilotHome = this.#options.copilotHomePath ?? join(homedir(), ".copilot");
+        const hooksDirectory = join(copilotHome, "hooks");
+        const reporterPath = join(hooksDirectory, "nanasa-status-hook-v1.mjs");
+        writePrivateText(reporterPath, HOOK_STATUS_REPORTER_SOURCE);
         const configPath = join(root, "copilot", "mcp-config.json");
         writePrivateJson(configPath, {
           mcpServers: {
@@ -88,6 +122,27 @@ export class AgentRuntimeProvisioner {
             },
           },
         });
+        const hook = (eventName: string, matcher?: string) => ({
+          type: "command",
+          ...(matcher === undefined ? {} : { matcher }),
+          bash: `${shellQuote(process.execPath)} ${shellQuote(reporterPath)} copilot ${shellQuote(eventName)}`,
+          timeoutSec: 2,
+        });
+        writePrivateJson(join(hooksDirectory, "nanasa-status-v1.json"), {
+          version: 1,
+          hooks: {
+            sessionStart: [hook("sessionStart")],
+            userPromptSubmitted: [hook("userPromptSubmitted")],
+            preToolUse: [hook("preToolUse", ".*")],
+            permissionRequest: [hook("permissionRequest", ".*")],
+            postToolUse: [hook("postToolUse", ".*")],
+            postToolUseFailure: [hook("postToolUseFailure", ".*")],
+            agentStop: [hook("agentStop")],
+            errorOccurred: [hook("errorOccurred")],
+            preCompact: [hook("preCompact")],
+            sessionEnd: [hook("sessionEnd")],
+          },
+        });
         return {
           command: [...command, "--additional-mcp-config", `@${configPath}`],
           environment: {},
@@ -96,6 +151,8 @@ export class AgentRuntimeProvisioner {
       case "claude-code": {
         const configDirectory = join(root, "claude");
         ensurePrivateDirectory(configDirectory);
+        const reporterPath = join(configDirectory, "nanasa-status-hook.mjs");
+        writePrivateText(reporterPath, HOOK_STATUS_REPORTER_SOURCE);
         writePrivateJson(join(configDirectory, ".claude.json"), {
           mcpServers: {
             nanasa: {
@@ -104,6 +161,27 @@ export class AgentRuntimeProvisioner {
               headers: { Authorization: "Bearer ${NANASA_MCP_TOKEN}" },
               alwaysLoad: true,
             },
+          },
+        });
+        const hook = (eventName: string, matcher?: string) => ({
+          ...(matcher === undefined ? {} : { matcher }),
+          hooks: [commandHook(reporterPath, "claude-code", eventName)],
+        });
+        writePrivateJson(join(configDirectory, "settings.json"), {
+          hooks: {
+            SessionStart: [hook("SessionStart")],
+            UserPromptSubmit: [hook("UserPromptSubmit")],
+            PreToolUse: [hook("PreToolUse", "*")],
+            PermissionRequest: [hook("PermissionRequest", "*")],
+            PostToolUse: [hook("PostToolUse", "*")],
+            PostToolUseFailure: [hook("PostToolUseFailure", "*")],
+            Stop: [hook("Stop")],
+            StopFailure: [hook("StopFailure")],
+            PreCompact: [hook("PreCompact")],
+            PostCompact: [hook("PostCompact")],
+            Elicitation: [hook("Elicitation")],
+            ElicitationResult: [hook("ElicitationResult")],
+            SessionEnd: [hook("SessionEnd")],
           },
         });
         linkCredential(
@@ -138,13 +216,21 @@ export class AgentRuntimeProvisioner {
         );
         const extensionPath =
           this.#options.piExtensionPath ?? fileURLToPath(import.meta.resolve("pi-mcp-adapter"));
+        const statusExtensionPath = join(agentDirectory, "nanasa-status-extension.mjs");
+        writePrivateText(statusExtensionPath, PI_STATUS_REPORTER_SOURCE);
         return {
-          command: [...command, "--extension", extensionPath],
+          command: [...command, "--extension", extensionPath, "--extension", statusExtensionPath],
           environment: { PI_CODING_AGENT_DIR: agentDirectory },
         };
       }
       case "opencode": {
-        const configPath = join(root, "opencode", "opencode.json");
+        const opencodeDirectory = join(root, "opencode");
+        const configPath = join(opencodeDirectory, "opencode.json");
+        const configDirectory = join(opencodeDirectory, "nanasa-config");
+        writePrivateText(
+          join(configDirectory, "plugins", "nanasa-status.mjs"),
+          OPENCODE_STATUS_REPORTER_SOURCE,
+        );
         writePrivateJson(configPath, {
           $schema: "https://opencode.ai/config.json",
           mcp: {
@@ -159,7 +245,7 @@ export class AgentRuntimeProvisioner {
         });
         return {
           command,
-          environment: { OPENCODE_CONFIG: configPath },
+          environment: { OPENCODE_CONFIG: configPath, OPENCODE_CONFIG_DIR: configDirectory },
         };
       }
     }

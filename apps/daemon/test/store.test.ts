@@ -693,7 +693,19 @@ describe("NanasaStore schema migration", () => {
     const inspected = new DatabaseSync(databasePath);
     expect(
       (inspected.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
-    ).toBe(1);
+    ).toBe(2);
+    expect(
+      inspected
+        .prepare(
+          `SELECT name FROM sqlite_master
+           WHERE type = 'table' AND name IN (
+             'agent_status_events', 'agent_status_current', 'agent_task_reports'
+           )
+           ORDER BY name`,
+        )
+        .all()
+        .map((row) => (row as { name: string }).name),
+    ).toEqual(["agent_status_current", "agent_status_events", "agent_task_reports"]);
     expect(
       inspected
         .prepare("SELECT adapter, capabilities_json FROM agent_profiles WHERE id = ?")

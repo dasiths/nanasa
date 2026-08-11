@@ -1,0 +1,29 @@
+[
+  { "event": "session.ready", "sessionId": "opencode-session" },
+  { "event": "turn.started", "sessionId": "opencode-session" },
+  {
+    "event": "tool.started",
+    "sessionId": "opencode-session",
+    "operationId": "opencode-tool-1",
+    "data": { "tool": "bash" }
+  },
+  {
+    "event": "wait.opened",
+    "sessionId": "opencode-session",
+    "requestId": "opencode-permission-1",
+    "data": {
+      "waitKind": "permission",
+      "summary": "Tool permission required",
+      "replyChannel": "terminal"
+    }
+  },
+  { "event": "wait.closed", "sessionId": "opencode-session", "requestId": "opencode-permission-1" },
+  {
+    "event": "tool.finished",
+    "sessionId": "opencode-session",
+    "operationId": "opencode-tool-1",
+    "data": { "tool": "bash" }
+  },
+  { "event": "turn.settled", "sessionId": "opencode-session" },
+  { "event": "session.ended", "sessionId": "opencode-session" }
+]

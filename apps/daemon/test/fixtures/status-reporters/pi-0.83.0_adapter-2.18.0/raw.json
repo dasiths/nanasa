@@ -1,0 +1,13 @@
+[
+  { "event": "session_start", "sessionId": "pi-session" },
+  { "event": "agent_start" },
+  { "event": "tool_execution_start", "toolCallId": "pi-tool-1", "toolName": "bash" },
+  {
+    "event": "tool_execution_end",
+    "toolCallId": "pi-tool-1",
+    "toolName": "bash",
+    "isError": false
+  },
+  { "event": "agent_settled" },
+  { "event": "session_shutdown" }
+]

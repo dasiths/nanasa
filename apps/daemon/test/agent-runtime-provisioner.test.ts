@@ -66,10 +66,12 @@ describe("AgentRuntimeProvisioner", () => {
     const provisioner = new AgentRuntimeProvisioner({
       agentsDirectory: join(root, "agents"),
       mcpEndpointUrl: "http://127.0.0.1:3210/mcp",
+      copilotHomePath: join(root, "copilot-home"),
     });
 
     const configured = provisioner.provision(membership(), profile("copilot"));
     const configPath = join(root, "agents", "membership_stable", "copilot", "mcp-config.json");
+    const hooksDirectory = join(root, "copilot-home", "hooks");
 
     expect(configured).toEqual({
       command: ["copilot", "--additional-mcp-config", `@${configPath}`],
@@ -83,6 +85,24 @@ describe("AgentRuntimeProvisioner", () => {
         },
       },
     });
+    expect(readJson(join(hooksDirectory, "nanasa-status-v1.json"))).toMatchObject({
+      version: 1,
+      hooks: {
+        sessionStart: expect.any(Array),
+        preToolUse: expect.any(Array),
+        permissionRequest: expect.any(Array),
+        agentStop: expect.any(Array),
+        sessionEnd: expect.any(Array),
+      },
+    });
+    expect(readJson(join(hooksDirectory, "nanasa-status-v1.json"))).toMatchObject({
+      hooks: {
+        sessionStart: [{ bash: expect.stringMatching(/copilot 'sessionStart'$/) }],
+      },
+    });
+    expect(readFileSync(join(hooksDirectory, "nanasa-status-hook-v1.mjs"), "utf8")).not.toContain(
+      "NANASA_MCP_TOKEN=",
+    );
   });
 
   it("uses an isolated Claude config for direct and wrapped launch commands", () => {
@@ -112,6 +132,32 @@ describe("AgentRuntimeProvisioner", () => {
         },
       },
     });
+    expect(readJson(join(configDirectory, "settings.json"))).toMatchObject({
+      hooks: {
+        SessionStart: expect.any(Array),
+        PreToolUse: expect.any(Array),
+        PermissionRequest: expect.any(Array),
+        Stop: expect.any(Array),
+        SessionEnd: expect.any(Array),
+      },
+    });
+    expect(readJson(join(configDirectory, "settings.json"))).toMatchObject({
+      hooks: {
+        SessionStart: [
+          {
+            hooks: [
+              {
+                args: [
+                  expect.stringContaining("nanasa-status-hook.mjs"),
+                  "claude-code",
+                  "SessionStart",
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
     expect(lstatSync(join(configDirectory, ".credentials.json")).isSymbolicLink()).toBe(true);
   });
 
@@ -128,9 +174,16 @@ describe("AgentRuntimeProvisioner", () => {
 
     const configured = provisioner.provision(membership(), profile("pi"));
     const agentDirectory = join(root, "agents", "membership_stable", "pi");
+    const statusExtensionPath = join(agentDirectory, "nanasa-status-extension.mjs");
 
     expect(configured).toEqual({
-      command: ["pi", "--extension", "/runtime/pi-mcp-adapter/index.ts"],
+      command: [
+        "pi",
+        "--extension",
+        "/runtime/pi-mcp-adapter/index.ts",
+        "--extension",
+        statusExtensionPath,
+      ],
       environment: { PI_CODING_AGENT_DIR: agentDirectory },
     });
     expect(readJson(join(agentDirectory, "mcp.json"))).toMatchObject({
@@ -143,6 +196,8 @@ describe("AgentRuntimeProvisioner", () => {
         },
       },
     });
+    expect(readFileSync(statusExtensionPath, "utf8")).toContain('pi.on("agent_settled"');
+    expect(statSync(statusExtensionPath).mode & 0o777).toBe(0o600);
     expect(lstatSync(join(agentDirectory, "auth.json")).isSymbolicLink()).toBe(true);
   });
 
@@ -154,11 +209,13 @@ describe("AgentRuntimeProvisioner", () => {
     });
 
     const configured = provisioner.provision(membership(), profile("opencode"));
-    const configPath = join(root, "agents", "membership_stable", "opencode", "opencode.json");
+    const opencodeDirectory = join(root, "agents", "membership_stable", "opencode");
+    const configPath = join(opencodeDirectory, "opencode.json");
+    const configDirectory = join(opencodeDirectory, "nanasa-config");
 
     expect(configured).toEqual({
       command: ["opencode"],
-      environment: { OPENCODE_CONFIG: configPath },
+      environment: { OPENCODE_CONFIG: configPath, OPENCODE_CONFIG_DIR: configDirectory },
     });
     expect(readJson(configPath)).toMatchObject({
       mcp: {
@@ -169,6 +226,9 @@ describe("AgentRuntimeProvisioner", () => {
         },
       },
     });
+    expect(readFileSync(join(configDirectory, "plugins", "nanasa-status.mjs"), "utf8")).toContain(
+      "session.status",
+    );
   });
 
   it("reuses private membership directories without persisting a capability", () => {
@@ -177,6 +237,7 @@ describe("AgentRuntimeProvisioner", () => {
     const provisioner = new AgentRuntimeProvisioner({
       agentsDirectory,
       mcpEndpointUrl: "http://127.0.0.1:3210/mcp",
+      copilotHomePath: join(root, "copilot-home"),
     });
 
     provisioner.provision(membership(), profile("copilot"));
@@ -199,6 +260,7 @@ describe("AgentRuntimeProvisioner", () => {
     const provisioner = new AgentRuntimeProvisioner({
       agentsDirectory,
       mcpEndpointUrl: "http://127.0.0.1:3210/mcp",
+      copilotHomePath: join(root, "copilot-home"),
     });
 
     expect(() => provisioner.provision(membership(), profile("copilot"))).toThrow(

@@ -1,0 +1,18 @@
+[
+  { "event": "session.ready", "sessionId": "pi-session" },
+  { "event": "turn.started", "sessionId": "pi-session" },
+  {
+    "event": "tool.started",
+    "sessionId": "pi-session",
+    "operationId": "pi-tool-1",
+    "data": { "tool": "bash" }
+  },
+  {
+    "event": "tool.finished",
+    "sessionId": "pi-session",
+    "operationId": "pi-tool-1",
+    "data": { "tool": "bash" }
+  },
+  { "event": "turn.settled", "sessionId": "pi-session" },
+  { "event": "session.ended", "sessionId": "pi-session" }
+]

@@ -19,6 +19,7 @@ export interface RunRuntimeCoordinatorOptions {
 }
 
 const RECOVERY_TERMINAL_SIZE = { cols: 120, rows: 40 } as const;
+const STATUS_PROBE_INTERVAL_MS = 15_000;
 
 export class RunRuntimeCoordinator {
   readonly #store: NanasaStore;
@@ -31,6 +32,7 @@ export class RunRuntimeCoordinator {
   readonly #now: () => Date;
   #pending: Promise<void> = Promise.resolve();
   #closing = false;
+  #lastStatusProbeAt = 0;
 
   public constructor(
     store: NanasaStore,
@@ -179,6 +181,20 @@ export class RunRuntimeCoordinator {
     return this.#serialize(async () => {
       await this.#runtime.reconcile(markOrphanedStarting);
       const afterTmux = this.#store.listActiveRuns();
+      const probeNow = this.#now();
+      if (probeNow.getTime() - this.#lastStatusProbeAt >= STATUS_PROBE_INTERVAL_MS) {
+        const probeTime = probeNow.toISOString();
+        this.#lastStatusProbeAt = probeNow.getTime();
+        for (const run of afterTmux.filter((candidate) =>
+          ["starting", "running"].includes(candidate.status),
+        )) {
+          this.#store.recordProcessStatus(run.id, {
+            event: "lease.probed",
+            eventId: `lease-probe-${run.generation}-${probeTime}`,
+            observedAt: probeTime,
+          });
+        }
+      }
       for (const run of afterTmux.filter((candidate) => candidate.status === "stopping")) {
         await this.#supervisor.stop(run.id);
         await this.#runtime.removeViewSession(run.id);

@@ -8,6 +8,7 @@ import { MessageWorkspace } from "./components/message-workspace.js";
 import { TerminalWorkspace } from "./components/terminal-workspace.js";
 import { useAppliedTheme, usePortalPreferences } from "./hooks/use-portal-preferences.js";
 import { useDomainEvents, usePortalSnapshot } from "./hooks/use-portal-snapshot.js";
+import { memberStatusView } from "./member-status.js";
 
 export interface AppProps {
   client?: PortalClient;
@@ -41,6 +42,18 @@ export function App({ client = api }: AppProps) {
   const members = groupMemberships.filter((member) => member.state === "active");
   const runs = snapshot?.runs.filter((run) => run.groupId === selectedGroupId) ?? [];
   const runningCount = runs.filter((run) => run.status === "running").length;
+  const memberStatusViews = members.map((member) =>
+    memberStatusView(snapshot?.agentStatuses, runs, member),
+  );
+  const workingCount = memberStatusViews.filter(({ label }) => label === "working").length;
+  const waitingCount = memberStatusViews.filter(({ label }) => label === "waiting").length;
+  const attentionStatuses = memberStatusViews.flatMap(({ status: memberStatus }) =>
+    memberStatus !== undefined && memberStatus.attention !== "none" ? [memberStatus] : [],
+  );
+  const attentionCount = attentionStatuses.length;
+  const attentionSummary = attentionStatuses
+    .map((memberStatus) => `${memberStatus.alias}: ${memberStatus.attention.replaceAll("_", " ")}`)
+    .join("; ");
   const selectedMessageIds = new Set(
     snapshot?.messages
       .filter((message) => message.groupId === selectedGroupId)
@@ -252,8 +265,21 @@ export function App({ client = api }: AppProps) {
               {selectedGroup?.name ?? "No group selected"}
             </h1>
             {selectedGroup !== undefined && (
-              <p>
-                {members.length} members <span aria-hidden="true">/</span> {runningCount} running
+              <p className="group-status-summary">
+                <span>{members.length} members</span>
+                <span>{runningCount} terminals</span>
+                {memberStatusViews.length > 0 && (
+                  <>
+                    <span>{workingCount} working</span>
+                    <span>{waitingCount} waiting</span>
+                    <span
+                      className={attentionCount > 0 ? "needs-attention" : undefined}
+                      title={attentionSummary || undefined}
+                    >
+                      {attentionCount} {attentionCount === 1 ? "needs" : "need"} attention
+                    </span>
+                  </>
+                )}
               </p>
             )}
           </div>
