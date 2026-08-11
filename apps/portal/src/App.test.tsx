@@ -39,6 +39,7 @@ const config: NanasaConfig = {
       description: "Reviews changes without modifying them",
       instructions: [],
       permissionPolicy: "read-only",
+      presentation: { icon: "shield-check", color: "amber", shortName: "Review" },
     },
   },
   agentProfiles: {},
@@ -181,9 +182,14 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     }),
     createAgentProfile: vi.fn().mockResolvedValue(profile),
     updateAgentProfile: vi.fn().mockResolvedValue(profile),
+    updateRolePresentation: vi.fn().mockResolvedValue(config.roles.reviewer),
     addMembership: vi.fn().mockResolvedValue(memberships[0]),
     updateMembership: vi.fn().mockResolvedValue(memberships[0]),
     removeMembership: vi.fn().mockResolvedValue({ ...memberships[0], state: "removed" }),
+    reorderMemberships: vi.fn().mockResolvedValue({
+      groupId: "group-backend",
+      memberIds: ["builder", "reviewer"],
+    }),
     startRun: vi.fn().mockResolvedValue(run),
     startAllRuns: vi.fn().mockResolvedValue({ groupId: "group-backend", outcomes: [] }),
     stopRun: vi.fn().mockResolvedValue(run),
@@ -383,6 +389,7 @@ describe("portal application", () => {
     const tree = screen.getByRole("navigation", { name: "Group tree" });
     expect(within(tree).getByText("Backend")).toBeVisible();
     expect(within(tree).getByText("Builder")).toBeVisible();
+    expect(within(tree).getByLabelText("Role Reviewer")).toHaveClass("role-color-amber");
 
     const groupTrigger = screen.getByRole("button", { name: "Actions for group Backend" });
     groupTrigger.focus();
@@ -414,6 +421,51 @@ describe("portal application", () => {
     );
     await user.keyboard("{ArrowUp}");
     expect(within(agentMenu).getByRole("menuitem", { name: "Remove agent Builder" })).toHaveFocus();
+  });
+
+  it("updates role presentation from the global role settings dialog", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    await user.click(screen.getByRole("button", { name: "Role settings" }));
+    const dialog = screen.getByRole("dialog", { name: "Role presentation" });
+    await user.selectOptions(within(dialog).getByLabelText("Icon"), "scan-search");
+    await user.selectOptions(within(dialog).getByLabelText("Color"), "rose");
+    await user.clear(within(dialog).getByLabelText("Compact name"));
+    await user.type(within(dialog).getByLabelText("Compact name"), "Inspect");
+    await user.click(within(dialog).getByRole("button", { name: "Save Reviewer" }));
+
+    await waitFor(() =>
+      expect(client.updateRolePresentation).toHaveBeenCalledWith("reviewer", {
+        icon: "scan-search",
+        color: "rose",
+        shortName: "Inspect",
+      }),
+    );
+  });
+
+  it("reorders agents with complete group permutations", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    await user.click(screen.getByRole("button", { name: "Actions for agent Builder" }));
+    const builderMenu = screen.getByRole("menu", { name: "Actions for agent Builder" });
+    expect(within(builderMenu).getByRole("menuitem", { name: "Move Builder up" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+
+    await user.click(screen.getByRole("button", { name: "Actions for agent Reviewer" }));
+    const reviewerMenu = screen.getByRole("menu", { name: "Actions for agent Reviewer" });
+    await user.click(within(reviewerMenu).getByRole("menuitem", { name: "Move Reviewer up" }));
+
+    await waitFor(() =>
+      expect(client.reorderMemberships).toHaveBeenCalledWith("group-backend", {
+        memberIds: ["reviewer", "builder"],
+      }),
+    );
   });
 
   it("requires a dialog confirmation before removing a membership", async () => {
@@ -872,9 +924,8 @@ describe("portal application", () => {
     ).toBeInTheDocument();
     await user.keyboard("{Escape}");
 
-    const memberButton = screen.getByText("builder").closest("button");
-    expect(memberButton).not.toBeNull();
-    await user.click(memberButton as HTMLButtonElement);
+    const memberButton = screen.getByRole("button", { name: "View details for Builder" });
+    await user.click(memberButton);
     const details = screen.getByRole("dialog", { name: "Agent details for Builder" });
     await waitFor(() => expect(details).toHaveFocus());
     expect(within(details).getByText("decision required")).toBeInTheDocument();
@@ -971,6 +1022,8 @@ describe("portal application", () => {
         onStopRun={vi.fn()}
       />,
     );
+
+    expect(screen.getByLabelText("Unassigned role")).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "Actions for agent Builder" }));
     expect(

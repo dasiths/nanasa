@@ -4,14 +4,23 @@ roles:
   project-manager:
     name: Project Manager
     description: Coordinates assignments, dependencies, decisions, and completion
+    presentation:
+      icon: clipboard-list
+      color: teal
     permissionPolicy: inherit
   implementor:
     name: Implementor
     description: Implements assigned changes and validates the result
+    presentation:
+      icon: hammer
+      color: blue
     permissionPolicy: inherit
   reviewer:
     name: Reviewer
     description: Reviews changes and reports prioritized findings without modifying files
+    presentation:
+      icon: shield-check
+      color: amber
     permissionPolicy: read-only
 agentTypes:
   copilot:

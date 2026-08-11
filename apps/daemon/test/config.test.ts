@@ -127,6 +127,7 @@ groups:
         agentProfileId: profile_one
         alias: Reviewer
         instructions: [.nanasa/instructions/assignment.md]
+        order: 2
 `);
     const instructionDirectory = join(repository, ".nanasa", "instructions");
     mkdirSync(instructionDirectory);
@@ -154,6 +155,7 @@ groups:
 
     expect(first.roleId).toBe("reviewer");
     expect(first.role?.permissionPolicy).toBe("read-only");
+    expect(loaded.config.groups.group_one?.memberships.membership_one?.order).toBe(2);
     expect(first.sources.map((source) => source.scope)).toEqual([
       "builtin",
       "builtin",

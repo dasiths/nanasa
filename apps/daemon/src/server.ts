@@ -11,6 +11,9 @@ import {
   CreateGroupCommandSchema,
   DeleteGroupResultSchema,
   InterruptAgentRunCommandSchema,
+  ReorderGroupMembershipsCommandSchema,
+  ReorderGroupMembershipsResultSchema,
+  RoleDefinitionSchema,
   StartAgentRunCommandSchema,
   StartGroupRunsCommandSchema,
   StartGroupRunsResultSchema,
@@ -19,6 +22,7 @@ import {
   UpdateAgentProfileCommandSchema,
   UpdateGroupCommandSchema,
   UpdateGroupMembershipCommandSchema,
+  UpdateRolePresentationCommandSchema,
 } from "@nanasa/contracts";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 import { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
@@ -349,6 +353,15 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     ),
   );
 
+  app.patch<{ Params: { roleId: string } }>("/api/roles/:roleId/presentation", async (request) =>
+    RoleDefinitionSchema.parse(
+      await topology.updateRolePresentation(
+        request.params.roleId,
+        UpdateRolePresentationCommandSchema.parse(request.body),
+      ),
+    ),
+  );
+
   app.post<{ Params: { groupId: string } }>(
     "/api/groups/:groupId/memberships",
     async (request, reply) => {
@@ -378,6 +391,17 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         request.params.groupId,
         request.params.memberId,
         UpdateGroupMembershipCommandSchema.parse(request.body),
+      ),
+  );
+
+  app.put<{ Params: { groupId: string } }>(
+    "/api/groups/:groupId/membership-order",
+    async (request) =>
+      ReorderGroupMembershipsResultSchema.parse(
+        await topology.reorderMemberships(
+          request.params.groupId,
+          ReorderGroupMembershipsCommandSchema.parse(request.body),
+        ),
       ),
   );
 

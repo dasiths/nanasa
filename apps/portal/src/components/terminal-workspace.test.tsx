@@ -2,10 +2,11 @@ import type {
   AgentProfile,
   AgentRun,
   GroupMembership,
+  NanasaConfig,
   PortalSnapshot,
   TerminalEndpointStatus,
 } from "@nanasa/contracts";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { PortalClient } from "../api.js";
@@ -18,6 +19,21 @@ const endpointPaths = {
   "run-reviewer": "/terminals/22222222222222222222222222222222/",
 } as const;
 
+const roles = {
+  implementor: {
+    name: "Implementor",
+    instructions: [],
+    permissionPolicy: "inherit",
+    presentation: { icon: "hammer", color: "blue", shortName: "Build" },
+  },
+  reviewer: {
+    name: "Reviewer",
+    instructions: [],
+    permissionPolicy: "read-only",
+    presentation: { icon: "shield-check", color: "amber", shortName: "Review" },
+  },
+} satisfies NanasaConfig["roles"];
+
 const members: GroupMembership[] = [
   {
     id: "membership-builder",
@@ -25,6 +41,7 @@ const members: GroupMembership[] = [
     memberId: "builder",
     agentProfileId: "profile-copilot",
     alias: "Builder",
+    roleId: "implementor",
     state: "active",
     joinedAt: timestamp,
   },
@@ -34,6 +51,7 @@ const members: GroupMembership[] = [
     memberId: "reviewer",
     agentProfileId: "profile-copilot",
     alias: "Reviewer",
+    roleId: "reviewer",
     state: "active",
     joinedAt: timestamp,
   },
@@ -73,9 +91,11 @@ function createClient(
     deleteGroup: vi.fn(),
     createAgentProfile: vi.fn<() => Promise<AgentProfile>>(),
     updateAgentProfile: vi.fn(),
+    updateRolePresentation: vi.fn(),
     addMembership: vi.fn(),
     updateMembership: vi.fn(),
     removeMembership: vi.fn(),
+    reorderMemberships: vi.fn(),
     startRun: vi.fn(),
     startAllRuns: vi.fn(),
     stopRun: vi.fn(),
@@ -100,6 +120,7 @@ describe("TerminalWorkspace", () => {
       <TerminalWorkspace
         client={client}
         members={members}
+        roles={roles}
         runs={runs}
         agentStatuses={[
           {
@@ -124,14 +145,32 @@ describe("TerminalWorkspace", () => {
 
     await screen.findByTitle("Builder (builder) ttyd terminal");
     const builderTab = screen.getByRole("tab", { name: /Builder/ });
+    expect(builderTab).toHaveClass("role-color-blue");
     expect(builderTab.querySelector(".status-dot")).toHaveClass("status-waiting");
     expect(builderTab.querySelector(".status-dot")).not.toHaveClass("status-running");
+    expect(within(builderTab).getByLabelText("Role Implementor")).toHaveTextContent("Build");
+    expect(
+      within(screen.getByRole("region", { name: "Builder (builder) terminal" })).getByLabelText(
+        "Role Implementor",
+      ),
+    ).toHaveTextContent("Build");
+    expect(screen.getByRole("region", { name: "Builder (builder) terminal" })).toHaveClass(
+      "role-color-blue",
+    );
+    const titleBar = screen
+      .getByRole("region", { name: "Builder (builder) terminal" })
+      .querySelector(".terminal-statusbar");
+    const memberId = within(titleBar as HTMLElement).getByLabelText("Member ID builder");
+    expect(memberId).toHaveTextContent("builder");
+    expect(memberId).toHaveAttribute("title", "builder");
+    expect(memberId.parentElement).toHaveClass("terminal-title-tools");
+    expect(titleBar?.lastElementChild).toBe(memberId.parentElement);
     expect(container.querySelector(".connection-ready")).toBeInTheDocument();
   });
 
   it("mounts only the selected run iframe in tabs", async () => {
     const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
-    render(<TerminalWorkspace client={client} members={members} runs={runs} />);
+    render(<TerminalWorkspace client={client} members={members} roles={roles} runs={runs} />);
 
     const builderFrame = await screen.findByTitle("Builder (builder) ttyd terminal");
     expect(screen.getAllByTitle(/ttyd terminal$/)).toHaveLength(1);
@@ -145,7 +184,7 @@ describe("TerminalWorkspace", () => {
     expect(reviewerFrame).toHaveAttribute("src", endpointPaths["run-reviewer"]);
   });
 
-  it("copies member IDs from terminal tabs", async () => {
+  it("copies member IDs from terminal title bars instead of tabs", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -154,14 +193,24 @@ describe("TerminalWorkspace", () => {
     const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
     render(<TerminalWorkspace client={client} members={members} runs={runs} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy member ID builder" }));
+    expect(
+      within(screen.getByRole("tablist", { name: "Agent terminals" })).queryByRole("button", {
+        name: "Copy member ID builder",
+      }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "Builder (builder) terminal" })).getByRole(
+        "button",
+        { name: "Copy member ID builder" },
+      ),
+    );
 
     expect(writeText).toHaveBeenCalledWith("builder");
   });
 
   it("mounts one isolated ready iframe per run in grid layout", async () => {
     const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
-    render(<TerminalWorkspace client={client} members={members} runs={runs} />);
+    render(<TerminalWorkspace client={client} members={members} roles={roles} runs={runs} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Grid terminal layout" }));
     await waitFor(() => expect(screen.getAllByTitle(/ttyd terminal$/)).toHaveLength(2));
@@ -175,6 +224,43 @@ describe("TerminalWorkspace", () => {
       endpointPaths["run-reviewer"],
     );
     expect(screen.getByTitle("Reviewer (reviewer) ttyd terminal")).not.toHaveAttribute("sandbox");
+    expect(
+      within(screen.getByRole("region", { name: "Builder (builder) terminal" })).getByLabelText(
+        "Role Implementor",
+      ),
+    ).toHaveTextContent("Build");
+    expect(
+      within(screen.getByRole("region", { name: "Reviewer (reviewer) terminal" })).getByLabelText(
+        "Role Reviewer",
+      ),
+    ).toHaveTextContent("Review");
+    expect(screen.getByRole("region", { name: "Reviewer (reviewer) terminal" })).toHaveClass(
+      "role-color-amber",
+    );
+  });
+
+  it("uses incoming membership order for tabs and grid panes", async () => {
+    const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
+    render(
+      <TerminalWorkspace
+        client={client}
+        members={[...members].reverse()}
+        roles={roles}
+        runs={runs}
+      />,
+    );
+
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      expect.stringContaining("Reviewer"),
+      expect.stringContaining("Builder"),
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Grid terminal layout" }));
+    await waitFor(() => expect(screen.getAllByTitle(/ttyd terminal$/)).toHaveLength(2));
+    expect(
+      screen
+        .getAllByRole("region", { name: /terminal$/ })
+        .map((pane) => pane.getAttribute("aria-label")),
+    ).toEqual(["Reviewer (reviewer) terminal", "Builder (builder) terminal"]);
   });
 
   it("releases hidden grid clients when returning to the selected tab", async () => {

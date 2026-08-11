@@ -7,12 +7,21 @@ import type {
   GroupMembership,
   NanasaConfig,
   PortalSnapshot,
+  ReorderGroupMembershipsCommand,
+  RoleDefinition,
   UpdateAgentProfileCommand,
   UpdateGroupCommand,
   UpdateGroupMembershipCommand,
+  UpdateRolePresentationCommand,
 } from "@nanasa/contracts";
-import { InstructionPathSchema } from "@nanasa/contracts";
 import {
+  InstructionPathSchema,
+  RolePresentationColorSchema,
+  RolePresentationIconSchema,
+} from "@nanasa/contracts";
+import {
+  ArrowDown,
+  ArrowUp,
   Check,
   ChevronDown,
   ChevronRight,
@@ -21,6 +30,7 @@ import {
   Copy,
   EllipsisVertical,
   Pencil,
+  Palette,
   Play,
   Plus,
   RefreshCw,
@@ -42,6 +52,7 @@ import { createPortal } from "react-dom";
 
 import { copyToClipboard } from "../copy-to-clipboard.js";
 import { memberStatusView } from "../member-status.js";
+import { RoleIdentity } from "./role-identity.js";
 
 export interface AddAgentInput {
   groupId: string;
@@ -76,6 +87,8 @@ interface GroupTreeProps {
     command: UpdateGroupMembershipCommand,
   ): Promise<void>;
   onUpdateAgentProfile?(profileId: string, command: UpdateAgentProfileCommand): Promise<void>;
+  onUpdateRolePresentation?(roleId: string, command: UpdateRolePresentationCommand): Promise<void>;
+  onReorderMembers?(groupId: string, command: ReorderGroupMembershipsCommand): Promise<void>;
   onRemoveAgent(groupId: string, memberId: string): Promise<void>;
   onStartRun(groupId: string, memberId: string): Promise<void>;
   onStopRun(groupId: string, memberId: string): Promise<void>;
@@ -538,6 +551,164 @@ function GroupSettingsDialog({
   );
 }
 
+function RolePresentationSection({
+  roleId,
+  role,
+  onUpdate,
+}: {
+  roleId: string;
+  role: RoleDefinition;
+  onUpdate(command: UpdateRolePresentationCommand): Promise<void>;
+}) {
+  const [icon, setIcon] = useState(role.presentation?.icon ?? "briefcase-business");
+  const [color, setColor] = useState(role.presentation?.color ?? "slate");
+  const [shortName, setShortName] = useState(role.presentation?.shortName ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(undefined);
+    try {
+      await onUpdate({
+        icon,
+        color,
+        ...(shortName.trim() === "" ? {} : { shortName: shortName.trim() }),
+      });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to update role presentation");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const previewRole: RoleDefinition = {
+    ...role,
+    presentation: {
+      icon,
+      color,
+      ...(shortName.trim() === "" ? {} : { shortName: shortName.trim() }),
+    },
+  };
+
+  return (
+    <form
+      className="agent-settings-section role-settings-section"
+      onSubmit={(event) => void submit(event)}
+    >
+      <div className="role-settings-title">
+        <div>
+          <h3>{role.name}</h3>
+          <code>{roleId}</code>
+        </div>
+        <RoleIdentity role={previewRole} />
+      </div>
+      <div className="role-settings-grid">
+        <label>
+          Icon
+          <select
+            value={icon}
+            onChange={(event) => setIcon(RolePresentationIconSchema.parse(event.target.value))}
+          >
+            {RolePresentationIconSchema.options.map((option) => (
+              <option key={option} value={option}>
+                {option.replaceAll("-", " ")}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Color
+          <select
+            value={color}
+            onChange={(event) => setColor(RolePresentationColorSchema.parse(event.target.value))}
+          >
+            {RolePresentationColorSchema.options.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Compact name
+          <input
+            value={shortName}
+            maxLength={24}
+            placeholder={role.name}
+            onChange={(event) => setShortName(event.target.value)}
+          />
+        </label>
+      </div>
+      {error !== undefined && <p className="form-error">{error}</p>}
+      <button type="submit" className="compact-button" disabled={busy}>
+        <Check aria-hidden="true" size={15} />
+        {busy ? "Saving..." : `Save ${role.name}`}
+      </button>
+    </form>
+  );
+}
+
+function RoleSettingsDialog({
+  roles,
+  onClose,
+  onUpdate,
+}: {
+  roles: NanasaConfig["roles"];
+  onClose(): void;
+  onUpdate(roleId: string, command: UpdateRolePresentationCommand): Promise<void>;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    return () => {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+    };
+  }, []);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="confirmation-dialog agent-settings-dialog"
+      aria-labelledby="role-settings-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
+      <div className="confirmation-dialog-body">
+        <header className="agent-settings-heading">
+          <div>
+            <span className="eyebrow">Portal identity</span>
+            <h2 id="role-settings-title">Role presentation</h2>
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Close role settings"
+            onClick={onClose}
+          >
+            <X aria-hidden="true" size={16} />
+          </button>
+        </header>
+        {Object.entries(roles).map(([roleId, role]) => (
+          <RolePresentationSection
+            key={roleId}
+            roleId={roleId}
+            role={role}
+            onUpdate={(command) => onUpdate(roleId, command)}
+          />
+        ))}
+      </div>
+    </dialog>
+  );
+}
+
 function AgentSettingsDialog({
   member,
   profile,
@@ -892,6 +1063,8 @@ export function GroupTree({
   onRenameAgent,
   onUpdateAgent,
   onUpdateAgentProfile,
+  onUpdateRolePresentation,
+  onReorderMembers,
   onRemoveAgent,
   onStartRun,
   onStopRun,
@@ -901,6 +1074,7 @@ export function GroupTree({
   );
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [showAddAgent, setShowAddAgent] = useState(false);
+  const [showRoleSettings, setShowRoleSettings] = useState(false);
   const [settingsGroupId, setSettingsGroupId] = useState<string>();
   const [editTarget, setEditTarget] = useState<EditTarget>();
   const [settingsTarget, setSettingsTarget] = useState<{
@@ -995,15 +1169,26 @@ export function GroupTree({
           <span className="eyebrow">Operations</span>
           <strong className="brand">Nanasa</strong>
         </div>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label="Create group"
-          title="Create group"
-          onClick={() => setShowCreateGroup((visible) => !visible)}
-        >
-          <Plus aria-hidden="true" size={17} />
-        </button>
+        <div className="rail-heading-actions">
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Role settings"
+            title="Role settings"
+            onClick={() => setShowRoleSettings(true)}
+          >
+            <Palette aria-hidden="true" size={16} />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Create group"
+            title="Create group"
+            onClick={() => setShowCreateGroup((visible) => !visible)}
+          >
+            <Plus aria-hidden="true" size={17} />
+          </button>
+        </div>
       </div>
       {showCreateGroup && <CreateGroupForm onCreate={onCreateGroup} />}
       <nav className="group-tree" aria-label="Group tree">
@@ -1135,6 +1320,9 @@ export function GroupTree({
                 <div className="tree-members">
                   {members.length === 0 && <p className="tree-empty">No members</p>}
                   {members.map((member) => {
+                    const memberIndex = members.findIndex(
+                      (candidate) => candidate.memberId === member.memberId,
+                    );
                     const {
                       run,
                       status: agentStatus,
@@ -1200,7 +1388,7 @@ export function GroupTree({
                             }}
                           >
                             <span>{member.alias}</span>
-                            <code title={member.memberId}>{member.memberId}</code>
+                            <RoleIdentity role={role} />
                             <small title={statusTitle || undefined}>
                               {semanticLabel}
                               {semanticDetail.length > 0 && ` · ${semanticDetail}`}
@@ -1331,7 +1519,7 @@ export function GroupTree({
                         {editTarget?.kind !== "member" && (
                           <ActionMenu
                             label={`Actions for agent ${member.alias}`}
-                            itemCount={action === "none" ? 4 : 5}
+                            itemCount={action === "none" ? 6 : 7}
                             triggerId={`member-actions-${group.id}-${member.memberId}`}
                           >
                             <button
@@ -1345,6 +1533,54 @@ export function GroupTree({
                             >
                               <Copy aria-hidden="true" size={14} />
                               <span>Copy member ID</span>
+                            </button>
+                            <button
+                              type="button"
+                              role="menuitem"
+                              className="action-menu-item"
+                              aria-label={`Move ${member.alias} up`}
+                              disabled={
+                                memberIndex === 0 ||
+                                onReorderMembers === undefined ||
+                                busyAction === `${group.id}:reorder`
+                              }
+                              onClick={() => {
+                                const memberIds = members.map((candidate) => candidate.memberId);
+                                [memberIds[memberIndex - 1], memberIds[memberIndex]] = [
+                                  memberIds[memberIndex] as string,
+                                  memberIds[memberIndex - 1] as string,
+                                ];
+                                void onReorderMembers?.(group.id, { memberIds }).catch(
+                                  () => undefined,
+                                );
+                              }}
+                            >
+                              <ArrowUp aria-hidden="true" size={14} />
+                              <span>Move up</span>
+                            </button>
+                            <button
+                              type="button"
+                              role="menuitem"
+                              className="action-menu-item"
+                              aria-label={`Move ${member.alias} down`}
+                              disabled={
+                                memberIndex === members.length - 1 ||
+                                onReorderMembers === undefined ||
+                                busyAction === `${group.id}:reorder`
+                              }
+                              onClick={() => {
+                                const memberIds = members.map((candidate) => candidate.memberId);
+                                [memberIds[memberIndex], memberIds[memberIndex + 1]] = [
+                                  memberIds[memberIndex + 1] as string,
+                                  memberIds[memberIndex] as string,
+                                ];
+                                void onReorderMembers?.(group.id, { memberIds }).catch(
+                                  () => undefined,
+                                );
+                              }}
+                            >
+                              <ArrowDown aria-hidden="true" size={14} />
+                              <span>Move down</span>
                             </button>
                             {action !== "none" && (
                               <button
@@ -1480,6 +1716,13 @@ export function GroupTree({
           instructions={config.groups[settingsGroupId]?.instructions ?? []}
           onClose={() => setSettingsGroupId(undefined)}
           onUpdate={(command) => onUpdateGroup(settingsGroupId, command)}
+        />
+      )}
+      {showRoleSettings && onUpdateRolePresentation !== undefined && (
+        <RoleSettingsDialog
+          roles={config.roles}
+          onClose={() => setShowRoleSettings(false)}
+          onUpdate={onUpdateRolePresentation}
         />
       )}
       {settingsTarget !== undefined &&

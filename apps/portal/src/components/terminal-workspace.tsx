@@ -2,6 +2,8 @@ import type {
   AgentRun,
   AgentStatusSummary,
   GroupMembership,
+  NanasaConfig,
+  RoleDefinition,
   TerminalEndpointState,
 } from "@nanasa/contracts";
 import { CircleAlert, Copy, Grid2X2, LoaderCircle, Monitor, RefreshCw, Rows3 } from "lucide-react";
@@ -11,6 +13,7 @@ import type { PortalClient } from "../api.js";
 import { copyToClipboard } from "../copy-to-clipboard.js";
 import { usePortalPreferences } from "../hooks/use-portal-preferences.js";
 import { useTerminalEndpoint } from "../hooks/use-terminal-endpoint.js";
+import { RoleIdentity, roleColorClass } from "./role-identity.js";
 
 const endpointLabels: Record<Exclude<TerminalEndpointState, "ready">, string> = {
   starting: "Terminal starting",
@@ -24,6 +27,7 @@ function TerminalPane({
   run,
   alias,
   memberId,
+  role,
   connectionRevision,
   suspended,
 }: {
@@ -31,6 +35,7 @@ function TerminalPane({
   run: AgentRun;
   alias: string;
   memberId: string;
+  role: RoleDefinition | undefined;
   connectionRevision: number;
   suspended: boolean;
 }) {
@@ -44,16 +49,37 @@ function TerminalPane({
       : endpointLabels[endpointState];
 
   return (
-    <section className="terminal-pane" aria-label={`${alias} (${memberId}) terminal`}>
+    <section
+      className={`terminal-pane ${roleColorClass(role)}`}
+      aria-label={`${alias} (${memberId}) terminal`}
+    >
       <div className="terminal-statusbar">
         <span
           className={`connection-dot connection-${endpointState ?? "starting"}`}
           aria-hidden="true"
         />
         <strong>{alias}</strong>
-        <code title={memberId}>{memberId}</code>
+        <RoleIdentity role={role} compact />
         <span className="status-separator" aria-hidden="true" />
         <span>{endpointState ?? (loading ? "loading" : "unavailable")}</span>
+        <div className="terminal-title-tools">
+          <code
+            className="terminal-member-id"
+            aria-label={`Member ID ${memberId}`}
+            title={memberId}
+          >
+            {memberId}
+          </code>
+          <button
+            type="button"
+            className="icon-button terminal-title-copy"
+            aria-label={`Copy member ID ${memberId}`}
+            title={`Copy ${memberId}`}
+            onClick={() => void copyToClipboard(memberId).catch(() => undefined)}
+          >
+            <Copy aria-hidden="true" size={12} />
+          </button>
+        </div>
       </div>
       {suspended ? (
         <div className="terminal-state" role="status">
@@ -97,6 +123,7 @@ function TerminalPane({
 interface TerminalWorkspaceProps {
   client: PortalClient;
   members: GroupMembership[];
+  roles?: NanasaConfig["roles"];
   runs: AgentRun[];
   agentStatuses?: AgentStatusSummary[];
   connectionRevision?: number;
@@ -106,6 +133,7 @@ interface TerminalWorkspaceProps {
 export function TerminalWorkspace({
   client,
   members,
+  roles = {},
   runs,
   agentStatuses = [],
   connectionRevision = 0,
@@ -129,6 +157,10 @@ export function TerminalWorkspace({
     : availableRuns[0]?.id;
   const memberAlias = (run: AgentRun) =>
     members.find((member) => member.memberId === run.memberId)?.alias ?? run.memberId;
+  const memberRole = (run: AgentRun) => {
+    const roleId = members.find((member) => member.memberId === run.memberId)?.roleId;
+    return roleId === undefined ? undefined : roles[roleId];
+  };
   const displayStatus = (run: AgentRun) =>
     agentStatuses.find(
       (status) => status.groupId === run.groupId && status.memberId === run.memberId,
@@ -152,7 +184,7 @@ export function TerminalWorkspace({
             <div className="terminal-tab-item" role="presentation" key={run.id}>
               <button
                 type="button"
-                className="terminal-tab-select"
+                className={`terminal-tab-select ${roleColorClass(memberRole(run))}`}
                 role="tab"
                 aria-selected={run.id === activeRunId}
                 onClick={() => setSelectedRunId(run.id)}
@@ -163,16 +195,7 @@ export function TerminalWorkspace({
                   aria-label={`${displayStatus(run).replaceAll("_", " ")} agent status`}
                 />
                 <span>{memberAlias(run)}</span>
-                <small title={run.memberId}>{run.memberId}</small>
-              </button>
-              <button
-                type="button"
-                className="icon-button terminal-tab-copy"
-                aria-label={`Copy member ID ${run.memberId}`}
-                title={`Copy ${run.memberId}`}
-                onClick={() => void copyToClipboard(run.memberId).catch(() => undefined)}
-              >
-                <Copy aria-hidden="true" size={13} />
+                <RoleIdentity role={memberRole(run)} compact />
               </button>
             </div>
           ))}
@@ -208,6 +231,7 @@ export function TerminalWorkspace({
               run={run}
               alias={memberAlias(run)}
               memberId={run.memberId}
+              role={memberRole(run)}
               connectionRevision={connectionRevision}
               suspended={suspended}
             />

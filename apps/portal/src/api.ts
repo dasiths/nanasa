@@ -25,6 +25,12 @@ import {
   NanasaConfigSchema,
   type PortalSnapshot,
   PortalSnapshotSchema,
+  type ReorderGroupMembershipsCommand,
+  ReorderGroupMembershipsCommandSchema,
+  type ReorderGroupMembershipsResult,
+  ReorderGroupMembershipsResultSchema,
+  type RoleDefinition,
+  RoleDefinitionSchema,
   type StartGroupRunsResult,
   StartGroupRunsResultSchema,
   type SubmitMessageCommand,
@@ -37,6 +43,8 @@ import {
   UpdateGroupCommandSchema,
   type UpdateGroupMembershipCommand,
   UpdateGroupMembershipCommandSchema,
+  type UpdateRolePresentationCommand,
+  UpdateRolePresentationCommandSchema,
 } from "@nanasa/contracts";
 
 interface Schema<T> {
@@ -61,6 +69,10 @@ export interface PortalClient {
   deleteGroup(groupId: string): Promise<DeleteGroupResult>;
   createAgentProfile(command: CreateAgentProfileCommand): Promise<AgentProfile>;
   updateAgentProfile(profileId: string, command: UpdateAgentProfileCommand): Promise<AgentProfile>;
+  updateRolePresentation(
+    roleId: string,
+    command: UpdateRolePresentationCommand,
+  ): Promise<RoleDefinition>;
   addMembership(groupId: string, command: AddGroupMembershipCommand): Promise<GroupMembership>;
   updateMembership(
     groupId: string,
@@ -68,6 +80,10 @@ export interface PortalClient {
     command: UpdateGroupMembershipCommand,
   ): Promise<GroupMembership>;
   removeMembership(groupId: string, memberId: string): Promise<GroupMembership>;
+  reorderMemberships(
+    groupId: string,
+    command: ReorderGroupMembershipsCommand,
+  ): Promise<ReorderGroupMembershipsResult>;
   startRun(groupId: string, memberId: string): Promise<AgentRun>;
   startAllRuns(groupId: string, idempotencyKey: string): Promise<StartGroupRunsResult>;
   stopRun(groupId: string, memberId: string): Promise<AgentRun>;
@@ -101,7 +117,7 @@ async function request<T>(path: string, schema: Schema<T>, init?: RequestInit): 
 }
 
 function commandInit(
-  method: "POST" | "PATCH" | "DELETE",
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
   body: unknown,
   idempotencyKey: string = crypto.randomUUID(),
 ): RequestInit {
@@ -148,6 +164,12 @@ export const api: PortalClient = {
       AgentProfileSchema,
       commandInit("PATCH", UpdateAgentProfileCommandSchema.parse(command)),
     ),
+  updateRolePresentation: (roleId, command) =>
+    request(
+      `/api/roles/${encodeURIComponent(roleId)}/presentation`,
+      RoleDefinitionSchema,
+      commandInit("PATCH", UpdateRolePresentationCommandSchema.parse(command)),
+    ),
   addMembership: (groupId, command) =>
     request(
       `/api/groups/${encodeURIComponent(groupId)}/memberships`,
@@ -165,6 +187,12 @@ export const api: PortalClient = {
       `/api/groups/${encodeURIComponent(groupId)}/memberships/${encodeURIComponent(memberId)}`,
       GroupMembershipSchema,
       commandInit("DELETE", {}),
+    ),
+  reorderMemberships: (groupId, command) =>
+    request(
+      `/api/groups/${encodeURIComponent(groupId)}/membership-order`,
+      ReorderGroupMembershipsResultSchema,
+      commandInit("PUT", ReorderGroupMembershipsCommandSchema.parse(command)),
     ),
   startRun: (groupId, memberId) =>
     request(

@@ -17,11 +17,13 @@ import {
   MAX_MESSAGE_TEXT_BYTES,
   MessageSchema,
   NanasaConfigSchema,
+  ReorderGroupMembershipsCommandSchema,
   StartAgentRunCommandSchema,
   SubmitMessageCommandSchema,
   TerminalEndpointStatusSchema,
   UpdateGroupCommandSchema,
   UpdateGroupMembershipCommandSchema,
+  UpdateRolePresentationCommandSchema,
 } from "../src/index.js";
 
 const baseMessage = {
@@ -552,6 +554,11 @@ describe("configuration contracts", () => {
           name: "Reviewer",
           instructions: [".nanasa/instructions/reviewer.md"],
           permissionPolicy: "read-only",
+          presentation: {
+            icon: "shield-check",
+            color: "amber",
+            shortName: "Review",
+          },
         },
       },
       agentProfiles: {
@@ -578,15 +585,90 @@ describe("configuration contracts", () => {
     expect(parsed.roles.reviewer).toMatchObject({
       permissionPolicy: "read-only",
       instructions: [".nanasa/instructions/reviewer.md"],
+      presentation: {
+        icon: "shield-check",
+        color: "amber",
+        shortName: "Review",
+      },
     });
     expect(parsed.agentProfiles.profile_one?.instructions).toEqual([]);
     expect(parsed.groups.group_one?.memberships.membership_one?.instructions).toEqual([]);
     expect(
       NanasaConfigSchema.safeParse({
         ...parsed,
+        roles: {
+          ...parsed.roles,
+          reviewer: {
+            ...parsed.roles.reviewer,
+            presentation: { icon: "sparkles", color: "gold" },
+          },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      NanasaConfigSchema.safeParse({
+        ...parsed,
         agentProfiles: {
           ...parsed.agentProfiles,
           profile_one: { ...parsed.agentProfiles.profile_one, defaultRoleId: "missing-role" },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("validates role presentation updates and complete membership order commands", () => {
+    expect(
+      UpdateRolePresentationCommandSchema.parse({
+        icon: "hammer",
+        color: "blue",
+        shortName: "Build",
+      }),
+    ).toEqual({ icon: "hammer", color: "blue", shortName: "Build" });
+    expect(
+      UpdateRolePresentationCommandSchema.safeParse({ icon: "sparkles", color: "gold" }).success,
+    ).toBe(false);
+
+    expect(
+      ReorderGroupMembershipsCommandSchema.parse({ memberIds: ["builder", "reviewer"] }),
+    ).toEqual({ memberIds: ["builder", "reviewer"] });
+    expect(
+      ReorderGroupMembershipsCommandSchema.safeParse({ memberIds: ["builder", "builder"] }).success,
+    ).toBe(false);
+
+    const configured = NanasaConfigSchema.parse({
+      version: 1,
+      agentTypes: config.agentTypes,
+      groups: {
+        group_one: {
+          name: "Team",
+          memberships: {
+            membership_one: {
+              memberId: "copilot.builder",
+              agentProfileId: "profile_one",
+              alias: "Builder",
+              order: 0,
+            },
+          },
+        },
+      },
+      agentProfiles: {
+        profile_one: { name: "Builder", agentType: "copilot" },
+      },
+    });
+    expect(configured.groups.group_one?.memberships.membership_one?.order).toBe(0);
+    expect(
+      NanasaConfigSchema.safeParse({
+        ...configured,
+        groups: {
+          group_one: {
+            ...configured.groups.group_one,
+            memberships: {
+              membership_one: {
+                ...configured.groups.group_one?.memberships.membership_one,
+                order: -1,
+              },
+            },
+          },
         },
       }).success,
     ).toBe(false);

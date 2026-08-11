@@ -184,12 +184,52 @@ export const RolePermissionPolicySchema = z.enum(["inherit", "read-only"]);
 
 export type RolePermissionPolicy = z.infer<typeof RolePermissionPolicySchema>;
 
+export const RolePresentationIconSchema = z.enum([
+  "briefcase-business",
+  "clipboard-list",
+  "code",
+  "hammer",
+  "scan-search",
+  "shield-check",
+  "waypoints",
+  "wrench",
+]);
+
+export type RolePresentationIcon = z.infer<typeof RolePresentationIconSchema>;
+
+export const RolePresentationColorSchema = z.enum([
+  "amber",
+  "blue",
+  "cyan",
+  "rose",
+  "slate",
+  "teal",
+  "violet",
+]);
+
+export type RolePresentationColor = z.infer<typeof RolePresentationColorSchema>;
+
+export const RolePresentationSchema = z
+  .object({
+    icon: RolePresentationIconSchema,
+    color: RolePresentationColorSchema,
+    shortName: z.string().trim().min(1).max(24).optional(),
+  })
+  .strict();
+
+export type RolePresentation = z.infer<typeof RolePresentationSchema>;
+
+export const UpdateRolePresentationCommandSchema = RolePresentationSchema;
+
+export type UpdateRolePresentationCommand = z.infer<typeof UpdateRolePresentationCommandSchema>;
+
 export const RoleDefinitionSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
     description: z.string().trim().min(1).max(500).optional(),
     instructions: z.array(InstructionPathSchema).max(32).default([]),
     permissionPolicy: RolePermissionPolicySchema.default("inherit"),
+    presentation: RolePresentationSchema.optional(),
   })
   .strict();
 
@@ -213,10 +253,41 @@ export const ConfiguredMembershipSchema = z
     alias: z.string().trim().min(1).max(100),
     roleId: RoleIdSchema.optional(),
     instructions: z.array(InstructionPathSchema).max(32).default([]),
+    order: z.number().int().nonnegative().max(255).optional(),
   })
   .strict();
 
 export type ConfiguredMembership = z.infer<typeof ConfiguredMembershipSchema>;
+
+export const ReorderGroupMembershipsCommandSchema = z
+  .object({
+    memberIds: z.array(IdentifierSchema).max(256),
+  })
+  .strict()
+  .superRefine((command, context) => {
+    const seen = new Set<string>();
+    for (const [index, memberId] of command.memberIds.entries()) {
+      if (seen.has(memberId)) {
+        context.addIssue({
+          code: "custom",
+          message: "Member order must not contain duplicate member IDs",
+          path: ["memberIds", index],
+        });
+      }
+      seen.add(memberId);
+    }
+  });
+
+export type ReorderGroupMembershipsCommand = z.infer<typeof ReorderGroupMembershipsCommandSchema>;
+
+export const ReorderGroupMembershipsResultSchema = z
+  .object({
+    groupId: IdentifierSchema,
+    memberIds: z.array(IdentifierSchema).max(256),
+  })
+  .strict();
+
+export type ReorderGroupMembershipsResult = z.infer<typeof ReorderGroupMembershipsResultSchema>;
 
 export const ConfiguredGroupSchema = z
   .object({

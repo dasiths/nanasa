@@ -45,6 +45,47 @@ describe("terminal endpoint API", () => {
 });
 
 describe("portal operations API", () => {
+  it("updates role presentation and sends complete membership order permutations", async () => {
+    const responses = [
+      {
+        name: "Reviewer",
+        instructions: [],
+        permissionPolicy: "read-only",
+        presentation: { icon: "scan-search", color: "rose", shortName: "Inspect" },
+      },
+      { groupId: "group/one", memberIds: ["reviewer", "builder"] },
+    ];
+    const fetchMock = vi.fn().mockImplementation(async () => ({
+      ok: true,
+      json: async () => responses.shift(),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.updateRolePresentation("reviewer/lead", {
+      icon: "scan-search",
+      color: "rose",
+      shortName: "Inspect",
+    });
+    await api.reorderMemberships("group/one", { memberIds: ["reviewer", "builder"] });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/roles/reviewer%2Flead/presentation",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ icon: "scan-search", color: "rose", shortName: "Inspect" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/groups/group%2Fone/membership-order",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ memberIds: ["reviewer", "builder"] }),
+      }),
+    );
+  });
+
   it("updates reusable profile role and Markdown instruction defaults", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

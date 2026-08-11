@@ -1,9 +1,11 @@
 import type {
+  ReorderGroupMembershipsCommand,
   StartGroupRunsResult,
   SubmitMessageCommand,
   UpdateAgentProfileCommand,
   UpdateGroupCommand,
   UpdateGroupMembershipCommand,
+  UpdateRolePresentationCommand,
 } from "@nanasa/contracts";
 import { Cable, CircleAlert, Laptop, Moon, Play, RefreshCw, Sun, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -159,6 +161,10 @@ export function App({ client = api }: AppProps) {
     );
   const updateAgentProfile = (profileId: string, command: UpdateAgentProfileCommand) =>
     runAction(`${profileId}:settings`, () => client.updateAgentProfile(profileId, command));
+  const updateRolePresentation = (roleId: string, command: UpdateRolePresentationCommand) =>
+    runAction(`role:${roleId}:presentation`, () => client.updateRolePresentation(roleId, command));
+  const reorderMembers = (groupId: string, command: ReorderGroupMembershipsCommand) =>
+    runAction(`${groupId}:reorder`, () => client.reorderMemberships(groupId, command));
   const removeAgent = (groupId: string, memberId: string) =>
     runAction(`${groupId}:${memberId}:remove`, () => client.removeMembership(groupId, memberId));
 
@@ -248,6 +254,8 @@ export function App({ client = api }: AppProps) {
           onRenameAgent={renameAgent}
           onUpdateAgent={updateAgent}
           onUpdateAgentProfile={updateAgentProfile}
+          onUpdateRolePresentation={updateRolePresentation}
+          onReorderMembers={reorderMembers}
           onRemoveAgent={removeAgent}
           onStartRun={startRun}
           onStopRun={stopRun}
@@ -399,6 +407,7 @@ export function App({ client = api }: AppProps) {
                 <TerminalWorkspace
                   client={client}
                   members={members}
+                  roles={config.roles}
                   runs={runs}
                   agentStatuses={snapshot.agentStatuses ?? []}
                   connectionRevision={terminalConnectionRevision}

@@ -147,12 +147,18 @@ roles:
   implementor:
     name: Implementor
     description: Implements assigned changes and validates the result
+    presentation:
+      icon: hammer
+      color: blue
     instructions:
       - .nanasa/instructions/implementor.md
     permissionPolicy: inherit
   reviewer:
     name: Reviewer
     description: Reviews changes without modifying files
+    presentation:
+      icon: shield-check
+      color: amber
     instructions:
       - .nanasa/instructions/reviewer.md
     permissionPolicy: read-only
@@ -176,6 +182,7 @@ groups:
         alias: Reviewer
         roleId: reviewer
         instructions: []
+        order: 0
 
 messages:
   retentionPerGroup: 1000
@@ -189,7 +196,22 @@ absent.
 
 Roles describe responsibility independently from the provider profile. A
 membership `roleId` overrides its profile `defaultRoleId`; omitting both leaves
-the member unassigned. Nanasa composes the system-prompt suffix in this order:
+the member unassigned. Optional role `presentation` metadata gives the portal a
+consistent icon and theme-safe color for the group tree, terminal tabs, and grid
+terminal titles. Supported colors are `amber`, `blue`, `cyan`, `rose`, `slate`,
+`teal`, and `violet`. Supported icons are `briefcase-business`,
+`clipboard-list`, `code`, `hammer`, `scan-search`, `shield-check`, `waypoints`,
+and `wrench`. An optional `shortName` (24 characters maximum) can replace a long
+role name in compact terminal surfaces. Presentation metadata does not change
+instructions or permission policy. The portal Role settings dialog updates these
+presentation fields without restarting active agents.
+
+Membership `order` is a zero-based group-local display position. The portal's
+Move up and Move down commands atomically rewrite dense order values in YAML.
+The resulting order is shared by the group tree, terminal tabs, and terminal
+grid. Reordering does not change membership revision or restart active agents.
+
+Nanasa composes the system-prompt suffix in this order:
 built-in MCP coordination guidance, top-level instructions, group instructions,
 effective role instructions, profile instructions, then membership
 instructions. References must be unique, repository-relative UTF-8 Markdown

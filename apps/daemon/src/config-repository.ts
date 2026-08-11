@@ -54,13 +54,14 @@ export class ConfigRepository {
           memberships: Object.fromEntries(
             snapshot.memberships
               .filter((membership) => membership.groupId === group.id)
-              .map((membership) => [
+              .map((membership, order) => [
                 membership.id,
                 {
                   memberId: membership.memberId,
                   agentProfileId: membership.agentProfileId,
                   alias: membership.alias,
                   instructions: [],
+                  order,
                 },
               ]),
           ),

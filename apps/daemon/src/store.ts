@@ -71,6 +71,7 @@ import {
   reduceAgentStatus,
 } from "./agent-status-reducer.js";
 import { dockerMemberName, formatMemberId, type MemberNameGenerator } from "./member-id.js";
+import { orderedMembershipEntries } from "./membership-order.js";
 
 interface Parser<T> {
   parse(value: unknown): T;
@@ -1947,6 +1948,21 @@ export class NanasaStore {
         .prepare("SELECT * FROM memberships WHERE state = 'active' ORDER BY joined_at, id")
         .all() as unknown as MembershipRow[]
     ).map((row) => this.#hydrateMembership(row));
+    const configuredOrder = new Map<string, number>();
+    let nextConfiguredOrder = 0;
+    for (const configuredGroup of Object.values(this.#config?.groups ?? {})) {
+      for (const [membershipId] of orderedMembershipEntries(configuredGroup.memberships)) {
+        configuredOrder.set(membershipId, nextConfiguredOrder);
+        nextConfiguredOrder += 1;
+      }
+    }
+    memberships.sort(
+      (left, right) =>
+        (configuredOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+          (configuredOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER) ||
+        left.joinedAt.localeCompare(right.joinedAt) ||
+        left.id.localeCompare(right.id),
+    );
     const runs = (
       this.#database
         .prepare(

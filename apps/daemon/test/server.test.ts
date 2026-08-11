@@ -175,6 +175,88 @@ describe("daemon REST API", () => {
     await daemon.app.close();
   });
 
+  it("updates role presentation and atomically persists portal membership order", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const group = (
+      await daemon.app.inject({ method: "POST", url: "/api/groups", payload: { name: "Team" } })
+    ).json<{ id: string }>();
+    const profile = (
+      await daemon.app.inject({
+        method: "POST",
+        url: "/api/agent-profiles",
+        payload: { name: "Reusable", agentType: "copilot" },
+      })
+    ).json<{ id: string }>();
+    for (const memberId of ["builder", "reviewer", "tester"]) {
+      expect(
+        (
+          await daemon.app.inject({
+            method: "POST",
+            url: `/api/groups/${group.id}/memberships`,
+            payload: { memberId, agentProfileId: profile.id, alias: memberId },
+          })
+        ).statusCode,
+      ).toBe(201);
+    }
+    daemon.store.createRunForMembership(group.id, "builder");
+
+    const presentation = await daemon.app.inject({
+      method: "PATCH",
+      url: "/api/roles/reviewer/presentation",
+      payload: { icon: "shield-check", color: "amber", shortName: "Review" },
+    });
+    expect(presentation.statusCode).toBe(200);
+    expect(presentation.json()).toMatchObject({
+      name: "Reviewer",
+      presentation: { icon: "shield-check", color: "amber", shortName: "Review" },
+    });
+
+    const reordered = await daemon.app.inject({
+      method: "PUT",
+      url: `/api/groups/${group.id}/membership-order`,
+      payload: { memberIds: ["tester", "builder", "reviewer"] },
+    });
+    expect(reordered.statusCode).toBe(200);
+    expect(reordered.json()).toEqual({
+      groupId: group.id,
+      memberIds: ["tester", "builder", "reviewer"],
+    });
+    expect(daemon.store.getSnapshot()).toMatchObject({
+      groups: [{ id: group.id, membershipRevision: 3 }],
+      memberships: [{ memberId: "tester" }, { memberId: "builder" }, { memberId: "reviewer" }],
+    });
+
+    const repository = repositoryByDataPath.get(":memory:") as string;
+    const persisted = loadNanasaConfig(repository).config;
+    expect(persisted.roles.reviewer?.presentation).toEqual({
+      icon: "shield-check",
+      color: "amber",
+      shortName: "Review",
+    });
+    expect(
+      Object.values(persisted.groups[group.id]?.memberships ?? {}).map((membership) => [
+        membership.memberId,
+        membership.order,
+      ]),
+    ).toEqual([
+      ["tester", 0],
+      ["builder", 1],
+      ["reviewer", 2],
+    ]);
+
+    const stale = await daemon.app.inject({
+      method: "PUT",
+      url: `/api/groups/${group.id}/membership-order`,
+      payload: { memberIds: ["builder", "reviewer"] },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ code: "membership_order_stale" });
+    expect(daemon.store.getSnapshot().memberships.map((membership) => membership.memberId)).toEqual(
+      ["tester", "builder", "reviewer"],
+    );
+    await daemon.app.close();
+  });
+
   it("renames and removes groups and memberships while preserving profiles", async () => {
     const daemon = await createDaemon({ dataPath: ":memory:" });
     const group = (

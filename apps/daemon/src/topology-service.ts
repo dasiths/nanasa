@@ -7,12 +7,17 @@ import type {
   DeleteGroupResult,
   Group,
   GroupMembership,
+  ReorderGroupMembershipsCommand,
+  ReorderGroupMembershipsResult,
+  RoleDefinition,
+  UpdateRolePresentationCommand,
   UpdateAgentProfileCommand,
   UpdateGroupCommand,
   UpdateGroupMembershipCommand,
 } from "@nanasa/contracts";
 import { ConfigRepository } from "./config-repository.js";
 import { dockerMemberName, formatMemberId } from "./member-id.js";
+import { normalizeMembershipOrder } from "./membership-order.js";
 import { RunRuntimeCoordinator } from "./run-runtime-coordinator.js";
 import { DomainError, NanasaStore } from "./store.js";
 
@@ -116,6 +121,26 @@ export class TopologyService {
     this.#store.reconcileTopology(mutation.loaded.config, mutation.loaded.status);
     this.#store.recordRuntimeEvent("group.updated", "group", groupId, { groupId });
     return this.#store.getGroup(groupId);
+  }
+
+  public async updateRolePresentation(
+    roleId: string,
+    presentation: UpdateRolePresentationCommand,
+  ): Promise<RoleDefinition> {
+    const mutation = await this.#repository.mutate((config) => {
+      const role = config.roles[roleId];
+      if (role === undefined) throw new DomainError("role_not_found", "Role not found", 404);
+      return {
+        config: {
+          ...config,
+          roles: { ...config.roles, [roleId]: { ...role, presentation } },
+        },
+        result: roleId,
+      };
+    });
+    this.#store.reconcileTopology(mutation.loaded.config, mutation.loaded.status);
+    this.#store.recordRuntimeEvent("role.presentation.updated", "role", roleId, { roleId });
+    return mutation.loaded.config.roles[roleId] as RoleDefinition;
   }
 
   public async deleteGroup(groupId: string, idempotencyKey?: string): Promise<DeleteGroupResult> {
@@ -268,7 +293,7 @@ export class TopologyService {
             ...config.groups,
             [groupId]: {
               ...group,
-              memberships: {
+              memberships: normalizeMembershipOrder({
                 ...group.memberships,
                 [membershipId]: group.memberships[membershipId] ?? {
                   memberId,
@@ -277,7 +302,7 @@ export class TopologyService {
                   instructions: command.instructions ?? [],
                   ...(command.roleId === undefined ? {} : { roleId: command.roleId }),
                 },
-              },
+              }),
             },
           },
         },
@@ -368,11 +393,59 @@ export class TopologyService {
       return {
         config: {
           ...config,
-          groups: { ...config.groups, [groupId]: { ...group, memberships } },
+          groups: {
+            ...config.groups,
+            [groupId]: { ...group, memberships: normalizeMembershipOrder(memberships) },
+          },
         },
         result: entry[0],
       };
     });
     return this.#coordinator.removeMembership(groupId, memberId, idempotencyKey);
+  }
+
+  public async reorderMemberships(
+    groupId: string,
+    command: ReorderGroupMembershipsCommand,
+  ): Promise<ReorderGroupMembershipsResult> {
+    const mutation = await this.#repository.mutate((config) => {
+      const group = config.groups[groupId];
+      if (group === undefined) throw new DomainError("group_not_found", "Group not found", 404);
+      const entriesByMemberId = new Map(
+        Object.entries(group.memberships).map(([membershipId, membership]) => [
+          membership.memberId,
+          [membershipId, membership] as const,
+        ]),
+      );
+      if (
+        command.memberIds.length !== entriesByMemberId.size ||
+        command.memberIds.some((memberId) => !entriesByMemberId.has(memberId))
+      ) {
+        throw new DomainError(
+          "membership_order_stale",
+          "Memberships changed while preparing the new order; refresh and retry",
+          409,
+        );
+      }
+      const memberships = Object.fromEntries(
+        command.memberIds.map((memberId, order) => {
+          const [membershipId, membership] = entriesByMemberId.get(memberId) as readonly [
+            string,
+            (typeof group.memberships)[string],
+          ];
+          return [membershipId, { ...membership, order }];
+        }),
+      );
+      return {
+        config: {
+          ...config,
+          groups: { ...config.groups, [groupId]: { ...group, memberships } },
+        },
+        result: { groupId, memberIds: command.memberIds },
+      };
+    });
+    this.#store.reconcileTopology(mutation.loaded.config, mutation.loaded.status);
+    this.#store.recordRuntimeEvent("membership.reordered", "group", groupId, mutation.result);
+    return mutation.result;
   }
 }
