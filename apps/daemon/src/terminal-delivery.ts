@@ -2,15 +2,12 @@ import type { AgentRun } from "@nanasa/contracts";
 
 import type { RuntimeObservation } from "./runtime-observation.js";
 import type { DeliveryClaim } from "./store.js";
+import type { TerminalInputArbiter } from "./terminal/terminal-input-arbiter.js";
 
 interface TerminalDeliveryRuntime {
   readonly serverName: string;
   observeRun(run: AgentRun): Promise<RuntimeObservation>;
   pasteToRun(run: AgentRun, text: string): Promise<void>;
-}
-
-interface TerminalWriterRegistry {
-  hasWriter(runId: string): boolean;
 }
 
 export function formatTerminalDelivery(claim: DeliveryClaim): string {
@@ -23,11 +20,11 @@ export function formatTerminalDelivery(claim: DeliveryClaim): string {
 
 export class TmuxTerminalDelivery {
   readonly #runtime: TerminalDeliveryRuntime;
-  readonly #endpoints: TerminalWriterRegistry;
+  readonly #arbiter: TerminalInputArbiter;
 
-  public constructor(runtime: TerminalDeliveryRuntime, endpoints: TerminalWriterRegistry) {
+  public constructor(runtime: TerminalDeliveryRuntime, arbiter: TerminalInputArbiter) {
     this.#runtime = runtime;
-    this.#endpoints = endpoints;
+    this.#arbiter = arbiter;
   }
 
   public async isAvailable(run: AgentRun): Promise<boolean> {
@@ -42,9 +39,8 @@ export class TmuxTerminalDelivery {
     if (claim.run === undefined || !(await this.isAvailable(claim.run))) {
       throw new Error("terminal_run_unavailable");
     }
-    if (this.#endpoints.hasWriter(claim.run.id)) {
-      throw new Error("terminal_writer_conflict");
-    }
-    await this.#runtime.pasteToRun(claim.run, formatTerminalDelivery(claim));
+    await this.#arbiter.dispatchAutomated(claim.run.id, () =>
+      this.#runtime.pasteToRun(claim.run as AgentRun, formatTerminalDelivery(claim)),
+    );
   }
 }

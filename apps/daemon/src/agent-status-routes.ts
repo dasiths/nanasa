@@ -2,6 +2,7 @@ import { hostHeaderValidation, originValidation } from "@modelcontextprotocol/no
 import { AgentStatusEventInputSchema, type AgentProfile } from "@nanasa/contracts";
 import type { FastifyInstance } from "fastify";
 
+import type { AgentActionAckService } from "./actions/agent-action-ack-service.js";
 import { AgentStatusService } from "./agent-status-service.js";
 import { McpCredentialIssuer } from "./mcp-auth.js";
 import { NativeSessionService } from "./native-session-service.js";
@@ -17,6 +18,7 @@ export interface AgentStatusRouteOptions {
   nativeSessions?: NativeSessionService;
   adapters?: ProviderAdapterRegistry;
   providerStateRoot?: (profile: AgentProfile) => string;
+  actionAcks?: AgentActionAckService;
 }
 
 class AgentStatusRateLimiter {
@@ -81,4 +83,32 @@ export function registerAgentStatusRoutes(
     }
     return reply.status(202).send(result);
   });
+
+  if (options.actionAcks !== undefined) {
+    app.post<{ Params: { actionId: string } }>(
+      "/api/v1/agent-status/action-acks/:actionId",
+      { bodyLimit: 16 * 1024 },
+      async (request, reply) => {
+        if (!validateHost(request.raw, reply.raw) || !validateOrigin(request.raw, reply.raw)) {
+          reply.hijack();
+          return;
+        }
+        const principal = options.credentials.authenticate(request.headers.authorization);
+        if (principal.kind !== "agent") {
+          throw new DomainError(
+            "agent_action_ack_reporter_required",
+            "Only active agent runs may acknowledge actions",
+            403,
+          );
+        }
+        limiter.check(principal.runId);
+        const action = options.actionAcks!.acknowledge(
+          principal,
+          request.params.actionId,
+          request.body as never,
+        );
+        return reply.status(202).send(action);
+      },
+    );
+  }
 }

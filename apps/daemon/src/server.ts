@@ -5,6 +5,11 @@ import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import {
   AdHocConsoleSessionSchema,
+  AgentActionSchema,
+  AgentActionWorkspaceSchema,
+  CreateAgentActionCommandSchema,
+  ReplyOpenWaitCommandSchema,
+  WaitForAgentActionCommandSchema,
   CreateGroupAgentCommandSchema,
   CreateGroupCommandSchema,
   DeleteGroupResultSchema,
@@ -30,6 +35,11 @@ import {
   UpdateGroupCommandSchema,
   UpdateRolePresentationCommandSchema,
 } from "@nanasa/contracts";
+import { AgentActionAckService } from "./actions/agent-action-ack-service.js";
+import { AgentActionScheduler } from "./actions/agent-action-scheduler.js";
+import { AgentActionService } from "./actions/agent-action-service.js";
+import { AgentOpenWaitService } from "./actions/agent-open-wait-service.js";
+import { AgentWaitService } from "./actions/agent-wait-service.js";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 import { AdHocConsoleManager } from "./ad-hoc-console-manager.js";
 import { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
@@ -41,6 +51,7 @@ import { ConfigRepository } from "./config-repository.js";
 import { DaemonInstanceGuard } from "./daemon-instance-guard.js";
 import { DaemonLifecycle } from "./daemon-lifecycle.js";
 import { DeliveryDispatcher } from "./delivery-dispatcher.js";
+import { DeliveryRepository } from "./delivery-repository.js";
 import { EventLog } from "./event-log.js";
 import { EventStreamSession } from "./event-stream-session.js";
 import { resolveEffectiveAgentPrompt } from "./instruction-resolver.js";
@@ -48,6 +59,7 @@ import { McpCredentialIssuer } from "./mcp-auth.js";
 import { validateMcpEndpointConfiguration } from "./mcp-config.js";
 import { registerMcpRoutes } from "./mcp-server.js";
 import { MessageCommandService } from "./message-command-service.js";
+import { MessageRepository } from "./message-repository.js";
 import { NativeSessionService } from "./native-session-service.js";
 import { OperatorAuth } from "./operator-auth.js";
 import { GeneratedOverlayTransaction } from "./generated-overlay-transaction.js";
@@ -64,6 +76,7 @@ import { TmuxTerminalDelivery } from "./terminal-delivery.js";
 import { ArtifactPreviewService } from "./terminal/artifact-preview-service.js";
 import { TerminalControlService } from "./terminal/terminal-control-service.js";
 import { TerminalGateway } from "./terminal/terminal-gateway.js";
+import { TerminalInputArbiter } from "./terminal/terminal-input-arbiter.js";
 import { TerminalReadService } from "./terminal/terminal-read-service.js";
 import { TmuxRuntime } from "./tmux-runtime.js";
 import { TopologyService } from "./topology-service.js";
@@ -106,6 +119,10 @@ export interface DaemonContext {
   consoles: AdHocConsoleManager;
   dispatcher: DeliveryDispatcher;
   messageCommands: MessageCommandService;
+  actions: AgentActionService;
+  actionScheduler: AgentActionScheduler;
+  actionWaits: AgentWaitService;
+  openWaits: AgentOpenWaitService;
   topology: TopologyService;
   loadedConfig: LoadedNanasaConfig;
   runtimePath: string;
@@ -322,6 +339,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       }),
     });
     const terminalControl = new TerminalControlService(store);
+    const terminalInput = new TerminalInputArbiter(terminalControl);
     const terminalReads = new TerminalReadService(
       store,
       runtime,
@@ -333,12 +351,20 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       terminalReads,
       daemonEpoch,
       options.tmuxPath ?? "tmux",
+      terminalInput,
     );
     const artifactPreviews = new ArtifactPreviewService(loadedConfig.repoRoot);
-    const terminalDelivery = new TmuxTerminalDelivery(runtime, terminalGateway);
+    const terminalDelivery = new TmuxTerminalDelivery(runtime, terminalInput);
     const consoles = new AdHocConsoleManager(runtime, terminalGateway, loadedConfig.repoRoot);
-    const dispatcher = new DeliveryDispatcher(store, terminalDelivery);
-    const messageCommands = new MessageCommandService(store);
+    const deliveries = new DeliveryRepository(store);
+    const messages = new MessageRepository(store);
+    const dispatcher = new DeliveryDispatcher(store, deliveries, terminalDelivery);
+    const messageCommands = new MessageCommandService(messages);
+    const actions = new AgentActionService(store, daemonEpoch);
+    const actionScheduler = new AgentActionScheduler(store, runtime, terminalInput);
+    const actionAcks = new AgentActionAckService(store);
+    const actionWaits = new AgentWaitService(store);
+    const openWaits = new AgentOpenWaitService(store, runtime, terminalInput, providerAdapters);
     const coordinator = new RunRuntimeCoordinator(store, runtime, terminalGateway, dispatcher, {
       ...(options.reconcileIntervalMs === undefined
         ? {}
@@ -359,6 +385,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     await app.register(websocket);
     await coordinator.reconcile(true);
     coordinator.start();
+    actionScheduler.start();
 
     app.addHook("onRequest", async (request, reply) => {
       const path = requestPath(request.url);
@@ -377,6 +404,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         path === "/api/v1/meta" ||
         path === "/api/v1/auth/bootstrap" ||
         path === "/api/v1/agent-status/events" ||
+        path.startsWith("/api/v1/agent-status/action-acks/") ||
         path === "/api/v1/internal/tmux-invalidation"
       ) {
         return;
@@ -433,6 +461,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       lifecycle.beginDraining();
       for (const session of eventSessions) session.plannedRestart();
       await consoles.close();
+      await actionScheduler.close();
       await coordinator.close();
     });
 
@@ -506,6 +535,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
           credentialReference: integration.credentials,
         }).storageReference;
       },
+      actionAcks,
     });
     if (options.mcp?.enabled === true) {
       registerMcpRoutes(app, {
@@ -515,6 +545,9 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         credentials: mcpCredentials,
         store,
         messages: messageCommands,
+        actions,
+        actionWaits,
+        openWaits,
       });
     }
     app.get("/api/v1/config", async () => configRepository.load().config);
@@ -622,6 +655,81 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         InterruptAgentRunCommandSchema.parse(request.body);
         await coordinator.interrupt(request.params.runId);
         return reply.status(204).send();
+      },
+    );
+
+    app.post("/api/v1/agent-actions", async (request, reply) => {
+      const key = idempotencyKey(request.headers);
+      if (key === undefined) {
+        throw new DomainError(
+          "action_idempotency_key_required",
+          "Agent actions require an Idempotency-Key",
+          400,
+        );
+      }
+      const principal = operatorAuth.authenticate(request);
+      const action = actions.create(
+        { kind: "operator", operatorId: principal.operatorId },
+        CreateAgentActionCommandSchema.parse(request.body),
+        key,
+      );
+      void actionScheduler.tick();
+      return reply.status(201).send(AgentActionSchema.parse(action));
+    });
+
+    app.get<{ Params: { actionId: string } }>(
+      "/api/v1/agent-actions/:actionId",
+      async (request) => {
+        const principal = operatorAuth.authenticate(request);
+        return AgentActionSchema.parse(
+          actions.get(
+            { kind: "operator", operatorId: principal.operatorId },
+            request.params.actionId,
+          ),
+        );
+      },
+    );
+
+    app.post<{ Params: { actionId: string } }>(
+      "/api/v1/agent-actions/:actionId/cancel",
+      async (request) => {
+        const principal = operatorAuth.authenticate(request);
+        return AgentActionSchema.parse(
+          actions.cancel(
+            { kind: "operator", operatorId: principal.operatorId },
+            request.params.actionId,
+          ),
+        );
+      },
+    );
+
+    app.post<{ Params: { actionId: string } }>(
+      "/api/v1/agent-actions/:actionId/wait",
+      async (request) => {
+        const principal = operatorAuth.authenticate(request);
+        return actionWaits.wait(
+          { kind: "operator", operatorId: principal.operatorId },
+          request.params.actionId,
+          WaitForAgentActionCommandSchema.parse(request.body),
+        );
+      },
+    );
+
+    app.get<{ Params: { groupId: string } }>(
+      "/api/v1/groups/:groupId/action-workspace",
+      async (request) =>
+        AgentActionWorkspaceSchema.parse(actions.listWorkspace(request.params.groupId)),
+    );
+
+    app.post<{ Params: { waitId: string } }>(
+      "/api/v1/open-waits/:waitId/reply",
+      async (request) => {
+        const principal = operatorAuth.authenticate(request);
+        return openWaits.reply(
+          { kind: "operator", operatorId: principal.operatorId },
+          request.params.waitId,
+          ReplyOpenWaitCommandSchema.parse(request.body),
+        );
       },
     );
 
@@ -769,7 +877,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         }
         return Number(value);
       };
-      return store.listMessagePage(request.params.groupId, {
+      return messages.page(request.params.groupId, {
         ...(request.query.limit === undefined
           ? {}
           : { limit: parsePositive(request.query.limit, "limit") }),
@@ -784,13 +892,12 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
 
     app.delete<{ Params: { groupId: string } }>(
       "/api/v1/groups/:groupId/messages",
-      async (request) =>
-        store.clearMessageHistory(request.params.groupId, idempotencyKey(request.headers)),
+      async (request) => messages.clear(request.params.groupId, idempotencyKey(request.headers)),
     );
 
     app.get<{ Params: { messageId: string } }>(
       "/api/v1/messages/:messageId/deliveries",
-      async (request) => store.listDeliveries(request.params.messageId),
+      async (request) => deliveries.list(request.params.messageId),
     );
 
     app.get<{ Querystring: { after?: string; instance?: string } }>(
@@ -849,6 +956,10 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       consoles,
       dispatcher,
       messageCommands,
+      actions,
+      actionScheduler,
+      actionWaits,
+      openWaits,
       topology,
       loadedConfig,
       runtimePath,

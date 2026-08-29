@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
-import { type DeliveryClaim, NanasaStore } from "./store.js";
+import { DeliveryRepository } from "./delivery-repository.js";
+import type { DeliveryClaim, NanasaStore } from "./store.js";
 
 export interface TerminalDeliveryTarget {
   deliver(claim: DeliveryClaim): Promise<void>;
@@ -19,6 +20,7 @@ export interface DeliveryDispatcherOptions {
 
 export class DeliveryDispatcher {
   readonly #store: NanasaStore;
+  readonly #deliveries: DeliveryRepository;
   readonly #target: TerminalDeliveryTarget;
   readonly #owner: string;
   readonly #pollIntervalMs: number;
@@ -35,10 +37,12 @@ export class DeliveryDispatcher {
 
   public constructor(
     store: NanasaStore,
+    deliveries: DeliveryRepository,
     target: TerminalDeliveryTarget,
     options: DeliveryDispatcherOptions = {},
   ) {
     this.#store = store;
+    this.#deliveries = deliveries;
     this.#target = target;
     this.#owner = options.owner ?? `dispatcher_${randomUUID()}`;
     this.#pollIntervalMs = options.pollIntervalMs ?? 1_000;
@@ -81,7 +85,7 @@ export class DeliveryDispatcher {
   }
 
   async #dispatch(): Promise<void> {
-    const claims = this.#store.claimDeliveries({
+    const claims = this.#deliveries.claim({
       owner: this.#owner,
       now: this.#now(),
       leaseMs: this.#leaseMs,
@@ -92,14 +96,14 @@ export class DeliveryDispatcher {
 
   async #deliver(claim: DeliveryClaim): Promise<void> {
     if (!claim.recipientActive) {
-      this.#store.revokeClaim(claim, this.#owner, "membership_removed");
+      this.#deliveries.revoke(claim, this.#owner, "membership_removed");
       return;
     }
     if (
       claim.message.delivery.expiresAt !== undefined &&
       new Date(claim.message.delivery.expiresAt).getTime() <= this.#now().getTime()
     ) {
-      this.#store.rejectClaim(claim, this.#owner, "delivery_expired");
+      this.#deliveries.reject(claim, this.#owner, "delivery_expired");
       return;
     }
     if (claim.run === undefined || claim.run.status !== "running") {
@@ -108,9 +112,9 @@ export class DeliveryDispatcher {
     }
 
     try {
-      if (!this.#store.beginDelivery(claim, this.#owner)) return;
+      if (!this.#deliveries.begin(claim, this.#owner)) return;
       await this.#target.deliver(claim);
-      this.#store.markDeliveryTerminalInjected(claim, this.#owner);
+      this.#deliveries.markTerminalInjected(claim, this.#owner);
     } catch (error) {
       this.#retry(claim, error instanceof Error ? error.message : "terminal_delivery_failed");
     }
@@ -119,7 +123,7 @@ export class DeliveryDispatcher {
   #retry(claim: DeliveryClaim, reason: string): void {
     const exponent = Math.max(0, claim.delivery.attempts - 1);
     const delay = Math.min(this.#retryMaxMs, this.#retryBaseMs * 2 ** exponent);
-    this.#store.failDeliveryAttempt(claim, this.#owner, reason, {
+    this.#deliveries.fail(claim, this.#owner, reason, {
       maxAttempts: this.#maxAttempts,
       retryAt: new Date(this.#now().getTime() + delay),
     });

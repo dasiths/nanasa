@@ -1,6 +1,16 @@
 import {
   type AdHocConsoleSession,
   AdHocConsoleSessionSchema,
+  type AgentAction,
+  AgentActionSchema,
+  type AgentActionWorkspace,
+  AgentActionWorkspaceSchema,
+  type CreateAgentActionCommand,
+  CreateAgentActionCommandSchema,
+  type OpenWait,
+  OpenWaitSchema,
+  type ReplyOpenWaitCommand,
+  ReplyOpenWaitCommandSchema,
   type AgentRun,
   AgentRunSchema,
   type ClearMessageHistoryResult,
@@ -87,6 +97,9 @@ export interface PortalClient {
   startAllRuns(groupId: string, idempotencyKey: string): Promise<StartGroupRunsResult>;
   stopRun(groupId: string, agentId: string): Promise<AgentRun>;
   submitMessage(groupId: string, command: SubmitMessageCommand): Promise<MessageSubmissionResult>;
+  createAgentAction(command: CreateAgentActionCommand): Promise<AgentAction>;
+  loadActionWorkspace(groupId: string): Promise<AgentActionWorkspace>;
+  replyOpenWait(waitId: string, command: ReplyOpenWaitCommand): Promise<OpenWait>;
   loadMessages(
     groupId: string,
     options?: { limit?: number; before?: number; after?: number },
@@ -208,6 +221,23 @@ export const api: PortalClient = {
       `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/messages`,
       MessageSubmissionResultSchema,
       commandInit("POST", SubmitMessageCommandSchema.parse(command)),
+    ),
+  createAgentAction: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/agent-actions`,
+      AgentActionSchema,
+      commandInit("POST", CreateAgentActionCommandSchema.parse(command)),
+    ),
+  loadActionWorkspace: (groupId) =>
+    request(
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/action-workspace`,
+      AgentActionWorkspaceSchema,
+    ),
+  replyOpenWait: (waitId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/open-waits/${encodeURIComponent(waitId)}/reply`,
+      OpenWaitSchema,
+      commandInit("POST", ReplyOpenWaitCommandSchema.parse(command)),
     ),
   loadMessages: (groupId, options = {}) => {
     const query = new URLSearchParams();

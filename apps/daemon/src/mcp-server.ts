@@ -1,14 +1,19 @@
 import { hostHeaderValidation, originValidation, toNodeHandler } from "@modelcontextprotocol/node";
 import { type AuthInfo, createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import {
+  CreateAgentActionCommandSchema,
   AgentProgressReportCommandSchema,
   MAX_MESSAGE_REQUEST_BYTES,
   type MessageSubmissionResult,
   SubmitMessageCommandSchema,
+  WaitForAgentActionCommandSchema,
 } from "@nanasa/contracts";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { nanasaMcpServerInstructions } from "./coordination-instructions.js";
+import type { AgentActionService } from "./actions/agent-action-service.js";
+import type { AgentOpenWaitService } from "./actions/agent-open-wait-service.js";
+import type { AgentWaitService } from "./actions/agent-wait-service.js";
 import { McpCredentialIssuer, type McpPrincipal } from "./mcp-auth.js";
 import { MessageCommandService } from "./message-command-service.js";
 import { DomainError, NanasaStore } from "./store.js";
@@ -41,6 +46,22 @@ const ListAgentStatusesSchema = z
 const GetAgentStatusSchema = z
   .object({ groupId: IdentifierSchema.optional(), memberId: IdentifierSchema })
   .strict();
+const PromptPeerSchema = z
+  .object({
+    groupId: IdentifierSchema.optional(),
+    memberId: IdentifierSchema,
+    prompt: z.string().trim().min(1),
+    idempotencyKey: z.string().trim().min(1).max(256),
+    expectedRunId: IdentifierSchema.optional(),
+    expectedGeneration: z.number().int().positive().optional(),
+    expectedStatusRevision: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+const ActionReferenceSchema = z.object({ actionId: IdentifierSchema }).strict();
+const WaitActionSchema = ActionReferenceSchema.extend({
+  states: z.array(z.string().trim().min(1)).min(1).max(16),
+  timeoutMs: z.number().int().min(1).max(300_000).default(30_000),
+}).strict();
 
 export interface McpRouteOptions {
   path: string;
@@ -49,6 +70,9 @@ export interface McpRouteOptions {
   credentials: McpCredentialIssuer;
   store: NanasaStore;
   messages: MessageCommandService;
+  actions: AgentActionService;
+  actionWaits: AgentWaitService;
+  openWaits: AgentOpenWaitService;
 }
 
 class McpRateLimiter {
@@ -118,8 +142,39 @@ function commandBase(principal: McpPrincipal, input: z.infer<typeof MessageField
     body: { contentType: input.contentType, text: input.text },
     delivery: {},
     replyTo: input.replyTo,
-    hop: 0,
   };
+}
+
+function actionPrincipal(principal: McpPrincipal) {
+  return principal.kind === "agent"
+    ? {
+        kind: "agent" as const,
+        groupId: principal.groupId,
+        memberId: principal.memberId,
+        runId: principal.runId,
+        generation: principal.generation,
+      }
+    : { kind: "operator" as const, operatorId: principal.operatorId };
+}
+
+function actionToolResult(operation: () => unknown) {
+  try {
+    const result = operation();
+    return {
+      content: [{ type: "text" as const, text: "Durable action state returned." }],
+      structuredContent: { result },
+    };
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: error instanceof Error ? error.message : "Agent action failed",
+        },
+      ],
+      isError: true,
+    };
+  }
 }
 
 function listMembersResult(
@@ -360,6 +415,105 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
         );
       }),
   );
+  server.registerTool(
+    "nanasa.prompt_peer",
+    {
+      description:
+        "Create a durable prompt action for one exact current peer; dispatch waits for safe readiness",
+      inputSchema: PromptPeerSchema,
+    },
+    async (input) =>
+      actionToolResult(() =>
+        options.actions.create(
+          actionPrincipal(principal),
+          CreateAgentActionCommandSchema.parse({
+            kind: "prompt",
+            groupId: targetGroup(principal, input.groupId),
+            memberId: input.memberId,
+            prompt: input.prompt,
+            allowWorking: false,
+            expectedRunId: input.expectedRunId,
+            expectedGeneration: input.expectedGeneration,
+            expectedStatusRevision: input.expectedStatusRevision,
+          }),
+          input.idempotencyKey,
+        ),
+      ),
+  );
+  server.registerTool(
+    "nanasa.get_action_result",
+    {
+      description:
+        "Read the exact durable state and correlated result for an action created by the caller",
+      inputSchema: ActionReferenceSchema,
+    },
+    async (input) =>
+      actionToolResult(() => options.actions.get(actionPrincipal(principal), input.actionId)),
+  );
+  server.registerTool(
+    "nanasa.wait_action",
+    {
+      description: "Wait for one exact durable action to enter any requested lifecycle state",
+      inputSchema: WaitActionSchema,
+    },
+    async (input) => {
+      try {
+        const result = await options.actionWaits.wait(
+          actionPrincipal(principal),
+          input.actionId,
+          WaitForAgentActionCommandSchema.parse({
+            states: input.states,
+            timeoutMs: input.timeoutMs,
+          }),
+        );
+        return {
+          content: [{ type: "text" as const, text: `Action is ${result.action.state}.` }],
+          structuredContent: result,
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: error instanceof Error ? error.message : "Action wait failed",
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+  server.registerTool(
+    "nanasa.cancel_action",
+    {
+      description: "Cancel the caller's own action before provider submission",
+      inputSchema: ActionReferenceSchema,
+    },
+    async (input) =>
+      actionToolResult(() => options.actions.cancel(actionPrincipal(principal), input.actionId)),
+  );
+  server.registerTool(
+    "nanasa.list_own_waits",
+    {
+      description: "List only the authenticated agent runtime's exact open provider waits",
+      inputSchema: z.object({ groupId: IdentifierSchema.optional() }).strict(),
+    },
+    async (input) => {
+      if (principal.kind !== "agent") {
+        return {
+          content: [{ type: "text" as const, text: "Only agents have own runtime waits." }],
+          isError: true,
+        };
+      }
+      return actionToolResult(() =>
+        options.openWaits.list(
+          actionPrincipal(principal),
+          targetGroup(principal, input.groupId),
+          principal.memberId,
+        ),
+      );
+    },
+  );
   return server;
 }
 
@@ -390,7 +544,15 @@ export function registerMcpRoutes(app: FastifyInstance, options: McpRouteOptions
     (request.raw as typeof request.raw & { auth?: AuthInfo }).auth = {
       token,
       clientId: "nanasa-bearer-client",
-      scopes: ["messages:submit"],
+      scopes: [
+        "members:read",
+        "status:read",
+        "progress:write:self",
+        "messages:send",
+        "actions:prompt:peer",
+        "actions:wait:own",
+        "waits:read:self",
+      ],
     };
     reply.hijack();
     await nodeHandler(request.raw as Parameters<typeof nodeHandler>[0], reply.raw, request.body);

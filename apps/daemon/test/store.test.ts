@@ -51,7 +51,6 @@ describe("NanasaStore persistence", () => {
       audience: { kind: "dm", memberId: membership.memberId },
       body: { contentType: "text/markdown", text: "Review the API." },
       delivery: {},
-      hop: 0,
     });
 
     expect(store.getSnapshot()).toMatchObject({
@@ -286,7 +285,6 @@ describe("NanasaStore persistence", () => {
           audience: { kind: "dm", memberId: "reviewer" },
           body: { contentType: "text/plain", text },
           delivery: {},
-          hop: 0,
         },
         key,
       );
@@ -430,7 +428,6 @@ describe("NanasaStore group and membership updates", () => {
       audience: { kind: "multicast", memberIds: ["alpha", "beta"] },
       body: { contentType: "text/plain", text: "Before deletion" },
       delivery: {},
-      hop: 0,
     });
     const linkedGroup = store.createGroup({ name: "Linked group" });
     store.addMembership(linkedGroup.id, {
@@ -444,10 +441,6 @@ describe("NanasaStore group and membership updates", () => {
       audience: { kind: "dm", memberId: "linked-member" },
       body: { contentType: "text/plain", text: "Cross-group reply" },
       delivery: {},
-      replyTo: submission.message.id,
-      rootId: submission.message.id,
-      causationId: submission.message.id,
-      hop: 0,
     });
 
     expect(store.listGroupRunsRequiringStop(fixture.groupId)).toMatchObject([
@@ -527,7 +520,6 @@ describe("NanasaStore message routing", () => {
       intent: "request" as const,
       body: { contentType: "text/plain" as const, text: "Check this." },
       delivery: {},
-      hop: 0,
     };
 
     const direct = store.submitMessage(fixture.groupId, {
@@ -607,7 +599,6 @@ describe("NanasaStore message routing", () => {
       intent: "request" as const,
       body: { contentType: "text/plain" as const, text: "Check this." },
       delivery: {},
-      hop: 0,
     };
 
     expect(() =>
@@ -641,6 +632,116 @@ describe("NanasaStore message routing", () => {
         audience: { kind: "dm", memberId: "alpha" },
       }),
     ).toThrowError(expect.objectContaining({ code: "invalid_sender_run" }));
+    store.close();
+  });
+
+  it("derives causal depth, validates visibility, and rejects repeated actor-audience cycles", () => {
+    const store = new NanasaStore(":memory:");
+    const fixture = createRoutingFixture(store);
+    store.createRun({
+      id: "run_beta",
+      groupId: fixture.groupId,
+      memberId: "beta",
+      agentProfileId: fixture.profileId,
+      generation: 1,
+      status: "running",
+      startedAt: "2026-08-29T12:00:00.000Z",
+    });
+    const common = {
+      body: { contentType: "text/plain" as const, text: "Coordinate" },
+      delivery: {},
+    };
+    const root = store.submitMessage(fixture.groupId, {
+      ...common,
+      intent: "request",
+      sender: { kind: "operator", operatorId: "operator" },
+      audience: { kind: "dm", memberId: "alpha" },
+    });
+    const alpha = store.submitMessage(fixture.groupId, {
+      ...common,
+      intent: "response",
+      sender: { kind: "agent", memberId: "alpha", runId: "run_alpha" },
+      audience: { kind: "dm", memberId: "beta" },
+      replyTo: root.message.id,
+      causationId: root.message.id,
+    });
+    expect(alpha.message).toMatchObject({
+      conversationId: root.message.conversationId,
+      rootId: root.message.id,
+      hop: 1,
+    });
+    const beta = store.submitMessage(fixture.groupId, {
+      ...common,
+      intent: "response",
+      sender: { kind: "agent", memberId: "beta", runId: "run_beta" },
+      audience: { kind: "dm", memberId: "alpha" },
+      causationId: alpha.message.id,
+    });
+    expect(beta.message.hop).toBe(2);
+    expect(() =>
+      store.submitMessage(fixture.groupId, {
+        ...common,
+        intent: "response",
+        sender: { kind: "agent", memberId: "alpha", runId: "run_alpha" },
+        audience: { kind: "dm", memberId: "beta" },
+        causationId: beta.message.id,
+      }),
+    ).toThrowError(expect.objectContaining({ code: "message_causal_cycle" }));
+    expect(() =>
+      store.submitMessage(fixture.groupId, {
+        ...common,
+        intent: "response",
+        sender: { kind: "agent", memberId: "beta", runId: "run_beta" },
+        audience: { kind: "dm", memberId: "gamma" },
+        replyTo: root.message.id,
+      }),
+    ).toThrowError(expect.objectContaining({ code: "message_causation_forbidden" }));
+    store.close();
+  });
+
+  it("enforces automated reply and fan-out budgets on the server", () => {
+    const store = new NanasaStore(":memory:");
+    const fixture = createRoutingFixture(store);
+    for (let index = 0; index < 33; index += 1) {
+      store.addMembership(fixture.groupId, {
+        memberId: `fanout-${index}`,
+        agentProfileId: fixture.profileId,
+        alias: `Fanout ${index}`,
+      });
+    }
+    expect(() =>
+      store.submitMessage(fixture.groupId, {
+        intent: "inform",
+        sender: { kind: "operator", operatorId: "operator" },
+        audience: {
+          kind: "group",
+          membershipRevision: store.getGroup(fixture.groupId).membershipRevision,
+        },
+        body: { contentType: "text/plain", text: "Too many recipients" },
+        delivery: {},
+      }),
+    ).toThrowError(expect.objectContaining({ code: "message_fan_out_exceeded" }));
+
+    for (let index = 0; index < 16; index += 1) {
+      store.submitMessage(fixture.groupId, {
+        conversationId: "conversation-budget",
+        intent: "inform",
+        sender: { kind: "agent", memberId: "alpha", runId: "run_alpha" },
+        audience: { kind: "dm", memberId: `fanout-${index}` },
+        body: { contentType: "text/plain", text: `Automated ${index}` },
+        delivery: {},
+      });
+    }
+    expect(() =>
+      store.submitMessage(fixture.groupId, {
+        conversationId: "conversation-budget",
+        intent: "inform",
+        sender: { kind: "agent", memberId: "alpha", runId: "run_alpha" },
+        audience: { kind: "dm", memberId: "fanout-16" },
+        body: { contentType: "text/plain", text: "One too many" },
+        delivery: {},
+      }),
+    ).toThrowError(expect.objectContaining({ code: "message_automated_reply_budget_exhausted" }));
     store.close();
   });
 });
@@ -727,7 +828,6 @@ describe("NanasaStore schema migration", () => {
       audience: { kind: "dm", memberId: "worker" },
       body: { contentType: "text/plain", text: "Pending" },
       delivery: {},
-      hop: 0,
     });
     const completed = store.submitMessage(group.id, {
       intent: "request",
@@ -735,7 +835,6 @@ describe("NanasaStore schema migration", () => {
       audience: { kind: "dm", memberId: "worker" },
       body: { contentType: "text/plain", text: "Completed" },
       delivery: {},
-      hop: 0,
     });
     const eventIds = store.listEvents().map((event) => event.id);
     store.close();
@@ -1044,7 +1143,7 @@ describe("NanasaStore schema migration", () => {
     const baseline = new DatabaseSync(baselinePath, { readOnly: true });
     expect(
       (baseline.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
-    ).toBe(5);
+    ).toBe(6);
     baseline.close();
     return;
     const directory = mkdtempSync(join(tmpdir(), "nanasa-delivery-migration-"));
@@ -1071,7 +1170,6 @@ describe("NanasaStore schema migration", () => {
       audience: { kind: "dm", memberId: member.memberId },
       body: { contentType: "text/plain", text: "Historical" },
       delivery: {},
-      hop: 0,
     });
     store.close();
 

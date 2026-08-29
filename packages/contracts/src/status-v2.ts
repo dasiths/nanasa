@@ -128,6 +128,7 @@ export const AgentStatusEventInputSchema = z
     nativeSessionId: z.string().trim().min(1).max(4_096).optional(),
     event: AgentStatusEventKindSchema,
     occurredAt: TimestampSchema.optional(),
+    actionId: IdentifierSchema.optional(),
     turnId: IdentifierSchema.optional(),
     operationId: IdentifierSchema.optional(),
     requestId: IdentifierSchema.optional(),

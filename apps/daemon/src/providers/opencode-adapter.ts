@@ -7,7 +7,10 @@ import {
   normalizeSessionReference,
   unsupportedSessionMutation,
 } from "./adapter-support.js";
-import { freezeControlStrategy } from "./provider-control-strategy.js";
+import {
+  closedTerminalWaitReplyInput,
+  freezeControlStrategy,
+} from "./provider-control-strategy.js";
 import type {
   NativeSessionReport,
   ProviderAdapter,
@@ -39,6 +42,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
     supportsPromptAcknowledgement: false,
     supportsCancellation: true,
     terminalSubmitSequence: "\r",
+    waitReplyInput: closedTerminalWaitReplyInput,
   });
   public recognizeCommand(command: readonly string[]): boolean {
     return command.some((part) => /(?:^|[/\\])opencode(?:\.exe)?$/.test(part));

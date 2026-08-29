@@ -1,0 +1,486 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { AgentRun, AgentStatusEventInput } from "@nanasa/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentActionAckService } from "../src/actions/agent-action-ack-service.js";
+import { actionReadiness, AgentActionScheduler } from "../src/actions/agent-action-scheduler.js";
+import { AgentActionService } from "../src/actions/agent-action-service.js";
+import { AgentOpenWaitService } from "../src/actions/agent-open-wait-service.js";
+import { AgentWaitService } from "../src/actions/agent-wait-service.js";
+import { PeerCapabilityPolicy } from "../src/actions/peer-capability-policy.js";
+import { ProviderAdapterRegistry } from "../src/providers/provider-adapter-registry.js";
+import { NanasaStore } from "../src/store.js";
+import { TerminalControlService } from "../src/terminal/terminal-control-service.js";
+import { TerminalInputArbiter } from "../src/terminal/terminal-input-arbiter.js";
+
+const stores: NanasaStore[] = [];
+const controls: TerminalControlService[] = [];
+const directories: string[] = [];
+
+afterEach(() => {
+  for (const control of controls.splice(0)) control.close();
+  for (const store of stores.splice(0)) store.close();
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
+});
+
+function reporterEvent(
+  run: AgentRun,
+  sourceSequence: number,
+  event: AgentStatusEventInput["event"],
+  options: Partial<AgentStatusEventInput> = {},
+): AgentStatusEventInput {
+  return {
+    version: 2,
+    eventId: `status_${sourceSequence}_${event}`,
+    providerId: "claude-code",
+    adapterId: "claude-code",
+    reporterId: "claude-hooks",
+    source: "claude-code",
+    protocolVersion: 2,
+    reporterVersion: "2",
+    runId: run.id,
+    generation: run.generation,
+    reporterEpoch: "reporter_epoch_1",
+    sourceSequence,
+    event,
+    data: {},
+    ...options,
+  };
+}
+
+function fixture(path = ":memory:") {
+  const store = new NanasaStore(path);
+  stores.push(store);
+  const daemonEpoch = store.beginDaemonEpoch({
+    instanceId: `instance_${Math.random()}`,
+    processId: 10,
+    processStartedAt: "2026-08-29T12:00:00.000Z",
+  });
+  const group = store.createGroup({ name: "Actions" });
+  const profile = store.createInternalAgentProfile({
+    name: "Claude",
+    agentType: "claude-code",
+    kind: "claude-code",
+    command: "claude",
+    args: [],
+    environment: {},
+  });
+  store.addMembership(group.id, {
+    memberId: "worker",
+    agentProfileId: profile.id,
+    alias: "Worker",
+  });
+  const run = store.createRun({
+    id: "run_action_1",
+    groupId: group.id,
+    memberId: "worker",
+    agentProfileId: profile.id,
+    generation: 1,
+    status: "running",
+    terminal: {
+      serverName: "nanasa-test",
+      sessionId: "$1",
+      windowId: "@1",
+      paneId: "%1",
+    } as never,
+    startedAt: "2026-08-29T12:00:00.000Z",
+  });
+  store.registerReporterSession({
+    id: "reporter_session_1",
+    providerId: "claude-code",
+    adapterId: "claude-code",
+    reporterId: "claude-hooks",
+    source: "claude-code",
+    protocolVersion: 2,
+    reporterVersion: "2",
+    runId: run.id,
+    generation: run.generation,
+    reporterEpoch: "reporter_epoch_1",
+    readinessCoverage: "full",
+    sourceSequence: 0,
+    openedAt: "2026-08-29T12:00:00.000Z",
+    leaseExpiresAt: "2099-08-29T12:00:00.000Z",
+  });
+  store.bindReporterProcess(run.id, run.generation, "a".repeat(64));
+  store.recordProcessStatus(run.id, {
+    event: "process.alive",
+    eventId: "process_alive_1",
+    observedAt: "2026-08-29T12:00:00.000Z",
+    process: {
+      foregroundPgid: 10,
+      leaderPid: 10,
+      pidStartIdentity: "10:100",
+      executableFingerprint: "b".repeat(64),
+      argvFingerprint: "c".repeat(64),
+      processFingerprint: "a".repeat(64),
+      expectedProviderMatch: "match",
+      wrapperChain: ["claude"],
+    },
+  });
+  store.ingestAgentStatusEvent(
+    { groupId: group.id, memberId: "worker", runId: run.id, generation: 1 },
+    reporterEvent(run, 1, "session.ready"),
+  );
+  const control = new TerminalControlService(store);
+  controls.push(control);
+  const arbiter = new TerminalInputArbiter(control);
+  const runtime = {
+    observeRun: vi.fn(async () => ({
+      id: "observation_1",
+      runId: run.id,
+      generation: run.generation,
+      state: "present" as const,
+      observedAt: "2026-08-29T12:00:00.000Z",
+      evidenceCode: "exact_owned_pane_and_process",
+      process: {
+        foregroundPgid: 10,
+        leaderPid: 10,
+        pidStartIdentity: "10:100",
+        executableFingerprint: "b".repeat(64),
+        argvFingerprint: "c".repeat(64),
+        processFingerprint: "a".repeat(64),
+        expectedProviderMatch: "match" as const,
+        wrapperChain: ["claude"],
+      },
+    })),
+    pasteToRun: vi.fn(async () => undefined),
+  };
+  const actions = new AgentActionService(
+    store,
+    daemonEpoch,
+    undefined,
+    () => new Date("2026-08-29T12:00:01.000Z"),
+  );
+  const scheduler = new AgentActionScheduler(
+    store,
+    runtime,
+    arbiter,
+    () => new Date("2026-08-29T12:00:02.000Z"),
+  );
+  const principal = { kind: "operator" as const, operatorId: "operator_1" };
+  return {
+    store,
+    daemonEpoch,
+    group,
+    profile,
+    run,
+    control,
+    arbiter,
+    runtime,
+    actions,
+    scheduler,
+    principal,
+  };
+}
+
+function createAction(context: ReturnType<typeof fixture>, key = "action-key") {
+  return context.actions.create(
+    context.principal,
+    {
+      kind: "prompt",
+      groupId: context.group.id,
+      memberId: "worker",
+      prompt: "Review the exact action",
+      allowWorking: false,
+    },
+    key,
+  );
+}
+
+describe("durable exact-runtime actions", () => {
+  it("keeps terminal injection as submission evidence until fenced reporter acknowledgements", async () => {
+    const context = fixture();
+    const action = createAction(context);
+    await context.scheduler.tick();
+
+    expect(context.runtime.pasteToRun).toHaveBeenCalledOnce();
+    expect(context.store.getAgentAction(action.id).state).toBe("submitted");
+    expect(context.store.listActionAcknowledgements(action.id)).toEqual([]);
+
+    const acks = new AgentActionAckService(
+      context.store,
+      () => new Date("2026-08-29T12:00:03.000Z"),
+    );
+    const reporterPrincipal = {
+      kind: "agent" as const,
+      groupId: context.group.id,
+      memberId: "worker",
+      runId: context.run.id,
+      generation: 1,
+    };
+    expect(
+      acks.acknowledge(reporterPrincipal, action.id, {
+        kind: "accepted",
+        sourceSequence: 2,
+        providerTurnId: "turn_1",
+        completionRevision: 0,
+        data: {},
+      }).state,
+    ).toBe("accepted");
+    context.store.ingestAgentStatusEvent(
+      reporterPrincipal,
+      reporterEvent(context.run, 3, "turn.started", { turnId: "turn_1" }),
+    );
+    context.store.ingestAgentStatusEvent(
+      reporterPrincipal,
+      reporterEvent(context.run, 4, "turn.settled", { turnId: "turn_1" }),
+    );
+    expect(
+      acks.acknowledge(reporterPrincipal, action.id, {
+        kind: "completed",
+        sourceSequence: 5,
+        providerTurnId: "turn_1",
+        completionRevision: 1,
+        data: { summary: "done" },
+      }).state,
+    ).toBe("completed");
+  });
+
+  it("never follows a replacement run and conservatively settles an ambiguous crash window", async () => {
+    const context = fixture();
+    const replaced = createAction(context, "replacement");
+    context.store.updateRunStatus(context.run.id, "stopping");
+    context.store.updateRunStatus(context.run.id, "stopped");
+    expect(context.store.getAgentAction(replaced.id)).toMatchObject({
+      state: "superseded",
+      error: { code: "run_stopped" },
+    });
+    await context.scheduler.tick();
+    expect(context.runtime.pasteToRun).not.toHaveBeenCalled();
+
+    const second = fixture();
+    const ambiguous = createAction(second, "ambiguous");
+    const now = new Date("2026-08-29T12:00:02.000Z");
+    second.store.beginAgentActionAttempt({
+      id: "attempt_ambiguous",
+      actionId: ambiguous.id,
+      attempt: 1,
+      effect: "terminal-injection",
+      state: "submitting",
+      daemonEpoch: ambiguous.target.daemonEpoch,
+      groupId: ambiguous.target.groupId,
+      memberId: ambiguous.target.memberId,
+      runId: ambiguous.target.runId,
+      generation: ambiguous.target.generation,
+      reporterSessionId: ambiguous.target.reporterSessionId,
+      reporterId: ambiguous.target.reporterId,
+      reporterEpoch: ambiguous.target.reporterEpoch,
+      baselineStatusRevision: ambiguous.target.baselineStatusRevision,
+      baselineCompletionRevision: ambiguous.target.baselineCompletionRevision,
+      terminalBinding: second.run.terminal!,
+      terminalBindingFingerprint: "d".repeat(64),
+      leaseOwner: "crashed_scheduler",
+      leaseExpiresAt: new Date(now.getTime() - 1).toISOString(),
+      createdAt: new Date(now.getTime() - 1_000).toISOString(),
+      updatedAt: new Date(now.getTime() - 1_000).toISOString(),
+    });
+    await second.scheduler.tick();
+    expect(second.store.getAgentAction(ambiguous.id)).toMatchObject({
+      state: "settled-unverified",
+      error: { code: "submission_crash_window" },
+    });
+    expect(second.runtime.pasteToRun).not.toHaveBeenCalled();
+  });
+
+  it("dispatches only fresh current interactive idle unless working is explicitly overridden", () => {
+    const context = fixture();
+    const action = createAction(context);
+    const idle = context.store.getAgentStatus(context.group.id, "worker");
+    expect(actionReadiness(action, idle, new Date("2026-08-29T12:00:02.000Z"))).toEqual({
+      kind: "dispatch",
+    });
+    for (const [state, code] of [
+      ["blocked", "target_blocked"],
+      ["unknown", "target_unknown"],
+      ["failed", "target_failed"],
+      ["stopped", "target_stopped"],
+    ] as const) {
+      expect(actionReadiness(action, { ...idle, state }, new Date())).toEqual({
+        kind: "reject",
+        code,
+      });
+    }
+    expect(actionReadiness(action, { ...idle, state: "starting" }, new Date())).toEqual({
+      kind: "defer",
+      code: "target_starting",
+    });
+    expect(
+      actionReadiness(action, { ...idle, processState: "indeterminate" }, new Date()),
+    ).toMatchObject({ kind: "reject", code: "target_process_indeterminate" });
+    expect(actionReadiness(action, { ...idle, staleAuthority: true }, new Date())).toMatchObject({
+      kind: "reject",
+      code: "target_reporter_stale",
+    });
+    expect(actionReadiness(action, { ...idle, state: "working" }, new Date())).toMatchObject({
+      kind: "reject",
+      code: "target_working_override_required",
+    });
+    expect(
+      actionReadiness({ ...action, allowWorking: true }, { ...idle, state: "working" }, new Date()),
+    ).toEqual({ kind: "dispatch" });
+    expect(
+      actionReadiness(
+        { ...action, target: { ...action.target, runId: "replacement" } },
+        idle,
+        new Date(),
+      ),
+    ).toMatchObject({ kind: "reject", code: "target_identity_mismatch" });
+  });
+
+  it("waits for exact action states without treating unrelated events as completion", async () => {
+    const context = fixture();
+    const action = createAction(context);
+    const waits = new AgentWaitService(context.store);
+    const pending = waits.wait(context.principal, action.id, {
+      states: ["cancelled"],
+      timeoutMs: 1_000,
+    });
+    context.store.recordRuntimeEvent("unrelated.changed", "run", context.run.id, {});
+    context.actions.cancel(context.principal, action.id);
+    await expect(pending).resolves.toMatchObject({ matched: true, action: { state: "cancelled" } });
+  });
+});
+
+describe("exact provider waits and authority", () => {
+  it("keeps a reply transport-only until the reporter closes the exact wait", async () => {
+    const context = fixture();
+    const identity = {
+      groupId: context.group.id,
+      memberId: "worker",
+      runId: context.run.id,
+      generation: 1,
+    };
+    context.store.ingestAgentStatusEvent(
+      identity,
+      reporterEvent(context.run, 2, "wait.opened", {
+        requestId: "permission_1",
+        data: {
+          waitKind: "permission",
+          summary: "Allow one tool?",
+          replyChannel: "terminal",
+        },
+      }),
+    );
+    const wait = context.store.listOpenWaits(context.group.id)[0]!;
+    const service = new AgentOpenWaitService(
+      context.store,
+      context.runtime,
+      context.arbiter,
+      ProviderAdapterRegistry.builtIn(),
+    );
+    await expect(
+      service.reply(context.principal, wait.id, {
+        expectedRunId: wait.runId,
+        expectedGeneration: wait.generation,
+        expectedReporterEpoch: wait.reporterEpoch,
+        expectedStatusRevision: wait.openedStatusRevision,
+        reply: { kind: "allow-once" },
+      }),
+    ).resolves.toMatchObject({ state: "replying" });
+    expect(context.store.getOpenWait(wait.id).state).toBe("replying");
+    context.store.ingestAgentStatusEvent(
+      identity,
+      reporterEvent(context.run, 3, "wait.closed", { requestId: "permission_1" }),
+    );
+    expect(context.store.getOpenWait(wait.id).state).toBe("answered");
+  });
+
+  it("denies peer permission approval, arbitrary keys, peer stops, and unrestricted reads", () => {
+    const context = fixture();
+    const policy = new PeerCapabilityPolicy();
+    const peer = {
+      kind: "agent" as const,
+      groupId: context.group.id,
+      memberId: "worker",
+      runId: context.run.id,
+      generation: 1,
+    };
+    const wait = {
+      id: "wait_1",
+      groupId: context.group.id,
+      memberId: "worker",
+      runId: context.run.id,
+      generation: 1,
+      reporterSessionId: "reporter_session_1",
+      reporterId: "claude-hooks",
+      reporterEpoch: "reporter_epoch_1",
+      providerRequestId: "permission_1",
+      kind: "permission" as const,
+      summary: "Permission",
+      replyChannel: "terminal" as const,
+      openedStatusRevision: 2,
+      state: "open" as const,
+      openedAt: "2026-08-29T12:00:00.000Z",
+      updatedAt: "2026-08-29T12:00:00.000Z",
+    };
+    expect(() => policy.assertReply(peer, wait, { kind: "allow-once" })).toThrowError(
+      expect.objectContaining({ code: "peer_capability_forbidden" }),
+    );
+    expect(() => policy.assertNoPeerTerminalOrRunControl(peer)).toThrowError(
+      /arbitrary keys, unrestricted terminal reads, or peer run control/,
+    );
+  });
+});
+
+describe("action retention foreign keys", () => {
+  it("nulls message links while action retention cascades attempts and acknowledgements", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "nanasa-actions-retention-"));
+    directories.push(directory);
+    const context = fixture(join(directory, "nanasa.sqlite"));
+    const message = context.store.submitMessage(context.group.id, {
+      intent: "request",
+      sender: { kind: "operator", operatorId: "operator_1" },
+      audience: { kind: "dm", memberId: "worker" },
+      body: { contentType: "text/plain", text: "Linked communication" },
+      delivery: {},
+    });
+    const action = context.actions.create(
+      context.principal,
+      {
+        kind: "prompt",
+        groupId: context.group.id,
+        memberId: "worker",
+        prompt: "Linked work",
+        messageId: message.message.id,
+      },
+      "linked-action",
+    );
+    await context.scheduler.tick();
+    const identity = {
+      groupId: context.group.id,
+      memberId: "worker",
+      runId: context.run.id,
+      generation: 1,
+    };
+    context.store.ingestAgentStatusEvent(
+      identity,
+      reporterEvent(context.run, 2, "wait.opened", {
+        actionId: action.id,
+        requestId: "question_linked",
+        data: {
+          waitKind: "question",
+          summary: "Clarify linked work",
+          replyChannel: "terminal",
+        },
+      }),
+    );
+    context.store.clearMessageHistory(context.group.id);
+    expect(context.store.getAgentAction(action.id).messageId).toBeUndefined();
+    expect(context.store.listOpenWaits(context.group.id)).toMatchObject([
+      { actionId: action.id, state: "open" },
+    ]);
+    context.store.ingestAgentStatusEvent(
+      identity,
+      reporterEvent(context.run, 3, "wait.closed", { requestId: "question_linked" }),
+    );
+    context.store.transitionAgentAction(action.id, ["submitted"], "settled-unverified");
+    expect(context.store.pruneAgentActions(context.group.id, 0)).toBe(1);
+    expect(context.store.listActionAttempts(action.id)).toEqual([]);
+    expect(context.store.listOpenWaits(context.group.id)).toEqual([]);
+    expect(() => context.store.getAgentAction(action.id)).toThrowError(
+      expect.objectContaining({ code: "agent_action_not_found" }),
+    );
+  });
+});

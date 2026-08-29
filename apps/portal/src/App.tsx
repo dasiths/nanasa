@@ -402,6 +402,7 @@ export function App({ client = api }: AppProps) {
                 members={members}
                 historyMembers={groupMemberships}
                 unreadCount={unreadCounts.get(selectedGroup.id) ?? 0}
+                activityRevision={snapshot.sequence}
                 onReadThrough={(sequence) => markReadThrough(selectedGroup.id, sequence)}
                 {...(selectedMessageState === undefined
                   ? {}

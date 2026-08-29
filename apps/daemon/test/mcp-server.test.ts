@@ -161,6 +161,11 @@ describe("Streamable HTTP MCP", () => {
       "nanasa.send_dm",
       "nanasa.send_multicast",
       "nanasa.broadcast_group",
+      "nanasa.prompt_peer",
+      "nanasa.get_action_result",
+      "nanasa.wait_action",
+      "nanasa.cancel_action",
+      "nanasa.list_own_waits",
     ]);
 
     expect((await mcpRequest(daemon, undefined, "tools/list", {})).statusCode).toBe(401);

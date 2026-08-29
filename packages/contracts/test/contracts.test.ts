@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import {
+  AgentActionAttemptSchema,
+  AgentActionSchema,
+  AgentActionStateSchema,
+  OpenWaitSchema,
+  ReplyOpenWaitCommandSchema,
   AgentProfileSchema,
   AgentProgressReportCommandSchema,
   AgentRunSchema,
@@ -108,6 +113,22 @@ const baseMessage = {
 } as const;
 
 describe("message policy contracts", () => {
+  it("derives causal depth on the server instead of accepting caller-owned hops", () => {
+    const command = {
+      intent: baseMessage.intent,
+      sender: baseMessage.sender,
+      audience: baseMessage.audience,
+      body: baseMessage.body,
+      delivery: baseMessage.delivery,
+    };
+    expect(SubmitMessageCommandSchema.safeParse(command).success).toBe(true);
+    expect(
+      SubmitMessageCommandSchema.safeParse({
+        ...command,
+        hop: 2,
+      }).success,
+    ).toBe(false);
+  });
   it("generates only final delivery status names", () => {
     const schema = JSON.stringify(z.toJSONSchema(DeliveryOutcomeSchema));
     expect(schema).toContain("terminal_injected");
@@ -156,7 +177,6 @@ describe("message policy contracts", () => {
       audience: baseMessage.audience,
       body: baseMessage.body,
       delivery: baseMessage.delivery,
-      hop: baseMessage.hop,
     };
     expect(
       SubmitMessageCommandSchema.parse({
@@ -193,6 +213,116 @@ describe("message policy contracts", () => {
     ],
   ])("rejects %s", (_name, overrides) => {
     expect(MessageSchema.safeParse({ ...baseMessage, ...overrides }).success).toBe(false);
+  });
+});
+
+describe("durable action contracts", () => {
+  it("defines every distinct exact-work lifecycle state", () => {
+    expect(AgentActionStateSchema.options).toEqual([
+      "created",
+      "deferred",
+      "submitted",
+      "accepted",
+      "started",
+      "blocked",
+      "completed",
+      "settled-unverified",
+      "failed",
+      "stalled",
+      "timed-out",
+      "cancelled",
+      "expired",
+      "superseded",
+      "rejected",
+    ]);
+  });
+
+  it("requires complete runtime, daemon, reporter, revision, and terminal attempt pins", () => {
+    const target = {
+      groupId: "group_1",
+      memberId: "member_1",
+      runId: "run_1",
+      generation: 2,
+      daemonEpoch: 4,
+      reporterSessionId: "reporter_session_1",
+      reporterId: "claude-hooks",
+      reporterEpoch: "reporter_epoch_1",
+      nativeSessionId: "native_1",
+      baselineStatusRevision: 9,
+      baselineCompletionRevision: 3,
+    };
+    expect(
+      AgentActionSchema.parse({
+        version: 1,
+        id: "action_1",
+        kind: "prompt",
+        principal: { kind: "operator", operatorId: "operator_1" },
+        target,
+        idempotencyKey: "action-key",
+        requestDigest: "a".repeat(64),
+        prompt: "Review this",
+        allowWorking: false,
+        state: "created",
+        queueDeadlineAt: "2026-08-29T12:05:00Z",
+        createdAt: "2026-08-29T12:00:00Z",
+        updatedAt: "2026-08-29T12:00:00Z",
+      }).target,
+    ).toEqual(target);
+    expect(
+      AgentActionAttemptSchema.safeParse({
+        id: "attempt_1",
+        actionId: "action_1",
+        attempt: 1,
+        effect: "terminal-injection",
+        state: "submitting",
+        ...target,
+        terminalBinding: {
+          serverName: "nanasa",
+          sessionId: "session_1",
+          windowId: "@1",
+          paneId: "%1",
+        },
+        terminalBindingFingerprint: "b".repeat(64),
+        leaseOwner: "scheduler_1",
+        leaseExpiresAt: "2026-08-29T12:01:00Z",
+        createdAt: "2026-08-29T12:00:00Z",
+        updatedAt: "2026-08-29T12:00:00Z",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("models exact question, permission, plan approval, and elicitation replies", () => {
+    for (const kind of ["question", "permission", "plan_approval", "elicitation"] as const) {
+      expect(
+        OpenWaitSchema.parse({
+          id: `wait_${kind}`,
+          groupId: "group_1",
+          memberId: "member_1",
+          runId: "run_1",
+          generation: 1,
+          reporterSessionId: "reporter_1",
+          reporterId: "claude-hooks",
+          reporterEpoch: "epoch_1",
+          providerRequestId: `request_${kind}`,
+          kind,
+          summary: "Exact provider request",
+          replyChannel: "terminal",
+          openedStatusRevision: 2,
+          state: "open",
+          openedAt: "2026-08-29T12:00:00Z",
+          updatedAt: "2026-08-29T12:00:00Z",
+        }).kind,
+      ).toBe(kind);
+    }
+    expect(
+      ReplyOpenWaitCommandSchema.safeParse({
+        expectedRunId: "run_1",
+        expectedGeneration: 1,
+        expectedReporterEpoch: "epoch_1",
+        expectedStatusRevision: 2,
+        reply: { kind: "keys", keys: ["Enter"] },
+      }).success,
+    ).toBe(false);
   });
 });
 

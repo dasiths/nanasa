@@ -1,6 +1,12 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
+  type AgentAction,
+  type AgentActionAcknowledgement,
+  AgentActionAcknowledgementSchema,
+  type AgentActionAttempt,
+  AgentActionAttemptSchema,
+  AgentActionSchema,
   type AgentProfile,
   AgentProfileSchema,
   type AgentProgressReportCommand,
@@ -39,6 +45,9 @@ import {
   type InternalCreateAgentProfileCommand,
   InternalCreateAgentProfileCommandSchema,
   MAX_MESSAGE_PAGE_SIZE,
+  MAX_AUTOMATED_REPLIES_PER_CONVERSATION,
+  MAX_MESSAGE_CAUSAL_DEPTH,
+  MAX_MESSAGE_FAN_OUT,
   type Message,
   type MessagePage,
   MessagePageSchema,
@@ -46,6 +55,8 @@ import {
   type MessageSubmissionResult,
   MessageSubmissionResultSchema,
   type NanasaConfig,
+  type OpenWait,
+  OpenWaitSchema,
   type PortalSnapshot,
   PortalSnapshotSchema,
   type RecoveryPhase,
@@ -195,6 +206,112 @@ interface DeliveryRow {
   run_id: string | null;
   run_generation: number | null;
   updated_at: string;
+}
+
+interface ActionRow {
+  id: string;
+  kind: string;
+  principal_json: string;
+  group_id: string;
+  member_id: string;
+  run_id: string;
+  generation: number;
+  daemon_epoch: number;
+  reporter_session_id: string;
+  reporter_id: string;
+  reporter_epoch: string;
+  native_session_id: string | null;
+  baseline_status_revision: number;
+  baseline_completion_revision: number;
+  message_id: string | null;
+  conversation_id: string | null;
+  reply_to_action_id: string | null;
+  causation_id: string | null;
+  idempotency_key: string;
+  request_digest: string;
+  prompt: string | null;
+  allow_working: number;
+  state: string;
+  queue_deadline_at: string;
+  acceptance_deadline_at: string | null;
+  completion_deadline_at: string | null;
+  accepted_provider_turn_id: string | null;
+  accepted_provider_request_id: string | null;
+  result_json: string | null;
+  error_json: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ActionAttemptRow {
+  id: string;
+  action_id: string;
+  attempt: number;
+  effect: string;
+  state: string;
+  daemon_epoch: number;
+  group_id: string;
+  member_id: string;
+  run_id: string;
+  generation: number;
+  reporter_session_id: string;
+  reporter_id: string;
+  reporter_epoch: string;
+  native_session_id: string | null;
+  baseline_status_revision: number;
+  baseline_completion_revision: number;
+  terminal_binding_json: string;
+  terminal_binding_fingerprint: string;
+  provider_turn_id: string | null;
+  provider_request_id: string | null;
+  lease_owner: string;
+  lease_expires_at: string;
+  created_at: string;
+  updated_at: string;
+  submitted_at: string | null;
+  failure_code: string | null;
+}
+
+interface ActionAcknowledgementRow {
+  id: string;
+  action_id: string;
+  attempt_id: string;
+  kind: string;
+  run_id: string;
+  generation: number;
+  reporter_session_id: string;
+  reporter_id: string;
+  reporter_epoch: string;
+  source_sequence: number;
+  native_session_id: string | null;
+  provider_turn_id: string | null;
+  provider_request_id: string | null;
+  completion_revision: number;
+  acknowledged_at: string;
+  data_json: string;
+}
+
+interface OpenWaitRow {
+  id: string;
+  action_id: string | null;
+  group_id: string;
+  member_id: string;
+  run_id: string;
+  generation: number;
+  reporter_session_id: string;
+  reporter_id: string;
+  reporter_epoch: string;
+  native_session_id: string | null;
+  provider_request_id: string;
+  kind: string;
+  summary: string;
+  reply_channel: string;
+  opened_status_revision: number;
+  state: string;
+  expires_at: string | null;
+  opened_at: string;
+  updated_at: string;
+  answered_at: string | null;
 }
 
 interface AgentStatusCurrentRow {
@@ -920,6 +1037,22 @@ export class NanasaStore {
         throw new DomainError("invalid_run_membership", "Run member is not active", 409);
       }
 
+      const timestamp = new Date().toISOString();
+      this.#database
+        .prepare(
+          `UPDATE actions SET state = 'superseded', updated_at = ?,
+             error_json = '{"code":"run_replaced","message":"The target run was replaced","retryable":false}'
+           WHERE group_id = ? AND member_id = ? AND run_id <> ?
+             AND state IN ('created', 'deferred', 'submitted', 'accepted', 'started', 'blocked')`,
+        )
+        .run(timestamp, input.groupId, input.memberId, input.id);
+      this.#database
+        .prepare(
+          `UPDATE open_waits SET state = 'superseded', updated_at = ?
+           WHERE group_id = ? AND member_id = ? AND run_id <> ? AND state IN ('open', 'replying')`,
+        )
+        .run(timestamp, input.groupId, input.memberId, input.id);
+
       this.#database
         .prepare(
           `INSERT INTO runs
@@ -1181,6 +1314,32 @@ export class NanasaStore {
           options.reason ?? "operator_stopped",
           runId,
         );
+      if (status === "stopped" || status === "failed") {
+        const actionState = status === "stopped" ? "superseded" : "failed";
+        this.#database
+          .prepare(
+            `UPDATE actions SET state = ?, updated_at = ?,
+               error_json = ?
+             WHERE run_id = ?
+               AND state IN ('created', 'deferred', 'submitted', 'accepted', 'started', 'blocked')`,
+          )
+          .run(
+            actionState,
+            stoppedAt,
+            JSON.stringify({
+              code: status === "stopped" ? "run_stopped" : "run_failed",
+              message: status === "stopped" ? "The target run stopped" : "The target run failed",
+              retryable: false,
+            }),
+            runId,
+          );
+        this.#database
+          .prepare(
+            `UPDATE open_waits SET state = 'superseded', updated_at = ?
+             WHERE run_id = ? AND state IN ('open', 'replying')`,
+          )
+          .run(stoppedAt, runId);
+      }
       const updated = this.getRun(runId);
       return {
         result: updated,
@@ -1480,6 +1639,7 @@ export class NanasaStore {
         observedAt,
         input,
       );
+      this.#applyOpenWaitReporterEvent(run, session, input, next);
       this.#upsertAgentStatusState(run, next);
       this.#trimAgentStatusEvents(run.id, run.generation);
       return {
@@ -1762,71 +1922,88 @@ export class NanasaStore {
   ): MessageSubmissionResult {
     const input = SubmitMessageCommandSchema.parse(command);
     const scope = `group.${groupId}.message.submit`;
-    return this.#executeIdempotent(scope, idempotencyKey, MessageSubmissionResultSchema, () => {
-      const group = this.#requireGroup(groupId);
-      this.#validateSender(groupId, input.sender);
-      const recipients = this.#resolveRecipients(group, input);
-      if (recipients.length === 0) {
-        throw new DomainError("empty_audience", "The message has no eligible recipients", 409);
-      }
+    const requestDigest = createHash("sha256")
+      .update(JSON.stringify({ groupId, input }))
+      .digest("hex");
+    return this.#executeIdempotent(
+      scope,
+      idempotencyKey,
+      MessageSubmissionResultSchema,
+      () => {
+        const group = this.#requireGroup(groupId);
+        this.#validateSender(groupId, input.sender);
+        const recipients = this.#resolveRecipients(group, input);
+        if (recipients.length === 0) {
+          throw new DomainError("empty_audience", "The message has no eligible recipients", 409);
+        }
+        if (recipients.length > MAX_MESSAGE_FAN_OUT) {
+          throw new DomainError(
+            "message_fan_out_exceeded",
+            `Message fan-out exceeds the ${MAX_MESSAGE_FAN_OUT}-recipient limit`,
+            409,
+          );
+        }
+        const causation = this.#deriveMessageCausation(groupId, input, recipients);
 
-      this.#database
-        .prepare("UPDATE groups SET message_sequence = message_sequence + 1 WHERE id = ?")
-        .run(groupId);
-      const sequenceRow = this.#database
-        .prepare("SELECT message_sequence AS next_seq FROM groups WHERE id = ?")
-        .get(groupId) as unknown as { next_seq: number };
-      const timestamp = new Date().toISOString();
-      const messageId = `msg_${randomUUID()}`;
-      const message = MessageSchema.parse({
-        ...input,
-        id: messageId,
-        groupId,
-        groupSeq: sequenceRow.next_seq,
-        conversationId: input.conversationId ?? `conv_${randomUUID()}`,
-        createdAt: timestamp,
-      });
+        this.#database
+          .prepare("UPDATE groups SET message_sequence = message_sequence + 1 WHERE id = ?")
+          .run(groupId);
+        const sequenceRow = this.#database
+          .prepare("SELECT message_sequence AS next_seq FROM groups WHERE id = ?")
+          .get(groupId) as unknown as { next_seq: number };
+        const timestamp = new Date().toISOString();
+        const messageId = `msg_${randomUUID()}`;
+        const message = MessageSchema.parse({
+          ...input,
+          ...causation,
+          id: messageId,
+          groupId,
+          groupSeq: sequenceRow.next_seq,
+          createdAt: timestamp,
+        });
 
-      this.#database
-        .prepare(
-          `INSERT INTO messages
+        this.#database
+          .prepare(
+            `INSERT INTO messages
              (id, group_id, group_seq, conversation_id, intent, sender_json, audience_json,
               body_json, delivery_json, reply_to, root_id, causation_id, hop, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          message.id,
-          message.groupId,
-          message.groupSeq,
-          message.conversationId,
-          message.intent,
-          JSON.stringify(message.sender),
-          JSON.stringify(message.audience),
-          JSON.stringify(message.body),
-          JSON.stringify(message.delivery),
-          message.replyTo ?? null,
-          message.rootId ?? null,
-          message.causationId ?? null,
-          message.hop,
-          message.createdAt,
-        );
+          )
+          .run(
+            message.id,
+            message.groupId,
+            message.groupSeq,
+            message.conversationId,
+            message.intent,
+            JSON.stringify(message.sender),
+            JSON.stringify(message.audience),
+            JSON.stringify(message.body),
+            JSON.stringify(message.delivery),
+            message.replyTo ?? null,
+            message.rootId ?? null,
+            message.causationId ?? null,
+            message.hop,
+            message.createdAt,
+          );
 
-      const deliveryOutcomes = recipients.map((recipientMemberId) => {
-        const outcome = this.#resolveDelivery(message, recipientMemberId, timestamp);
-        this.#insertDelivery(outcome);
-        return outcome;
-      });
-      this.#pruneGroupMessages(groupId, this.#messageRetentionPerGroup, timestamp);
-      const result = MessageSubmissionResultSchema.parse({ message, deliveryOutcomes });
-      return {
-        result,
-        event: this.#appendEvent("message.submitted", "message", message.id, {
-          groupId,
-          groupSeq: message.groupSeq,
-          state: this.getGroupMessageState(groupId),
-        }),
-      };
-    });
+        const deliveryOutcomes = recipients.map((recipientMemberId) => {
+          const outcome = this.#resolveDelivery(message, recipientMemberId, timestamp);
+          this.#insertDelivery(outcome);
+          return outcome;
+        });
+        this.#pruneGroupMessages(groupId, this.#messageRetentionPerGroup, timestamp);
+        const result = MessageSubmissionResultSchema.parse({ message, deliveryOutcomes });
+        return {
+          result,
+          event: this.#appendEvent("message.submitted", "message", message.id, {
+            groupId,
+            groupSeq: message.groupSeq,
+            state: this.getGroupMessageState(groupId),
+          }),
+        };
+      },
+      requestDigest,
+    );
   }
 
   public getGroupMessageState(groupId: string): GroupMessageState {
@@ -1867,6 +2044,14 @@ export class NanasaStore {
       activeDeliveryCount: row.active_delivery_count,
       failedRecipientMemberIds: failedRows.map((failed) => failed.recipient_member_id),
     });
+  }
+
+  public getMessage(messageId: string): Message {
+    const row = this.#database.prepare("SELECT * FROM messages WHERE id = ?").get(messageId) as
+      | MessageRow
+      | undefined;
+    if (row === undefined) throw new DomainError("message_not_found", "Message not found", 404);
+    return this.#hydrateMessage(row);
   }
 
   public listMessagePage(
@@ -2018,6 +2203,9 @@ export class NanasaStore {
 
   #nullMessageReferences(messageIds: string[]): void {
     for (const messageId of messageIds) {
+      this.#database
+        .prepare("UPDATE actions SET message_id = NULL WHERE message_id = ?")
+        .run(messageId);
       for (const column of ["reply_to", "root_id", "causation_id"] as const) {
         this.#database
           .prepare(`UPDATE messages SET ${column} = NULL WHERE ${column} = ?`)
@@ -2263,6 +2451,604 @@ export class NanasaStore {
     if (event === undefined) return false;
     this.#publish(event);
     return true;
+  }
+
+  public createAgentAction(action: AgentAction): AgentAction {
+    const parsed = AgentActionSchema.parse(action);
+    const existing = this.#database
+      .prepare("SELECT * FROM actions WHERE group_id = ? AND idempotency_key = ?")
+      .get(parsed.target.groupId, parsed.idempotencyKey) as ActionRow | undefined;
+    if (existing !== undefined) {
+      if (existing.request_digest !== parsed.requestDigest) {
+        throw new DomainError(
+          "action_idempotency_conflict",
+          "The action idempotency key was already used for different input",
+          409,
+        );
+      }
+      return this.#hydrateAction(existing);
+    }
+    const event = this.#transaction(() => {
+      this.#database
+        .prepare(
+          `INSERT INTO actions
+             (id, kind, principal_json, group_id, member_id, run_id, generation, daemon_epoch,
+              reporter_session_id, reporter_id, reporter_epoch, native_session_id,
+              baseline_status_revision, baseline_completion_revision, message_id,
+              conversation_id, reply_to_action_id, causation_id, idempotency_key,
+              request_digest, prompt, allow_working, state, queue_deadline_at,
+              acceptance_deadline_at, completion_deadline_at, accepted_provider_turn_id,
+              accepted_provider_request_id, result_json, error_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          parsed.id,
+          parsed.kind,
+          JSON.stringify(parsed.principal),
+          parsed.target.groupId,
+          parsed.target.memberId,
+          parsed.target.runId,
+          parsed.target.generation,
+          parsed.target.daemonEpoch,
+          parsed.target.reporterSessionId,
+          parsed.target.reporterId,
+          parsed.target.reporterEpoch,
+          parsed.target.nativeSessionId ?? null,
+          parsed.target.baselineStatusRevision,
+          parsed.target.baselineCompletionRevision,
+          parsed.messageId ?? null,
+          parsed.conversationId ?? null,
+          parsed.replyToActionId ?? null,
+          parsed.causationId ?? null,
+          parsed.idempotencyKey,
+          parsed.requestDigest,
+          parsed.prompt ?? null,
+          parsed.allowWorking ? 1 : 0,
+          parsed.state,
+          parsed.queueDeadlineAt,
+          parsed.acceptanceDeadlineAt ?? null,
+          parsed.completionDeadlineAt ?? null,
+          parsed.acceptedProviderTurnId ?? null,
+          parsed.acceptedProviderRequestId ?? null,
+          parsed.result === undefined ? null : JSON.stringify(parsed.result),
+          parsed.error === undefined ? null : JSON.stringify(parsed.error),
+          parsed.createdAt,
+          parsed.updatedAt,
+        );
+      return this.#appendEvent("agent-action.created", "agent-action", parsed.id, {
+        groupId: parsed.target.groupId,
+        memberId: parsed.target.memberId,
+        state: parsed.state,
+      });
+    });
+    this.#publish(event);
+    return parsed;
+  }
+
+  public getAgentAction(actionId: string): AgentAction {
+    const row = this.#database.prepare("SELECT * FROM actions WHERE id = ?").get(actionId) as
+      | ActionRow
+      | undefined;
+    if (row === undefined)
+      throw new DomainError("agent_action_not_found", "Agent action not found", 404);
+    return this.#hydrateAction(row);
+  }
+
+  public listAgentActions(groupId?: string): AgentAction[] {
+    const rows = (groupId === undefined
+      ? this.#database.prepare("SELECT * FROM actions ORDER BY created_at, id").all()
+      : this.#database
+          .prepare("SELECT * FROM actions WHERE group_id = ? ORDER BY created_at, id")
+          .all(groupId)) as unknown as ActionRow[];
+    return rows.map((row) => this.#hydrateAction(row));
+  }
+
+  public listActionAttempts(actionId?: string): AgentActionAttempt[] {
+    const rows = (actionId === undefined
+      ? this.#database.prepare("SELECT * FROM action_attempts ORDER BY created_at, id").all()
+      : this.#database
+          .prepare("SELECT * FROM action_attempts WHERE action_id = ? ORDER BY attempt")
+          .all(actionId)) as unknown as ActionAttemptRow[];
+    return rows.map((row) => this.#hydrateActionAttempt(row));
+  }
+
+  public listActionAcknowledgements(actionId?: string): AgentActionAcknowledgement[] {
+    const rows = (actionId === undefined
+      ? this.#database
+          .prepare("SELECT * FROM action_acknowledgements ORDER BY acknowledged_at, id")
+          .all()
+      : this.#database
+          .prepare(
+            "SELECT * FROM action_acknowledgements WHERE action_id = ? ORDER BY acknowledged_at, id",
+          )
+          .all(actionId)) as unknown as ActionAcknowledgementRow[];
+    return rows.map((row) => this.#hydrateActionAcknowledgement(row));
+  }
+
+  public beginAgentActionAttempt(attempt: AgentActionAttempt): AgentActionAttempt {
+    const parsed = AgentActionAttemptSchema.parse(attempt);
+    const event = this.#transaction(() => {
+      const action = this.getAgentAction(parsed.actionId);
+      const run = this.getActiveRun(action.target.groupId, action.target.memberId);
+      const reporter = this.getCurrentReporterSession(
+        action.target.runId,
+        action.target.generation,
+      );
+      const status = this.getAgentStatus(action.target.groupId, action.target.memberId);
+      if (
+        !["created", "deferred"].includes(action.state) ||
+        run?.id !== action.target.runId ||
+        run.generation !== action.target.generation ||
+        parsed.runId !== action.target.runId ||
+        parsed.generation !== action.target.generation ||
+        parsed.daemonEpoch !== action.target.daemonEpoch ||
+        parsed.reporterSessionId !== action.target.reporterSessionId ||
+        parsed.reporterId !== action.target.reporterId ||
+        parsed.reporterEpoch !== action.target.reporterEpoch ||
+        reporter?.id !== action.target.reporterSessionId ||
+        reporter.reporterEpoch !== action.target.reporterEpoch ||
+        JSON.stringify(run.terminal) !== JSON.stringify(parsed.terminalBinding) ||
+        parsed.baselineStatusRevision !== status.statusRevision ||
+        parsed.baselineCompletionRevision !== status.completionRevision
+      ) {
+        throw new DomainError(
+          "agent_action_target_replaced",
+          "The exact action target is no longer authoritative",
+          409,
+        );
+      }
+      if (
+        this.listActionAttempts(action.id).some((candidate) => candidate.state === "submitting")
+      ) {
+        throw new DomainError(
+          "agent_action_ambiguous_attempt",
+          "An action attempt may already have written to the provider",
+          409,
+        );
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO action_attempts
+             (id, action_id, attempt, effect, state, daemon_epoch, group_id, member_id,
+              run_id, generation, reporter_session_id, reporter_id, reporter_epoch,
+              native_session_id, baseline_status_revision, baseline_completion_revision,
+              terminal_binding_json, terminal_binding_fingerprint, provider_turn_id,
+              provider_request_id, lease_owner, lease_expires_at, created_at, updated_at,
+              submitted_at, failure_code)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          parsed.id,
+          parsed.actionId,
+          parsed.attempt,
+          parsed.effect,
+          parsed.state,
+          parsed.daemonEpoch,
+          parsed.groupId,
+          parsed.memberId,
+          parsed.runId,
+          parsed.generation,
+          parsed.reporterSessionId,
+          parsed.reporterId,
+          parsed.reporterEpoch,
+          parsed.nativeSessionId ?? null,
+          parsed.baselineStatusRevision,
+          parsed.baselineCompletionRevision,
+          JSON.stringify(parsed.terminalBinding),
+          parsed.terminalBindingFingerprint,
+          parsed.providerTurnId ?? null,
+          parsed.providerRequestId ?? null,
+          parsed.leaseOwner,
+          parsed.leaseExpiresAt,
+          parsed.createdAt,
+          parsed.updatedAt,
+          parsed.submittedAt ?? null,
+          parsed.failureCode ?? null,
+        );
+      return this.#appendEvent("agent-action.attempt-started", "agent-action", parsed.actionId, {
+        attemptId: parsed.id,
+        state: parsed.state,
+      });
+    });
+    this.#publish(event);
+    return parsed;
+  }
+
+  public markAgentActionSubmitted(
+    actionId: string,
+    attemptId: string,
+    leaseOwner: string,
+  ): AgentAction {
+    const timestamp = new Date().toISOString();
+    const completed = this.#transaction(() => {
+      const attempt = this.#database
+        .prepare("SELECT * FROM action_attempts WHERE id = ? AND action_id = ?")
+        .get(attemptId, actionId) as ActionAttemptRow | undefined;
+      if (
+        attempt === undefined ||
+        attempt.state !== "submitting" ||
+        attempt.lease_owner !== leaseOwner
+      ) {
+        throw new DomainError(
+          "agent_action_attempt_fenced",
+          "The action attempt lease is no longer current",
+          409,
+        );
+      }
+      const action = this.getAgentAction(actionId);
+      const run = this.getActiveRun(action.target.groupId, action.target.memberId);
+      if (
+        run?.id !== attempt.run_id ||
+        run.generation !== attempt.generation ||
+        JSON.stringify(run.terminal) !== attempt.terminal_binding_json
+      ) {
+        throw new DomainError(
+          "agent_action_target_replaced",
+          "The action target changed during submission",
+          409,
+        );
+      }
+      this.#database
+        .prepare(
+          "UPDATE action_attempts SET state = 'submitted', submitted_at = ?, updated_at = ? WHERE id = ?",
+        )
+        .run(timestamp, timestamp, attemptId);
+      this.#database
+        .prepare("UPDATE actions SET state = 'submitted', updated_at = ? WHERE id = ?")
+        .run(timestamp, actionId);
+      const result = this.getAgentAction(actionId);
+      return {
+        result,
+        event: this.#appendEvent("agent-action.submitted", "agent-action", actionId, {
+          attemptId,
+          state: "submitted",
+          transportEvidence: "terminal_injected",
+        }),
+      };
+    });
+    this.#publish(completed.event);
+    return completed.result;
+  }
+
+  public failAgentActionAttempt(
+    actionId: string,
+    attemptId: string,
+    leaseOwner: string,
+    state: "failed" | "stalled" | "superseded" | "rejected",
+    error: { code: string; message: string; retryable: boolean },
+  ): AgentAction {
+    const timestamp = new Date().toISOString();
+    const completed = this.#transaction(() => {
+      const attempt = this.#database
+        .prepare("SELECT * FROM action_attempts WHERE id = ? AND action_id = ?")
+        .get(attemptId, actionId) as ActionAttemptRow | undefined;
+      if (
+        attempt === undefined ||
+        attempt.state !== "submitting" ||
+        attempt.lease_owner !== leaseOwner
+      ) {
+        throw new DomainError(
+          "agent_action_attempt_fenced",
+          "The action attempt lease is no longer current",
+          409,
+        );
+      }
+      this.#database
+        .prepare(
+          "UPDATE action_attempts SET state = ?, failure_code = ?, updated_at = ? WHERE id = ?",
+        )
+        .run(state, error.code, timestamp, attemptId);
+      this.#database
+        .prepare("UPDATE actions SET state = ?, error_json = ?, updated_at = ? WHERE id = ?")
+        .run(state, JSON.stringify(error), timestamp, actionId);
+      const result = this.getAgentAction(actionId);
+      return {
+        result,
+        event: this.#appendEvent(`agent-action.${state}`, "agent-action", actionId, {
+          attemptId,
+          state,
+          error,
+        }),
+      };
+    });
+    this.#publish(completed.event);
+    return completed.result;
+  }
+
+  public transitionAgentAction(
+    actionId: string,
+    expectedStates: AgentAction["state"][],
+    state: AgentAction["state"],
+    options: {
+      error?: AgentAction["error"];
+      result?: Record<string, unknown>;
+      acceptedProviderTurnId?: string;
+      acceptedProviderRequestId?: string;
+    } = {},
+  ): AgentAction {
+    const current = this.getAgentAction(actionId);
+    if (!expectedStates.includes(current.state)) {
+      throw new DomainError(
+        "agent_action_state_conflict",
+        `Cannot transition action from ${current.state} to ${state}`,
+        409,
+      );
+    }
+    const timestamp = new Date().toISOString();
+    const completed = this.#transaction(() => {
+      this.#database
+        .prepare(
+          `UPDATE actions SET state = ?, error_json = ?, result_json = ?,
+             accepted_provider_turn_id = COALESCE(?, accepted_provider_turn_id),
+             accepted_provider_request_id = COALESCE(?, accepted_provider_request_id),
+             updated_at = ? WHERE id = ? AND state = ?`,
+        )
+        .run(
+          state,
+          options.error === undefined ? null : JSON.stringify(options.error),
+          options.result === undefined ? null : JSON.stringify(options.result),
+          options.acceptedProviderTurnId ?? null,
+          options.acceptedProviderRequestId ?? null,
+          timestamp,
+          actionId,
+          current.state,
+        );
+      const result = this.getAgentAction(actionId);
+      return {
+        result,
+        event: this.#appendEvent(`agent-action.${state}`, "agent-action", actionId, { state }),
+      };
+    });
+    this.#publish(completed.event);
+    return completed.result;
+  }
+
+  public recoverAmbiguousActionAttempts(now: Date): AgentAction[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT DISTINCT a.id FROM actions a
+         JOIN action_attempts aa ON aa.action_id = a.id
+         WHERE aa.state = 'submitting' AND aa.lease_expires_at <= ?
+           AND a.state IN ('created', 'deferred')`,
+      )
+      .all(now.toISOString()) as Array<{ id: string }>;
+    return rows.map((row) =>
+      this.transitionAgentAction(row.id, ["created", "deferred"], "settled-unverified", {
+        error: {
+          code: "submission_crash_window",
+          message: "Submission may have reached the provider before durable confirmation",
+          retryable: false,
+        },
+      }),
+    );
+  }
+
+  public recordAgentActionAcknowledgement(
+    acknowledgement: AgentActionAcknowledgement,
+  ): AgentAction {
+    const parsed = AgentActionAcknowledgementSchema.parse(acknowledgement);
+    const completed = this.#transaction(() => {
+      const action = this.getAgentAction(parsed.actionId);
+      const attempt = this.listActionAttempts(action.id).find(
+        (item) => item.id === parsed.attemptId,
+      );
+      const reporter = this.getCurrentReporterSession(parsed.runId, parsed.generation);
+      const status = this.getAgentStatus(action.target.groupId, action.target.memberId);
+      if (
+        attempt?.state !== "submitted" ||
+        !["submitted", "accepted", "started", "blocked"].includes(action.state) ||
+        parsed.runId !== action.target.runId ||
+        parsed.generation !== action.target.generation ||
+        parsed.reporterSessionId !== action.target.reporterSessionId ||
+        parsed.reporterId !== action.target.reporterId ||
+        parsed.reporterEpoch !== action.target.reporterEpoch ||
+        reporter?.id !== parsed.reporterSessionId ||
+        reporter.reporterEpoch !== parsed.reporterEpoch ||
+        parsed.sourceSequence <= reporter.sourceSequence ||
+        (action.target.nativeSessionId !== undefined &&
+          parsed.nativeSessionId !== action.target.nativeSessionId)
+      ) {
+        throw new DomainError(
+          "agent_action_ack_fenced",
+          "The acknowledgement does not match the current exact action target",
+          409,
+        );
+      }
+      if (
+        action.acceptedProviderTurnId !== undefined &&
+        parsed.providerTurnId !== action.acceptedProviderTurnId
+      ) {
+        throw new DomainError(
+          "agent_action_ack_correlation_mismatch",
+          "The acknowledgement provider turn does not match accepted work",
+          409,
+        );
+      }
+      if (
+        parsed.kind === "completed" &&
+        parsed.completionRevision <= attempt.baselineCompletionRevision
+      ) {
+        throw new DomainError(
+          "agent_action_completion_revision_stale",
+          "Completion must advance beyond the action baseline",
+          409,
+        );
+      }
+      if (parsed.completionRevision > status.completionRevision) {
+        throw new DomainError(
+          "agent_action_completion_revision_future",
+          "Acknowledgement completion revision is not durable in status",
+          409,
+        );
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO action_acknowledgements
+             (id, action_id, attempt_id, kind, run_id, generation, reporter_session_id,
+              reporter_id, reporter_epoch, source_sequence, native_session_id,
+              provider_turn_id, provider_request_id, completion_revision,
+              acknowledged_at, data_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          parsed.id,
+          parsed.actionId,
+          parsed.attemptId,
+          parsed.kind,
+          parsed.runId,
+          parsed.generation,
+          parsed.reporterSessionId,
+          parsed.reporterId,
+          parsed.reporterEpoch,
+          parsed.sourceSequence,
+          parsed.nativeSessionId ?? null,
+          parsed.providerTurnId ?? null,
+          parsed.providerRequestId ?? null,
+          parsed.completionRevision,
+          parsed.acknowledgedAt,
+          JSON.stringify(parsed.data),
+        );
+      this.#database
+        .prepare("UPDATE reporter_sessions SET source_sequence = ? WHERE id = ?")
+        .run(parsed.sourceSequence, parsed.reporterSessionId);
+      const nextState = parsed.kind;
+      this.#database
+        .prepare(
+          `UPDATE actions SET state = ?,
+             accepted_provider_turn_id = CASE WHEN ? = 'accepted' THEN ? ELSE accepted_provider_turn_id END,
+             accepted_provider_request_id = CASE WHEN ? = 'accepted' THEN ? ELSE accepted_provider_request_id END,
+             result_json = CASE WHEN ? IN ('completed', 'settled-unverified') THEN ? ELSE result_json END,
+             error_json = CASE WHEN ? = 'failed' THEN ? ELSE error_json END,
+             updated_at = ? WHERE id = ?`,
+        )
+        .run(
+          nextState,
+          parsed.kind,
+          parsed.providerTurnId ?? null,
+          parsed.kind,
+          parsed.providerRequestId ?? null,
+          parsed.kind,
+          JSON.stringify(parsed.data),
+          parsed.kind,
+          JSON.stringify({
+            code: "provider_failed",
+            message: "Provider reported failure",
+            retryable: false,
+          }),
+          parsed.acknowledgedAt,
+          parsed.actionId,
+        );
+      const result = this.getAgentAction(parsed.actionId);
+      return {
+        result,
+        event: this.#appendEvent(`agent-action.${parsed.kind}`, "agent-action", parsed.actionId, {
+          acknowledgementId: parsed.id,
+          kind: parsed.kind,
+        }),
+      };
+    });
+    this.#publish(completed.event);
+    return completed.result;
+  }
+
+  public listOpenWaits(groupId?: string, memberId?: string): OpenWait[] {
+    const conditions: string[] = [];
+    const values: string[] = [];
+    if (groupId !== undefined) {
+      conditions.push("group_id = ?");
+      values.push(groupId);
+    }
+    if (memberId !== undefined) {
+      conditions.push("member_id = ?");
+      values.push(memberId);
+    }
+    const where = conditions.length === 0 ? "" : `WHERE ${conditions.join(" AND ")}`;
+    const rows = this.#database
+      .prepare(`SELECT * FROM open_waits ${where} ORDER BY opened_at, id`)
+      .all(...values) as unknown as OpenWaitRow[];
+    return rows.map((row) => this.#hydrateOpenWait(row));
+  }
+
+  public getOpenWait(waitId: string): OpenWait {
+    const row = this.#database.prepare("SELECT * FROM open_waits WHERE id = ?").get(waitId) as
+      | OpenWaitRow
+      | undefined;
+    if (row === undefined) throw new DomainError("open_wait_not_found", "Open wait not found", 404);
+    return this.#hydrateOpenWait(row);
+  }
+
+  public beginOpenWaitReply(
+    waitId: string,
+    expected: { runId: string; generation: number; reporterEpoch: string; statusRevision: number },
+  ): OpenWait {
+    const wait = this.getOpenWait(waitId);
+    const status = this.getAgentStatus(wait.groupId, wait.memberId);
+    const reporter = this.getCurrentReporterSession(wait.runId, wait.generation);
+    if (
+      wait.state !== "open" ||
+      wait.runId !== expected.runId ||
+      wait.generation !== expected.generation ||
+      wait.reporterEpoch !== expected.reporterEpoch ||
+      status.runId !== wait.runId ||
+      status.generation !== wait.generation ||
+      expected.statusRevision !== wait.openedStatusRevision ||
+      status.statusRevision < wait.openedStatusRevision ||
+      status.openWait?.requestId !== wait.providerRequestId ||
+      reporter?.id !== wait.reporterSessionId ||
+      reporter.reporterEpoch !== wait.reporterEpoch
+    ) {
+      throw new DomainError(
+        "open_wait_replaced",
+        "The exact provider wait is closed, stale, or replaced",
+        409,
+      );
+    }
+    const timestamp = new Date().toISOString();
+    this.#database
+      .prepare(
+        "UPDATE open_waits SET state = 'replying', updated_at = ? WHERE id = ? AND state = 'open'",
+      )
+      .run(timestamp, waitId);
+    return this.getOpenWait(waitId);
+  }
+
+  public resetOpenWaitReply(waitId: string): OpenWait {
+    const timestamp = new Date().toISOString();
+    this.#database
+      .prepare(
+        "UPDATE open_waits SET state = 'open', updated_at = ? WHERE id = ? AND state = 'replying'",
+      )
+      .run(timestamp, waitId);
+    return this.getOpenWait(waitId);
+  }
+
+  public pruneAgentActions(groupId: string, retain: number): number {
+    if (!Number.isInteger(retain) || retain < 0) {
+      throw new DomainError(
+        "invalid_action_retention",
+        "Action retention must be nonnegative",
+        400,
+      );
+    }
+    const victims = this.#database
+      .prepare(
+        `SELECT id FROM actions WHERE group_id = ?
+         AND state IN ('completed', 'settled-unverified', 'failed', 'stalled', 'timed-out',
+                       'cancelled', 'expired', 'superseded', 'rejected')
+         AND NOT EXISTS (
+           SELECT 1 FROM open_waits ow WHERE ow.action_id = actions.id
+             AND ow.state IN ('open', 'replying')
+         )
+         ORDER BY updated_at DESC, id DESC LIMIT -1 OFFSET ?`,
+      )
+      .all(groupId, retain) as Array<{ id: string }>;
+    for (const victim of victims) {
+      this.#database
+        .prepare("UPDATE actions SET reply_to_action_id = NULL WHERE reply_to_action_id = ?")
+        .run(victim.id);
+      this.#database.prepare("DELETE FROM actions WHERE id = ?").run(victim.id);
+    }
+    return victims.length;
   }
 
   public listEvents(afterSequence = 0): DomainEvent[] {
@@ -2775,14 +3561,16 @@ export class NanasaStore {
     idempotencyKey: string | undefined,
     schema: Parser<T>,
     operation: () => CommandResult<T>,
+    requestDigest?: string,
   ): T {
     if (idempotencyKey !== undefined) {
       const existing = this.#database
         .prepare(
-          "SELECT response_json, invalidated_at FROM idempotency_keys WHERE scope = ? AND key = ?",
+          `SELECT request_digest, response_json, invalidated_at
+           FROM idempotency_keys WHERE scope = ? AND key = ?`,
         )
         .get(scope, idempotencyKey) as
-        | { response_json: string; invalidated_at: string | null }
+        | { request_digest: string | null; response_json: string; invalidated_at: string | null }
         | undefined;
       if (existing !== undefined) {
         if (existing.invalidated_at !== null) {
@@ -2790,6 +3578,13 @@ export class NanasaStore {
             "idempotency_result_expired",
             "The original idempotent result expired with retained message history; use a new key",
             410,
+          );
+        }
+        if (requestDigest !== undefined && existing.request_digest !== requestDigest) {
+          throw new DomainError(
+            "idempotency_request_conflict",
+            "The idempotency key was already used for different request content",
+            409,
           );
         }
         return schema.parse(JSON.parse(existing.response_json));
@@ -2801,12 +3596,14 @@ export class NanasaStore {
       if (idempotencyKey !== undefined) {
         this.#database
           .prepare(
-            `INSERT INTO idempotency_keys (scope, key, response_json, event_sequence, created_at)
-             VALUES (?, ?, ?, ?, ?)`,
+            `INSERT INTO idempotency_keys
+               (scope, key, request_digest, response_json, event_sequence, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
           )
           .run(
             scope,
             idempotencyKey,
+            requestDigest ?? null,
             JSON.stringify(commandResult.result),
             commandResult.event.sequence,
             new Date().toISOString(),
@@ -2856,6 +3653,141 @@ export class NanasaStore {
       }
     }
     return requested;
+  }
+
+  #deriveMessageCausation(
+    groupId: string,
+    command: SubmitMessageCommand,
+    recipients: string[],
+  ): Pick<Message, "conversationId" | "replyTo" | "rootId" | "causationId" | "hop"> {
+    const edgeIds = [
+      ...new Set([command.replyTo, command.causationId].filter(Boolean)),
+    ] as string[];
+    const parents = edgeIds.map((id) => {
+      const row = this.#database.prepare("SELECT * FROM messages WHERE id = ?").get(id) as
+        | MessageRow
+        | undefined;
+      if (row === undefined || row.group_id !== groupId) {
+        throw new DomainError(
+          "message_causation_invalid",
+          "Reply and causation messages must exist in the same group",
+          409,
+        );
+      }
+      if (command.sender.kind === "agent") {
+        const visible = this.#database
+          .prepare(
+            "SELECT 1 FROM deliveries WHERE message_id = ? AND recipient_member_id = ? LIMIT 1",
+          )
+          .get(row.id, command.sender.memberId);
+        if (
+          visible === undefined &&
+          JSON.parse(row.sender_json).memberId !== command.sender.memberId
+        ) {
+          throw new DomainError(
+            "message_causation_forbidden",
+            "Agent senders may only reply to messages visible to their identity",
+            403,
+          );
+        }
+      }
+      return this.#hydrateMessage(row);
+    });
+    const conversationIds = new Set(parents.map((parent) => parent.conversationId));
+    if (conversationIds.size > 1) {
+      throw new DomainError(
+        "message_conversation_mismatch",
+        "Reply and causation edges must belong to one conversation",
+        409,
+      );
+    }
+    const inheritedConversationId = parents[0]?.conversationId;
+    if (
+      inheritedConversationId !== undefined &&
+      command.conversationId !== undefined &&
+      command.conversationId !== inheritedConversationId
+    ) {
+      throw new DomainError(
+        "message_conversation_mismatch",
+        "The requested conversation does not match its causal parent",
+        409,
+      );
+    }
+    const conversationId =
+      inheritedConversationId ?? command.conversationId ?? `conv_${randomUUID()}`;
+    const hop = parents.length === 0 ? 0 : Math.max(...parents.map((parent) => parent.hop)) + 1;
+    if (hop > MAX_MESSAGE_CAUSAL_DEPTH) {
+      throw new DomainError(
+        "message_causal_depth_exceeded",
+        `Message causal depth exceeds the ${MAX_MESSAGE_CAUSAL_DEPTH}-hop limit`,
+        409,
+      );
+    }
+    if (command.sender.kind === "agent") {
+      const automated = this.#database
+        .prepare(
+          `SELECT COUNT(*) AS count FROM messages
+           WHERE group_id = ? AND conversation_id = ?
+             AND json_extract(sender_json, '$.kind') = 'agent'`,
+        )
+        .get(groupId, conversationId) as { count: number };
+      if (automated.count >= MAX_AUTOMATED_REPLIES_PER_CONVERSATION) {
+        throw new DomainError(
+          "message_automated_reply_budget_exhausted",
+          "The conversation requires operator intervention before another automated reply",
+          409,
+        );
+      }
+    }
+    const actor =
+      command.sender.kind === "agent"
+        ? `agent:${command.sender.memberId}`
+        : `operator:${command.sender.operatorId}`;
+    const signature = `${actor}->${[...recipients].sort().join(",")}`;
+    let cursor = parents.find((parent) => parent.id === command.causationId) ?? parents[0];
+    const visited = new Set<string>();
+    while (cursor !== undefined) {
+      if (visited.has(cursor.id)) {
+        throw new DomainError(
+          "message_causal_cycle",
+          "The message causation graph has a cycle",
+          409,
+        );
+      }
+      visited.add(cursor.id);
+      const priorRecipients = (
+        this.#database
+          .prepare(
+            "SELECT recipient_member_id FROM deliveries WHERE message_id = ? ORDER BY recipient_member_id",
+          )
+          .all(cursor.id) as Array<{ recipient_member_id: string }>
+      ).map((row) => row.recipient_member_id);
+      const priorActor =
+        cursor.sender.kind === "agent"
+          ? `agent:${cursor.sender.memberId}`
+          : `operator:${cursor.sender.operatorId}`;
+      if (`${priorActor}->${priorRecipients.join(",")}` === signature) {
+        throw new DomainError(
+          "message_causal_cycle",
+          "The automated actor and audience already occur in this causal chain",
+          409,
+        );
+      }
+      const nextId = cursor.causationId ?? cursor.replyTo;
+      if (nextId === undefined) break;
+      const row = this.#database.prepare("SELECT * FROM messages WHERE id = ?").get(nextId) as
+        | MessageRow
+        | undefined;
+      cursor = row === undefined ? undefined : this.#hydrateMessage(row);
+    }
+    const root = parents[0];
+    return {
+      conversationId,
+      ...(command.replyTo === undefined ? {} : { replyTo: command.replyTo }),
+      ...(root === undefined ? {} : { rootId: root.rootId ?? root.id }),
+      ...(command.causationId === undefined ? {} : { causationId: command.causationId }),
+      hop,
+    };
   }
 
   #generateMemberId(groupId: string): string {
@@ -2978,6 +3910,90 @@ export class NanasaStore {
         observedAt,
         JSON.stringify(payload),
       );
+  }
+
+  #applyOpenWaitReporterEvent(
+    run: AgentRun,
+    session: ReporterSession,
+    input: AgentStatusEventInput,
+    state: AgentStatusReducerState,
+  ): void {
+    if (input.event === "wait.opened") {
+      if (
+        input.requestId === undefined ||
+        input.data.waitKind === undefined ||
+        input.data.summary === undefined ||
+        input.data.replyChannel === undefined
+      ) {
+        throw new DomainError(
+          "open_wait_report_invalid",
+          "The reporter wait is missing exact request metadata",
+          400,
+        );
+      }
+      if (input.actionId !== undefined) {
+        const action = this.getAgentAction(input.actionId);
+        if (
+          action.target.runId !== run.id ||
+          action.target.generation !== run.generation ||
+          action.target.reporterSessionId !== session.id ||
+          action.target.reporterEpoch !== session.reporterEpoch
+        ) {
+          throw new DomainError(
+            "open_wait_action_mismatch",
+            "The open wait action does not match the exact reporter target",
+            409,
+          );
+        }
+      }
+      const timestamp = new Date().toISOString();
+      this.#database
+        .prepare(
+          `INSERT INTO open_waits
+             (id, action_id, group_id, member_id, run_id, generation, reporter_session_id,
+              reporter_id, reporter_epoch, native_session_id, provider_request_id, kind,
+              summary, reply_channel, opened_status_revision, state, expires_at, opened_at,
+              updated_at, answered_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, ?, NULL)`,
+        )
+        .run(
+          `wait_${randomUUID()}`,
+          input.actionId ?? null,
+          run.groupId,
+          run.memberId,
+          run.id,
+          run.generation,
+          session.id,
+          session.reporterId,
+          session.reporterEpoch,
+          input.nativeSessionId ?? session.nativeSessionId ?? null,
+          input.requestId,
+          input.data.waitKind,
+          input.data.summary,
+          input.data.replyChannel,
+          state.statusRevision,
+          timestamp,
+          timestamp,
+        );
+      return;
+    }
+    if (input.event === "wait.closed") {
+      if (input.requestId === undefined) {
+        throw new DomainError(
+          "open_wait_report_invalid",
+          "The reporter wait close is missing its request identity",
+          400,
+        );
+      }
+      const timestamp = new Date().toISOString();
+      this.#database
+        .prepare(
+          `UPDATE open_waits SET state = 'answered', answered_at = ?, updated_at = ?
+           WHERE run_id = ? AND generation = ? AND reporter_epoch = ?
+             AND provider_request_id = ? AND state IN ('open', 'replying')`,
+        )
+        .run(timestamp, timestamp, run.id, run.generation, session.reporterEpoch, input.requestId);
+    }
   }
 
   #trimAgentStatusEvents(runId: string, generation: number): void {
@@ -3329,6 +4345,123 @@ export class NanasaStore {
       status: row.status,
       attempts: row.attempts,
       updatedAt: row.updated_at,
+    });
+  }
+
+  #hydrateAction(row: ActionRow): AgentAction {
+    return AgentActionSchema.parse({
+      version: 1,
+      id: row.id,
+      kind: row.kind,
+      principal: JSON.parse(row.principal_json),
+      target: {
+        groupId: row.group_id,
+        memberId: row.member_id,
+        runId: row.run_id,
+        generation: row.generation,
+        daemonEpoch: row.daemon_epoch,
+        reporterSessionId: row.reporter_session_id,
+        reporterId: row.reporter_id,
+        reporterEpoch: row.reporter_epoch,
+        nativeSessionId: row.native_session_id ?? undefined,
+        baselineStatusRevision: row.baseline_status_revision,
+        baselineCompletionRevision: row.baseline_completion_revision,
+      },
+      messageId: row.message_id ?? undefined,
+      conversationId: row.conversation_id ?? undefined,
+      replyToActionId: row.reply_to_action_id ?? undefined,
+      causationId: row.causation_id ?? undefined,
+      idempotencyKey: row.idempotency_key,
+      requestDigest: row.request_digest,
+      prompt: row.prompt ?? undefined,
+      allowWorking: row.allow_working === 1,
+      state: row.state,
+      queueDeadlineAt: row.queue_deadline_at,
+      acceptanceDeadlineAt: row.acceptance_deadline_at ?? undefined,
+      completionDeadlineAt: row.completion_deadline_at ?? undefined,
+      acceptedProviderTurnId: row.accepted_provider_turn_id ?? undefined,
+      acceptedProviderRequestId: row.accepted_provider_request_id ?? undefined,
+      result: row.result_json === null ? undefined : JSON.parse(row.result_json),
+      error: row.error_json === null ? undefined : JSON.parse(row.error_json),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    });
+  }
+
+  #hydrateActionAttempt(row: ActionAttemptRow): AgentActionAttempt {
+    return AgentActionAttemptSchema.parse({
+      id: row.id,
+      actionId: row.action_id,
+      attempt: row.attempt,
+      effect: row.effect,
+      state: row.state,
+      daemonEpoch: row.daemon_epoch,
+      groupId: row.group_id,
+      memberId: row.member_id,
+      runId: row.run_id,
+      generation: row.generation,
+      reporterSessionId: row.reporter_session_id,
+      reporterId: row.reporter_id,
+      reporterEpoch: row.reporter_epoch,
+      nativeSessionId: row.native_session_id ?? undefined,
+      baselineStatusRevision: row.baseline_status_revision,
+      baselineCompletionRevision: row.baseline_completion_revision,
+      terminalBinding: JSON.parse(row.terminal_binding_json),
+      terminalBindingFingerprint: row.terminal_binding_fingerprint,
+      providerTurnId: row.provider_turn_id ?? undefined,
+      providerRequestId: row.provider_request_id ?? undefined,
+      leaseOwner: row.lease_owner,
+      leaseExpiresAt: row.lease_expires_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      submittedAt: row.submitted_at ?? undefined,
+      failureCode: row.failure_code ?? undefined,
+    });
+  }
+
+  #hydrateActionAcknowledgement(row: ActionAcknowledgementRow): AgentActionAcknowledgement {
+    return AgentActionAcknowledgementSchema.parse({
+      id: row.id,
+      actionId: row.action_id,
+      attemptId: row.attempt_id,
+      kind: row.kind,
+      runId: row.run_id,
+      generation: row.generation,
+      reporterSessionId: row.reporter_session_id,
+      reporterId: row.reporter_id,
+      reporterEpoch: row.reporter_epoch,
+      sourceSequence: row.source_sequence,
+      nativeSessionId: row.native_session_id ?? undefined,
+      providerTurnId: row.provider_turn_id ?? undefined,
+      providerRequestId: row.provider_request_id ?? undefined,
+      completionRevision: row.completion_revision,
+      acknowledgedAt: row.acknowledged_at,
+      data: JSON.parse(row.data_json),
+    });
+  }
+
+  #hydrateOpenWait(row: OpenWaitRow): OpenWait {
+    return OpenWaitSchema.parse({
+      id: row.id,
+      actionId: row.action_id ?? undefined,
+      groupId: row.group_id,
+      memberId: row.member_id,
+      runId: row.run_id,
+      generation: row.generation,
+      reporterSessionId: row.reporter_session_id,
+      reporterId: row.reporter_id,
+      reporterEpoch: row.reporter_epoch,
+      nativeSessionId: row.native_session_id ?? undefined,
+      providerRequestId: row.provider_request_id,
+      kind: row.kind,
+      summary: row.summary,
+      replyChannel: row.reply_channel,
+      openedStatusRevision: row.opened_status_revision,
+      state: row.state,
+      expiresAt: row.expires_at ?? undefined,
+      openedAt: row.opened_at,
+      updatedAt: row.updated_at,
+      answeredAt: row.answered_at ?? undefined,
     });
   }
 

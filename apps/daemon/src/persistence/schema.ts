@@ -1,4 +1,4 @@
-export const DATABASE_SCHEMA_VERSION = 5;
+export const DATABASE_SCHEMA_VERSION = 6;
 
 export const DATABASE_BASELINE_SQL = `
   CREATE TABLE schema_metadata (
@@ -233,52 +233,112 @@ export const DATABASE_BASELINE_SQL = `
 
   CREATE TABLE actions (
     id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('prompt', 'wait', 'wait-reply', 'cancel')),
+    principal_json TEXT NOT NULL,
+    group_id TEXT NOT NULL REFERENCES groups(id),
     member_id TEXT NOT NULL,
     run_id TEXT NOT NULL REFERENCES runs(id),
-    generation INTEGER NOT NULL,
-    reporter_session_id TEXT REFERENCES reporter_sessions(id),
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    daemon_epoch INTEGER NOT NULL CHECK (daemon_epoch > 0),
+    reporter_session_id TEXT NOT NULL REFERENCES reporter_sessions(id),
+    reporter_id TEXT NOT NULL,
+    reporter_epoch TEXT NOT NULL,
+    native_session_id TEXT,
     baseline_status_revision INTEGER NOT NULL CHECK (baseline_status_revision >= 0),
-    deadline TEXT NOT NULL,
-    state TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
+    baseline_completion_revision INTEGER NOT NULL CHECK (baseline_completion_revision >= 0),
+    message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+    conversation_id TEXT,
+    reply_to_action_id TEXT REFERENCES actions(id) ON DELETE SET NULL,
+    causation_id TEXT,
+    idempotency_key TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    prompt TEXT,
+    allow_working INTEGER NOT NULL CHECK (allow_working IN (0, 1)),
+    state TEXT NOT NULL CHECK (state IN ('created', 'deferred', 'submitted', 'accepted', 'started', 'blocked', 'completed', 'settled-unverified', 'failed', 'stalled', 'timed-out', 'cancelled', 'expired', 'superseded', 'rejected')),
+    queue_deadline_at TEXT NOT NULL,
+    acceptance_deadline_at TEXT,
+    completion_deadline_at TEXT,
+    accepted_provider_turn_id TEXT,
+    accepted_provider_request_id TEXT,
+    result_json TEXT,
+    error_json TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    UNIQUE (group_id, idempotency_key)
   ) STRICT;
 
   CREATE TABLE action_attempts (
     id TEXT PRIMARY KEY,
-    action_id TEXT NOT NULL REFERENCES actions(id),
+    action_id TEXT NOT NULL REFERENCES actions(id) ON DELETE CASCADE,
     attempt INTEGER NOT NULL CHECK (attempt > 0),
-    effect TEXT NOT NULL,
-    state TEXT NOT NULL,
-    started_at TEXT NOT NULL,
-    completed_at TEXT,
+    effect TEXT NOT NULL CHECK (effect IN ('provider-api', 'terminal-injection', 'logical-reply')),
+    state TEXT NOT NULL CHECK (state IN ('submitting', 'submitted', 'failed', 'stalled', 'cancelled', 'superseded', 'rejected')),
+    daemon_epoch INTEGER NOT NULL CHECK (daemon_epoch > 0),
+    group_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    reporter_session_id TEXT NOT NULL REFERENCES reporter_sessions(id),
+    reporter_id TEXT NOT NULL,
+    reporter_epoch TEXT NOT NULL,
+    native_session_id TEXT,
+    baseline_status_revision INTEGER NOT NULL CHECK (baseline_status_revision >= 0),
+    baseline_completion_revision INTEGER NOT NULL CHECK (baseline_completion_revision >= 0),
+    terminal_binding_json TEXT NOT NULL,
+    terminal_binding_fingerprint TEXT NOT NULL,
+    provider_turn_id TEXT,
+    provider_request_id TEXT,
+    lease_owner TEXT NOT NULL,
+    lease_expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    submitted_at TEXT,
     failure_code TEXT,
     UNIQUE (action_id, attempt)
   ) STRICT;
 
   CREATE TABLE action_acknowledgements (
     id TEXT PRIMARY KEY,
-    action_id TEXT NOT NULL REFERENCES actions(id),
-    attempt_id TEXT NOT NULL REFERENCES action_attempts(id),
-    state TEXT NOT NULL,
+    action_id TEXT NOT NULL REFERENCES actions(id) ON DELETE CASCADE,
+    attempt_id TEXT NOT NULL REFERENCES action_attempts(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('accepted', 'started', 'blocked', 'completed', 'settled-unverified', 'failed', 'cancelled')),
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    reporter_session_id TEXT NOT NULL REFERENCES reporter_sessions(id),
+    reporter_id TEXT NOT NULL,
+    reporter_epoch TEXT NOT NULL,
+    source_sequence INTEGER NOT NULL CHECK (source_sequence > 0),
+    native_session_id TEXT,
     provider_turn_id TEXT,
+    provider_request_id TEXT,
     completion_revision INTEGER NOT NULL CHECK (completion_revision >= 0),
-    acknowledged_at TEXT NOT NULL
+    acknowledged_at TEXT NOT NULL,
+    data_json TEXT NOT NULL,
+    UNIQUE (reporter_session_id, source_sequence)
   ) STRICT;
 
   CREATE TABLE open_waits (
     id TEXT PRIMARY KEY,
-    action_id TEXT REFERENCES actions(id),
+    action_id TEXT REFERENCES actions(id) ON DELETE CASCADE,
+    group_id TEXT NOT NULL REFERENCES groups(id),
+    member_id TEXT NOT NULL,
     run_id TEXT NOT NULL REFERENCES runs(id),
-    generation INTEGER NOT NULL,
+    generation INTEGER NOT NULL CHECK (generation > 0),
     reporter_session_id TEXT NOT NULL REFERENCES reporter_sessions(id),
-    kind TEXT NOT NULL,
+    reporter_id TEXT NOT NULL,
+    reporter_epoch TEXT NOT NULL,
+    native_session_id TEXT,
+    provider_request_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('permission', 'question', 'elicitation', 'plan_approval')),
     summary TEXT NOT NULL,
-    deadline TEXT NOT NULL,
+    reply_channel TEXT NOT NULL CHECK (reply_channel IN ('terminal', 'hook', 'rpc', 'acp', 'api')),
+    opened_status_revision INTEGER NOT NULL CHECK (opened_status_revision >= 0),
+    state TEXT NOT NULL CHECK (state IN ('open', 'replying', 'answered', 'expired', 'cancelled', 'superseded')),
+    expires_at TEXT,
     opened_at TEXT NOT NULL,
-    closed_at TEXT
+    updated_at TEXT NOT NULL,
+    answered_at TEXT,
+    UNIQUE (run_id, generation, reporter_epoch, provider_request_id)
   ) STRICT;
 
   CREATE TABLE provider_state (
@@ -425,4 +485,12 @@ export const DATABASE_BASELINE_SQL = `
   CREATE INDEX screen_observations_run_sequence ON screen_observations (run_id, generation, sequence);
   CREATE INDEX status_progress_reports_run_time ON status_progress_reports (run_id, generation, reported_at);
   CREATE INDEX terminal_checkpoints_owner_expiry ON terminal_checkpoints (owner_principal_id, expires_at);
+  CREATE INDEX messages_conversation_causation ON messages (group_id, conversation_id, hop, created_at);
+  CREATE INDEX actions_group_state_deadline ON actions (group_id, state, queue_deadline_at, updated_at);
+  CREATE INDEX actions_target ON actions (run_id, generation, reporter_epoch, state);
+  CREATE INDEX actions_message ON actions (message_id);
+  CREATE INDEX action_attempts_action_state ON action_attempts (action_id, state, attempt);
+  CREATE INDEX action_acknowledgements_action_time ON action_acknowledgements (action_id, acknowledged_at);
+  CREATE INDEX open_waits_group_state ON open_waits (group_id, state, updated_at);
+  CREATE INDEX open_waits_target ON open_waits (run_id, generation, reporter_epoch, provider_request_id);
 `;

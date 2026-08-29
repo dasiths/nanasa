@@ -95,6 +95,11 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
     "nanasa.send_dm",
     "nanasa.send_multicast",
     "nanasa.broadcast_group",
+    "nanasa.prompt_peer",
+    "nanasa.get_action_result",
+    "nanasa.wait_action",
+    "nanasa.cancel_action",
+    "nanasa.list_own_waits",
   ]);
   const listedMembers = await nanasa.agentMcpRequest(
     paneByMember.get(members[0]!.memberId)!,

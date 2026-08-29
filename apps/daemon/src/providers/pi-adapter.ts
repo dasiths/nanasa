@@ -3,7 +3,10 @@ import { fileURLToPath } from "node:url";
 import type { NativeSessionReference } from "@nanasa/contracts";
 import { PI_STATUS_REPORTER_SOURCE } from "../status-reporter-assets.js";
 import { json, normalizeSessionReference, unsupportedSessionMutation } from "./adapter-support.js";
-import { freezeControlStrategy } from "./provider-control-strategy.js";
+import {
+  closedTerminalWaitReplyInput,
+  freezeControlStrategy,
+} from "./provider-control-strategy.js";
 import type {
   NativeSessionReport,
   ProviderAdapter,
@@ -37,6 +40,7 @@ export class PiAdapter implements ProviderAdapter {
     supportsPromptAcknowledgement: false,
     supportsCancellation: true,
     terminalSubmitSequence: "\r",
+    waitReplyInput: closedTerminalWaitReplyInput,
   });
   readonly #mcpAdapterPath: string;
 

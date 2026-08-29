@@ -45,9 +45,10 @@ export class TerminalGateway {
     private readonly reads: TerminalReadService,
     private readonly daemonEpoch: number,
     private readonly tmuxPath = "tmux",
+    arbiter?: TerminalInputArbiter,
   ) {
     this.#control = control;
-    this.#arbiter = new TerminalInputArbiter(control);
+    this.#arbiter = arbiter ?? new TerminalInputArbiter(control);
   }
 
   public start(run: AgentRun): void {

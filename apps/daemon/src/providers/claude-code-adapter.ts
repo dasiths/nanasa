@@ -2,7 +2,10 @@ import { join } from "node:path";
 import type { NativeSessionReference } from "@nanasa/contracts";
 import { HOOK_STATUS_REPORTER_SOURCE } from "../status-reporter-assets.js";
 import { json, normalizeSessionReference, unsupportedSessionMutation } from "./adapter-support.js";
-import { freezeControlStrategy } from "./provider-control-strategy.js";
+import {
+  closedTerminalWaitReplyInput,
+  freezeControlStrategy,
+} from "./provider-control-strategy.js";
 import type {
   NativeSessionReport,
   ProviderAdapter,
@@ -34,6 +37,7 @@ export class ClaudeCodeAdapter implements ProviderAdapter {
     supportsPromptAcknowledgement: false,
     supportsCancellation: true,
     terminalSubmitSequence: "\r",
+    waitReplyInput: closedTerminalWaitReplyInput,
   });
 
   public recognizeCommand(command: readonly string[]): boolean {

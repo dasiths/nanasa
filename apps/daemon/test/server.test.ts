@@ -460,7 +460,6 @@ describe("daemon REST API", () => {
         audience: { kind: "group", membershipRevision: 2 },
         body: { contentType: "text/markdown", text: "Review this API." },
         delivery: {},
-        hop: 0,
       },
     });
     expect(messageResponse.statusCode).toBe(201);
@@ -670,7 +669,6 @@ describe("portal static assets", () => {
           audience: { kind: "dm", memberId: agent.memberId },
           body: { contentType: "text/plain", text },
           delivery: {},
-          hop: 0,
         },
       });
 

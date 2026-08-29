@@ -1,19 +1,15 @@
 import type { MessageSubmissionResult, SubmitMessageCommand } from "@nanasa/contracts";
 
-import { NanasaStore } from "./store.js";
+import { MessageRepository } from "./message-repository.js";
 
 export class MessageCommandService {
-  readonly #store: NanasaStore;
-
-  public constructor(store: NanasaStore) {
-    this.#store = store;
-  }
+  public constructor(private readonly messages: MessageRepository) {}
 
   public submit(
     groupId: string,
     command: SubmitMessageCommand,
     idempotencyKey?: string,
   ): MessageSubmissionResult {
-    return this.#store.submitMessage(groupId, command, idempotencyKey);
+    return this.messages.submit(groupId, command, idempotencyKey);
   }
 }

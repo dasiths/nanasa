@@ -279,6 +279,15 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
       if (submission === undefined) throw new Error("No submission fixture configured");
       return submission;
     }),
+    createAgentAction: vi.fn(),
+    loadActionWorkspace: vi.fn().mockResolvedValue({
+      groupId: "group-backend",
+      actions: [],
+      attempts: [],
+      acknowledgements: [],
+      openWaits: [],
+    }),
+    replyOpenWait: vi.fn(),
     loadMessages: vi.fn().mockResolvedValue({
       groupId: "group-backend",
       messages: [],
@@ -1478,6 +1487,112 @@ describe("portal application", () => {
         delivery: {},
       }),
     );
+  });
+
+  it("creates Prompt when ready work separately from communication delivery", async () => {
+    const user = userEvent.setup();
+    const client = createClient(submissionResult());
+    vi.mocked(client.createAgentAction).mockResolvedValue({
+      version: 1,
+      id: "action-1",
+      kind: "prompt",
+      principal: { kind: "operator", operatorId: "portal-operator" },
+      target: {
+        groupId: "group-backend",
+        memberId: "builder",
+        runId: "run-builder",
+        generation: 1,
+        daemonEpoch: 1,
+        reporterSessionId: "reporter-1",
+        reporterId: "copilot-hooks",
+        reporterEpoch: "epoch-1",
+        baselineStatusRevision: 2,
+        baselineCompletionRevision: 0,
+      },
+      messageId: "message-1",
+      conversationId: "conversation-1",
+      idempotencyKey: "action-key",
+      requestDigest: "a".repeat(64),
+      prompt: "Review the API",
+      allowWorking: false,
+      state: "created",
+      queueDeadlineAt: "2026-08-29T12:05:00.000Z",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+    await openMessageComposer(user);
+    await user.type(screen.getByLabelText("Message body"), "Review the API");
+    await user.click(
+      screen.getByLabelText(
+        "Prompt when ready (creates exact durable work separately from delivery)",
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() => expect(client.submitMessage).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(client.createAgentAction).toHaveBeenCalledWith({
+        kind: "prompt",
+        groupId: "group-backend",
+        memberId: "builder",
+        prompt: "Review the API",
+        messageId: "message-1",
+        conversationId: "conversation-1",
+        allowWorking: false,
+      }),
+    );
+    expect(
+      screen.getByRole("region", { name: "Action progress and exact waits" }),
+    ).toHaveTextContent("Separate from communication delivery and browser unread");
+  });
+
+  it("renders exact permission waits separately and sends only closed logical replies", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    vi.mocked(client.loadActionWorkspace).mockResolvedValue({
+      groupId: "group-backend",
+      actions: [],
+      attempts: [],
+      acknowledgements: [],
+      openWaits: [
+        {
+          id: "wait-1",
+          groupId: "group-backend",
+          memberId: "builder",
+          runId: "run-builder",
+          generation: 1,
+          reporterSessionId: "reporter-1",
+          reporterId: "copilot-hooks",
+          reporterEpoch: "epoch-1",
+          providerRequestId: "permission-1",
+          kind: "permission",
+          summary: "Allow one command?",
+          replyChannel: "terminal",
+          openedStatusRevision: 7,
+          state: "open",
+          openedAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+    });
+    vi.mocked(client.replyOpenWait).mockResolvedValue({
+      ...(await client.loadActionWorkspace("group-backend")).openWaits[0]!,
+      state: "replying",
+    });
+    render(<App client={client} />);
+    await screen.findByText("Allow one command?");
+    await user.click(screen.getByRole("button", { name: "Allow once" }));
+
+    expect(client.replyOpenWait).toHaveBeenCalledWith("wait-1", {
+      expectedRunId: "run-builder",
+      expectedGeneration: 1,
+      expectedReporterEpoch: "epoch-1",
+      expectedStatusRevision: 7,
+      reply: { kind: "allow-once" },
+    });
+    expect(screen.queryByRole("button", { name: /send keys/i })).not.toBeInTheDocument();
   });
 
   it("restores server message history and clears persisted entries", async () => {

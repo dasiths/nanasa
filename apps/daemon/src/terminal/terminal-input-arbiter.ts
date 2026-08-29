@@ -10,6 +10,9 @@ export function terminalViewSessionName(runId: string): string {
 }
 
 export class TerminalInputArbiter {
+  readonly #automated = new Set<string>();
+  readonly #queues = new Map<string, Promise<void>>();
+
   public constructor(private readonly control: TerminalControlService) {}
 
   public dispatch(
@@ -18,6 +21,13 @@ export class TerminalInputArbiter {
     pty: AttachmentPty,
     frame: Extract<TerminalClientFrame, { type: "input" | "paste" | "focus" | "resize" }>,
   ): void {
+    if (this.#automated.has(runId)) {
+      throw new DomainError(
+        "terminal_input_automation_active",
+        "Automated terminal input is already in progress",
+        409,
+      );
+    }
     this.control.assertController(runId, streamId, frame.leaseId);
     if (frame.type === "resize") {
       pty.resize(frame.cols, frame.rows);
@@ -37,5 +47,38 @@ export class TerminalInputArbiter {
         413,
       );
     pty.write(frame.data);
+  }
+
+  public dispatchAutomated<T>(runId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.#queues.get(runId) ?? Promise.resolve();
+    let result!: T;
+    let failure: unknown;
+    const queued = previous
+      .catch(() => undefined)
+      .then(async () => {
+        if (this.control.hasController(runId)) {
+          throw new DomainError(
+            "terminal_writer_conflict",
+            "Automated input is blocked by an active browser controller",
+            409,
+          );
+        }
+        this.#automated.add(runId);
+        try {
+          result = await operation();
+        } catch (error) {
+          failure = error;
+        } finally {
+          this.#automated.delete(runId);
+        }
+      });
+    const settled = queued.finally(() => {
+      if (this.#queues.get(runId) === settled) this.#queues.delete(runId);
+    });
+    this.#queues.set(runId, settled);
+    return settled.then(() => {
+      if (failure !== undefined) throw failure;
+      return result;
+    });
   }
 }

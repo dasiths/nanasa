@@ -1,4 +1,5 @@
 import {
+  type AgentActionWorkspace,
   type Audience,
   DEFAULT_MESSAGE_PAGE_SIZE,
   type DeliveryOutcome,
@@ -9,6 +10,7 @@ import {
   type Message,
   type MessageIntent,
   type MessageSubmissionResult,
+  type OpenWait,
   OVERSIZED_MESSAGE_GUIDANCE,
   type SubmitMessageCommand,
   SubmitMessageCommandSchema,
@@ -76,7 +78,6 @@ export function buildMessageCommand(group: Group, draft: MessageDraft): SubmitMe
     audience,
     body: { contentType: "text/markdown", text: draft.body },
     delivery: {},
-    hop: 0,
   });
 }
 
@@ -94,7 +95,9 @@ function OutcomeRow({
     <li className={`outcome-row outcome-${outcome.status}`}>
       <ActorAvatar name={alias} memberId={outcome.recipientMemberId} />
       <span className="outcome-recipient">{alias}</span>
-      <strong>{outcome.status}</strong>
+      <strong>
+        {outcome.status === "terminal_injected" ? "terminal injected" : outcome.status}
+      </strong>
       {outcome.attempts > 1 && (
         <span>
           {outcome.attempts === 2 ? "Retried once" : `Retried ${outcome.attempts - 1} times`}
@@ -240,9 +243,90 @@ interface MessageWorkspaceProps {
   historyMembers?: GroupMembership[];
   messageState?: GroupMessageState;
   unreadCount?: number;
+  activityRevision?: number;
   client?: PortalClient;
   onReadThrough?(sequence: number): void;
   onSubmit(command: SubmitMessageCommand): Promise<MessageSubmissionResult>;
+}
+
+function ExactWaitReply({
+  wait,
+  client,
+  onReplied,
+}: {
+  wait: OpenWait;
+  client: PortalClient;
+  onReplied(): void;
+}) {
+  const [answer, setAnswer] = useState("");
+  const [busy, setBusy] = useState(false);
+  const reply = async (value: Parameters<PortalClient["replyOpenWait"]>[1]["reply"]) => {
+    setBusy(true);
+    try {
+      await client.replyOpenWait(wait.id, {
+        expectedRunId: wait.runId,
+        expectedGeneration: wait.generation,
+        expectedReporterEpoch: wait.reporterEpoch,
+        expectedStatusRevision: wait.openedStatusRevision,
+        reply: value,
+      });
+      onReplied();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <li className="action-progress-row">
+      <div>
+        <strong>{wait.kind.replaceAll("_", " ")}</strong>
+        <span>{wait.summary}</span>
+        <small>
+          {wait.memberId} · exact request {wait.providerRequestId}
+        </small>
+      </div>
+      {wait.kind === "permission" ? (
+        <div className="exact-wait-actions">
+          <button type="button" disabled={busy} onClick={() => void reply({ kind: "deny" })}>
+            Deny
+          </button>
+          <button type="button" disabled={busy} onClick={() => void reply({ kind: "allow-once" })}>
+            Allow once
+          </button>
+        </div>
+      ) : wait.kind === "plan_approval" ? (
+        <div className="exact-wait-actions">
+          <button type="button" disabled={busy} onClick={() => void reply({ kind: "reject-plan" })}>
+            Reject plan
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void reply({ kind: "approve-plan" })}
+          >
+            Approve plan
+          </button>
+        </div>
+      ) : (
+        <form
+          className="exact-wait-actions"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void reply({ kind: "answer", text: answer });
+          }}
+        >
+          <input
+            aria-label={`Reply to ${wait.kind} from ${wait.memberId}`}
+            value={answer}
+            onChange={(event) => setAnswer(event.target.value)}
+            required
+          />
+          <button type="submit" disabled={busy || answer.trim().length === 0}>
+            Reply
+          </button>
+        </form>
+      )}
+    </li>
+  );
 }
 
 function ConfirmClearHistoryDialog({
@@ -308,6 +392,7 @@ export function MessageWorkspace({
   historyMembers = members,
   messageState,
   unreadCount = 0,
+  activityRevision = 0,
   client = api,
   onReadThrough,
   onSubmit,
@@ -326,6 +411,8 @@ export function MessageWorkspace({
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
+  const [promptWhenReady, setPromptWhenReady] = useState(false);
+  const [actionWorkspace, setActionWorkspace] = useState<AgentActionWorkspace>();
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const contextKey = `${group.id}:${members.map((member) => member.memberId).join(",")}`;
@@ -419,6 +506,31 @@ export function MessageWorkspace({
     messageState?.activeDeliveryCount,
     messageState?.failedRecipientMemberIds.join(","),
   ]);
+
+  const refreshActions = () => {
+    void client
+      .loadActionWorkspace(group.id)
+      .then(setActionWorkspace)
+      .catch((cause: unknown) =>
+        setError(cause instanceof Error ? cause.message : "Unable to load action progress"),
+      );
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    void client
+      .loadActionWorkspace(group.id)
+      .then((workspace) => {
+        if (!cancelled) setActionWorkspace(workspace);
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled)
+          setError(cause instanceof Error ? cause.message : "Unable to load action progress");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activityRevision, client, group.id]);
 
   useEffect(() => {
     try {
@@ -631,8 +743,33 @@ export function MessageWorkspace({
         ...current.filter((outcome) => outcome.messageId !== submission.message.id),
         ...submission.deliveryOutcomes,
       ]);
+      if (promptWhenReady) {
+        const outcomes = await Promise.allSettled(
+          targetMemberIds.map((memberId) =>
+            client.createAgentAction({
+              kind: "prompt",
+              groupId: group.id,
+              memberId,
+              prompt: body,
+              messageId: submission.message.id,
+              conversationId: submission.message.conversationId,
+              allowWorking: false,
+            }),
+          ),
+        );
+        const failures = outcomes.filter((outcome) => outcome.status === "rejected");
+        if (failures.length > 0) {
+          setError(
+            `${failures.length} prompt action${failures.length === 1 ? "" : "s"} could not be created`,
+          );
+        } else {
+          setError(undefined);
+        }
+        refreshActions();
+      } else {
+        setError(undefined);
+      }
       setBody("");
-      setError(undefined);
       setComposing(false);
     } catch (cause) {
       if (contextVersionRef.current !== submittedContextVersion) return;
@@ -741,6 +878,44 @@ export function MessageWorkspace({
                   <CircleArrowDown aria-hidden="true" size={15} />
                   New messages
                 </button>
+              )}
+            </section>
+            <section className="action-progress" aria-label="Action progress and exact waits">
+              <header>
+                <strong>Action progress &amp; exact waits</strong>
+                <span>Separate from communication delivery and browser unread</span>
+              </header>
+              {(actionWorkspace?.openWaits.filter((wait) =>
+                ["open", "replying"].includes(wait.state),
+              ).length ?? 0) > 0 && (
+                <ul>
+                  {actionWorkspace?.openWaits
+                    .filter((wait) => ["open", "replying"].includes(wait.state))
+                    .map((wait) => (
+                      <ExactWaitReply
+                        key={wait.id}
+                        wait={wait}
+                        client={client}
+                        onReplied={refreshActions}
+                      />
+                    ))}
+                </ul>
+              )}
+              {(actionWorkspace?.actions.length ?? 0) === 0 ? (
+                <p>No durable prompt actions.</p>
+              ) : (
+                <ul>
+                  {actionWorkspace?.actions
+                    .slice(-10)
+                    .reverse()
+                    .map((action) => (
+                      <li key={action.id} className="action-progress-row">
+                        <span>{action.target.memberId}</span>
+                        <strong>{action.state}</strong>
+                        <small>{action.id}</small>
+                      </li>
+                    ))}
+                </ul>
               )}
             </section>
             <div className="message-prompt">
@@ -877,6 +1052,14 @@ export function MessageWorkspace({
                 placeholder="Send scoped context or a concrete request..."
                 required
               />
+            </label>
+            <label className="prompt-when-ready-option">
+              <input
+                type="checkbox"
+                checked={promptWhenReady}
+                onChange={(event) => setPromptWhenReady(event.target.checked)}
+              />
+              Prompt when ready (creates exact durable work separately from delivery)
             </label>
             {messageTooLarge && (
               <p className="form-error" role="alert">
