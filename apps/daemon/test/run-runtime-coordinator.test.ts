@@ -127,7 +127,7 @@ describe("RunRuntimeCoordinator", () => {
     });
     const runtime = {
       reconcile: vi.fn(async () => undefined),
-      isCurrentRun: vi.fn(async () => false),
+      observeRun: vi.fn(async () => ({ kind: "missing" })),
       recoverRun,
       removeViewSession: vi.fn(async () => undefined),
       removeStaleViewSessions: vi.fn(async () => undefined),
@@ -149,6 +149,8 @@ describe("RunRuntimeCoordinator", () => {
 
     try {
       await coordinator.reconcile(true);
+      expect(recoverRun).not.toHaveBeenCalled();
+      await coordinator.reconcile(true);
       const replacement = store.listDesiredRunningRuns()[0]!;
       expect(recoverRun).toHaveBeenCalledWith(
         expect.objectContaining({ id: run.id, recoveryAttempts: 1 }),
@@ -166,6 +168,37 @@ describe("RunRuntimeCoordinator", () => {
     } finally {
       await coordinator.close();
       store.close();
+    }
+  });
+
+  it("never launches or replaces a run after an indeterminate observation", async () => {
+    const recoverRun = vi.fn();
+    const runtime = {
+      reconcile: vi.fn(async () => undefined),
+      observeRun: vi.fn(async () => ({ kind: "indeterminate", evidence: "tmux_timeout" })),
+      recoverRun,
+      removeStaleViewSessions: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    };
+    const coordinator = new RunRuntimeCoordinator(
+      {
+        listActiveRuns: vi.fn(() => []),
+        listDesiredRunningRuns: vi.fn(() => [runningRun]),
+      } as never,
+      runtime as never,
+      {
+        reconcile: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+      } as never,
+      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
+      { reconcileIntervalMs: 60_000 },
+    );
+    try {
+      await coordinator.reconcile(true);
+      await coordinator.reconcile(true);
+      expect(recoverRun).not.toHaveBeenCalled();
+    } finally {
+      await coordinator.close();
     }
   });
 
@@ -204,7 +237,7 @@ describe("RunRuntimeCoordinator", () => {
     });
     const runtime = {
       reconcile: vi.fn(async () => undefined),
-      isCurrentRun: vi.fn(async () => true),
+      observeRun: vi.fn(async () => ({ kind: "present" })),
       recoverRun,
       removeViewSession: vi.fn(async () => undefined),
       removeStaleViewSessions: vi.fn(async () => undefined),
@@ -273,7 +306,7 @@ describe("RunRuntimeCoordinator", () => {
     });
     const runtime = {
       reconcile: vi.fn(async () => undefined),
-      isCurrentRun: vi.fn(async () => false),
+      observeRun: vi.fn(async () => ({ kind: "dead" })),
       recoverRun: vi.fn(),
       removeViewSession: vi.fn(async () => undefined),
       stopRun: vi.fn(async () => store.updateRunStatus(run.id, "stopped")),

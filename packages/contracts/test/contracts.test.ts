@@ -8,15 +8,18 @@ import {
   AgentStatusDetailSchema,
   AgentStatusEventInputSchema,
   ConfigStatusSchema,
+  ControlMetadataSchema,
   CredentialProfileReferenceSchema,
   CreateGroupAgentCommandSchema,
   DeleteGroupResultSchema,
   DeliveryOutcomeSchema,
+  EventServerFrameSchema,
   InstructionPathSchema,
   InterruptAgentRunCommandSchema,
   MAX_MESSAGE_TEXT_BYTES,
   MessageSchema,
   NanasaConfigSchema,
+  PortalSnapshotSchema,
   RemoveGroupAgentResultSchema,
   ReorderGroupAgentsCommandSchema,
   ReorderGroupAgentsResultSchema,
@@ -27,6 +30,55 @@ import {
   UpdateGroupAgentCommandSchema,
   UpdateGroupCommandSchema,
 } from "../src/index.js";
+
+describe("versioned control-plane contracts", () => {
+  it("requires daemon identity, epoch, versions, and explicit loopback-only metadata", () => {
+    expect(
+      ControlMetadataSchema.parse({
+        apiVersion: 1,
+        eventProtocolVersion: 1,
+        productVersion: "0.0.0",
+        configVersion: 2,
+        databaseSchemaVersion: 5,
+        repositoryId: "repo-one",
+        instanceId: "daemon-one",
+        daemonEpoch: 2,
+        lifecycle: "ready",
+        remoteAccess: "loopback-only",
+        limits: { eventPendingBytes: 1_048_576 },
+      }),
+    ).toMatchObject({ instanceId: "daemon-one", daemonEpoch: 2 });
+  });
+
+  it("accepts only typed replay, heartbeat, reset, slow-consumer, and restart frames", () => {
+    expect(
+      EventServerFrameSchema.parse({
+        type: "subscription.reset-required",
+        reason: "cursor_expired",
+        cursor: 10,
+        snapshotUrl: "/api/v1/snapshot",
+      }),
+    ).toMatchObject({ type: "subscription.reset-required" });
+    expect(EventServerFrameSchema.safeParse({ type: "event", sequence: 11 }).success).toBe(false);
+  });
+
+  it("fences portal snapshots by daemon instance and event sequence", () => {
+    expect(
+      PortalSnapshotSchema.parse({
+        instanceId: "daemon-one",
+        daemonEpoch: 2,
+        sequence: 10,
+        generatedAt: "2026-08-29T12:00:00.000Z",
+        groups: [],
+        agentProfiles: [],
+        memberships: [],
+        runs: [],
+        messages: [],
+        deliveryOutcomes: [],
+      }),
+    ).toMatchObject({ instanceId: "daemon-one", sequence: 10 });
+  });
+});
 
 const baseMessage = {
   id: "msg_1",

@@ -365,7 +365,7 @@ describe("Streamable HTTP MCP", () => {
     const submit = (token: string, body: unknown) =>
       daemon.app.inject({
         method: "POST",
-        url: "/api/agent-status/events",
+        url: "/api/v1/agent-status/events",
         headers: {
           host: "127.0.0.1:3210",
           authorization: `Bearer ${token}`,

@@ -33,6 +33,7 @@ export class RunRuntimeCoordinator {
   #pending: Promise<void> = Promise.resolve();
   #closing = false;
   #lastStatusProbeAt = 0;
+  readonly #missingConfirmations = new Map<string, number>();
 
   public constructor(
     store: NanasaStore,
@@ -202,10 +203,13 @@ export class RunRuntimeCoordinator {
       }
       const recoveredRuns: AgentRun[] = [];
       for (const persisted of this.#store.listDesiredRunningRuns()) {
+        const observationKey = `${persisted.id}:${persisted.generation}`;
+        const observation = await this.#runtime.observeRun(persisted);
         if (
           persisted.recoveryReason !== "terminal_runtime_migration" &&
-          (await this.#runtime.isCurrentRun(persisted))
+          observation.kind === "present"
         ) {
+          this.#missingConfirmations.delete(observationKey);
           let current = persisted;
           if (markOrphanedStarting || persisted.recoveryPhase !== "recovered") {
             current = this.#store.transitionRunRecovery(
@@ -218,6 +222,22 @@ export class RunRuntimeCoordinator {
           recoveredRuns.push(current);
           continue;
         }
+        if (observation.kind === "indeterminate") {
+          this.#missingConfirmations.delete(observationKey);
+          continue;
+        }
+        if (observation.kind === "missing") {
+          const confirmations = (this.#missingConfirmations.get(observationKey) ?? 0) + 1;
+          this.#missingConfirmations.set(observationKey, confirmations);
+          if (confirmations < 2) continue;
+          const finalObservation = await this.#runtime.observeRun(persisted);
+          if (finalObservation.kind !== "missing" && finalObservation.kind !== "dead") {
+            this.#missingConfirmations.delete(observationKey);
+            if (finalObservation.kind === "present") recoveredRuns.push(persisted);
+            continue;
+          }
+        }
+        this.#missingConfirmations.delete(observationKey);
         const replacement = await this.#recoverMissingRun(persisted);
         if (replacement !== undefined) recoveredRuns.push(replacement);
       }

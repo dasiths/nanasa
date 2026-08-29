@@ -10,7 +10,7 @@ import { createDaemon as createDaemonBase, type DaemonOptions } from "../src/ser
 const temporaryDirectories: string[] = [];
 const repositoryByDataPath = new Map<string, string>();
 
-function createDaemon(options: DaemonOptions = {}) {
+async function createDaemon(options: DaemonOptions = {}) {
   const key = options.dataPath ?? `memory-${temporaryDirectories.length}`;
   let repository = repositoryByDataPath.get(key);
   if (repository === undefined) {
@@ -57,7 +57,61 @@ messages: { retentionPerGroup: 1000 }
     );
     repositoryByDataPath.set(key, repository);
   }
-  return createDaemonBase({ ...options, loadedConfig: loadNanasaConfig(repository) });
+  const daemon = await createDaemonBase({ ...options, loadedConfig: loadNanasaConfig(repository) });
+  const rawInject = daemon.app.inject.bind(daemon.app);
+  const bootstrapToken = daemon.bootstrapFragment.slice("nanasa-bootstrap=".length);
+  const bootstrap = await rawInject({
+    method: "POST",
+    url: "/api/v1/auth/bootstrap",
+    payload: { token: bootstrapToken },
+  });
+  const cookie = bootstrap.headers["set-cookie"]?.split(";", 1)[0];
+  const csrfToken = bootstrap.json<{ csrfToken: string }>().csrfToken;
+  const authenticatedInject = ((optionsOrUrl: Parameters<typeof rawInject>[0]) => {
+    if (typeof optionsOrUrl === "string") {
+      const url =
+        optionsOrUrl.startsWith("/api/") && !optionsOrUrl.startsWith("/api/v1/")
+          ? optionsOrUrl.replace("/api/", "/api/v1/")
+          : optionsOrUrl;
+      return rawInject({
+        method: "GET",
+        url,
+        headers: cookie === undefined ? {} : { cookie },
+      });
+    }
+    const url =
+      optionsOrUrl.url.startsWith("/api/") && !optionsOrUrl.url.startsWith("/api/v1/")
+        ? optionsOrUrl.url.replace("/api/", "/api/v1/")
+        : optionsOrUrl.url;
+    return rawInject({
+      ...optionsOrUrl,
+      url,
+      headers: {
+        ...optionsOrUrl.headers,
+        ...(cookie === undefined ? {} : { cookie }),
+        "x-nanasa-csrf": csrfToken,
+      },
+    });
+  }) as typeof daemon.app.inject;
+  daemon.app.inject = authenticatedInject;
+  const rawInjectWs = daemon.app.injectWS.bind(daemon.app);
+  daemon.app.injectWS = ((path, headers, options) =>
+    rawInjectWs(
+      path.startsWith("/api/") && !path.startsWith("/api/v1/")
+        ? path.replace("/api/", "/api/v1/")
+        : path,
+      {
+        ...headers,
+        headers: {
+          ...((headers as { headers?: Record<string, string> }).headers ?? {}),
+          host: "localhost",
+          origin: "http://localhost",
+          ...(cookie === undefined ? {} : { cookie }),
+        },
+      },
+      options,
+    )) as typeof daemon.app.injectWS;
+  return daemon;
 }
 
 function temporaryDatabase(): string {
@@ -585,7 +639,10 @@ describe("portal static assets", () => {
         },
       },
     );
-    expect(JSON.parse(await eventFrame)).toMatchObject({ type: "group.created" });
+    expect(JSON.parse(await eventFrame)).toMatchObject({
+      type: "subscription.started",
+      instanceId: daemon.guard.instanceId,
+    });
     eventSocket.terminate();
 
     await daemon.app.close();
@@ -682,20 +739,26 @@ describe("domain event WebSocket", () => {
       {},
       {
         onInit(client) {
-          client.once("message", (data) => resolveReplay(data.toString()));
+          client.on("message", (data) => {
+            const frame = JSON.parse(data.toString()) as { type: string };
+            if (frame.type === "domain.event") resolveReplay(data.toString());
+          });
         },
       },
     );
     expect(JSON.parse(await replay)).toMatchObject({
-      sequence: 2,
-      type: "agent-profile.created",
+      type: "domain.event",
+      event: { sequence: 2, type: "agent-profile.created" },
     });
 
     const live = new Promise<string>((resolve) => {
       socket.once("message", (data) => resolve(data.toString()));
     });
     daemon.store.createGroup({ name: "Second" });
-    expect(JSON.parse(await live)).toMatchObject({ sequence: 3, type: "group.created" });
+    expect(JSON.parse(await live)).toMatchObject({
+      type: "domain.event",
+      event: { sequence: 3, type: "group.created" },
+    });
 
     await new Promise<void>((resolve) => {
       socket.once("close", resolve);

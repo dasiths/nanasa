@@ -1,4 +1,4 @@
-import { DomainEventSchema, type NanasaConfig, type PortalSnapshot } from "@nanasa/contracts";
+import { EventServerFrameSchema, type NanasaConfig, type PortalSnapshot } from "@nanasa/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { PortalClient } from "../api.js";
@@ -12,37 +12,80 @@ export function usePortalSnapshot(client: PortalClient) {
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [error, setError] = useState<string>();
   const [errorSource, setErrorSource] = useState<"snapshot" | "config">();
+  const acceptedRef = useRef<
+    { instanceId: string; daemonEpoch: number; sequence: number } | undefined
+  >(undefined);
+  const inFlightRef = useRef<Promise<void> | undefined>(undefined);
+  const trailingInvalidationRef = useRef(false);
 
   const refresh = useCallback(async () => {
-    const [snapshotResult, configResult] = await Promise.allSettled([
-      client.loadSnapshot(),
-      client.loadConfig(),
-    ]);
-    if (snapshotResult.status === "rejected") {
-      setStatus("error");
-      setErrorSource("snapshot");
-      setError(
-        snapshotResult.reason instanceof Error
-          ? snapshotResult.reason.message
-          : "Unable to load portal state",
-      );
-      return;
+    trailingInvalidationRef.current = true;
+    if (inFlightRef.current !== undefined) return inFlightRef.current;
+
+    const operation = (async () => {
+      do {
+        trailingInvalidationRef.current = false;
+        const [metadataResult, snapshotResult, configResult] = await Promise.allSettled([
+          client.loadMetadata(),
+          client.loadSnapshot(),
+          client.loadConfig(),
+        ]);
+        if (metadataResult.status === "rejected" || snapshotResult.status === "rejected") {
+          const reason =
+            metadataResult.status === "rejected"
+              ? metadataResult.reason
+              : snapshotResult.status === "rejected"
+                ? snapshotResult.reason
+                : undefined;
+          setStatus("error");
+          setErrorSource("snapshot");
+          setError(reason instanceof Error ? reason.message : "Unable to load portal state");
+          return;
+        }
+        const next = snapshotResult.value;
+        if (
+          next.instanceId !== metadataResult.value.instanceId ||
+          next.daemonEpoch !== metadataResult.value.daemonEpoch
+        ) {
+          trailingInvalidationRef.current = true;
+          continue;
+        }
+        const accepted = acceptedRef.current;
+        const isStale =
+          accepted !== undefined &&
+          (next.daemonEpoch < accepted.daemonEpoch ||
+            (next.daemonEpoch === accepted.daemonEpoch &&
+              (next.instanceId !== accepted.instanceId || next.sequence < accepted.sequence)));
+        if (!isStale) {
+          acceptedRef.current = {
+            instanceId: next.instanceId,
+            daemonEpoch: next.daemonEpoch,
+            sequence: next.sequence,
+          };
+          setSnapshot(next);
+        }
+        if (configResult.status === "rejected") {
+          setStatus("error");
+          setErrorSource("config");
+          setError(
+            configResult.reason instanceof Error
+              ? configResult.reason.message
+              : "Unable to load repository configuration",
+          );
+          return;
+        }
+        setConfig(configResult.value);
+        setStatus("ready");
+        setError(undefined);
+        setErrorSource(undefined);
+      } while (trailingInvalidationRef.current);
+    })();
+    inFlightRef.current = operation;
+    try {
+      await operation;
+    } finally {
+      if (inFlightRef.current === operation) inFlightRef.current = undefined;
     }
-    setSnapshot(snapshotResult.value);
-    if (configResult.status === "rejected") {
-      setStatus("error");
-      setErrorSource("config");
-      setError(
-        configResult.reason instanceof Error
-          ? configResult.reason.message
-          : "Unable to load repository configuration",
-      );
-      return;
-    }
-    setConfig(configResult.value);
-    setStatus("ready");
-    setError(undefined);
-    setErrorSource(undefined);
   }, [client]);
 
   useEffect(() => {
@@ -59,10 +102,16 @@ export function useDomainEvents(
 ): EventConnectionStatus {
   const [status, setStatus] = useState<EventConnectionStatus>("disconnected");
   const sequenceRef = useRef(0);
+  const instanceRef = useRef<string | undefined>(undefined);
   const callbackRef = useRef(onEvent);
   callbackRef.current = onEvent;
   if (snapshot !== undefined) {
-    sequenceRef.current = Math.max(sequenceRef.current, snapshot.sequence);
+    if (instanceRef.current !== snapshot.instanceId) {
+      instanceRef.current = snapshot.instanceId;
+      sequenceRef.current = snapshot.sequence;
+    } else {
+      sequenceRef.current = Math.max(sequenceRef.current, snapshot.sequence);
+    }
   }
 
   useEffect(() => {
@@ -79,17 +128,34 @@ export function useDomainEvents(
       if (stopped) {
         return;
       }
-      socket = client.createEventsSocket(sequenceRef.current);
+      socket = client.createEventsSocket(sequenceRef.current, snapshot.instanceId);
       socket.onopen = () => {
         attempt = 0;
-        setStatus("connected");
-        callbackRef.current();
       };
       socket.onmessage = (event) => {
         try {
-          const domainEvent = DomainEventSchema.parse(JSON.parse(String(event.data)));
-          sequenceRef.current = Math.max(sequenceRef.current, domainEvent.sequence);
-          callbackRef.current();
+          const frame = EventServerFrameSchema.parse(JSON.parse(String(event.data)));
+          if (frame.type === "subscription.started") {
+            if (
+              frame.instanceId !== snapshot.instanceId ||
+              frame.daemonEpoch !== snapshot.daemonEpoch
+            ) {
+              setStatus("reconnecting");
+              callbackRef.current();
+              socket?.close();
+              return;
+            }
+            setStatus("connected");
+          } else if (frame.type === "domain.event") {
+            sequenceRef.current = Math.max(sequenceRef.current, frame.event.sequence);
+            callbackRef.current();
+          } else if (frame.type === "subscription.heartbeat") {
+            sequenceRef.current = Math.max(sequenceRef.current, frame.cursor);
+          } else {
+            setStatus("reconnecting");
+            if (frame.type === "subscription.reset-required") callbackRef.current();
+            socket?.close();
+          }
         } catch {
           setStatus("reconnecting");
           socket?.close();
@@ -116,7 +182,7 @@ export function useDomainEvents(
       socket?.close();
       setStatus("disconnected");
     };
-  }, [client, snapshot === undefined]);
+  }, [client, snapshot?.daemonEpoch, snapshot?.instanceId]);
 
   return status;
 }

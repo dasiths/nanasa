@@ -8,6 +8,7 @@ import WebSocket, { type RawData } from "ws";
 
 import { loadNanasaConfig } from "../src/config.js";
 import { createDaemon, type DaemonContext } from "../src/server.js";
+import { authenticateTestDaemon } from "./operator-session-fixture.js";
 import { ttydViewSessionName } from "../src/ttyd-supervisor.js";
 
 const tmuxAvailable = spawnSync("tmux", ["-V"], { encoding: "utf8" }).status === 0;
@@ -196,11 +197,12 @@ function rawDataBuffer(data: RawData): Buffer {
 async function connectTerminal(
   url: string,
   origin: string,
+  cookie: string,
 ): Promise<{
   socket: WebSocket;
   outputUntil(text: string): Promise<string>;
 }> {
-  const socket = new WebSocket(url, "tty", { origin });
+  const socket = new WebSocket(url, "tty", { origin, headers: { cookie } });
   let output = "";
   const waiters = new Set<{
     text: string;
@@ -298,6 +300,7 @@ messages: { retentionPerGroup: 1000 }
       ttydPath: "ttyd",
       reconcileIntervalMs: 50,
     });
+    const operator = await authenticateTestDaemon(first);
     openDaemons.add(first);
     const firstAddress = await first.app.listen({ host: "127.0.0.1", port: 0 });
 
@@ -394,10 +397,14 @@ messages: { retentionPerGroup: 1000 }
         throw new Error("Expected a ready endpoint");
       }
       expect(await waitForTtydProcessCount(status.url.slice(0, -1), 1)).toHaveLength(1);
-      const index = await fetch(`${firstAddress}${status.url}`);
+      const index = await fetch(`${firstAddress}${status.url}`, {
+        headers: { cookie: operator.cookie },
+      });
       expect(index.status).toBe(200);
       expect(await index.text()).toContain("ttyd");
-      const token = await fetch(`${firstAddress}${status.url}token`);
+      const token = await fetch(`${firstAddress}${status.url}token`, {
+        headers: { cookie: operator.cookie },
+      });
       expect(token.status).toBe(200);
     }
 
@@ -409,6 +416,7 @@ messages: { retentionPerGroup: 1000 }
         return connectTerminal(
           `${firstAddress.replace(/^http:/, "ws:")}${status.url}ws`,
           firstAddress,
+          operator.cookie,
         );
       }),
     );
@@ -446,6 +454,7 @@ messages: { retentionPerGroup: 1000 }
       ttydPath: "ttyd",
       reconcileIntervalMs: 50,
     });
+    const reopenedOperator = await authenticateTestDaemon(reopened);
     openDaemons.add(reopened);
     const reopenedAddress = await reopened.app.listen({ host: "127.0.0.1", port: 0 });
     const reconciled = await Promise.all(runs.map((run) => waitForEndpoint(reopened, run.id)));
@@ -454,7 +463,13 @@ messages: { retentionPerGroup: 1000 }
     for (const [index, status] of reconciled.entries()) {
       expect(reopened.store.getRun(runs[index]!.id).terminal).toEqual(runs[index]!.terminal);
       if (status.state === "ready") {
-        expect((await fetch(`${reopenedAddress}${status.url}`)).status).toBe(200);
+        expect(
+          (
+            await fetch(`${reopenedAddress}${status.url}`, {
+              headers: { cookie: reopenedOperator.cookie },
+            })
+          ).status,
+        ).toBe(200);
       }
     }
 

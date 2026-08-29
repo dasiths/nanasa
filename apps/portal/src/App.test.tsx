@@ -174,6 +174,8 @@ const memberships: GroupMembership[] = [
 ];
 
 const snapshot: PortalSnapshot = {
+  instanceId: "daemon-test",
+  daemonEpoch: 1,
   sequence: 7,
   generatedAt: timestamp,
   groups: [
@@ -228,6 +230,19 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
   return {
     createConsole: vi.fn().mockResolvedValue({ id: "console-one", runId: "console-one" }),
     closeConsole: vi.fn().mockResolvedValue(undefined),
+    loadMetadata: vi.fn().mockResolvedValue({
+      apiVersion: 1,
+      eventProtocolVersion: 1,
+      productVersion: "0.0.0",
+      configVersion: 2,
+      databaseSchemaVersion: 5,
+      repositoryId: "repo-test",
+      instanceId: snapshot.instanceId,
+      daemonEpoch: snapshot.daemonEpoch,
+      lifecycle: "ready",
+      remoteAccess: "loopback-only",
+      limits: {},
+    }),
     loadSnapshot: vi.fn().mockResolvedValue(snapshot),
     loadConfig: vi.fn().mockResolvedValue(config),
     createGroup: vi.fn().mockResolvedValue(snapshot.groups[0]),
@@ -340,7 +355,7 @@ describe("portal application", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("refreshes the snapshot when the domain event socket connects", async () => {
+  it("refreshes the snapshot when a typed domain event arrives", async () => {
     const client = createClient();
     render(<App client={client} />);
     await screen.findByRole("heading", { name: "Backend" });
@@ -348,10 +363,69 @@ describe("portal application", () => {
 
     await waitFor(() => expect(client.createEventsSocket).toHaveBeenCalledTimes(1));
     const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
-    await waitFor(() => expect(socket?.onopen).toEqual(expect.any(Function)));
-    await act(async () => socket!.onopen!(new Event("open")));
+    await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
+    await act(async () =>
+      socket!.onmessage!(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "domain.event",
+            event: {
+              sequence: 8,
+              id: "event-8",
+              type: "group.changed",
+              aggregateType: "group",
+              aggregateId: "group-backend",
+              occurredAt: timestamp,
+              payload: {},
+            },
+          }),
+        }),
+      ),
+    );
 
     await waitFor(() => expect(client.loadSnapshot).toHaveBeenCalledTimes(2));
+  });
+
+  it("coalesces an event burst into one in-flight snapshot and one trailing invalidation", async () => {
+    const client = createClient();
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+    const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
+    await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
+
+    let resolveSnapshot: (value: PortalSnapshot) => void = () => undefined;
+    vi.mocked(client.loadSnapshot)
+      .mockImplementationOnce(
+        () =>
+          new Promise<PortalSnapshot>((resolve) => {
+            resolveSnapshot = resolve;
+          }),
+      )
+      .mockResolvedValue({ ...snapshot, sequence: 1_007 });
+
+    await act(async () => {
+      for (let sequence = 8; sequence < 1_008; sequence += 1) {
+        socket!.onmessage!(
+          new MessageEvent("message", {
+            data: JSON.stringify({
+              type: "domain.event",
+              event: {
+                sequence,
+                id: `event-${sequence}`,
+                type: "fixture.changed",
+                aggregateType: "fixture",
+                aggregateId: "fixture-one",
+                occurredAt: timestamp,
+                payload: {},
+              },
+            }),
+          }),
+        );
+      }
+    });
+    expect(client.loadSnapshot).toHaveBeenCalledTimes(2);
+    resolveSnapshot({ ...snapshot, sequence: 1_007 });
+    await waitFor(() => expect(client.loadSnapshot).toHaveBeenCalledTimes(3));
   });
 
   it("replaces the rail Add agent shortcut with Console", async () => {
@@ -1128,7 +1202,7 @@ describe("portal application", () => {
         "true",
       ),
     );
-    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+    await waitFor(() => expect(document.documentElement).toHaveAttribute("data-theme", "light"));
   });
 
   it("selects a group from the tree and updates the workspace", async () => {

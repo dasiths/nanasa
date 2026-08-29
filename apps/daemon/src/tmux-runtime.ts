@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { AgentProfile, AgentRun, GroupMembership, TerminalBinding } from "@nanasa/contracts";
 
 import type { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
+import { runtimeObservation, type RuntimeObservation } from "./runtime-observation.js";
 import { DomainError, NanasaStore } from "./store.js";
 import { ttydViewSessionName } from "./ttyd-supervisor.js";
 
@@ -318,13 +319,61 @@ export class TmuxRuntime {
     }
   }
 
-  public async isCurrentRun(run: AgentRun): Promise<boolean> {
-    try {
-      await this.#ownedPaneStatus(run, true);
-      return true;
-    } catch {
-      return false;
+  public async observeRun(run: AgentRun): Promise<RuntimeObservation> {
+    const binding = run.terminal;
+    if (binding === undefined || binding.serverName !== this.serverName) {
+      return runtimeObservation(run, "missing", { evidence: "terminal_binding_unavailable" });
     }
+    let result: CommandOutput;
+    try {
+      result = await this.#tmux(
+        [
+          "list-panes",
+          "-a",
+          "-F",
+          "#{session_id}\t#{window_id}\t#{pane_id}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_dead_signal}\t#{@nanasa-run-id}\t#{@nanasa-generation}",
+        ],
+        true,
+      );
+    } catch (error) {
+      return runtimeObservation(run, "indeterminate", {
+        evidence: error instanceof Error ? error.message : "tmux_observation_failed",
+      });
+    }
+    if (result.exitCode !== 0) {
+      return runtimeObservation(run, "indeterminate", {
+        evidence: result.stderr.trim() || `tmux_exit_${result.exitCode}`,
+      });
+    }
+    const pane = result.stdout
+      .trimEnd()
+      .split("\n")
+      .map((line) => line.split("\t"))
+      .find((fields) => fields[2] === binding.paneId);
+    if (pane === undefined) {
+      return runtimeObservation(run, "missing", { evidence: "owned_pane_missing" });
+    }
+    const [sessionId, windowId, paneId, dead, deadStatus, deadSignal, runId, generation] = pane;
+    if (
+      sessionId !== binding.sessionId ||
+      windowId !== binding.windowId ||
+      paneId !== binding.paneId ||
+      runId !== run.id ||
+      generation !== String(run.generation)
+    ) {
+      return runtimeObservation(run, "missing", { evidence: "owned_pane_identity_mismatch" });
+    }
+    if (dead === "1") {
+      return runtimeObservation(run, "dead", {
+        evidence: "tmux_retained_exit",
+        ...(/^-?\d+$/.test(deadStatus ?? "") ? { exitCode: Number(deadStatus) } : {}),
+        ...(deadSignal === undefined || deadSignal.length === 0 ? {} : { signal: deadSignal }),
+      });
+    }
+    if (dead !== "0") {
+      return runtimeObservation(run, "indeterminate", { evidence: "malformed_tmux_dead_state" });
+    }
+    return runtimeObservation(run, "present", { evidence: "exact_owned_pane" });
   }
 
   public async interruptRun(run: AgentRun): Promise<void> {

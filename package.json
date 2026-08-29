@@ -36,7 +36,7 @@
     "dev": "pnpm --parallel --filter @nanasa/daemon --filter @nanasa/portal dev",
     "prestart": "pnpm build",
     "start": "NANASA_MCP_ENABLED=true NODE_ENV=production pnpm --filter @nanasa/daemon start",
-    "build": "pnpm --filter @nanasa/contracts build && pnpm --filter @nanasa/daemon build && pnpm --filter @nanasa/portal build",
+    "build": "pnpm --filter @nanasa/contracts build && pnpm --filter @nanasa/control-client build && pnpm --filter @nanasa/daemon build && pnpm --filter @nanasa/portal build",
     "package:build": "node scripts/build-package.mjs",
     "package:test": "pnpm package:build && node --test test/package-cli.test.mjs",
     "acceptance": "pnpm package:build && playwright test",

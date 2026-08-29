@@ -37,17 +37,35 @@ export const ErrorEnvelopeSchema = z
 export const ControlMetadataSchema = z
   .object({
     apiVersion: z.literal(1),
+    eventProtocolVersion: z.literal(1),
+    productVersion: z.string().trim().min(1).max(100),
     configVersion: z.literal(2),
     databaseSchemaVersion: z.number().int().positive(),
+    repositoryId: IdentifierSchema,
     instanceId: IdentifierSchema,
-    daemonEpoch: z.number().int().nonnegative(),
+    daemonEpoch: z.number().int().positive(),
+    lifecycle: z.enum(["starting", "ready", "draining"]),
+    remoteAccess: z.literal("loopback-only"),
     limits: z.record(z.string(), z.number().int().nonnegative()),
+  })
+  .strict();
+
+export const OperatorBootstrapCommandSchema = z
+  .object({ token: z.string().trim().min(32).max(256) })
+  .strict();
+export const OperatorSessionSchema = z
+  .object({
+    operatorId: IdentifierSchema,
+    csrfToken: z.string().trim().min(32).max(256),
+    expiresAt: TimestampSchema,
   })
   .strict();
 
 export type Principal = z.infer<typeof PrincipalSchema>;
 export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
 export type ControlMetadata = z.infer<typeof ControlMetadataSchema>;
+export type OperatorBootstrapCommand = z.infer<typeof OperatorBootstrapCommandSchema>;
+export type OperatorSession = z.infer<typeof OperatorSessionSchema>;
 
 export const RoleIdSchema = z
   .string()

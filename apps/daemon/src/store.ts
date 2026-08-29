@@ -268,6 +268,8 @@ function agentStatusSummary(detail: AgentStatusDetail): AgentStatusSummary {
 export class NanasaStore {
   readonly #database: DatabaseSync;
   readonly #listeners = new Set<DomainEventListener>();
+  #instanceId = "store-local";
+  #daemonEpoch = 0;
   #config: NanasaConfig | undefined;
   #configStatus: ConfigStatus | undefined;
   #messageRetentionPerGroup: number;
@@ -288,6 +290,44 @@ export class NanasaStore {
   public onEvent(listener: DomainEventListener): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
+  }
+
+  public beginDaemonEpoch(options: {
+    instanceId: string;
+    processId: number;
+    processStartedAt: string;
+  }): number {
+    const epoch = this.#transaction(() => {
+      const row = this.#database
+        .prepare("SELECT COALESCE(MAX(epoch), 0) + 1 AS epoch FROM daemon_epochs")
+        .get() as { epoch: number };
+      this.#database
+        .prepare(
+          `INSERT INTO daemon_epochs
+               (epoch, instance_id, process_id, process_started_at, acquired_at, released_at)
+             VALUES (?, ?, ?, ?, ?, NULL)`,
+        )
+        .run(
+          row.epoch,
+          options.instanceId,
+          options.processId,
+          options.processStartedAt,
+          new Date().toISOString(),
+        );
+      return row.epoch;
+    });
+    this.#instanceId = options.instanceId;
+    this.#daemonEpoch = epoch;
+    return epoch;
+  }
+
+  public releaseDaemonEpoch(instanceId: string): void {
+    this.#database
+      .prepare(
+        `UPDATE daemon_epochs SET released_at = ?
+         WHERE instance_id = ? AND released_at IS NULL`,
+      )
+      .run(new Date().toISOString(), instanceId);
   }
 
   public reconcileTopology(config: NanasaConfig, configStatus?: ConfigStatus): void {
@@ -1826,12 +1866,38 @@ export class NanasaStore {
   }
 
   public listEvents(afterSequence = 0): DomainEvent[] {
+    return this.listEventPage(afterSequence, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
+  }
+
+  public eventBounds(): { earliestAvailable: number; highWater: number } {
+    const row = this.#database
+      .prepare(
+        `SELECT COALESCE(MIN(sequence), 0) AS earliest_available,
+                COALESCE(MAX(sequence), 0) AS high_water
+         FROM domain_events`,
+      )
+      .get() as { earliest_available: number; high_water: number };
+    return { earliestAvailable: row.earliest_available, highWater: row.high_water };
+  }
+
+  public listEventPage(
+    afterSequence: number,
+    throughSequence: number,
+    limit: number,
+  ): DomainEvent[] {
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new DomainError("invalid_event_page_limit", "Event page limit must be positive", 400);
+    }
+    const boundedLimit = Math.min(limit, 1_000);
     const rows = this.#database
       .prepare(
         `SELECT sequence, id, type, aggregate_type, aggregate_id, occurred_at, payload_json
-         FROM domain_events WHERE sequence > ? ORDER BY sequence`,
+         FROM domain_events
+         WHERE sequence > ? AND sequence <= ?
+         ORDER BY sequence
+         LIMIT ?`,
       )
-      .all(afterSequence) as unknown as EventRow[];
+      .all(afterSequence, throughSequence, boundedLimit) as unknown as EventRow[];
     return rows.map((row) => this.#hydrateEvent(row));
   }
 
@@ -1998,48 +2064,54 @@ export class NanasaStore {
     return completed.result;
   }
 
-  public getSnapshot(): PortalSnapshot {
-    const groups = (
-      this.#database
-        .prepare("SELECT * FROM groups ORDER BY created_at, id")
-        .all() as unknown as GroupRow[]
-    ).map((row) => this.#hydrateGroup(row));
-    const agentProfiles = (
-      this.#database
-        .prepare(
-          `SELECT p.* FROM agent_profiles p
+  public getSnapshot(
+    authority: { instanceId: string; daemonEpoch: number } = {
+      instanceId: this.#instanceId,
+      daemonEpoch: this.#daemonEpoch,
+    },
+  ): PortalSnapshot {
+    return this.#readTransaction(() => {
+      const groups = (
+        this.#database
+          .prepare("SELECT * FROM groups ORDER BY created_at, id")
+          .all() as unknown as GroupRow[]
+      ).map((row) => this.#hydrateGroup(row));
+      const agentProfiles = (
+        this.#database
+          .prepare(
+            `SELECT p.* FROM agent_profiles p
            WHERE EXISTS (
              SELECT 1 FROM memberships m
              WHERE m.agent_profile_id = p.id AND m.state = 'active'
            )
            ORDER BY p.created_at, p.id`,
-        )
-        .all() as unknown as AgentProfileRow[]
-    ).map((row) => this.#hydrateAgentProfile(row));
-    const memberships = (
-      this.#database
-        .prepare("SELECT * FROM memberships WHERE state = 'active' ORDER BY joined_at, id")
-        .all() as unknown as MembershipRow[]
-    ).map((row) => this.#hydrateMembership(row));
-    const configuredOrder = new Map<string, number>();
-    let nextConfiguredOrder = 0;
-    for (const configuredGroup of Object.values(this.#config?.groups ?? {})) {
-      for (const [agentId] of orderedAgentEntries(configuredGroup.agents)) {
-        configuredOrder.set(agentId, nextConfiguredOrder);
-        nextConfiguredOrder += 1;
+          )
+          .all() as unknown as AgentProfileRow[]
+      ).map((row) => this.#hydrateAgentProfile(row));
+      const memberships = (
+        this.#database
+          .prepare("SELECT * FROM memberships WHERE state = 'active' ORDER BY joined_at, id")
+          .all() as unknown as MembershipRow[]
+      ).map((row) => this.#hydrateMembership(row));
+      const configuredOrder = new Map<string, number>();
+      let nextConfiguredOrder = 0;
+      for (const configuredGroup of Object.values(this.#config?.groups ?? {})) {
+        for (const [agentId] of orderedAgentEntries(configuredGroup.agents)) {
+          configuredOrder.set(agentId, nextConfiguredOrder);
+          nextConfiguredOrder += 1;
+        }
       }
-    }
-    memberships.sort(
-      (left, right) =>
-        (configuredOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
-          (configuredOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER) ||
-        left.joinedAt.localeCompare(right.joinedAt) ||
-        left.id.localeCompare(right.id),
-    );
-    const runs = (
-      this.#database
-        .prepare(
-          `SELECT r.* FROM runs r
+      memberships.sort(
+        (left, right) =>
+          (configuredOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+            (configuredOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER) ||
+          left.joinedAt.localeCompare(right.joinedAt) ||
+          left.id.localeCompare(right.id),
+      );
+      const runs = (
+        this.#database
+          .prepare(
+            `SELECT r.* FROM runs r
            WHERE EXISTS (
              SELECT 1 FROM memberships m
              WHERE m.group_id = r.group_id
@@ -2047,34 +2119,37 @@ export class NanasaStore {
                AND m.state = 'active'
            )
            ORDER BY r.started_at, r.id`,
-        )
-        .all() as unknown as RunRow[]
-    ).map((row) => this.#hydrateRun(row));
-    const messages = (
-      this.#database
-        .prepare("SELECT * FROM messages ORDER BY created_at, id")
-        .all() as unknown as MessageRow[]
-    ).map((row) => this.#hydrateMessage(row));
-    const deliveryOutcomes = this.listDeliveries();
-    const messageGroups = groups.map((group) => this.getGroupMessageState(group.id));
-    const agentStatuses = groups.flatMap((group) => this.listAgentStatuses(group.id));
-    const sequenceRow = this.#database
-      .prepare("SELECT COALESCE(MAX(sequence), 0) AS sequence FROM domain_events")
-      .get() as unknown as { sequence: number };
+          )
+          .all() as unknown as RunRow[]
+      ).map((row) => this.#hydrateRun(row));
+      const messages = (
+        this.#database
+          .prepare("SELECT * FROM messages ORDER BY created_at, id")
+          .all() as unknown as MessageRow[]
+      ).map((row) => this.#hydrateMessage(row));
+      const deliveryOutcomes = this.listDeliveries();
+      const messageGroups = groups.map((group) => this.getGroupMessageState(group.id));
+      const agentStatuses = groups.flatMap((group) => this.listAgentStatuses(group.id));
+      const sequenceRow = this.#database
+        .prepare("SELECT COALESCE(MAX(sequence), 0) AS sequence FROM domain_events")
+        .get() as unknown as { sequence: number };
 
-    return PortalSnapshotSchema.parse({
-      sequence: sequenceRow.sequence,
-      generatedAt: new Date().toISOString(),
-      groups,
-      agentProfiles,
-      memberships,
-      runs,
-      agentStatuses,
-      messages,
-      deliveryOutcomes,
-      messageGroups,
-      ...(this.#config === undefined ? {} : { config: this.#config }),
-      ...(this.#configStatus === undefined ? {} : { configStatus: this.#configStatus }),
+      return PortalSnapshotSchema.parse({
+        instanceId: authority.instanceId,
+        daemonEpoch: authority.daemonEpoch,
+        sequence: sequenceRow.sequence,
+        generatedAt: new Date().toISOString(),
+        groups,
+        agentProfiles,
+        memberships,
+        runs,
+        agentStatuses,
+        messages,
+        deliveryOutcomes,
+        messageGroups,
+        ...(this.#config === undefined ? {} : { config: this.#config }),
+        ...(this.#configStatus === undefined ? {} : { configStatus: this.#configStatus }),
+      });
     });
   }
 
@@ -2604,6 +2679,17 @@ export class NanasaStore {
 
   #transaction<T>(operation: () => T): T {
     this.#database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = operation();
+      this.#database.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  #readTransaction<T>(operation: () => T): T {
+    this.#database.exec("BEGIN");
     try {
       const result = operation();
       this.#database.exec("COMMIT");

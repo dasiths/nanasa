@@ -9,6 +9,7 @@ import WebSocket, { WebSocketServer } from "ws";
 
 import { createDaemon, type DaemonContext } from "../src/server.js";
 import { loadNanasaConfig } from "../src/config-v2.js";
+import { authenticateTestDaemon } from "./operator-session-fixture.js";
 
 const daemons = new Set<DaemonContext>();
 const servers = new Set<Server>();
@@ -89,7 +90,12 @@ describe("terminal endpoint proxy", () => {
       response.end(JSON.stringify({ path: request.url }));
     });
     const upstreamPort = await listen(upstream);
-    const daemon = await createDaemon({ dataPath: ":memory:", loadedConfig: loadedConfig() });
+    const daemon = await createDaemon({
+      dataPath: ":memory:",
+      loadedConfig: loadedConfig(),
+      authority: { allowedHostnames: ["localhost", "127.0.0.1", "::1", "portal.test"] },
+    });
+    await authenticateTestDaemon(daemon);
     daemons.add(daemon);
     const run = runningRun(daemon);
     const record = daemon.terminalEndpoints.begin(run, 1);
@@ -105,7 +111,7 @@ describe("terminal endpoint proxy", () => {
     daemon.terminalEndpoints.publishReady(run.id, 1, upstreamPort);
     const status = await daemon.app.inject({
       method: "GET",
-      url: `/api/runs/${encodeURIComponent(run.id)}/terminal`,
+      url: `/api/v1/runs/${encodeURIComponent(run.id)}/terminal`,
     });
     expect(status.statusCode).toBe(200);
     expect(status.json()).toEqual({
@@ -117,7 +123,7 @@ describe("terminal endpoint proxy", () => {
     expect(status.body).not.toContain("127.0.0.1");
     expect(status.body).not.toContain(String(upstreamPort));
 
-    const token = await daemon.app.inject({
+    const forwardedAttack = await daemon.app.inject({
       method: "GET",
       url: `${record.basePath}/token?asset=terminal`,
       headers: {
@@ -126,6 +132,19 @@ describe("terminal endpoint proxy", () => {
         authorization: "Bearer secret",
         cookie: "session=secret",
         "x-forwarded-host": "attacker.test",
+      },
+    });
+    expect(forwardedAttack.statusCode).toBe(400);
+    expect(forwardedAttack.json()).toMatchObject({ code: "untrusted_forwarded_headers" });
+
+    const token = await daemon.app.inject({
+      method: "GET",
+      url: `${record.basePath}/token?asset=terminal`,
+      headers: {
+        host: "portal.test",
+        origin: "http://portal.test",
+        authorization: "Bearer secret",
+        cookie: "session=secret",
       },
     });
     expect(token.statusCode, token.body).toBe(200);
@@ -201,6 +220,7 @@ describe("terminal endpoint proxy", () => {
     });
     const upstreamPort = await listen(upstreamHttp);
     const daemon = await createDaemon({ dataPath: ":memory:", loadedConfig: loadedConfig() });
+    const operator = await authenticateTestDaemon(daemon);
     daemons.add(daemon);
     const run = runningRun(daemon);
     const record = await readyEndpoint(daemon, run, upstreamPort);
@@ -209,7 +229,7 @@ describe("terminal endpoint proxy", () => {
     const rejected = new WebSocket(
       `${daemonAddress.replace(/^http:/, "ws:")}${record.basePath}/ws`,
       "tty",
-      { origin: "http://attacker.test" },
+      { origin: "http://attacker.test", headers: { cookie: operator.cookie } },
     );
     const rejectedStatus = await new Promise<number>((resolve, reject) => {
       rejected.once("unexpected-response", (_request, response) => {
@@ -225,7 +245,7 @@ describe("terminal endpoint proxy", () => {
       "tty",
       {
         origin: publicOrigin,
-        headers: { authorization: "Bearer secret", cookie: "session=secret" },
+        headers: { authorization: "Bearer secret", cookie: operator.cookie },
       },
     );
 

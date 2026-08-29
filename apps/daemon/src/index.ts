@@ -1,6 +1,7 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { assertLoopbackControlHost } from "./authority-policy.js";
 import { discoverAndLoadNanasaConfig, loadNanasaConfig } from "./config-v2.js";
 import { isLoopbackHost, validateMcpEndpointConfiguration } from "./mcp-config.js";
 import { createDaemon } from "./server.js";
@@ -108,7 +109,8 @@ async function start(): Promise<void> {
   const mcpOperatorToken = process.env.NANASA_MCP_OPERATOR_TOKEN;
   const mcpEndpointUrl =
     process.env.NANASA_MCP_URL ?? `http://${hostForUrl(host)}:${port}${mcpPath}`;
-  const statusEndpointUrl = `http://${hostForUrl(host)}:${port}/api/agent-status/events`;
+  const statusEndpointUrl = `http://${hostForUrl(host)}:${port}/api/v1/agent-status/events`;
+  assertLoopbackControlHost(host);
   validateMcpStartupConfiguration({
     enabled: mcpEnabled,
     listenHost: host,
@@ -123,12 +125,12 @@ async function start(): Promise<void> {
   const portalAssetsPath =
     process.env.NANASA_PORTAL_PATH ??
     resolve(dirname(fileURLToPath(import.meta.url)), "../../portal/dist");
-  const { app } = await createDaemon({
+  const daemon = await createDaemon({
     ...(dataPath === undefined ? {} : { dataPath }),
     runtimePath,
     loadedConfig,
     logger: true,
-    tmuxServerName,
+    ...(process.env.NANASA_TMUX_SERVER === undefined ? {} : { tmuxServerName }),
     ttydPath,
     statusEndpointUrl,
     servePortal,
@@ -143,12 +145,18 @@ async function start(): Promise<void> {
   });
 
   const close = async () => {
-    await app.close();
+    await daemon.app.close();
     process.exitCode = 0;
   };
   process.once("SIGINT", close);
   process.once("SIGTERM", close);
-  await app.listen({ host, port });
+  try {
+    await daemon.app.listen({ host, port });
+  } catch (error) {
+    await daemon.app.close();
+    throw error;
+  }
+  process.stdout.write(`Open http://${hostForUrl(host)}:${port}/#${daemon.bootstrapFragment}\n`);
 }
 
 const entryPoint = process.argv[1];

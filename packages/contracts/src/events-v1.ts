@@ -36,38 +36,52 @@ export type DomainEvent = z.infer<typeof DomainEventSchema>;
 export const EventServerFrameSchema = z.discriminatedUnion("type", [
   z
     .object({
-      type: z.literal("welcome"),
+      type: z.literal("subscription.started"),
       version: z.literal(1),
       cursor: EventCursorSchema,
+      highWater: EventCursorSchema,
+      earliestAvailable: EventCursorSchema,
       instanceId: IdentifierSchema,
-      daemonEpoch: z.number().int().nonnegative(),
+      daemonEpoch: z.number().int().positive(),
     })
     .strict(),
-  z.object({ type: z.literal("event"), event: DomainEventSchema }).strict(),
+  z.object({ type: z.literal("domain.event"), event: DomainEventSchema }).strict(),
   z
     .object({
-      type: z.literal("reset"),
-      reason: z.enum(["cursor_expired", "filter_changed", "server_restart"]),
+      type: z.literal("subscription.reset-required"),
+      reason: z.enum(["cursor_expired", "cursor_ahead", "instance_changed"]),
       cursor: EventCursorSchema,
+      snapshotUrl: z.literal("/api/v1/snapshot"),
     })
     .strict(),
   z
-    .object({ type: z.literal("heartbeat"), cursor: EventCursorSchema, sentAt: TimestampSchema })
-    .strict(),
-  z
-    .object({ type: z.literal("slow_consumer"), retryAfterMs: z.number().int().positive() })
+    .object({
+      type: z.literal("subscription.heartbeat"),
+      cursor: EventCursorSchema,
+      sentAt: TimestampSchema,
+    })
     .strict(),
   z
     .object({
-      type: z.literal("restart"),
-      daemonEpoch: z.number().int().nonnegative(),
+      type: z.literal("subscription.slow-consumer"),
+      cursor: EventCursorSchema,
+      retryAfterMs: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("subscription.planned-restart"),
+      daemonEpoch: z.number().int().positive(),
       retryAfterMs: z.number().int().positive(),
     })
     .strict(),
 ]);
+export type EventServerFrame = z.infer<typeof EventServerFrameSchema>;
 
 export const PortalSnapshotSchema = z
   .object({
+    instanceId: IdentifierSchema,
+    daemonEpoch: z.number().int().nonnegative(),
     sequence: z.number().int().nonnegative(),
     generatedAt: TimestampSchema,
     groups: z.array(GroupSchema),

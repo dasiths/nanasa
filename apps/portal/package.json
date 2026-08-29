@@ -7,10 +7,11 @@
     "dev": "vite",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "pnpm --filter @nanasa/contracts build && pnpm --filter @nanasa/control-client build && vitest run"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans-condensed": "^5.3.0",
+    "@nanasa/control-client": "workspace:*",
     "@nanasa/contracts": "workspace:*",
     "lucide-react": "^1.28.0",
     "react": "^19.2.8",

@@ -139,6 +139,7 @@ function createClient(
   return {
     createConsole: vi.fn(),
     closeConsole: vi.fn(),
+    loadMetadata: vi.fn(),
     loadSnapshot: vi.fn<() => Promise<PortalSnapshot>>(),
     loadConfig: vi.fn(),
     createGroup: vi.fn(),

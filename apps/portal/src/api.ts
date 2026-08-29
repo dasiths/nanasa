@@ -43,25 +43,21 @@ import {
   UpdateGroupCommandSchema,
   type UpdateRolePresentationCommand,
   UpdateRolePresentationCommandSchema,
+  type ControlMetadata,
 } from "@nanasa/contracts";
+import {
+  CONTROL_API_PREFIX,
+  ControlClientError,
+  NanasaControlClient,
+  type Schema,
+} from "@nanasa/control-client";
 
-interface Schema<T> {
-  parse(value: unknown): T;
-}
-
-export class ApiError extends Error {
-  public readonly status: number;
-
-  public constructor(message: string, status: number) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-  }
-}
+export { ControlClientError as ApiError };
 
 export interface PortalClient {
   createConsole(): Promise<AdHocConsoleSession>;
   closeConsole(consoleId: string): Promise<void>;
+  loadMetadata(): Promise<ControlMetadata>;
   loadSnapshot(): Promise<PortalSnapshot>;
   loadConfig(): Promise<NanasaConfig>;
   createGroup(command: CreateGroupCommand): Promise<Group>;
@@ -92,37 +88,17 @@ export interface PortalClient {
   ): Promise<MessagePage>;
   clearMessages(groupId: string): Promise<ClearMessageHistoryResult>;
   getTerminalEndpointStatus(runId: string): Promise<TerminalEndpointStatus>;
-  createEventsSocket(afterSequence: number): WebSocket;
+  createEventsSocket(afterSequence: number, instanceId: string): WebSocket;
 }
 
-function websocketUrl(path: string): string {
-  const url = new URL(path, window.location.href);
-  url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
-}
+const control = new NanasaControlClient();
 
 async function request<T>(path: string, schema: Schema<T>, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
-  const payload: unknown = await response.json();
-  if (!response.ok) {
-    const message =
-      typeof payload === "object" && payload !== null && "message" in payload
-        ? String(payload.message)
-        : `Request failed with status ${response.status}`;
-    throw new ApiError(message, response.status);
-  }
-  return schema.parse(payload);
+  return control.request(path, schema, { ...(init === undefined ? {} : { init }) });
 }
 
 async function requestVoid(path: string, init: RequestInit): Promise<void> {
-  const response = await fetch(path, init);
-  if (response.ok) return;
-  const payload: unknown = await response.json();
-  const message =
-    typeof payload === "object" && payload !== null && "message" in payload
-      ? String(payload.message)
-      : `Request failed with status ${response.status}`;
-  throw new ApiError(message, response.status);
+  return control.requestVoid(path, init);
 }
 
 function commandInit(
@@ -141,80 +117,85 @@ function commandInit(
 }
 
 export const api: PortalClient = {
-  createConsole: () => request("/api/consoles", AdHocConsoleSessionSchema, commandInit("POST", {})),
+  createConsole: () =>
+    request(`${CONTROL_API_PREFIX}/consoles`, AdHocConsoleSessionSchema, commandInit("POST", {})),
   closeConsole: (consoleId) =>
-    requestVoid(`/api/consoles/${encodeURIComponent(consoleId)}`, commandInit("DELETE", {})),
-  loadSnapshot: () => request("/api/snapshot", PortalSnapshotSchema),
-  loadConfig: () => request("/api/config", NanasaConfigSchema),
+    requestVoid(
+      `${CONTROL_API_PREFIX}/consoles/${encodeURIComponent(consoleId)}`,
+      commandInit("DELETE", {}),
+    ),
+  loadMetadata: () => control.metadata(),
+  loadSnapshot: () => request(`${CONTROL_API_PREFIX}/snapshot`, PortalSnapshotSchema),
+  loadConfig: () => request(`${CONTROL_API_PREFIX}/config`, NanasaConfigSchema),
   createGroup: (command) =>
     request(
-      "/api/groups",
+      `${CONTROL_API_PREFIX}/groups`,
       GroupSchema,
       commandInit("POST", CreateGroupCommandSchema.parse(command)),
     ),
   updateGroup: (groupId, command) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}`,
       GroupSchema,
       commandInit("PATCH", UpdateGroupCommandSchema.parse(command)),
     ),
   deleteGroup: (groupId) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}`,
       DeleteGroupResultSchema,
       commandInit("DELETE", {}),
     ),
   createAgent: (groupId, command) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/agents`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agents`,
       GroupMembershipSchema,
       commandInit("POST", CreateGroupAgentCommandSchema.parse(command)),
     ),
   updateAgent: (groupId, agentId, command) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}`,
       GroupMembershipSchema,
       commandInit("PATCH", UpdateGroupAgentCommandSchema.parse(command)),
     ),
   removeAgent: (groupId, agentId) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}`,
       RemoveGroupAgentResultSchema,
       commandInit("DELETE", {}),
     ),
   reorderAgents: (groupId, command) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/agent-order`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agent-order`,
       ReorderGroupAgentsResultSchema,
       commandInit("PUT", ReorderGroupAgentsCommandSchema.parse(command)),
     ),
   updateRolePresentation: (roleId, command) =>
     request(
-      `/api/roles/${encodeURIComponent(roleId)}/presentation`,
+      `${CONTROL_API_PREFIX}/roles/${encodeURIComponent(roleId)}/presentation`,
       RoleDefinitionSchema,
       commandInit("PATCH", UpdateRolePresentationCommandSchema.parse(command)),
     ),
   startRun: (groupId, agentId) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}/run`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}/run`,
       AgentRunSchema,
       commandInit("POST", {}),
     ),
   startAllRuns: (groupId, idempotencyKey) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/runs/start-all`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/runs/start-all`,
       StartGroupRunsResultSchema,
       commandInit("POST", {}, idempotencyKey),
     ),
   stopRun: (groupId, agentId) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}/run`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}/run`,
       AgentRunSchema,
       commandInit("DELETE", {}),
     ),
   submitMessage: (groupId, command) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/messages`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/messages`,
       MessageSubmissionResultSchema,
       commandInit("POST", SubmitMessageCommandSchema.parse(command)),
     ),
@@ -225,18 +206,20 @@ export const api: PortalClient = {
     if (options.after !== undefined) query.set("after", String(options.after));
     const suffix = query.size === 0 ? "" : `?${query.toString()}`;
     return request(
-      `/api/groups/${encodeURIComponent(groupId)}/messages${suffix}`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/messages${suffix}`,
       MessagePageSchema,
     );
   },
   clearMessages: (groupId) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/messages`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/messages`,
       ClearMessageHistoryResultSchema,
       commandInit("DELETE", {}),
     ),
   getTerminalEndpointStatus: (runId) =>
-    request(`/api/runs/${encodeURIComponent(runId)}/terminal`, TerminalEndpointStatusSchema),
-  createEventsSocket: (afterSequence) =>
-    new WebSocket(websocketUrl(`/api/events?after=${afterSequence}`)),
+    request(
+      `${CONTROL_API_PREFIX}/runs/${encodeURIComponent(runId)}/terminal`,
+      TerminalEndpointStatusSchema,
+    ),
+  createEventsSocket: (afterSequence, instanceId) => control.openEvents(afterSequence, instanceId),
 };

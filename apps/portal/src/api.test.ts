@@ -2,6 +2,27 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "./api.js";
 
+function stubAuthenticatedFetch(
+  fetchMock: (input: RequestInfo | URL, init?: RequestInit) => unknown,
+): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/v1/auth/session") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            operatorId: "operator-test",
+            csrfToken: "c".repeat(32),
+            expiresAt: "2026-08-30T12:00:00.000Z",
+          }),
+        });
+      }
+      return fetchMock(input, init);
+    }),
+  );
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -17,18 +38,17 @@ describe("terminal endpoint API", () => {
         url: "/terminals/0123456789abcdef0123456789abcdef/",
       }),
     });
-    vi.stubGlobal("fetch", fetchMock);
+    stubAuthenticatedFetch(fetchMock);
 
     await expect(api.getTerminalEndpointStatus("run/one")).resolves.toMatchObject({
       state: "ready",
       url: "/terminals/0123456789abcdef0123456789abcdef/",
     });
-    expect(fetchMock).toHaveBeenCalledWith("/api/runs/run%2Fone/terminal", undefined);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/runs/run%2Fone/terminal", undefined);
   });
 
   it("rejects an endpoint response that exposes an upstream URL", async () => {
-    vi.stubGlobal(
-      "fetch",
+    stubAuthenticatedFetch(
       vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
@@ -53,7 +73,7 @@ describe("portal operations API", () => {
         json: async () => ({ id: "console/one", runId: "console-run" }),
       })
       .mockResolvedValueOnce({ ok: true });
-    vi.stubGlobal("fetch", fetchMock);
+    stubAuthenticatedFetch(fetchMock);
 
     await expect(api.createConsole()).resolves.toEqual({
       id: "console/one",
@@ -63,12 +83,12 @@ describe("portal operations API", () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "/api/consoles",
+      "/api/v1/consoles",
       expect.objectContaining({ method: "POST" }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "/api/consoles/console%2Fone",
+      "/api/v1/consoles/console%2Fone",
       expect.objectContaining({ method: "DELETE" }),
     );
   });
@@ -87,7 +107,7 @@ describe("portal operations API", () => {
       ok: true,
       json: async () => responses.shift(),
     }));
-    vi.stubGlobal("fetch", fetchMock);
+    stubAuthenticatedFetch(fetchMock);
 
     await api.updateRolePresentation("reviewer/lead", {
       icon: "scan-search",
@@ -101,7 +121,7 @@ describe("portal operations API", () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "/api/roles/reviewer%2Flead/presentation",
+      "/api/v1/roles/reviewer%2Flead/presentation",
       expect.objectContaining({
         method: "PATCH",
         body: JSON.stringify({ icon: "scan-search", color: "rose", shortName: "Inspect" }),
@@ -109,7 +129,7 @@ describe("portal operations API", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "/api/groups/group%2Fone/agent-order",
+      "/api/v1/groups/group%2Fone/agent-order",
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({
@@ -134,7 +154,7 @@ describe("portal operations API", () => {
         joinedAt: "2026-08-10T08:00:00.000Z",
       }),
     });
-    vi.stubGlobal("fetch", fetchMock);
+    stubAuthenticatedFetch(fetchMock);
 
     await api.updateAgent("group/one", "agent/one", {
       name: " Reviewer ",
@@ -144,7 +164,7 @@ describe("portal operations API", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/groups/group%2Fone/agents/agent%2Fone",
+      "/api/v1/groups/group%2Fone/agents/agent%2Fone",
       expect.objectContaining({
         method: "PATCH",
         body: JSON.stringify({
@@ -179,19 +199,19 @@ describe("portal operations API", () => {
       ok: true,
       json: async () => responses.shift(),
     }));
-    vi.stubGlobal("fetch", fetchMock);
+    stubAuthenticatedFetch(fetchMock);
 
     await api.loadMessages("group/one", { limit: 20, before: 42 });
     await api.clearMessages("group/one");
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "/api/groups/group%2Fone/messages?limit=20&before=42",
+      "/api/v1/groups/group%2Fone/messages?limit=20&before=42",
       undefined,
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "/api/groups/group%2Fone/messages",
+      "/api/v1/groups/group%2Fone/messages",
       expect.objectContaining({
         method: "DELETE",
         headers: expect.objectContaining({
@@ -237,7 +257,7 @@ describe("portal operations API", () => {
       ok: true,
       json: async () => responses.shift(),
     }));
-    vi.stubGlobal("fetch", fetchMock);
+    stubAuthenticatedFetch(fetchMock);
 
     await api.updateGroup("group/one", { name: "  Renamed group  " });
     await api.createAgent("group/one", { name: " New agent ", integrationId: "copilot" });
@@ -246,12 +266,12 @@ describe("portal operations API", () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "/api/groups/group%2Fone",
+      "/api/v1/groups/group%2Fone",
       expect.objectContaining({ method: "PATCH", body: '{"name":"Renamed group"}' }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "/api/groups/group%2Fone/agents",
+      "/api/v1/groups/group%2Fone/agents",
       expect.objectContaining({
         method: "POST",
         body: '{"name":"New agent","integrationId":"copilot"}',
@@ -259,12 +279,12 @@ describe("portal operations API", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
-      "/api/groups/group%2Fone/agents/agent%2Fone",
+      "/api/v1/groups/group%2Fone/agents/agent%2Fone",
       expect.objectContaining({ method: "DELETE", body: "{}" }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       4,
-      "/api/groups/group%2Fone",
+      "/api/v1/groups/group%2Fone",
       expect.objectContaining({ method: "DELETE", body: "{}" }),
     );
     for (const call of fetchMock.mock.calls) {
@@ -277,22 +297,19 @@ describe("portal operations API", () => {
   });
 
   it("loads and validates configured integrations and group agents", async () => {
-    vi.stubGlobal(
-      "fetch",
+    stubAuthenticatedFetch(
       vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
+          version: 2,
           instructions: [],
           integrations: {
             "custom-agent": {
               id: "custom-agent",
               name: "Custom agent",
               kind: "opencode",
-              adapter: "terminal",
               command: ["custom-agent"],
               environment: {},
-              recovery: "restart",
-              capabilities: ["queue"],
             },
           },
           roles: {},
@@ -338,19 +355,19 @@ describe("portal operations API", () => {
       ok: true,
       json: async () => run,
     });
-    vi.stubGlobal("fetch", fetchMock);
+    stubAuthenticatedFetch(fetchMock);
 
     await api.startRun("group/one", "agent/one");
     await api.stopRun("group/one", "agent/one");
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "/api/groups/group%2Fone/agents/agent%2Fone/run",
+      "/api/v1/groups/group%2Fone/agents/agent%2Fone/run",
       expect.objectContaining({ method: "POST", body: "{}" }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "/api/groups/group%2Fone/agents/agent%2Fone/run",
+      "/api/v1/groups/group%2Fone/agents/agent%2Fone/run",
       expect.objectContaining({ method: "DELETE", body: "{}" }),
     );
   });
@@ -370,13 +387,13 @@ describe("portal operations API", () => {
         ],
       }),
     });
-    vi.stubGlobal("fetch", fetchMock);
+    stubAuthenticatedFetch(fetchMock);
 
     await expect(api.startAllRuns("group/one", "start-all-key")).resolves.toMatchObject({
       outcomes: [{ status: "already-running" }],
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/groups/group%2Fone/runs/start-all",
+      "/api/v1/groups/group%2Fone/runs/start-all",
       expect.objectContaining({
         method: "POST",
         body: "{}",

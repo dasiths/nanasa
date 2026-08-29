@@ -1,10 +1,11 @@
 import type { AgentRun } from "@nanasa/contracts";
 
+import type { RuntimeObservation } from "./runtime-observation.js";
 import type { DeliveryClaim } from "./store.js";
 
 interface TerminalDeliveryRuntime {
   readonly serverName: string;
-  isCurrentRun(run: AgentRun): Promise<boolean>;
+  observeRun(run: AgentRun): Promise<RuntimeObservation>;
   pasteToRun(run: AgentRun, text: string): Promise<void>;
 }
 
@@ -33,7 +34,7 @@ export class TmuxTerminalDelivery {
     return (
       run.status === "running" &&
       run.terminal?.serverName === this.#runtime.serverName &&
-      (await this.#runtime.isCurrentRun(run))
+      (await this.#runtime.observeRun(run)).kind === "present"
     );
   }
 
