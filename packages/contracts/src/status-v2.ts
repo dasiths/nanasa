@@ -85,6 +85,14 @@ const AgentStatusEventDataSchema = z
     retryAt: TimestampSchema.optional(),
     activeCount: z.number().int().nonnegative().max(10_000).optional(),
     fatal: z.boolean().optional(),
+    nativeSession: z
+      .object({
+        kind: z.enum(["id", "path"]),
+        value: z.string().trim().min(1).max(4_096),
+      })
+      .strict()
+      .optional(),
+    effectiveModel: z.string().trim().min(1).max(256).optional(),
   })
   .strict();
 

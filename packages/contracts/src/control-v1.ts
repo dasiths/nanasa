@@ -177,6 +177,14 @@ export const AgentRunSchema = z
     recoveryAttempts: z.number().int().nonnegative().default(0),
     recoveryNotBefore: TimestampSchema.optional(),
     recoveryReason: z.string().trim().min(1).max(1_000).optional(),
+    launchKind: z.enum(["fresh", "adopted", "resuming", "restarted"]).default("fresh"),
+    requestedModel: z.string().trim().min(1).max(256).optional(),
+    requestedModelSource: z
+      .enum(["membership", "integration", "provider-default"])
+      .default("provider-default"),
+    effectiveModel: z.string().trim().min(1).max(256).optional(),
+    nativeSessionId: IdentifierSchema.optional(),
+    recoveryOutcome: z.enum(["retained", "resumed", "restarted", "failed"]).optional(),
     terminal: TerminalBindingSchema.optional(),
     startedAt: TimestampSchema,
     stoppedAt: TimestampSchema.optional(),

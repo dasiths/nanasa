@@ -1,9 +1,19 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import type { AgentProfile, AgentRun, GroupMembership, TerminalBinding } from "@nanasa/contracts";
+import type {
+  AgentProfile,
+  AgentRun,
+  GroupMembership,
+  NativeSessionReference,
+  TerminalBinding,
+} from "@nanasa/contracts";
 
-import type { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
+import type {
+  AgentRuntimeConfiguration,
+  AgentRuntimeProvisioner,
+} from "./agent-runtime-provisioner.js";
+import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
 import { runtimeObservation, type RuntimeObservation } from "./runtime-observation.js";
 import { DomainError, NanasaStore } from "./store.js";
 import { ttydViewSessionName } from "./ttyd-supervisor.js";
@@ -13,6 +23,7 @@ export interface TmuxRuntimeOptions {
   tmuxPath?: string;
   runtimeEnvironment?: (run: AgentRun) => Record<string, string>;
   runtimeProvisioner?: AgentRuntimeProvisioner;
+  adapterRegistry?: ProviderAdapterRegistry;
 }
 
 interface CommandOutput {
@@ -80,8 +91,10 @@ export class TmuxRuntime {
   readonly #tmuxPath: string;
   readonly #runtimeEnvironment: (run: AgentRun) => Record<string, string>;
   readonly #runtimeProvisioner: AgentRuntimeProvisioner | undefined;
+  readonly #adapters: ProviderAdapterRegistry;
   readonly #reconciliations = new Set<Promise<void>>();
   readonly #detachedRunIds = new Set<string>();
+  readonly #provisionedRuns = new Map<string, AgentRuntimeConfiguration>();
   #serverConfiguration: Promise<void> | undefined;
   #closing = false;
 
@@ -91,6 +104,7 @@ export class TmuxRuntime {
     this.#tmuxPath = options.tmuxPath ?? "tmux";
     this.#runtimeEnvironment = options.runtimeEnvironment ?? (() => ({}));
     this.#runtimeProvisioner = options.runtimeProvisioner;
+    this.#adapters = options.adapterRegistry ?? ProviderAdapterRegistry.builtIn();
     if (!/^[A-Za-z0-9_.-]+$/.test(this.serverName)) {
       throw new Error(
         "tmux server name may contain only letters, numbers, dot, underscore, and dash",
@@ -110,6 +124,7 @@ export class TmuxRuntime {
   public async recoverRun(
     previous: AgentRun,
     size: { cols: number; rows: number },
+    options: { nativeSession?: NativeSessionReference; nativeSessionId?: string } = {},
   ): Promise<AgentRun> {
     const current = this.#store.getRun(previous.id);
     if (
@@ -124,7 +139,8 @@ export class TmuxRuntime {
       );
     }
     if (
-      current.recoveryReason === "terminal_runtime_migration" &&
+      (current.recoveryReason === "terminal_runtime_migration" ||
+        current.recoveryPhase === "resuming") &&
       (current.status === "starting" || current.status === "running")
     ) {
       try {
@@ -142,9 +158,15 @@ export class TmuxRuntime {
     const { run, profile, membership } = this.#store.createRunForMembership(
       current.groupId,
       current.memberId,
-      { recoveryFrom: current },
+      {
+        recoveryFrom: current,
+        launchKind: options.nativeSession === undefined ? "restarted" : "resuming",
+        ...(options.nativeSessionId === undefined
+          ? {}
+          : { nativeSessionId: options.nativeSessionId }),
+      },
     );
-    return this.#launchCreatedRun(run, profile, membership, size);
+    return this.#launchCreatedRun(run, profile, membership, size, options.nativeSession);
   }
 
   public async startConsole(
@@ -162,6 +184,8 @@ export class TmuxRuntime {
       desiredState: "running",
       recoveryPhase: "idle",
       recoveryAttempts: 0,
+      launchKind: "fresh",
+      requestedModelSource: "provider-default",
       startedAt: new Date().toISOString(),
     };
     try {
@@ -188,10 +212,11 @@ export class TmuxRuntime {
     profile: AgentProfile,
     membership: GroupMembership,
     size: { cols: number; rows: number },
+    nativeSession?: NativeSessionReference,
   ): Promise<AgentRun> {
     let binding: TerminalBinding | undefined;
     try {
-      binding = await this.#launch(run, profile, membership, size);
+      binding = await this.#launch(run, profile, membership, size, nativeSession);
       return this.#store.updateRunStatus(run.id, "running", { terminal: binding });
     } catch (error) {
       if (binding !== undefined) {
@@ -305,8 +330,8 @@ export class TmuxRuntime {
       throw new Error("terminal_delivery_too_large");
     }
     const target = terminalInputTarget(run.terminal!);
-    const submitInput =
-      this.#store.getAgentProfile(run.agentProfileId).kind === "copilot" ? "\u001b[I\r" : "\r";
+    const submitInput = this.#adapters.get(this.#store.getAgentProfile(run.agentProfileId).kind)
+      .control.terminalSubmitSequence;
     const bufferName = `nanasa-${randomUUID()}`;
     await this.#tmux(["load-buffer", "-b", bufferName, "-"], false, text);
     try {
@@ -518,6 +543,7 @@ export class TmuxRuntime {
     profile: AgentProfile,
     membership: GroupMembership,
     size: { cols: number; rows: number },
+    nativeSession?: NativeSessionReference,
   ): Promise<TerminalBinding> {
     const provisioned = this.#runtimeProvisioner?.provision(membership, profile);
     const environment = {
@@ -525,7 +551,20 @@ export class TmuxRuntime {
       ...this.#runtimeEnvironment(run),
       ...provisioned?.environment,
     };
-    const launchArguments = provisioned?.command ?? [profile.command, ...profile.args];
+    const launchArguments =
+      provisioned === undefined
+        ? [profile.command, ...profile.args]
+        : nativeSession === undefined
+          ? [...provisioned.command]
+          : [...this.#runtimeProvisioner!.resumeCommand(provisioned.snapshot, nativeSession)];
+    if (provisioned !== undefined) {
+      this.#provisionedRuns.set(run.id, provisioned);
+      this.#store.updateRunProviderMetadata(run.id, {
+        launchKind: nativeSession === undefined ? run.launchKind : "resuming",
+        requestedModel: provisioned.snapshot.desiredModel,
+        requestedModelSource: provisioned.snapshot.desiredModelSource,
+      });
+    }
     return this.#launchCommand(run, launchArguments, profile.workingDirectory, environment, size);
   }
 

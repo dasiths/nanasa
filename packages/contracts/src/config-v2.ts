@@ -89,8 +89,11 @@ export const IntegrationConfigSchema = z
     cwd: z.string().min(1).max(4_096).optional(),
     providerState: ProviderStatePolicySchema.default({ scope: "membership" }),
     credentials: CredentialProfileReferenceSchema.default({ kind: "provider-managed" }),
-    model: DesiredModelPolicySchema.default({ resumePolicy: "preserve-native" }),
-    nativeRecovery: NativeRecoveryPolicySchema.default("resume-or-restart"),
+    model: DesiredModelPolicySchema.default({ resumePolicy: "preserve-session" }),
+    nativeRecovery: NativeRecoveryPolicySchema.default({
+      mode: "resume-or-restart",
+      confirmationTimeoutSeconds: 30,
+    }),
     extensions: z.array(IntegrationIdSchema).max(32).default([]),
     environment: EnvironmentSchema.default({}),
   })

@@ -3,7 +3,9 @@ import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync } fr
 import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { IntegrationConfig } from "@nanasa/contracts";
 import { loadNanasaConfig } from "./config-v2.js";
-import { providerStateEnvironment, resolveProviderStateHome } from "./provider-state-home.js";
+import { ProviderStateRepository } from "./provider-state-repository.js";
+import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
+import { UserCredentialBroker } from "./user-credential-broker.js";
 import {
   formatRedactedResetInventory,
   inventoryAlphaResources,
@@ -94,12 +96,14 @@ function selectedHome(
   ) {
     throw new Error(`${integration.id} requires --agent <agent-id>`);
   }
-  return resolveProviderStateHome(
+  return new ProviderStateRepository(
     loadNanasaConfig(repositoryRoot).integrationsDirectory,
-    integration.id,
-    integration.providerState,
-    agentId,
-  );
+  ).resolve({
+    membershipId: agentId ?? "shared",
+    integrationId: integration.id,
+    policy: integration.providerState,
+    credentialReference: integration.credentials,
+  }).storageReference;
 }
 
 function hasSharedHome(integration: IntegrationConfig): boolean {
@@ -158,6 +162,15 @@ export function authenticateAgent(
   const configHome = selectedHome(repositoryRoot, integration, agentId);
   ensurePrivateTree(loaded.integrationsDirectory, configHome);
   const command = integration.command[0] as string;
+  const adapter = ProviderAdapterRegistry.builtIn().get(integration.kind);
+  const credentials = new UserCredentialBroker().resolve(
+    integration.credentials,
+    integration.kind,
+    adapter.credentialEnvironmentNames(),
+  );
+  if (credentials.health === "missing") {
+    throw new Error(`Credential profile ${credentials.profileId} is unavailable`);
+  }
   if (executablePath(command, process.env, integration.cwd) === undefined) {
     throw new Error(`Agent command not found: ${command}`);
   }
@@ -167,7 +180,8 @@ export function authenticateAgent(
     env: {
       ...process.env,
       ...integration.environment,
-      ...providerStateEnvironment(integration.kind, configHome),
+      ...adapter.stateEnvironment(configHome),
+      ...credentials.environment,
     },
     stdio: "inherit",
   });

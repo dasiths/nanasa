@@ -100,6 +100,12 @@ export const DATABASE_BASELINE_SQL = `
     recovery_attempts INTEGER NOT NULL DEFAULT 0 CHECK (recovery_attempts >= 0),
     recovery_not_before TEXT,
     recovery_reason TEXT,
+    launch_kind TEXT NOT NULL DEFAULT 'fresh' CHECK (launch_kind IN ('fresh', 'adopted', 'resuming', 'restarted')),
+    requested_model TEXT,
+    requested_model_source TEXT NOT NULL DEFAULT 'provider-default' CHECK (requested_model_source IN ('membership', 'integration', 'provider-default')),
+    effective_model TEXT,
+    native_session_id TEXT,
+    recovery_outcome TEXT CHECK (recovery_outcome IN ('retained', 'resumed', 'restarted', 'failed')),
     terminal_json TEXT,
     started_at TEXT NOT NULL,
     stopped_at TEXT,
@@ -248,6 +254,7 @@ export const DATABASE_BASELINE_SQL = `
     member_id TEXT,
     scope TEXT NOT NULL CHECK (scope IN ('membership', 'integration', 'custom')),
     storage_reference TEXT NOT NULL,
+    credential_reference_json TEXT NOT NULL,
     lifecycle TEXT NOT NULL CHECK (lifecycle IN ('active', 'retained', 'deleting', 'deleted')),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -267,12 +274,22 @@ export const DATABASE_BASELINE_SQL = `
   CREATE TABLE native_sessions (
     id TEXT PRIMARY KEY,
     member_id TEXT NOT NULL,
-    provider TEXT NOT NULL,
+    integration_id TEXT NOT NULL,
+    provider_kind TEXT NOT NULL,
     source TEXT NOT NULL,
-    native_session_id TEXT NOT NULL,
+    ref_kind TEXT NOT NULL CHECK (ref_kind IN ('id', 'path')),
+    ref_value TEXT NOT NULL,
     dedupe_hash TEXT NOT NULL UNIQUE,
-    reporter_session_id TEXT NOT NULL REFERENCES reporter_sessions(id),
-    observed_at TEXT NOT NULL
+    observed_model TEXT,
+    reporter_instance_id TEXT,
+    source_sequence INTEGER NOT NULL DEFAULT 0 CHECK (source_sequence >= 0),
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    status TEXT NOT NULL CHECK (status IN ('ready', 'reserved', 'resumed', 'invalid')),
+    reported_at TEXT NOT NULL,
+    last_resumed_at TEXT,
+    resume_run_id TEXT,
+    reserved_at TEXT
   ) STRICT;
 
   CREATE TABLE models (
@@ -287,12 +304,15 @@ export const DATABASE_BASELINE_SQL = `
   CREATE TABLE trust (
     id TEXT PRIMARY KEY,
     repository_id TEXT REFERENCES repositories(id),
+    repository_identity TEXT NOT NULL,
     principal_id TEXT NOT NULL,
     subject_digest TEXT NOT NULL,
     decision TEXT NOT NULL CHECK (decision IN ('trusted', 'denied', 'revoked')),
     decided_at TEXT NOT NULL,
     revoked_at TEXT
   ) STRICT;
+
+  CREATE UNIQUE INDEX trust_repository_subject ON trust (repository_identity, subject_digest, decided_at);
 
   CREATE TABLE terminal_checkpoints (
     id TEXT PRIMARY KEY,

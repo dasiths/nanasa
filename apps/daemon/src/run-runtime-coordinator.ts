@@ -4,9 +4,11 @@ import type {
   GroupMembership,
   StartGroupRunsCommand,
   StartGroupRunsResult,
+  NativeRecoveryPolicy,
 } from "@nanasa/contracts";
 
 import { DeliveryDispatcher } from "./delivery-dispatcher.js";
+import { NativeSessionService } from "./native-session-service.js";
 import { DomainError, NanasaStore } from "./store.js";
 import { TmuxRuntime } from "./tmux-runtime.js";
 import { TtydSupervisor } from "./ttyd-supervisor.js";
@@ -16,6 +18,11 @@ export interface RunRuntimeCoordinatorOptions {
   recoveryMaxAttempts?: number;
   recoveryCooldownMs?: readonly number[];
   now?: () => Date;
+  nativeSessions?: NativeSessionService;
+  nativeRecoveryPolicy?: (run: AgentRun) => {
+    integrationId: string;
+    policy: NativeRecoveryPolicy;
+  };
 }
 
 const RECOVERY_TERMINAL_SIZE = { cols: 120, rows: 40 } as const;
@@ -30,6 +37,8 @@ export class RunRuntimeCoordinator {
   readonly #recoveryMaxAttempts: number;
   readonly #recoveryCooldownMs: readonly number[];
   readonly #now: () => Date;
+  readonly #nativeSessions: NativeSessionService | undefined;
+  readonly #nativeRecoveryPolicy: RunRuntimeCoordinatorOptions["nativeRecoveryPolicy"];
   #pending: Promise<void> = Promise.resolve();
   #closing = false;
   #lastStatusProbeAt = 0;
@@ -49,6 +58,8 @@ export class RunRuntimeCoordinator {
     this.#recoveryMaxAttempts = options.recoveryMaxAttempts ?? 3;
     this.#recoveryCooldownMs = options.recoveryCooldownMs ?? [1_000, 5_000, 30_000];
     this.#now = options.now ?? (() => new Date());
+    this.#nativeSessions = options.nativeSessions;
+    this.#nativeRecoveryPolicy = options.nativeRecoveryPolicy;
     this.#reconcileTimer = setInterval(
       () => void this.reconcile().catch(() => undefined),
       options.reconcileIntervalMs ?? 1_000,
@@ -211,13 +222,55 @@ export class RunRuntimeCoordinator {
         ) {
           this.#missingConfirmations.delete(observationKey);
           let current = persisted;
+          if (markOrphanedStarting && persisted.recoveryPhase !== "resuming") {
+            current = this.#store.updateRunProviderMetadata(persisted.id, {
+              launchKind: "adopted",
+              recoveryOutcome: "retained",
+            });
+          }
+          if (persisted.recoveryPhase === "resuming") {
+            if (
+              persisted.nativeSessionId !== undefined &&
+              this.#nativeSessions?.isConfirmed(persisted.nativeSessionId, persisted.id) === true
+            ) {
+              current = this.#store.updateRunProviderMetadata(persisted.id, {
+                launchKind: "resuming",
+                recoveryOutcome: "resumed",
+              });
+              current = this.#store.transitionRunRecovery(
+                current.id,
+                current.generation,
+                "recovered",
+                { reason: "native_session_confirmed" },
+              );
+            } else {
+              const recovery = this.#nativeRecoveryPolicy?.(persisted);
+              const timeoutMs = (recovery?.policy.confirmationTimeoutSeconds ?? 30) * 1_000;
+              if (this.#now().getTime() - Date.parse(persisted.startedAt) >= timeoutMs) {
+                if (recovery?.policy.mode === "resume-only") {
+                  this.#store.updateRunProviderMetadata(persisted.id, {
+                    recoveryOutcome: "failed",
+                  });
+                  this.#store.transitionRunRecovery(persisted.id, persisted.generation, "failed", {
+                    reason: "native_resume_confirmation_timeout",
+                  });
+                  continue;
+                }
+                const replacement = await this.#recoverMissingRun(persisted, true);
+                if (replacement !== undefined) recoveredRuns.push(replacement);
+                continue;
+              }
+            }
+          }
           if (markOrphanedStarting || persisted.recoveryPhase !== "recovered") {
-            current = this.#store.transitionRunRecovery(
-              persisted.id,
-              persisted.generation,
-              "reconciling",
-              { reason: markOrphanedStarting ? "daemon_restart" : "runtime_reconcile" },
-            );
+            if (current.recoveryPhase !== "resuming" && current.recoveryPhase !== "recovered") {
+              current = this.#store.transitionRunRecovery(
+                persisted.id,
+                persisted.generation,
+                "reconciling",
+                { reason: markOrphanedStarting ? "daemon_restart" : "runtime_reconcile" },
+              );
+            }
           }
           recoveredRuns.push(current);
           continue;
@@ -257,7 +310,7 @@ export class RunRuntimeCoordinator {
       }
       await this.#supervisor.reconcile(readyForTtyd);
       for (const run of readyForTtyd) {
-        if (run.recoveryPhase === "recovered") continue;
+        if (run.recoveryPhase === "recovered" || run.recoveryPhase === "resuming") continue;
         try {
           this.#store.transitionRunRecovery(run.id, run.generation, "recovered", {
             reason: "runtime_recovered",
@@ -321,7 +374,7 @@ export class RunRuntimeCoordinator {
     return this.#runtime.stopRun(groupId, memberId);
   }
 
-  async #recoverMissingRun(run: AgentRun): Promise<AgentRun | undefined> {
+  async #recoverMissingRun(run: AgentRun, forceFresh = false): Promise<AgentRun | undefined> {
     if (run.recoveryAttempts >= this.#recoveryMaxAttempts) {
       if (run.recoveryPhase !== "failed") {
         this.#store.transitionRunRecovery(run.id, run.generation, "failed", {
@@ -344,18 +397,56 @@ export class RunRuntimeCoordinator {
     const cooldown =
       this.#recoveryCooldownMs[Math.min(nextAttempt - 1, this.#recoveryCooldownMs.length - 1)] ??
       30_000;
-    current = this.#store.transitionRunRecovery(current.id, current.generation, "restarting", {
-      incrementAttempt: true,
-      recoveryNotBefore: new Date(now.getTime() + cooldown).toISOString(),
-      reason:
-        current.recoveryReason === "terminal_runtime_migration"
-          ? "terminal_runtime_migration"
-          : "process_restart",
-    });
+    const recovery = this.#nativeRecoveryPolicy?.(current);
+    const reservation =
+      forceFresh || recovery?.policy.mode === "restart"
+        ? undefined
+        : this.#nativeSessions?.reserve(
+            current.memberId,
+            recovery?.integrationId ?? "",
+            current.id,
+          );
+    if (reservation === undefined && recovery?.policy.mode === "resume-only" && !forceFresh) {
+      this.#store.updateRunProviderMetadata(current.id, { recoveryOutcome: "failed" });
+      this.#store.transitionRunRecovery(current.id, current.generation, "failed", {
+        reason: "native_session_unavailable",
+      });
+      return undefined;
+    }
+    current = this.#store.transitionRunRecovery(
+      current.id,
+      current.generation,
+      reservation === undefined ? "restarting" : "resuming",
+      {
+        incrementAttempt: true,
+        recoveryNotBefore: new Date(now.getTime() + cooldown).toISOString(),
+        reason:
+          current.recoveryReason === "terminal_runtime_migration"
+            ? "terminal_runtime_migration"
+            : reservation === undefined
+              ? forceFresh
+                ? "native_resume_fallback_restart"
+                : "process_restart"
+              : "native_session_resume",
+      },
+    );
     try {
       await this.#supervisor.stop(current.id);
       await this.#runtime.removeViewSession(current.id);
-      return await this.#runtime.recoverRun(current, RECOVERY_TERMINAL_SIZE);
+      const replacement =
+        reservation === undefined
+          ? await this.#runtime.recoverRun(current, RECOVERY_TERMINAL_SIZE)
+          : await this.#runtime.recoverRun(current, RECOVERY_TERMINAL_SIZE, {
+              nativeSession: reservation.reference,
+              nativeSessionId: reservation.session.id,
+            });
+      if (reservation === undefined) {
+        return this.#store.updateRunProviderMetadata(replacement.id, {
+          launchKind: "restarted",
+          recoveryOutcome: "restarted",
+        });
+      }
+      return replacement;
     } catch (error) {
       const reason = error instanceof Error ? error.message : "recovery_launch_failed";
       this.#store.recordRuntimeEvent("run.recovery-failed", "run", current.id, {

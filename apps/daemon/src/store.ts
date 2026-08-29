@@ -24,6 +24,8 @@ import {
   type DeliveryOutcome,
   DeliveryOutcomeSchema,
   type DeliveryStatus,
+  type DurableNativeSession,
+  DurableNativeSessionSchema,
   type DomainEvent,
   DomainEventSchema,
   type Group,
@@ -45,6 +47,8 @@ import {
   type PortalSnapshot,
   PortalSnapshotSchema,
   type RecoveryPhase,
+  type ProviderStateBinding,
+  ProviderStateBindingSchema,
   type RunStatus,
   type StartGroupRunsResult,
   StartGroupRunsResultSchema,
@@ -56,6 +60,7 @@ import {
   type UpdateGroupCommand,
   UpdateGroupCommandSchema,
 } from "@nanasa/contracts";
+import type { RepositoryTrustReceipt } from "./repository-trust-service.js";
 
 import {
   type AgentStatusReducerState,
@@ -143,6 +148,12 @@ interface RunRow {
   recovery_attempts: number | null;
   recovery_not_before: string | null;
   recovery_reason: string | null;
+  launch_kind: string;
+  requested_model: string | null;
+  requested_model_source: string;
+  effective_model: string | null;
+  native_session_id: string | null;
+  recovery_outcome: string | null;
   terminal_json: string | null;
   started_at: string;
   stopped_at: string | null;
@@ -851,8 +862,9 @@ export class NanasaStore {
           `INSERT INTO runs
              (id, group_id, member_id, agent_profile_id, generation, status,
             desired_state, recovery_phase, recovery_attempts, recovery_not_before,
-            recovery_reason, terminal_json, started_at, stopped_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            recovery_reason, launch_kind, requested_model, requested_model_source,
+            effective_model, native_session_id, recovery_outcome, terminal_json, started_at, stopped_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.id,
@@ -866,6 +878,12 @@ export class NanasaStore {
           input.recoveryAttempts,
           input.recoveryNotBefore ?? null,
           input.recoveryReason ?? null,
+          input.launchKind,
+          input.requestedModel ?? null,
+          input.requestedModelSource,
+          input.effectiveModel ?? null,
+          input.nativeSessionId ?? null,
+          input.recoveryOutcome ?? null,
           input.terminal === undefined ? null : JSON.stringify(input.terminal),
           input.startedAt,
           input.stoppedAt ?? null,
@@ -888,6 +906,10 @@ export class NanasaStore {
     memberId: string,
     options: {
       recoveryFrom?: AgentRun;
+      launchKind?: AgentRun["launchKind"];
+      requestedModel?: string;
+      requestedModelSource?: AgentRun["requestedModelSource"];
+      nativeSessionId?: string;
     } = {},
   ): {
     run: AgentRun;
@@ -917,10 +939,20 @@ export class NanasaStore {
       generation: generationRow.generation,
       status: "starting",
       desiredState: "running",
-      recoveryPhase: options.recoveryFrom === undefined ? "idle" : "restarting",
+      recoveryPhase:
+        options.recoveryFrom === undefined
+          ? "idle"
+          : options.launchKind === "resuming"
+            ? "resuming"
+            : "restarting",
       recoveryAttempts: options.recoveryFrom?.recoveryAttempts ?? 0,
       recoveryNotBefore: options.recoveryFrom?.recoveryNotBefore,
       recoveryReason: options.recoveryFrom?.recoveryReason,
+      launchKind:
+        options.launchKind ?? (options.recoveryFrom === undefined ? "fresh" : "restarted"),
+      requestedModel: options.requestedModel,
+      requestedModelSource: options.requestedModelSource ?? "provider-default",
+      nativeSessionId: options.nativeSessionId,
       startedAt: new Date().toISOString(),
     });
     return {
@@ -1112,6 +1144,40 @@ export class NanasaStore {
       });
     }
     return result;
+  }
+
+  public updateRunProviderMetadata(
+    runId: string,
+    metadata: Partial<
+      Pick<
+        AgentRun,
+        | "launchKind"
+        | "requestedModel"
+        | "requestedModelSource"
+        | "effectiveModel"
+        | "nativeSessionId"
+        | "recoveryOutcome"
+      >
+    >,
+  ): AgentRun {
+    const current = this.getRun(runId);
+    this.#database
+      .prepare(
+        `UPDATE runs SET
+           launch_kind = ?, requested_model = ?, requested_model_source = ?,
+           effective_model = ?, native_session_id = ?, recovery_outcome = ?
+         WHERE id = ?`,
+      )
+      .run(
+        metadata.launchKind ?? current.launchKind,
+        metadata.requestedModel ?? current.requestedModel ?? null,
+        metadata.requestedModelSource ?? current.requestedModelSource,
+        metadata.effectiveModel ?? current.effectiveModel ?? null,
+        metadata.nativeSessionId ?? current.nativeSessionId ?? null,
+        metadata.recoveryOutcome ?? current.recoveryOutcome ?? null,
+        runId,
+      );
+    return this.getRun(runId);
   }
 
   public ingestAgentStatusEvent(
@@ -2018,6 +2084,211 @@ export class NanasaStore {
     return event;
   }
 
+  public upsertProviderState(binding: ProviderStateBinding): ProviderStateBinding {
+    const parsed = ProviderStateBindingSchema.parse(binding);
+    this.#database
+      .prepare(
+        `INSERT INTO provider_state
+           (id, integration_id, member_id, scope, storage_reference,
+            credential_reference_json, lifecycle, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           storage_reference = excluded.storage_reference,
+           credential_reference_json = excluded.credential_reference_json,
+           lifecycle = excluded.lifecycle,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        parsed.id,
+        parsed.integrationId,
+        parsed.memberId ?? null,
+        parsed.scope,
+        parsed.storageReference,
+        JSON.stringify(parsed.credentialReference),
+        parsed.lifecycle,
+        parsed.createdAt,
+        parsed.updatedAt,
+      );
+    return this.getProviderState(parsed.id)!;
+  }
+
+  public getProviderState(bindingId: string): ProviderStateBinding | undefined {
+    const row = this.#database
+      .prepare("SELECT * FROM provider_state WHERE id = ?")
+      .get(bindingId) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : this.#hydrateProviderState(row);
+  }
+
+  public listProviderStates(): readonly ProviderStateBinding[] {
+    return Object.freeze(
+      (
+        this.#database
+          .prepare("SELECT * FROM provider_state ORDER BY created_at, id")
+          .all() as Record<string, unknown>[]
+      ).map((row) => this.#hydrateProviderState(row)),
+    );
+  }
+
+  public setProviderStateLifecycle(
+    bindingId: string,
+    lifecycle: ProviderStateBinding["lifecycle"],
+  ): ProviderStateBinding {
+    const updatedAt = new Date().toISOString();
+    const result = this.#database
+      .prepare("UPDATE provider_state SET lifecycle = ?, updated_at = ? WHERE id = ?")
+      .run(lifecycle, updatedAt, bindingId);
+    if (result.changes !== 1)
+      throw new DomainError("provider_state_not_found", "Provider state binding not found", 404);
+    return this.getProviderState(bindingId)!;
+  }
+
+  public saveNativeSession(session: DurableNativeSession): DurableNativeSession {
+    const parsed = DurableNativeSessionSchema.parse(session);
+    this.#database
+      .prepare(
+        `INSERT INTO native_sessions
+           (id, member_id, integration_id, provider_kind, source, ref_kind, ref_value,
+            dedupe_hash, observed_model, run_id, generation, status, reported_at, last_resumed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           run_id = excluded.run_id, generation = excluded.generation,
+           observed_model = excluded.observed_model, status = excluded.status,
+           reported_at = excluded.reported_at, last_resumed_at = excluded.last_resumed_at`,
+      )
+      .run(
+        parsed.id,
+        parsed.memberId,
+        parsed.integrationId,
+        parsed.provider,
+        parsed.source,
+        parsed.referenceKind,
+        parsed.referenceValue,
+        parsed.dedupeHash,
+        parsed.effectiveModel ?? null,
+        parsed.runId,
+        parsed.generation,
+        parsed.status,
+        parsed.reportedAt,
+        parsed.lastResumedAt ?? null,
+      );
+    return this.latestNativeSession(parsed.memberId, parsed.integrationId)!;
+  }
+
+  public latestNativeSession(
+    memberId: string,
+    integrationId: string,
+  ): DurableNativeSession | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM native_sessions
+         WHERE member_id = ? AND integration_id = ?
+         ORDER BY reported_at DESC, id DESC LIMIT 1`,
+      )
+      .get(memberId, integrationId) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : this.#hydrateNativeSession(row);
+  }
+
+  public reservedNativeSession(
+    memberId: string,
+    integrationId: string,
+  ): DurableNativeSession | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM native_sessions
+         WHERE member_id = ? AND integration_id = ? AND status = 'reserved'
+         ORDER BY reserved_at DESC, id DESC LIMIT 1`,
+      )
+      .get(memberId, integrationId) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : this.#hydrateNativeSession(row);
+  }
+
+  public reserveNativeSession(sessionId: string, resumeRunId: string, reservedAt: string): boolean {
+    return (
+      this.#database
+        .prepare(
+          `UPDATE native_sessions
+           SET status = 'reserved', resume_run_id = ?, reserved_at = ?
+           WHERE id = ? AND status IN ('ready', 'resumed')`,
+        )
+        .run(resumeRunId, reservedAt, sessionId).changes === 1
+    );
+  }
+
+  public confirmNativeSession(
+    sessionId: string,
+    resumeRunId: string,
+    confirmedAt: string,
+  ): boolean {
+    return (
+      this.#database
+        .prepare(
+          `UPDATE native_sessions
+            SET status = 'resumed', last_resumed_at = ?, resume_run_id = ?
+            WHERE id = ? AND status IN ('reserved', 'resumed')`,
+        )
+        .run(confirmedAt, resumeRunId, sessionId).changes === 1
+    );
+  }
+
+  public invalidateNativeSession(sessionId: string): void {
+    this.#database
+      .prepare("UPDATE native_sessions SET status = 'invalid' WHERE id = ?")
+      .run(sessionId);
+  }
+
+  public isNativeSessionConfirmed(sessionId: string, resumeRunId: string): boolean {
+    return (
+      this.#database
+        .prepare(
+          "SELECT 1 FROM native_sessions WHERE id = ? AND resume_run_id = ? AND status = 'resumed'",
+        )
+        .get(sessionId, resumeRunId) !== undefined
+    );
+  }
+
+  public findRepositoryTrust(
+    repositoryIdentity: string,
+    subjectDigest: string,
+  ): RepositoryTrustReceipt | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM trust
+         WHERE repository_identity = ? AND subject_digest = ?
+         ORDER BY decided_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(repositoryIdentity, subjectDigest) as Record<string, unknown> | undefined;
+    return row === undefined
+      ? undefined
+      : {
+          id: String(row.id),
+          repositoryIdentity,
+          subjectDigest,
+          principalId: String(row.principal_id),
+          decision: row.decision as RepositoryTrustReceipt["decision"],
+          decidedAt: String(row.decided_at),
+          ...(row.revoked_at === null ? {} : { revokedAt: String(row.revoked_at) }),
+        };
+  }
+
+  public saveRepositoryTrust(receipt: RepositoryTrustReceipt): RepositoryTrustReceipt {
+    this.#database
+      .prepare(
+        `INSERT INTO trust
+           (id, repository_id, repository_identity, principal_id, subject_digest, decision, decided_at, revoked_at)
+         VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        receipt.id,
+        receipt.repositoryIdentity,
+        receipt.principalId,
+        receipt.subjectDigest,
+        receipt.decision,
+        receipt.decidedAt,
+        receipt.revokedAt ?? null,
+      );
+    return receipt;
+  }
+
   public getGroupStartAllResult(
     groupId: string,
     idempotencyKey: string | undefined,
@@ -2629,6 +2900,12 @@ export class NanasaStore {
       recoveryAttempts: row.recovery_attempts ?? 0,
       recoveryNotBefore: row.recovery_not_before ?? undefined,
       recoveryReason: row.recovery_reason ?? undefined,
+      launchKind: row.launch_kind,
+      requestedModel: row.requested_model ?? undefined,
+      requestedModelSource: row.requested_model_source,
+      effectiveModel: row.effective_model ?? undefined,
+      nativeSessionId: row.native_session_id ?? undefined,
+      recoveryOutcome: row.recovery_outcome ?? undefined,
       terminal: row.terminal_json === null ? undefined : JSON.parse(row.terminal_json),
       startedAt: row.started_at,
       stoppedAt: row.stopped_at ?? undefined,
@@ -2662,6 +2939,39 @@ export class NanasaStore {
       status: row.status,
       attempts: row.attempts,
       updatedAt: row.updated_at,
+    });
+  }
+
+  #hydrateProviderState(row: Record<string, unknown>): ProviderStateBinding {
+    return ProviderStateBindingSchema.parse({
+      id: row.id,
+      integrationId: row.integration_id,
+      memberId: row.member_id ?? undefined,
+      scope: row.scope,
+      storageReference: row.storage_reference,
+      credentialReference: JSON.parse(String(row.credential_reference_json)),
+      lifecycle: row.lifecycle,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    });
+  }
+
+  #hydrateNativeSession(row: Record<string, unknown>): DurableNativeSession {
+    return DurableNativeSessionSchema.parse({
+      id: row.id,
+      memberId: row.member_id,
+      integrationId: row.integration_id,
+      provider: row.provider_kind,
+      source: row.source,
+      referenceKind: row.ref_kind,
+      referenceValue: row.ref_value,
+      dedupeHash: row.dedupe_hash,
+      effectiveModel: row.observed_model ?? undefined,
+      runId: row.run_id,
+      generation: row.generation,
+      status: row.status,
+      reportedAt: row.reported_at,
+      lastResumedAt: row.last_resumed_at ?? undefined,
     });
   }
 

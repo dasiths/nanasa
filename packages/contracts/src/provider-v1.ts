@@ -37,16 +37,22 @@ export const CredentialProfileReferenceSchema = z.discriminatedUnion("kind", [
 ]);
 export type CredentialProfileReference = z.infer<typeof CredentialProfileReferenceSchema>;
 
-export const ModelResumePolicySchema = z.enum(["preserve-native", "enforce-configured"]);
+export const ModelResumePolicySchema = z.enum(["preserve-session", "enforce-configured"]);
+export type ModelResumePolicy = z.infer<typeof ModelResumePolicySchema>;
 export const DesiredModelPolicySchema = z
   .object({
     model: z.string().trim().min(1).max(256).optional(),
-    resumePolicy: ModelResumePolicySchema.default("preserve-native"),
+    resumePolicy: ModelResumePolicySchema.default("preserve-session"),
   })
   .strict();
 export type DesiredModelPolicy = z.infer<typeof DesiredModelPolicySchema>;
 
-export const NativeRecoveryPolicySchema = z.enum(["resume-or-restart", "restart"]);
+export const NativeRecoveryPolicySchema = z
+  .object({
+    mode: z.enum(["resume-or-restart", "resume-only", "restart"]),
+    confirmationTimeoutSeconds: z.number().int().min(5).max(300).default(30),
+  })
+  .strict();
 export type NativeRecoveryPolicy = z.infer<typeof NativeRecoveryPolicySchema>;
 
 export const AgentProfileSchema = z
@@ -81,11 +87,13 @@ export const ProviderStateBindingSchema = z
     memberId: IdentifierSchema.optional(),
     scope: ProviderStateScopeSchema,
     storageReference: z.string().trim().min(1).max(4_096),
+    credentialReference: CredentialProfileReferenceSchema,
     lifecycle: z.enum(["active", "retained", "deleting", "deleted"]),
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
   })
   .strict();
+export type ProviderStateBinding = z.infer<typeof ProviderStateBindingSchema>;
 
 export const GeneratedOverlaySchema = z
   .object({
@@ -98,19 +106,31 @@ export const GeneratedOverlaySchema = z
     createdAt: TimestampSchema,
   })
   .strict();
+export type GeneratedOverlay = z.infer<typeof GeneratedOverlaySchema>;
 
 export const NativeSessionReferenceSchema = z
   .object({
-    id: IdentifierSchema,
-    memberId: IdentifierSchema,
-    provider: IntegrationIdSchema,
+    provider: AgentKindSchema,
     source: z.string().trim().min(1).max(64),
-    nativeSessionId: z.string().trim().min(1).max(4_096),
+    referenceKind: z.enum(["id", "path"]),
+    referenceValue: z.string().trim().min(1).max(4_096),
     dedupeHash: z.string().regex(/^[0-9a-f]{64}$/),
-    reporterSessionId: IdentifierSchema,
-    observedAt: TimestampSchema,
   })
   .strict();
+export type NativeSessionReference = z.infer<typeof NativeSessionReferenceSchema>;
+
+export const DurableNativeSessionSchema = NativeSessionReferenceSchema.extend({
+  id: IdentifierSchema,
+  memberId: IdentifierSchema,
+  integrationId: IntegrationIdSchema,
+  runId: IdentifierSchema,
+  generation: z.number().int().positive(),
+  effectiveModel: z.string().trim().min(1).max(256).optional(),
+  status: z.enum(["ready", "reserved", "resumed", "invalid"]),
+  reportedAt: TimestampSchema,
+  lastResumedAt: TimestampSchema.optional(),
+}).strict();
+export type DurableNativeSession = z.infer<typeof DurableNativeSessionSchema>;
 
 export const EffectiveModelObservationSchema = z
   .object({
@@ -122,6 +142,7 @@ export const EffectiveModelObservationSchema = z
     observedAt: TimestampSchema,
   })
   .strict();
+export type EffectiveModelObservation = z.infer<typeof EffectiveModelObservationSchema>;
 
 export const ProviderAdapterDescriptorSchema = z
   .object({

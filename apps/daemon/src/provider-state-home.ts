@@ -1,5 +1,5 @@
-import { isAbsolute, join, relative, resolve } from "node:path";
-import type { AgentKind, ProviderStatePolicy } from "@nanasa/contracts";
+import { isAbsolute, relative, resolve } from "node:path";
+import type { ProviderStatePolicy } from "@nanasa/contracts";
 
 const PLACEHOLDER_PATTERN = /\{([^}]+)\}/g;
 const SAFE_INTEGRATION_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -18,7 +18,11 @@ export function validateProviderStatePolicy(policy: ProviderStatePolicy): void {
   const first = segments.find((segment) => segment !== ".");
   if (first === undefined)
     throw new Error("Provider state path must name a directory beneath integrations");
-  if (["integrations", "members", "overlays"].includes(first)) {
+  if (
+    ["state", "generated", "ledger", ".staging", "integrations", "members", "overlays"].includes(
+      first,
+    )
+  ) {
     throw new Error(`Provider state path uses reserved directory ${first}`);
   }
   const placeholders = [...policy.path.matchAll(PLACEHOLDER_PATTERN)].map((match) => match[1]);
@@ -50,12 +54,12 @@ export function resolveProviderStateHome(
     throw new Error(`Agent ID is not path-safe: ${agentId}`);
   const relativeHome =
     policy.scope === "integration"
-      ? `integrations/${integrationId}/state`
+      ? `state/integrations/${integrationId}`
       : policy.scope === "membership"
-        ? `members/${agentId}/${integrationId}/state`
-        : policy.path
+        ? `state/members/${agentId}/${integrationId}`
+        : `state/custom/${policy.path
             .replaceAll("{integrationId}", integrationId)
-            .replaceAll("{agentId}", agentId ?? "shared");
+            .replaceAll("{agentId}", agentId ?? "shared")}`;
   const home = resolve(integrationsDirectory, relativeHome);
   const relativePath = relative(resolve(integrationsDirectory), home);
   if (
@@ -66,25 +70,4 @@ export function resolveProviderStateHome(
     throw new Error("Provider state home must remain beneath .nanasa/integrations");
   }
   return home;
-}
-
-export function providerStateEnvironment(
-  kind: AgentKind,
-  stateHome: string,
-): Record<string, string> {
-  switch (kind) {
-    case "copilot":
-      return { COPILOT_HOME: stateHome, COPILOT_CACHE_HOME: join(stateHome, "cache") };
-    case "claude-code":
-      return { CLAUDE_CONFIG_DIR: stateHome };
-    case "pi":
-      return { PI_CODING_AGENT_DIR: stateHome };
-    case "opencode":
-      return {
-        XDG_CONFIG_HOME: join(stateHome, "xdg-config"),
-        XDG_DATA_HOME: join(stateHome, "xdg-data"),
-        XDG_STATE_HOME: join(stateHome, "xdg-state"),
-        XDG_CACHE_HOME: join(stateHome, "xdg-cache"),
-      };
-  }
 }

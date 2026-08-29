@@ -151,7 +151,7 @@ integrations:
   assert.equal(setup.status, 0, setup.stderr);
   const integrations = join(repository, ".nanasa", "integrations");
   assert.equal(statSync(integrations).mode & 0o777, 0o700);
-  assert.equal(existsSync(join(integrations, "integrations", "fixture", "state")), true);
+  assert.equal(existsSync(join(integrations, "state", "integrations", "fixture")), true);
 
   const doctor = runCli(repository, ["doctor"]);
   assert.equal(doctor.status, 0, doctor.stderr);
@@ -198,7 +198,7 @@ integrations:
   assert.equal(environment.home, externalHome);
   assert.equal(
     environment.copilotHome,
-    join(repository, ".nanasa", "integrations", "auth", "fixture"),
+    join(repository, ".nanasa", "integrations", "state", "custom", "auth", "fixture"),
   );
   assert.equal(environment.copilotCacheHome, join(environment.copilotHome, "cache"));
   assert.equal(readFileSync(join(externalHome, "sentinel"), "utf8"), "unchanged\n");

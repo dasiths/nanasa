@@ -1,8 +1,10 @@
 import { hostHeaderValidation, originValidation } from "@modelcontextprotocol/node";
-import { AgentStatusEventInputSchema } from "@nanasa/contracts";
+import { AgentStatusEventInputSchema, type AgentProfile } from "@nanasa/contracts";
 import type { FastifyInstance } from "fastify";
 
 import { McpCredentialIssuer } from "./mcp-auth.js";
+import { NativeSessionService } from "./native-session-service.js";
+import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
 import { DomainError, NanasaStore } from "./store.js";
 
 export interface AgentStatusRouteOptions {
@@ -10,6 +12,9 @@ export interface AgentStatusRouteOptions {
   allowedHostnames: string[];
   credentials: McpCredentialIssuer;
   store: NanasaStore;
+  nativeSessions?: NativeSessionService;
+  adapters?: ProviderAdapterRegistry;
+  providerStateRoot?: (profile: AgentProfile) => string;
 }
 
 class AgentStatusRateLimiter {
@@ -48,10 +53,30 @@ export function registerAgentStatusRoutes(
       );
     }
     limiter.check(principal.runId);
-    const result = options.store.ingestAgentStatusEvent(
-      principal,
-      AgentStatusEventInputSchema.parse(request.body),
-    );
+    const event = AgentStatusEventInputSchema.parse(request.body);
+    if (
+      options.nativeSessions !== undefined &&
+      options.adapters !== undefined &&
+      options.providerStateRoot !== undefined
+    ) {
+      const run = options.store.getRun(principal.runId);
+      const profile = options.store.getAgentProfile(run.agentProfileId);
+      options.nativeSessions.observe({
+        memberId: run.memberId,
+        integrationId: profile.agentType,
+        runId: run.id,
+        generation: run.generation,
+        adapter: options.adapters.get(profile.kind),
+        stateRoot: options.providerStateRoot(profile),
+        event,
+      });
+      if (event.data.effectiveModel !== undefined) {
+        options.store.updateRunProviderMetadata(run.id, {
+          effectiveModel: event.data.effectiveModel,
+        });
+      }
+    }
+    const result = options.store.ingestAgentStatusEvent(principal, event);
     return reply.status(202).send(result);
   });
 }

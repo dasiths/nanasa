@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
@@ -40,7 +41,13 @@ import { McpCredentialIssuer } from "./mcp-auth.js";
 import { validateMcpEndpointConfiguration } from "./mcp-config.js";
 import { registerMcpRoutes } from "./mcp-server.js";
 import { MessageCommandService } from "./message-command-service.js";
+import { NativeSessionService } from "./native-session-service.js";
 import { OperatorAuth } from "./operator-auth.js";
+import { GeneratedOverlayTransaction } from "./generated-overlay-transaction.js";
+import { ProviderStateRepository } from "./provider-state-repository.js";
+import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
+import { RepositoryTrustService } from "./repository-trust-service.js";
+import { UserCredentialBroker } from "./user-credential-broker.js";
 import { controlMetadata, repositoryTmuxNamespace } from "./protocol-metadata.js";
 import { RunRuntimeCoordinator } from "./run-runtime-coordinator.js";
 import { SnapshotReadModel } from "./snapshot-read-model.js";
@@ -98,6 +105,9 @@ export interface DaemonContext {
   daemonEpoch: number;
   operatorAuth: OperatorAuth;
   bootstrapFragment: string;
+  providerStates: ProviderStateRepository;
+  nativeSessions: NativeSessionService;
+  providerAdapters: ProviderAdapterRegistry;
 }
 
 interface ErrorWithIssues {
@@ -221,48 +231,65 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     if (options.mcp?.enabled === true && mcpEndpoint.pathname !== mcpPath) {
       throw new Error("The MCP endpoint URL path must match the configured MCP path");
     }
-    const mcpCredentials =
-      options.mcp?.enabled === true
-        ? new McpCredentialIssuer(store, {
-            secretPath:
-              options.mcp.secretPath ??
-              join(dataPath === ":memory:" ? runtimePath : dirname(dataPath), "mcp-secret"),
-            ...(options.mcp.operatorToken === undefined
-              ? {}
-              : { operatorToken: options.mcp.operatorToken }),
-          })
-        : undefined;
+    const mcpCredentials = new McpCredentialIssuer(store, {
+      secretPath:
+        options.mcp?.secretPath ??
+        join(dataPath === ":memory:" ? runtimePath : dirname(dataPath), "mcp-secret"),
+      ...(options.mcp?.operatorToken === undefined
+        ? {}
+        : { operatorToken: options.mcp.operatorToken }),
+    });
+    const providerAdapters = ProviderAdapterRegistry.builtIn();
+    const providerStates = new ProviderStateRepository(loadedConfig.integrationsDirectory, store);
+    const generatedOverlays = new GeneratedOverlayTransaction(loadedConfig.integrationsDirectory);
+    const credentialBroker = new UserCredentialBroker();
+    const repositoryTrust = new RepositoryTrustService(store);
+    const nativeSessions = new NativeSessionService(store);
+    const runtimeProvisioner = new AgentRuntimeProvisioner({
+      integrationsDirectory: loadedConfig.integrationsDirectory,
+      integrations: Object.fromEntries(
+        Object.entries(loadedConfig.config.integrations).map(([key, integration]) => [
+          key,
+          {
+            providerState: integration.providerState,
+            credentials: integration.credentials,
+            model: integration.model,
+            nativeRecovery: integration.nativeRecovery,
+          },
+        ]),
+      ),
+      statusEndpointUrl,
+      ...(options.mcp?.enabled === true ? { mcpEndpointUrl } : {}),
+      repositoryIdentity: createHash("sha256").update(loadedConfig.repoRoot).digest("hex"),
+      adapterRegistry: providerAdapters,
+      stateRepository: providerStates,
+      overlayTransaction: generatedOverlays,
+      credentialBroker,
+      trustService: repositoryTrust,
+      promptResolver: (membership) => {
+        const current = configRepository.load();
+        return resolveEffectiveAgentPrompt({
+          repoRoot: current.repoRoot,
+          config: current.config,
+          groupId: membership.groupId,
+          agentId: membership.id,
+        });
+      },
+      desiredModelResolver: (membership) => {
+        const current = configRepository.load();
+        return current.config.groups[membership.groupId]?.agents[membership.id]?.desiredModel;
+      },
+    });
     const runtime = new TmuxRuntime(store, {
       serverName: options.tmuxServerName ?? repositoryTmuxNamespace(loadedConfig.repoRoot),
       ...(options.tmuxPath === undefined ? {} : { tmuxPath: options.tmuxPath }),
-      ...(mcpCredentials === undefined
-        ? {}
-        : {
-            runtimeProvisioner: new AgentRuntimeProvisioner({
-              integrationsDirectory: loadedConfig.integrationsDirectory,
-              providerStates: Object.fromEntries(
-                Object.entries(loadedConfig.config.integrations).map(([key, integration]) => [
-                  key,
-                  integration.providerState,
-                ]),
-              ),
-              mcpEndpointUrl,
-              promptResolver: (membership) => {
-                const current = configRepository.load();
-                return resolveEffectiveAgentPrompt({
-                  repoRoot: current.repoRoot,
-                  config: current.config,
-                  groupId: membership.groupId,
-                  agentId: membership.id,
-                });
-              },
-            }),
-            runtimeEnvironment: (run) => ({
-              NANASA_MCP_URL: mcpEndpointUrl,
-              NANASA_MCP_TOKEN: mcpCredentials.issueAgent(run),
-              NANASA_STATUS_URL: statusEndpointUrl,
-            }),
-          }),
+      runtimeProvisioner,
+      adapterRegistry: providerAdapters,
+      runtimeEnvironment: (run) => ({
+        ...(options.mcp?.enabled === true ? { NANASA_MCP_URL: mcpEndpointUrl } : {}),
+        NANASA_MCP_TOKEN: mcpCredentials.issueAgent(run),
+        NANASA_STATUS_URL: statusEndpointUrl,
+      }),
     });
     const terminalEndpoints = new TerminalEndpointRegistry(store);
     const terminalDelivery = new TmuxTerminalDelivery(runtime, terminalEndpoints);
@@ -286,6 +313,13 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       ...(options.reconcileIntervalMs === undefined
         ? {}
         : { reconcileIntervalMs: options.reconcileIntervalMs }),
+      nativeSessions,
+      nativeRecoveryPolicy: (run) => {
+        const profile = store.getAgentProfile(run.agentProfileId);
+        const integration = loadedConfig.config.integrations[profile.agentType];
+        if (integration === undefined) throw new Error(`Missing integration ${profile.agentType}`);
+        return { integrationId: profile.agentType, policy: integration.nativeRecovery };
+      },
     });
     const topology = new TopologyService(configRepository, store, coordinator);
     await topology.reconcile();
@@ -383,13 +417,33 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     app.get("/health", async () => ({ status: "ok" }));
     app.get("/api/v1/meta", async () => metadata());
     operatorAuth.registerRoutes(app);
-    if (mcpCredentials !== undefined) {
-      registerAgentStatusRoutes(app, {
-        path: "/api/v1/agent-status/events",
-        allowedHostnames: [statusEndpoint.hostname],
-        credentials: mcpCredentials,
-        store,
-      });
+    registerAgentStatusRoutes(app, {
+      path: "/api/v1/agent-status/events",
+      allowedHostnames: [statusEndpoint.hostname],
+      credentials: mcpCredentials,
+      store,
+      nativeSessions,
+      adapters: providerAdapters,
+      providerStateRoot: (profile) => {
+        const existing = providerStates
+          .list()
+          .find(
+            (binding) =>
+              binding.integrationId === profile.agentType &&
+              (binding.memberId === profile.id || binding.memberId === undefined),
+          );
+        if (existing !== undefined) return existing.storageReference;
+        const integration = loadedConfig.config.integrations[profile.agentType];
+        if (integration === undefined) throw new Error(`Missing integration ${profile.agentType}`);
+        return providerStates.resolve({
+          membershipId: profile.id,
+          integrationId: profile.agentType,
+          policy: integration.providerState,
+          credentialReference: integration.credentials,
+        }).storageReference;
+      },
+    });
+    if (options.mcp?.enabled === true) {
       registerMcpRoutes(app, {
         path: mcpPath,
         endpointUrl: mcpEndpointUrl,
@@ -660,6 +714,9 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       daemonEpoch,
       operatorAuth,
       bootstrapFragment,
+      providerStates,
+      nativeSessions,
+      providerAdapters,
     };
   } catch (error) {
     if (appForCleanup !== undefined) {

@@ -1,3 +1,6 @@
+export * from "./provider-runtime-provisioner.js";
+
+/* Discarded pre-adapter implementation retained only until the alpha source reset completes.
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -153,7 +156,6 @@ export class AgentRuntimeProvisioner {
     this.#options = options;
     ensurePrivateDirectory(options.integrationsDirectory);
   }
-
   public provision(membership: GroupMembership, profile: AgentProfile): AgentRuntimeConfiguration {
     if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(membership.id)) {
       throw new Error(`Agent ID is not safe for agent persistence: ${membership.id}`);
@@ -173,246 +175,99 @@ export class AgentRuntimeProvisioner {
       "members",
       membership.id,
       profile.agentType,
-    );
-    ensurePrivateTree(this.#options.integrationsDirectory, configHome);
-    ensurePrivateTree(this.#options.integrationsDirectory, memberDirectory);
-    let command = [profile.command, ...profile.args];
-    const effectivePrompt = this.#options.promptResolver?.(membership, profile);
-    const generatedName = generatedAgentName(membership.id);
-    let promptPath: string | undefined;
-    if (effectivePrompt !== undefined) {
-      const instructionsDirectory = join(memberDirectory, "instructions");
-      promptPath = join(instructionsDirectory, "system-prompt-suffix.md");
-      writePrivateText(promptPath, effectivePrompt.text);
-      writePrivateJson(join(instructionsDirectory, "manifest.json"), {
-        version: 1,
-        artifact: "system-prompt-suffix",
-        revision: effectivePrompt.revision,
-        roleId: effectivePrompt.roleId ?? null,
-        permissionPolicy: effectivePrompt.role?.permissionPolicy ?? "inherit",
-        sources: effectivePrompt.sources,
+      const policy = this.#options.integrations[profile.agentType];
+      if (policy === undefined) throw new Error(`Provider integration policy is missing for ${profile.agentType}`);
+      const adapter = this.#adapters.get(profile.kind);
+      const configuredCommand = Object.freeze([profile.command, ...profile.args]);
+      if (!adapter.recognizeCommand(configuredCommand)) {
+        throw new Error(`Configured command is not recognized by adapter ${adapter.id}`);
+      }
+      const stateBinding = this.#states.resolve({
+        membershipId: membership.id,
+        integrationId: profile.agentType,
+        policy: policy.providerState,
+        credentialReference: policy.credentials,
       });
+      const previousLedger = this.#overlays.readLedger(stateBinding.id);
+      const overlayRevision = (previousLedger?.revision ?? 0) + 1;
+      const overlayRoot = this.#overlays.overlayRoot(stateBinding.id, overlayRevision);
+      const effectivePrompt = this.#options.promptResolver?.(membership, profile);
+      const permissionFloor = effectivePrompt?.role?.permissionPolicy ?? "inherit";
+      const overlay = adapter.planOverlay({
+        membershipId: membership.id,
+        memberAlias: membership.alias,
+        stateRoot: stateBinding.storageReference,
+        overlayRoot,
+        statusEndpointUrl: this.#options.statusEndpointUrl,
+        ...(this.#options.mcpEndpointUrl === undefined ? {} : { mcpEndpointUrl: this.#options.mcpEndpointUrl }),
+        ...(effectivePrompt === undefined ? {} : { prompt: effectivePrompt }),
+        readOnly: permissionFloor === "read-only",
+      });
+      const membershipModel = this.#options.desiredModelResolver?.(membership, profile);
+      const desiredModel = membershipModel ?? policy.model.model;
+      const desiredModelSource =
+        membershipModel !== undefined
+          ? "membership"
+          : policy.model.model !== undefined
+            ? "integration"
+            : "provider-default";
+      const credential = this.#credentials.resolve(
+        policy.credentials,
+        adapter.id,
+        adapter.credentialEnvironmentNames(),
+      );
+      if (credential.health === "missing") throw new Error(`Credential profile ${credential.profileId} is unavailable`);
+      const modelArguments = desiredModel === undefined ? [] : adapter.modelArguments(desiredModel);
+      const command = appendProviderArguments(configuredCommand, [
+        ...overlay.commandArguments,
+        ...modelArguments,
+      ]);
+      const environment = Object.freeze({
+        ...profile.environment,
+        ...adapter.stateEnvironment(stateBinding.storageReference),
+        ...overlay.environment,
+        ...credential.environment,
+      });
+      const manifest: RepositoryLaunchManifest = Object.freeze({
+        repositoryIdentity: this.#options.repositoryIdentity,
+        adapterId: adapter.id,
+        adapterVersion: adapter.version,
+        command: Object.freeze([...command]),
+        ...(profile.workingDirectory === undefined ? {} : { workingDirectory: profile.workingDirectory }),
+        environmentNames: Object.freeze(Object.keys(environment).sort()),
+        credentialReference: policy.credentials,
+        generatedIdentities: overlay.generatedIdentities,
+        permissionFloor,
+        ...(desiredModel === undefined ? {} : { desiredModel }),
+        modelResumePolicy: policy.model.resumePolicy,
+      });
+      const launchManifestDigest =
+        this.#options.trustService?.digest(manifest) ??
+        createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
+      if (this.#options.enforceRepositoryTrust === true) this.#options.trustService?.assertTrusted(manifest);
+      this.#overlays.commit(stateBinding.id, overlayRevision, adapter.version, overlay.files);
+      const snapshot = freezeRunSnapshot({
+        adapterId: adapter.id,
+        adapterVersion: adapter.version,
+        profile,
+        stateRoot: stateBinding.storageReference,
+        overlayRoot,
+        command,
+        environment,
+        ...(desiredModel === undefined ? {} : { desiredModel }),
+        desiredModelSource,
+        modelResumePolicy: policy.model.resumePolicy,
+        credentialReference: policy.credentials,
+        overlayRevision,
+        launchManifestDigest,
+      });
+      return Object.freeze({ command: snapshot.command, environment: snapshot.environment, snapshot, stateBinding, nativeRecovery: policy.nativeRecovery });
     }
-    const readOnly = effectivePrompt?.role?.permissionPolicy === "read-only";
 
-    switch (profile.kind) {
-      case "copilot": {
-        const hooksDirectory = join(configHome, "hooks");
-        const reporterPath = join(hooksDirectory, "nanasa-status-hook-v1.mjs");
-        writePrivateText(reporterPath, HOOK_STATUS_REPORTER_SOURCE);
-        const configPath = join(memberDirectory, "mcp-config.json");
-        writePrivateJson(configPath, {
-          mcpServers: {
-            nanasa: {
-              type: "http",
-              url: this.#options.mcpEndpointUrl,
-              headers: { Authorization: "Bearer ${NANASA_MCP_TOKEN}" },
-              tools: ["*"],
-            },
-          },
-        });
-        const hook = (eventName: string, matcher?: string) => ({
-          type: "command",
-          ...(matcher === undefined ? {} : { matcher }),
-          bash: `${shellQuote(process.execPath)} ${shellQuote(reporterPath)} copilot ${shellQuote(eventName)}`,
-          timeoutSec: 2,
-        });
-        writePrivateJson(join(hooksDirectory, "nanasa-status-v1.json"), {
-          version: 1,
-          hooks: {
-            sessionStart: [hook("sessionStart")],
-            userPromptSubmitted: [hook("userPromptSubmitted")],
-            preToolUse: [hook("preToolUse", ".*")],
-            permissionRequest: [hook("permissionRequest", ".*")],
-            postToolUse: [hook("postToolUse", ".*")],
-            postToolUseFailure: [hook("postToolUseFailure", ".*")],
-            agentStop: [hook("agentStop")],
-            errorOccurred: [hook("errorOccurred")],
-            preCompact: [hook("preCompact")],
-            sessionEnd: [hook("sessionEnd")],
-          },
-        });
-        const cacheDirectory = join(configHome, "cache");
-        ensurePrivateTree(this.#options.integrationsDirectory, cacheDirectory);
-        if (promptPath !== undefined && effectivePrompt !== undefined) {
-          const agentsDirectory = join(configHome, "agents");
-          writePrivateText(
-            join(agentsDirectory, `${generatedName}.agent.md`),
-            `---\nname: ${JSON.stringify(`Nanasa ${membership.alias}`)}\ndescription: ${JSON.stringify(`Nanasa-managed ${effectivePrompt.role?.name ?? "agent"}`)}\ninfer: false\n---\n\n${effectivePrompt.text}`,
-          );
-          command = [...command, "--agent", generatedName];
-          if (readOnly) command.push("--deny-tool=write", "--deny-tool=shell");
-        }
-        return {
-          command: [...command, "--additional-mcp-config", `@${configPath}`],
-          environment: providerStateEnvironment(profile.kind, configHome),
-        };
-      }
-      case "claude-code": {
-        const configDirectory = configHome;
-        ensurePrivateDirectory(configDirectory);
-        const reporterPath = join(configDirectory, "nanasa-status-hook.mjs");
-        writePrivateText(reporterPath, HOOK_STATUS_REPORTER_SOURCE);
-        const claudeStatePath = join(configDirectory, ".claude.json");
-        const claudeState = readPrivateJsonObject(claudeStatePath);
-        writePrivateJson(claudeStatePath, {
-          ...claudeState,
-          mcpServers: {
-            ...objectValue(claudeState.mcpServers),
-            nanasa: {
-              type: "http",
-              url: this.#options.mcpEndpointUrl,
-              headers: { Authorization: "Bearer ${NANASA_MCP_TOKEN}" },
-              alwaysLoad: true,
-            },
-          },
-        });
-        const hook = (eventName: string, matcher?: string) => ({
-          ...(matcher === undefined ? {} : { matcher }),
-          hooks: [commandHook(reporterPath, "claude-code", eventName)],
-        });
-        const settingsPath = join(configDirectory, "settings.json");
-        const settings = readPrivateJsonObject(settingsPath);
-        const existingHooks = objectValue(settings.hooks);
-        const generatedHooks = {
-          SessionStart: hook("SessionStart"),
-          UserPromptSubmit: hook("UserPromptSubmit"),
-          PreToolUse: hook("PreToolUse", "*"),
-          PermissionRequest: hook("PermissionRequest", "*"),
-          PostToolUse: hook("PostToolUse", "*"),
-          PostToolUseFailure: hook("PostToolUseFailure", "*"),
-          Stop: hook("Stop"),
-          StopFailure: hook("StopFailure"),
-          PreCompact: hook("PreCompact"),
-          PostCompact: hook("PostCompact"),
-          Elicitation: hook("Elicitation"),
-          ElicitationResult: hook("ElicitationResult"),
-          SessionEnd: hook("SessionEnd"),
-        };
-        const mergedHooks: Record<string, unknown> = Object.fromEntries(
-          Object.entries(generatedHooks).map(([eventName, generatedHook]) => [
-            eventName,
-            [
-              ...(Array.isArray(existingHooks[eventName])
-                ? existingHooks[eventName].filter((entry) => !isNanasaClaudeHook(entry))
-                : []),
-              generatedHook,
-            ],
-          ]),
-        );
-        for (const [eventName, entries] of Object.entries(existingHooks)) {
-          if (mergedHooks[eventName] === undefined) mergedHooks[eventName] = entries;
-        }
-        writePrivateJson(settingsPath, {
-          ...settings,
-          hooks: mergedHooks,
-        });
-        if (promptPath !== undefined) {
-          const providerArguments = ["--append-system-prompt-file", promptPath];
-          if (readOnly) {
-            providerArguments.push(
-              "--disallowedTools",
-              "Edit",
-              "--disallowedTools",
-              "Write",
-              "--disallowedTools",
-              "Bash",
-            );
-          }
-          command = appendProviderArguments(command, providerArguments);
-        }
-        return {
-          command,
-          environment: providerStateEnvironment(profile.kind, configHome),
-        };
-      }
-      case "pi": {
-        const agentDirectory = configHome;
-        ensurePrivateDirectory(agentDirectory);
-        const mcpPath = join(agentDirectory, "mcp.json");
-        const mcpConfig = readPrivateJsonObject(mcpPath);
-        writePrivateJson(mcpPath, {
-          ...mcpConfig,
-          settings: {
-            ...objectValue(mcpConfig.settings),
-            directTools: true,
-            hostConfigDiscovery: "off",
-          },
-          mcpServers: {
-            ...objectValue(mcpConfig.mcpServers),
-            nanasa: {
-              url: this.#options.mcpEndpointUrl,
-              headers: { Authorization: "Bearer ${NANASA_MCP_TOKEN}" },
-              protocolVersion: "auto",
-              lifecycle: "eager",
-            },
-          },
-        });
-        const extensionPath =
-          this.#options.piExtensionPath ?? fileURLToPath(import.meta.resolve("pi-mcp-adapter"));
-        const statusExtensionPath = join(agentDirectory, "nanasa-status-extension.mjs");
-        writePrivateText(statusExtensionPath, PI_STATUS_REPORTER_SOURCE);
-        if (promptPath !== undefined) command = [...command, "--append-system-prompt", promptPath];
-        if (readOnly) {
-          const policyPath = join(agentDirectory, "nanasa-read-only-policy.mjs");
-          writePrivateText(policyPath, PI_READ_ONLY_POLICY_SOURCE);
-          command = [...command, "--extension", policyPath];
-        }
-        return {
-          command: [...command, "--extension", extensionPath, "--extension", statusExtensionPath],
-          environment: providerStateEnvironment(profile.kind, configHome),
-        };
-      }
-      case "opencode": {
-        const opencodeDirectory = configHome;
-        const configPath = join(opencodeDirectory, "opencode.json");
-        const configDirectory = join(opencodeDirectory, "nanasa-config");
-        writePrivateText(
-          join(configDirectory, "plugins", "nanasa-status.mjs"),
-          OPENCODE_STATUS_REPORTER_SOURCE,
-        );
-        const opencodeConfig = readPrivateJsonObject(configPath);
-        const generatedAgent =
-          promptPath === undefined
-            ? undefined
-            : {
-                description: `Nanasa-managed ${effectivePrompt?.role?.name ?? "agent"}`,
-                mode: "primary",
-                prompt: `{file:${promptPath}}`,
-                ...(readOnly ? { permission: { edit: "deny", bash: "deny" } } : {}),
-              };
-        writePrivateJson(configPath, {
-          ...opencodeConfig,
-          $schema: opencodeConfig.$schema ?? "https://opencode.ai/config.json",
-          mcp: {
-            ...objectValue(opencodeConfig.mcp),
-            nanasa: {
-              type: "remote",
-              url: this.#options.mcpEndpointUrl,
-              enabled: true,
-              oauth: false,
-              headers: { Authorization: "Bearer {env:NANASA_MCP_TOKEN}" },
-            },
-          },
-          ...(generatedAgent === undefined
-            ? {}
-            : {
-                agent: {
-                  ...objectValue(opencodeConfig.agent),
-                  [generatedName]: generatedAgent,
-                },
-              }),
-        });
-        if (generatedAgent !== undefined) command = [...command, "--agent", generatedName];
-        return {
-          command,
-          environment: {
-            ...providerStateEnvironment(profile.kind, configHome),
-            OPENCODE_CONFIG: configPath,
-            OPENCODE_CONFIG_DIR: configDirectory,
-          },
-        };
-      }
+    public resumeCommand(snapshot: ProviderRunSnapshot, reference: NativeSessionReference): readonly string[] {
+      const adapter = this.#adapters.get(snapshot.profile.kind);
+      const resumeModel = snapshot.modelResumePolicy === "enforce-configured" ? snapshot.desiredModel : undefined;
+      return Object.freeze(appendProviderArguments(snapshot.command, adapter.resumeArguments(reference, resumeModel)));
     }
-  }
-}
+        const hook = (eventName: string, matcher?: string) => ({
+      */

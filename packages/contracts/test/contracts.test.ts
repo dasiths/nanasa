@@ -19,6 +19,8 @@ import {
   MAX_MESSAGE_TEXT_BYTES,
   MessageSchema,
   NanasaConfigSchema,
+  NativeRecoveryPolicySchema,
+  NativeSessionReferenceSchema,
   PortalSnapshotSchema,
   RemoveGroupAgentResultSchema,
   ReorderGroupAgentsCommandSchema,
@@ -457,6 +459,36 @@ describe("configuration contracts", () => {
     ).toBe(false);
   });
 
+  it("bounds confirmed native recovery and validates opaque native references", () => {
+    expect(
+      NativeRecoveryPolicySchema.parse({
+        mode: "resume-only",
+        confirmationTimeoutSeconds: 30,
+      }),
+    ).toEqual({ mode: "resume-only", confirmationTimeoutSeconds: 30 });
+    expect(
+      NativeRecoveryPolicySchema.safeParse({
+        mode: "resume-or-restart",
+        confirmationTimeoutSeconds: 4,
+      }).success,
+    ).toBe(false);
+    expect(
+      NativeRecoveryPolicySchema.safeParse({
+        mode: "resume-or-restart",
+        confirmationTimeoutSeconds: 301,
+      }).success,
+    ).toBe(false);
+    expect(
+      NativeSessionReferenceSchema.parse({
+        provider: "copilot",
+        source: "copilot",
+        referenceKind: "id",
+        referenceValue: "session-one",
+        dedupeHash: "a".repeat(64),
+      }),
+    ).toMatchObject({ referenceValue: "session-one" });
+  });
+
   const config = {
     version: 2,
     integrations: {
@@ -486,8 +518,8 @@ describe("configuration contracts", () => {
     expect(parsed.integrations.copilot).toMatchObject({
       providerState: { scope: "membership" },
       credentials: { kind: "provider-managed" },
-      model: { resumePolicy: "preserve-native" },
-      nativeRecovery: "resume-or-restart",
+      model: { resumePolicy: "preserve-session" },
+      nativeRecovery: { mode: "resume-or-restart", confirmationTimeoutSeconds: 30 },
       extensions: [],
     });
     expect(NanasaConfigSchema.safeParse({ ...config, version: undefined }).success).toBe(false);
