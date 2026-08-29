@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   type AgentAction,
@@ -42,6 +44,14 @@ import {
   type GroupMessageState,
   GroupMessageStateSchema,
   GroupSchema,
+  type Checkout,
+  CheckoutSchema,
+  type GitOperation,
+  GitOperationSchema,
+  type Repository,
+  RepositorySchema,
+  type Worktree,
+  WorktreeSchema,
   type InternalCreateAgentProfileCommand,
   InternalCreateAgentProfileCommandSchema,
   MAX_MESSAGE_PAGE_SIZE,
@@ -124,6 +134,7 @@ interface EventRow {
 interface GroupRow {
   id: string;
   name: string;
+  order_index: number;
   membership_revision: number;
   created_at: string;
   updated_at: string;
@@ -149,6 +160,8 @@ interface MembershipRow {
   agent_profile_id: string;
   alias: string;
   role_id: string | null;
+  checkout_id: string | null;
+  order_index: number;
   state: string;
   joined_at: string;
   removed_at: string | null;
@@ -159,6 +172,8 @@ interface RunRow {
   group_id: string;
   member_id: string;
   agent_profile_id: string;
+  checkout_id: string | null;
+  resolved_working_directory: string | null;
   generation: number;
   status: string;
   desired_state: string | null;
@@ -175,6 +190,61 @@ interface RunRow {
   terminal_json: string | null;
   started_at: string;
   stopped_at: string | null;
+}
+
+interface RepositoryRow {
+  id: string;
+  common_directory: string;
+  display_name: string;
+  object_format: string;
+  ref_storage: string;
+  primary_checkout_id: string | null;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface CheckoutRow {
+  id: string;
+  repository_id: string;
+  checkout_key: string;
+  path: string;
+  git_directory: string;
+  kind: string;
+  head: string | null;
+  branch: string | null;
+  dirty: number;
+  observed_at: string;
+}
+
+interface WorktreeRow {
+  id: string;
+  repository_id: string;
+  checkout_id: string;
+  source_checkout_id: string;
+  path: string;
+  branch: string;
+  base: string;
+  provenance_token: string;
+  operation_generation: number;
+  state: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface GitOperationRow {
+  id: string;
+  repository_id: string;
+  checkout_id: string | null;
+  worktree_id: string | null;
+  kind: string;
+  generation: number;
+  target_path: string | null;
+  request_json: string;
+  state: string;
+  started_at: string;
+  completed_at: string | null;
+  error_code: string | null;
 }
 
 interface MessageRow {
@@ -480,9 +550,349 @@ export class NanasaStore {
       .run(new Date().toISOString(), instanceId);
   }
 
+  public getOrderRevision(): number {
+    return (
+      this.#database
+        .prepare("SELECT order_revision FROM topology_order_state WHERE singleton = 1")
+        .get() as { order_revision: number }
+    ).order_revision;
+  }
+
+  public saveDiscoveredCheckout(
+    repository: Repository,
+    checkout: Checkout,
+    makePrimary = false,
+  ): { repository: Repository; checkout: Checkout } {
+    const parsedRepository = RepositorySchema.parse(repository);
+    const parsedCheckout = CheckoutSchema.parse(checkout);
+    if (parsedCheckout.repositoryId !== parsedRepository.id) {
+      throw new DomainError(
+        "checkout_repository_mismatch",
+        "Checkout repository identity differs",
+        409,
+      );
+    }
+    const result = this.#transaction(() => {
+      const existing = this.#database
+        .prepare("SELECT * FROM repositories WHERE id = ?")
+        .get(parsedRepository.id) as unknown as RepositoryRow | undefined;
+      if (
+        existing !== undefined &&
+        (existing.common_directory !== parsedRepository.commonDirectory ||
+          existing.object_format !== parsedRepository.objectFormat)
+      ) {
+        throw new DomainError(
+          "repository_identity_conflict",
+          "Repository identity changed while recording a checkout",
+          409,
+        );
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO repositories
+             (id, common_directory, display_name, object_format, ref_storage,
+              primary_checkout_id, revision, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             display_name = excluded.display_name,
+             ref_storage = excluded.ref_storage,
+             revision = repositories.revision + 1,
+             updated_at = excluded.updated_at`,
+        )
+        .run(
+          parsedRepository.id,
+          parsedRepository.commonDirectory,
+          parsedRepository.displayName,
+          parsedRepository.objectFormat,
+          parsedRepository.refStorage,
+          parsedRepository.revision,
+          parsedRepository.createdAt,
+          parsedRepository.updatedAt,
+        );
+      this.#database
+        .prepare(
+          `INSERT INTO checkouts
+             (id, repository_id, checkout_key, path, git_directory, kind, head, branch, dirty, observed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             repository_id = excluded.repository_id,
+             checkout_key = excluded.checkout_key,
+             path = excluded.path,
+             git_directory = excluded.git_directory,
+             kind = excluded.kind,
+             head = excluded.head,
+             branch = excluded.branch,
+             dirty = excluded.dirty,
+             observed_at = excluded.observed_at`,
+        )
+        .run(
+          parsedCheckout.id,
+          parsedCheckout.repositoryId,
+          parsedCheckout.checkoutKey,
+          parsedCheckout.path,
+          parsedCheckout.gitDirectory,
+          parsedCheckout.kind,
+          parsedCheckout.head ?? null,
+          parsedCheckout.branch ?? null,
+          parsedCheckout.dirty ? 1 : 0,
+          parsedCheckout.observedAt,
+        );
+      if (makePrimary || existing?.primary_checkout_id === null || existing === undefined) {
+        this.#database
+          .prepare("UPDATE repositories SET primary_checkout_id = ? WHERE id = ?")
+          .run(parsedCheckout.id, parsedRepository.id);
+      }
+      return {
+        repository: this.getRepository(parsedRepository.id),
+        checkout: this.getCheckout(parsedCheckout.id),
+      };
+    });
+    return result;
+  }
+
+  public listRepositories(): Repository[] {
+    return (
+      this.#database
+        .prepare("SELECT * FROM repositories ORDER BY created_at, id")
+        .all() as unknown as RepositoryRow[]
+    ).map((row) => this.#hydrateRepository(row));
+  }
+
+  public getRepository(repositoryId: string): Repository {
+    const row = this.#database
+      .prepare("SELECT * FROM repositories WHERE id = ?")
+      .get(repositoryId) as unknown as RepositoryRow | undefined;
+    if (row === undefined)
+      throw new DomainError("repository_not_found", "Repository not found", 404);
+    return this.#hydrateRepository(row);
+  }
+
+  public listCheckouts(repositoryId?: string): Checkout[] {
+    const rows = (repositoryId === undefined
+      ? this.#database.prepare("SELECT * FROM checkouts ORDER BY observed_at, id").all()
+      : this.#database
+          .prepare("SELECT * FROM checkouts WHERE repository_id = ? ORDER BY observed_at, id")
+          .all(repositoryId)) as unknown as CheckoutRow[];
+    return rows.map((row) => this.#hydrateCheckout(row));
+  }
+
+  public getCheckout(checkoutId: string): Checkout {
+    const row = this.#database
+      .prepare("SELECT * FROM checkouts WHERE id = ?")
+      .get(checkoutId) as unknown as CheckoutRow | undefined;
+    if (row === undefined) throw new DomainError("checkout_not_found", "Checkout not found", 404);
+    return this.#hydrateCheckout(row);
+  }
+
+  public listWorktrees(repositoryId?: string): Worktree[] {
+    const rows = (repositoryId === undefined
+      ? this.#database.prepare("SELECT * FROM worktrees ORDER BY created_at, id").all()
+      : this.#database
+          .prepare("SELECT * FROM worktrees WHERE repository_id = ? ORDER BY created_at, id")
+          .all(repositoryId)) as unknown as WorktreeRow[];
+    return rows.map((row) => this.#hydrateWorktree(row));
+  }
+
+  public getWorktree(worktreeId: string): Worktree {
+    const row = this.#database
+      .prepare("SELECT * FROM worktrees WHERE id = ?")
+      .get(worktreeId) as unknown as WorktreeRow | undefined;
+    if (row === undefined)
+      throw new DomainError("worktree_not_found", "Managed worktree not found", 404);
+    return this.#hydrateWorktree(row);
+  }
+
+  public saveWorktree(worktree: Worktree): Worktree {
+    const parsed = WorktreeSchema.parse(worktree);
+    this.#database
+      .prepare(
+        `INSERT INTO worktrees
+           (id, repository_id, checkout_id, source_checkout_id, path, branch, base,
+            provenance_token, operation_generation, state, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           checkout_id = excluded.checkout_id,
+           path = excluded.path,
+           operation_generation = excluded.operation_generation,
+           state = excluded.state,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        parsed.id,
+        parsed.repositoryId,
+        parsed.checkoutId,
+        parsed.sourceCheckoutId,
+        parsed.path,
+        parsed.branch,
+        parsed.base,
+        parsed.provenanceToken,
+        parsed.operationGeneration,
+        parsed.state,
+        parsed.createdAt,
+        parsed.updatedAt,
+      );
+    return this.getWorktree(parsed.id);
+  }
+
+  public beginGitOperation(input: {
+    repositoryId: string;
+    checkoutId?: string;
+    worktreeId?: string;
+    kind: GitOperation["kind"];
+    targetPath?: string;
+    request?: Readonly<Record<string, unknown>>;
+  }): GitOperation {
+    this.getRepository(input.repositoryId);
+    const generation = (
+      this.#database
+        .prepare(
+          "SELECT COALESCE(MAX(generation), 0) + 1 AS value FROM git_operations WHERE repository_id = ?",
+        )
+        .get(input.repositoryId) as { value: number }
+    ).value;
+    const operation = GitOperationSchema.parse({
+      id: `gitop_${randomUUID()}`,
+      repositoryId: input.repositoryId,
+      checkoutId: input.checkoutId,
+      worktreeId: input.worktreeId,
+      kind: input.kind,
+      generation,
+      targetPath: input.targetPath,
+      state: "running",
+      startedAt: new Date().toISOString(),
+    });
+    this.#database
+      .prepare(
+        `INSERT INTO git_operations
+           (id, repository_id, checkout_id, worktree_id, kind, generation, target_path,
+            request_json, state, started_at, completed_at, error_code)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+      )
+      .run(
+        operation.id,
+        operation.repositoryId,
+        operation.checkoutId ?? null,
+        operation.worktreeId ?? null,
+        operation.kind,
+        operation.generation,
+        operation.targetPath ?? null,
+        JSON.stringify(input.request ?? {}),
+        operation.state,
+        operation.startedAt,
+      );
+    return operation;
+  }
+
+  public completeGitOperation(
+    operationId: string,
+    state: "succeeded" | "failed" | "cancelled",
+    errorCode?: string,
+  ): GitOperation {
+    const completedAt = new Date().toISOString();
+    const changed = this.#database
+      .prepare(
+        `UPDATE git_operations SET state = ?, completed_at = ?, error_code = ?
+         WHERE id = ? AND state = 'running'`,
+      )
+      .run(state, completedAt, errorCode ?? null, operationId);
+    if (Number(changed.changes) !== 1) {
+      throw new DomainError("git_operation_stale", "Git operation is no longer current", 409);
+    }
+    return this.getGitOperation(operationId);
+  }
+
+  public getGitOperation(operationId: string): GitOperation {
+    const row = this.#database
+      .prepare("SELECT * FROM git_operations WHERE id = ?")
+      .get(operationId) as unknown as GitOperationRow | undefined;
+    if (row === undefined)
+      throw new DomainError("git_operation_not_found", "Git operation not found", 404);
+    return this.#hydrateGitOperation(row);
+  }
+
+  public getGitOperationRequest(operationId: string): Readonly<Record<string, unknown>> {
+    const row = this.#database
+      .prepare("SELECT request_json FROM git_operations WHERE id = ?")
+      .get(operationId) as { request_json: string } | undefined;
+    if (row === undefined)
+      throw new DomainError("git_operation_not_found", "Git operation not found", 404);
+    const value: unknown = JSON.parse(row.request_json);
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new DomainError("git_operation_intent_invalid", "Git operation intent is invalid", 500);
+    }
+    return value as Readonly<Record<string, unknown>>;
+  }
+
+  public listRecoverableGitOperations(): GitOperation[] {
+    return (
+      this.#database
+        .prepare("SELECT * FROM git_operations WHERE state = 'running' ORDER BY generation, id")
+        .all() as unknown as GitOperationRow[]
+    ).map((row) => this.#hydrateGitOperation(row));
+  }
+
+  public listRunsBoundToCheckout(checkoutId: string): AgentRun[] {
+    return (
+      this.#database
+        .prepare(
+          `SELECT * FROM runs WHERE checkout_id = ?
+           AND (status IN ('starting', 'running', 'stopping') OR desired_state = 'running')
+           ORDER BY started_at, id`,
+        )
+        .all(checkoutId) as unknown as RunRow[]
+    ).map((row) => this.#hydrateRun(row));
+  }
+
+  public listMembershipsBoundToCheckout(checkoutId: string): GroupMembership[] {
+    return (
+      this.#database
+        .prepare(
+          `SELECT * FROM memberships WHERE checkout_id = ? AND state = 'active'
+           ORDER BY group_id, order_index, id`,
+        )
+        .all(checkoutId) as unknown as MembershipRow[]
+    ).map((row) => this.#hydrateMembership(row));
+  }
+
   public reconcileTopology(config: NanasaConfig, configStatus?: ConfigStatus): void {
     const timestamp = new Date().toISOString();
     this.#transaction(() => {
+      const configuredGroups = Object.entries(config.groups)
+        .map(([groupId, group], sourceIndex) => ({ groupId, group, sourceIndex }))
+        .sort(
+          (left, right) =>
+            (left.group.order ?? left.sourceIndex) - (right.group.order ?? right.sourceIndex) ||
+            left.sourceIndex - right.sourceIndex ||
+            left.groupId.localeCompare(right.groupId),
+        );
+      const desiredOrder = configuredGroups.flatMap(({ groupId, group }, groupOrder) => [
+        `group:${groupId}:${groupOrder}`,
+        ...orderedAgentEntries(group.agents).map(
+          ([agentId], memberOrder) => `member:${groupId}:${agentId}:${memberOrder}`,
+        ),
+      ]);
+      const persistedOrder = (
+        this.#database
+          .prepare(
+            `SELECT 'group:' || id || ':' || order_index AS value, order_index AS group_order,
+                    -1 AS member_order
+             FROM groups
+             UNION ALL
+             SELECT 'member:' || group_id || ':' || id || ':' || order_index AS value,
+                    (SELECT order_index FROM groups WHERE groups.id = memberships.group_id),
+                    order_index
+             FROM memberships WHERE state = 'active'
+             ORDER BY group_order, member_order, value`,
+          )
+          .all() as Array<{ value: string }>
+      ).map((row) => row.value);
+      if (JSON.stringify(desiredOrder) !== JSON.stringify(persistedOrder)) {
+        this.#database
+          .prepare(
+            "UPDATE topology_order_state SET order_revision = order_revision + 1 WHERE singleton = 1",
+          )
+          .run();
+      }
       for (const [roleId, definition] of Object.entries(config.roles)) {
         this.#database
           .prepare(
@@ -494,7 +904,7 @@ export class NanasaStore {
           )
           .run(roleId, JSON.stringify(definition), timestamp, timestamp);
       }
-      for (const configuredGroup of Object.values(config.groups)) {
+      for (const { group: configuredGroup } of configuredGroups) {
         for (const [agentId, configuredAgent] of Object.entries(configuredGroup.agents)) {
           const integration = config.integrations[configuredAgent.integrationId];
           if (integration === undefined) {
@@ -536,20 +946,32 @@ export class NanasaStore {
       }
 
       const desiredGroupIds = new Set(Object.keys(config.groups));
-      for (const [groupId, configuredGroup] of Object.entries(config.groups)) {
+      const priorMembershipIdentity = new Map<string, string[]>();
+      const priorMemberships = this.#database
+        .prepare("SELECT * FROM memberships WHERE state = 'active'")
+        .all() as unknown as MembershipRow[];
+      for (const membership of priorMemberships) {
+        const identity = priorMembershipIdentity.get(membership.group_id) ?? [];
+        identity.push(`${membership.id}:${membership.member_id}:${membership.agent_profile_id}`);
+        priorMembershipIdentity.set(membership.group_id, identity);
+      }
+      for (const identity of priorMembershipIdentity.values()) identity.sort();
+      const primaryCheckout = this.#database
+        .prepare(
+          `SELECT c.id FROM checkouts c
+           JOIN repositories r ON r.primary_checkout_id = c.id
+           ORDER BY r.created_at, r.id LIMIT 1`,
+        )
+        .get() as { id: string } | undefined;
+      for (const [groupOrder, { groupId, group: configuredGroup }] of configuredGroups.entries()) {
         const existingGroup = this.#database
           .prepare("SELECT * FROM groups WHERE id = ?")
           .get(groupId) as unknown as GroupRow | undefined;
         const existingMemberships = this.#database
           .prepare("SELECT * FROM memberships WHERE group_id = ? AND state = 'active'")
           .all(groupId) as unknown as MembershipRow[];
-        const desiredMemberships = Object.entries(configuredGroup.agents);
-        const existingIdentity = existingMemberships
-          .map(
-            (membership) =>
-              `${membership.id}:${membership.member_id}:${membership.agent_profile_id}`,
-          )
-          .sort();
+        const desiredMemberships = orderedAgentEntries(configuredGroup.agents);
+        const existingIdentity = priorMembershipIdentity.get(groupId) ?? [];
         const desiredIdentity = desiredMemberships
           .map(([agentId, agent]) => `${agentId}:${agent.memberId}:${agentId}`)
           .sort();
@@ -565,16 +987,18 @@ export class NanasaStore {
             : timestamp;
         this.#database
           .prepare(
-            `INSERT INTO groups (id, name, membership_revision, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?)
+            `INSERT INTO groups (id, name, order_index, membership_revision, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                name = excluded.name,
+               order_index = excluded.order_index,
                membership_revision = excluded.membership_revision,
                updated_at = excluded.updated_at`,
           )
           .run(
             groupId,
             configuredGroup.name,
+            groupOrder,
             membershipRevision,
             existingGroup?.created_at ?? timestamp,
             groupUpdatedAt,
@@ -583,18 +1007,33 @@ export class NanasaStore {
         const desiredMembershipIds = new Set(
           desiredMemberships.map(([membershipId]) => membershipId),
         );
-        for (const [agentId, agent] of desiredMemberships) {
+        for (const [memberOrder, [agentId, agent]] of desiredMemberships.entries()) {
+          const checkoutId = agent.checkoutId ?? primaryCheckout?.id;
+          if (
+            checkoutId !== undefined &&
+            this.#database.prepare("SELECT 1 FROM checkouts WHERE id = ?").get(checkoutId) ===
+              undefined
+          ) {
+            throw new DomainError(
+              "configured_checkout_not_found",
+              `Checkout ${checkoutId} is not available on this machine`,
+              409,
+            );
+          }
           this.#database
             .prepare(
               `INSERT INTO memberships
-                 (id, group_id, member_id, agent_profile_id, alias, role_id, state, joined_at, removed_at)
-               VALUES (?, ?, ?, ?, ?, ?, 'active', ?, NULL)
+                 (id, group_id, member_id, agent_profile_id, alias, role_id, checkout_id,
+                  order_index, state, joined_at, removed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, NULL)
                ON CONFLICT(id) DO UPDATE SET
                  group_id = excluded.group_id,
                  member_id = excluded.member_id,
                  agent_profile_id = excluded.agent_profile_id,
                  alias = excluded.alias,
                  role_id = excluded.role_id,
+                 checkout_id = excluded.checkout_id,
+                 order_index = excluded.order_index,
                  state = 'active',
                  removed_at = NULL`,
             )
@@ -605,6 +1044,8 @@ export class NanasaStore {
               agentId,
               agent.name,
               agent.roleId ?? null,
+              checkoutId ?? null,
+              memberOrder,
               timestamp,
             );
         }
@@ -646,9 +1087,17 @@ export class NanasaStore {
     const input = CreateGroupCommandSchema.parse(command);
     return this.#executeIdempotent("group.create", idempotencyKey, GroupSchema, () => {
       const timestamp = new Date().toISOString();
+      const order = (
+        this.#database
+          .prepare("SELECT COALESCE(MAX(order_index), -1) + 1 AS value FROM groups")
+          .get() as {
+          value: number;
+        }
+      ).value;
       const group = GroupSchema.parse({
         id: `grp_${randomUUID()}`,
         name: input.name,
+        order,
         membershipRevision: 0,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -656,10 +1105,17 @@ export class NanasaStore {
 
       this.#database
         .prepare(
-          `INSERT INTO groups (id, name, membership_revision, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO groups (id, name, order_index, membership_revision, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         )
-        .run(group.id, group.name, group.membershipRevision, group.createdAt, group.updatedAt);
+        .run(
+          group.id,
+          group.name,
+          group.order,
+          group.membershipRevision,
+          group.createdAt,
+          group.updatedAt,
+        );
       return {
         result: group,
         event: this.#appendEvent("group.created", "group", group.id, { group }),
@@ -883,6 +1339,19 @@ export class NanasaStore {
       }
 
       const timestamp = new Date().toISOString();
+      const order = (
+        this.#database
+          .prepare(
+            "SELECT COALESCE(MAX(order_index), -1) + 1 AS value FROM memberships WHERE group_id = ? AND state = 'active'",
+          )
+          .get(groupId) as { value: number }
+      ).value;
+      const checkout = this.#database
+        .prepare(
+          `SELECT c.id FROM checkouts c JOIN repositories r ON r.primary_checkout_id = c.id
+           ORDER BY r.created_at, r.id LIMIT 1`,
+        )
+        .get() as { id: string } | undefined;
       const membership = GroupMembershipSchema.parse({
         id: existing?.id ?? `membership_${randomUUID()}`,
         groupId,
@@ -890,6 +1359,8 @@ export class NanasaStore {
         agentProfileId: input.agentProfileId,
         alias: input.alias,
         roleId: input.roleId,
+        checkoutId: checkout?.id,
+        order,
         state: "active",
         joinedAt: timestamp,
       });
@@ -898,8 +1369,9 @@ export class NanasaStore {
         this.#database
           .prepare(
             `INSERT INTO memberships
-               (id, group_id, member_id, agent_profile_id, alias, role_id, state, joined_at, removed_at)
-             VALUES (?, ?, ?, ?, ?, ?, 'active', ?, NULL)`,
+              (id, group_id, member_id, agent_profile_id, alias, role_id, checkout_id,
+               order_index, state, joined_at, removed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, NULL)`,
           )
           .run(
             membership.id,
@@ -908,6 +1380,8 @@ export class NanasaStore {
             membership.agentProfileId,
             membership.alias,
             membership.roleId ?? null,
+            membership.checkoutId ?? null,
+            membership.order,
             membership.joinedAt,
           );
       } else {
@@ -1056,17 +1530,20 @@ export class NanasaStore {
       this.#database
         .prepare(
           `INSERT INTO runs
-             (id, group_id, member_id, agent_profile_id, generation, status,
+             (id, group_id, member_id, agent_profile_id, checkout_id,
+              resolved_working_directory, generation, status,
             desired_state, recovery_phase, recovery_attempts, recovery_not_before,
             recovery_reason, launch_kind, requested_model, requested_model_source,
             effective_model, native_session_id, recovery_outcome, terminal_json, started_at, stopped_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.id,
           input.groupId,
           input.memberId,
           input.agentProfileId,
+          input.checkoutId ?? null,
+          input.resolvedWorkingDirectory ?? null,
           input.generation,
           input.status,
           input.desiredState,
@@ -1124,14 +1601,20 @@ export class NanasaStore {
     const generationRow = this.#database
       .prepare(
         `SELECT COALESCE(MAX(generation), 0) + 1 AS generation
-         FROM runs WHERE group_id = ? AND member_id = ?`,
+          FROM runs WHERE agent_profile_id = ?`,
       )
-      .get(groupId, memberId) as unknown as { generation: number };
+      .get(membership.agent_profile_id) as unknown as { generation: number };
+    const profile = this.#requireAgentProfile(membership.agent_profile_id);
+    const runLocation = this.#resolveRunLocation(membership, profile.workingDirectory);
     const run = this.createRun({
       id: `run_${randomUUID()}`,
       groupId,
       memberId,
       agentProfileId: membership.agent_profile_id,
+      ...(runLocation.checkoutId === undefined ? {} : { checkoutId: runLocation.checkoutId }),
+      ...(runLocation.workingDirectory === undefined
+        ? {}
+        : { resolvedWorkingDirectory: runLocation.workingDirectory }),
       generation: generationRow.generation,
       status: "starting",
       desiredState: "running",
@@ -1153,7 +1636,7 @@ export class NanasaStore {
     });
     return {
       run,
-      profile: this.#requireAgentProfile(membership.agent_profile_id),
+      profile,
       membership: this.#hydrateMembership(membership),
     };
   }
@@ -1262,7 +1745,7 @@ export class NanasaStore {
       .prepare(
         `SELECT * FROM memberships
          WHERE group_id = ? AND state = 'active'
-         ORDER BY member_id, id`,
+        ORDER BY order_index, id`,
       )
       .all(groupId) as unknown as MembershipRow[];
     return rows.map((row) => this.#hydrateMembership(row));
@@ -3476,7 +3959,7 @@ export class NanasaStore {
     return this.#readTransaction(() => {
       const groups = (
         this.#database
-          .prepare("SELECT * FROM groups ORDER BY created_at, id")
+          .prepare("SELECT * FROM groups ORDER BY order_index, id")
           .all() as unknown as GroupRow[]
       ).map((row) => this.#hydrateGroup(row));
       const agentProfiles = (
@@ -3493,7 +3976,10 @@ export class NanasaStore {
       ).map((row) => this.#hydrateAgentProfile(row));
       const memberships = (
         this.#database
-          .prepare("SELECT * FROM memberships WHERE state = 'active' ORDER BY joined_at, id")
+          .prepare(
+            `SELECT m.* FROM memberships m JOIN groups g ON g.id = m.group_id
+             WHERE m.state = 'active' ORDER BY g.order_index, m.order_index, m.id`,
+          )
           .all() as unknown as MembershipRow[]
       ).map((row) => this.#hydrateMembership(row));
       const configuredOrder = new Map<string, number>();
@@ -3517,14 +4003,16 @@ export class NanasaStore {
             `SELECT r.* FROM runs r
            WHERE EXISTS (
              SELECT 1 FROM memberships m
-             WHERE m.group_id = r.group_id
-               AND m.member_id = r.member_id
+             WHERE m.agent_profile_id = r.agent_profile_id
                AND m.state = 'active'
            )
            ORDER BY r.started_at, r.id`,
           )
           .all() as unknown as RunRow[]
       ).map((row) => this.#hydrateRun(row));
+      const repositories = this.listRepositories();
+      const checkouts = this.listCheckouts();
+      const worktrees = this.listWorktrees();
       const messages = (
         this.#database
           .prepare("SELECT * FROM messages ORDER BY created_at, id")
@@ -3542,10 +4030,14 @@ export class NanasaStore {
         daemonEpoch: authority.daemonEpoch,
         sequence: sequenceRow.sequence,
         generatedAt: new Date().toISOString(),
+        orderRevision: this.getOrderRevision(),
         groups,
         agentProfiles,
         memberships,
         runs,
+        repositories,
+        checkouts,
+        worktrees,
         agentStatuses,
         messages,
         deliveryOutcomes,
@@ -4258,6 +4750,7 @@ export class NanasaStore {
     return GroupSchema.parse({
       id: row.id,
       name: row.name,
+      order: row.order_index,
       membershipRevision: row.membership_revision,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -4287,6 +4780,8 @@ export class NanasaStore {
       agentProfileId: row.agent_profile_id,
       alias: row.alias,
       roleId: row.role_id ?? undefined,
+      checkoutId: row.checkout_id ?? undefined,
+      order: row.order_index,
       state: row.state,
       joinedAt: row.joined_at,
       removedAt: row.removed_at ?? undefined,
@@ -4299,6 +4794,8 @@ export class NanasaStore {
       groupId: row.group_id,
       memberId: row.member_id,
       agentProfileId: row.agent_profile_id,
+      checkoutId: row.checkout_id ?? undefined,
+      resolvedWorkingDirectory: row.resolved_working_directory ?? undefined,
       generation: row.generation,
       status: row.status,
       desiredState: row.desired_state ?? (row.status === "stopped" ? "stopped" : "running"),
@@ -4316,6 +4813,129 @@ export class NanasaStore {
       startedAt: row.started_at,
       stoppedAt: row.stopped_at ?? undefined,
     });
+  }
+
+  #hydrateRepository(row: RepositoryRow): Repository {
+    return RepositorySchema.parse({
+      id: row.id,
+      commonDirectory: row.common_directory,
+      displayName: row.display_name,
+      objectFormat: row.object_format,
+      refStorage: row.ref_storage,
+      primaryCheckoutId: row.primary_checkout_id ?? undefined,
+      revision: row.revision,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    });
+  }
+
+  #hydrateCheckout(row: CheckoutRow): Checkout {
+    return CheckoutSchema.parse({
+      id: row.id,
+      repositoryId: row.repository_id,
+      checkoutKey: row.checkout_key,
+      path: row.path,
+      gitDirectory: row.git_directory,
+      kind: row.kind,
+      head: row.head ?? undefined,
+      branch: row.branch ?? undefined,
+      dirty: row.dirty === 1,
+      observedAt: row.observed_at,
+    });
+  }
+
+  #hydrateWorktree(row: WorktreeRow): Worktree {
+    return WorktreeSchema.parse({
+      id: row.id,
+      repositoryId: row.repository_id,
+      checkoutId: row.checkout_id,
+      sourceCheckoutId: row.source_checkout_id,
+      path: row.path,
+      branch: row.branch,
+      base: row.base,
+      provenanceToken: row.provenance_token,
+      operationGeneration: row.operation_generation,
+      state: row.state,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    });
+  }
+
+  #hydrateGitOperation(row: GitOperationRow): GitOperation {
+    return GitOperationSchema.parse({
+      id: row.id,
+      repositoryId: row.repository_id,
+      checkoutId: row.checkout_id ?? undefined,
+      worktreeId: row.worktree_id ?? undefined,
+      kind: row.kind,
+      generation: row.generation,
+      targetPath: row.target_path ?? undefined,
+      state: row.state,
+      startedAt: row.started_at,
+      completedAt: row.completed_at ?? undefined,
+      errorCode: row.error_code ?? undefined,
+    });
+  }
+
+  #resolveRunLocation(
+    membership: MembershipRow,
+    configuredWorkingDirectory: string | undefined,
+  ): { checkoutId?: string; workingDirectory?: string } {
+    if (membership.checkout_id === null) {
+      return configuredWorkingDirectory === undefined
+        ? {}
+        : { workingDirectory: configuredWorkingDirectory };
+    }
+    const checkout = this.getCheckout(membership.checkout_id);
+    if (checkout.kind === "bare") {
+      throw new DomainError(
+        "bare_checkout_cannot_run",
+        "Agents cannot run in a bare checkout",
+        409,
+      );
+    }
+    const repository = this.getRepository(checkout.repositoryId);
+    const primary =
+      repository.primaryCheckoutId === undefined
+        ? checkout
+        : this.getCheckout(repository.primaryCheckoutId);
+    const relativeWorkingDirectory =
+      configuredWorkingDirectory === undefined
+        ? "."
+        : relative(primary.path, configuredWorkingDirectory);
+    if (
+      relativeWorkingDirectory === ".." ||
+      relativeWorkingDirectory.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
+      isAbsolute(relativeWorkingDirectory)
+    ) {
+      throw new DomainError(
+        "run_working_directory_outside_checkout",
+        "Configured working directory is outside the primary checkout",
+        409,
+      );
+    }
+    const candidate = resolve(checkout.path, relativeWorkingDirectory);
+    if (!existsSync(candidate) || !statSync(candidate).isDirectory()) {
+      throw new DomainError(
+        "run_working_directory_missing",
+        "The assigned checkout working directory does not exist",
+        409,
+      );
+    }
+    const canonical = realpathSync(candidate);
+    const relativeCanonical = relative(checkout.path, canonical);
+    if (
+      relativeCanonical === ".." ||
+      relativeCanonical.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
+      isAbsolute(relativeCanonical)
+    ) {
+      throw new DomainError(
+        "run_working_directory_symlink_escape",
+        "The assigned checkout working directory escapes through a symlink",
+        409,
+      );
+    }
+    return { checkoutId: checkout.id, workingDirectory: canonical };
   }
 
   #hydrateMessage(row: MessageRow): Message {

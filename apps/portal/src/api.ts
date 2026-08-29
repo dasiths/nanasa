@@ -13,12 +13,16 @@ import {
   ReplyOpenWaitCommandSchema,
   type AgentRun,
   AgentRunSchema,
+  type AssignAgentCheckoutCommand,
+  AssignAgentCheckoutCommandSchema,
   type ClearMessageHistoryResult,
   ClearMessageHistoryResultSchema,
   type CreateGroupAgentCommand,
   CreateGroupAgentCommandSchema,
   type CreateGroupCommand,
   CreateGroupCommandSchema,
+  type CreateWorktreeCommand,
+  CreateWorktreeCommandSchema,
   type DeleteGroupResult,
   DeleteGroupResultSchema,
   type Group,
@@ -39,8 +43,22 @@ import {
   ReorderGroupAgentsCommandSchema,
   type ReorderGroupAgentsResult,
   ReorderGroupAgentsResultSchema,
+  type ReorderGroupsCommand,
+  type ReorderGroupsResult,
+  ReorderGroupsCommandSchema,
+  ReorderGroupsResultSchema,
+  type ReparentGroupAgentCommand,
+  type ReparentGroupAgentResult,
+  ReparentGroupAgentCommandSchema,
+  ReparentGroupAgentResultSchema,
   type RoleDefinition,
   RoleDefinitionSchema,
+  type OpenCheckoutCommand,
+  OpenCheckoutCommandSchema,
+  type RemoveWorktreeCommand,
+  RemoveWorktreeCommandSchema,
+  type WorktreeOperationResult,
+  WorktreeOperationResultSchema,
   type StartGroupRunsResult,
   StartGroupRunsResultSchema,
   type SubmitMessageCommand,
@@ -89,6 +107,23 @@ export interface PortalClient {
     groupId: string,
     command: ReorderGroupAgentsCommand,
   ): Promise<ReorderGroupAgentsResult>;
+  reorderGroups(command: ReorderGroupsCommand): Promise<ReorderGroupsResult>;
+  reparentAgent(
+    groupId: string,
+    agentId: string,
+    command: ReparentGroupAgentCommand,
+  ): Promise<ReparentGroupAgentResult>;
+  assignCheckout(
+    groupId: string,
+    agentId: string,
+    command: AssignAgentCheckoutCommand,
+  ): Promise<void>;
+  createWorktree(command: CreateWorktreeCommand): Promise<WorktreeOperationResult>;
+  openCheckout(command: OpenCheckoutCommand): Promise<WorktreeOperationResult>;
+  removeWorktree(
+    worktreeId: string,
+    command: RemoveWorktreeCommand,
+  ): Promise<WorktreeOperationResult>;
   updateRolePresentation(
     roleId: string,
     command: UpdateRolePresentationCommand,
@@ -191,6 +226,41 @@ export const api: PortalClient = {
       `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agent-order`,
       ReorderGroupAgentsResultSchema,
       commandInit("PUT", ReorderGroupAgentsCommandSchema.parse(command)),
+    ),
+  reorderGroups: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/group-order`,
+      ReorderGroupsResultSchema,
+      commandInit("PUT", ReorderGroupsCommandSchema.parse(command)),
+    ),
+  reparentAgent: (groupId, agentId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}/reparent`,
+      ReparentGroupAgentResultSchema,
+      commandInit("POST", ReparentGroupAgentCommandSchema.parse(command)),
+    ),
+  assignCheckout: (groupId, agentId, command) =>
+    requestVoid(
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}/checkout`,
+      commandInit("PUT", AssignAgentCheckoutCommandSchema.parse(command)),
+    ),
+  createWorktree: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/worktrees`,
+      WorktreeOperationResultSchema,
+      commandInit("POST", CreateWorktreeCommandSchema.parse(command)),
+    ),
+  openCheckout: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/checkouts/open`,
+      WorktreeOperationResultSchema,
+      commandInit("POST", OpenCheckoutCommandSchema.parse(command)),
+    ),
+  removeWorktree: (worktreeId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/worktrees/${encodeURIComponent(worktreeId)}`,
+      WorktreeOperationResultSchema,
+      commandInit("DELETE", RemoveWorktreeCommandSchema.parse(command)),
     ),
   updateRolePresentation: (roleId, command) =>
     request(

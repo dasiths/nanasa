@@ -12,15 +12,25 @@ import {
   WaitForAgentActionCommandSchema,
   CreateGroupAgentCommandSchema,
   CreateGroupCommandSchema,
+  AssignAgentCheckoutCommandSchema,
+  CheckoutSchema,
+  CreateWorktreeCommandSchema,
   DeleteGroupResultSchema,
   InterruptAgentRunCommandSchema,
   MAX_MESSAGE_REQUEST_BYTES,
   MAX_MESSAGE_TEXT_BYTES,
   OVERSIZED_MESSAGE_GUIDANCE,
   RemoveGroupAgentResultSchema,
+  RemoveWorktreeCommandSchema,
+  ReorderGroupsCommandSchema,
+  ReorderGroupsResultSchema,
   ReorderGroupAgentsCommandSchema,
   ReorderGroupAgentsResultSchema,
   RoleDefinitionSchema,
+  OpenCheckoutCommandSchema,
+  ReparentGroupAgentCommandSchema,
+  ReparentGroupAgentResultSchema,
+  RepositorySchema,
   StartAgentRunCommandSchema,
   StartGroupRunsCommandSchema,
   StartGroupRunsResultSchema,
@@ -34,6 +44,8 @@ import {
   UpdateGroupAgentCommandSchema,
   UpdateGroupCommandSchema,
   UpdateRolePresentationCommandSchema,
+  WorktreeOperationResultSchema,
+  WorktreeSchema,
 } from "@nanasa/contracts";
 import { AgentActionAckService } from "./actions/agent-action-ack-service.js";
 import { AgentActionScheduler } from "./actions/agent-action-scheduler.js";
@@ -80,7 +92,13 @@ import { TerminalInputArbiter } from "./terminal/terminal-input-arbiter.js";
 import { TerminalReadService } from "./terminal/terminal-read-service.js";
 import { TmuxRuntime } from "./tmux-runtime.js";
 import { TopologyService } from "./topology-service.js";
+import { TopologyOrderService } from "./topology-order-service.js";
 import { TmuxEventObserver, type TmuxInvalidationKind } from "./tmux-event-observer.js";
+import { CheckoutService } from "./git/checkout-service.js";
+import { GitCommandAdapter } from "./git/git-command-adapter.js";
+import { GitStatusService } from "./git/git-status-service.js";
+import { RepositoryDiscoveryService } from "./git/repository-discovery-service.js";
+import { WorktreeService } from "./git/worktree-service.js";
 
 export interface DaemonOptions {
   dataPath?: string;
@@ -90,6 +108,7 @@ export interface DaemonOptions {
   logger?: boolean | FastifyBaseLogger;
   tmuxServerName?: string;
   tmuxPath?: string;
+  gitPath?: string;
   reconcileIntervalMs?: number;
   statusEndpointUrl?: string;
   servePortal?: boolean;
@@ -124,6 +143,9 @@ export interface DaemonContext {
   actionWaits: AgentWaitService;
   openWaits: AgentOpenWaitService;
   topology: TopologyService;
+  topologyOrder: TopologyOrderService;
+  checkouts: CheckoutService;
+  worktrees: WorktreeService;
   loadedConfig: LoadedNanasaConfig;
   runtimePath: string;
   guard: DaemonInstanceGuard;
@@ -215,10 +237,23 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       secretPath: join(runtimePath, "operator-secret"),
       secureCookies: options.authority?.secureCookies ?? false,
     });
+    const git = new GitCommandAdapter(options.gitPath);
+    const repositoryDiscovery = new RepositoryDiscoveryService(git);
+    const gitStatuses = new GitStatusService(git);
+    const checkouts = new CheckoutService(store, repositoryDiscovery, gitStatuses);
+    const repositoryCheckout = await checkouts.initialize(loadedConfig.config.repository.path);
+    const worktrees = new WorktreeService(
+      store,
+      git,
+      checkouts,
+      join(dirname(loadedConfig.repoRoot), ".nanasa-worktrees"),
+    );
+    await worktrees.recover();
     const bootstrapFragment = `nanasa-bootstrap=${operatorAuth.createBootstrapToken()}`;
     const metadata = () =>
       controlMetadata({
         repositoryRoot: loadedConfig.repoRoot,
+        repositoryId: repositoryCheckout.repository.id,
         guard,
         daemonEpoch,
         lifecycle,
@@ -380,6 +415,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     });
     coordinatorReference.current = coordinator;
     const topology = new TopologyService(configRepository, store, coordinator);
+    const topologyOrder = new TopologyOrderService(configRepository, store);
     await topology.reconcile();
 
     await app.register(websocket);
@@ -552,6 +588,46 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     }
     app.get("/api/v1/config", async () => configRepository.load().config);
     app.get("/api/v1/config/status", async () => configRepository.load().status);
+    app.get("/api/v1/repositories", async () =>
+      store.listRepositories().map((repository) => RepositorySchema.parse(repository)),
+    );
+    app.get<{ Params: { repositoryId: string } }>(
+      "/api/v1/repositories/:repositoryId/checkouts",
+      async (request) =>
+        checkouts
+          .list(request.params.repositoryId)
+          .map((checkout) => CheckoutSchema.parse(checkout)),
+    );
+    app.get<{ Params: { repositoryId: string } }>(
+      "/api/v1/repositories/:repositoryId/worktrees",
+      async (request) =>
+        worktrees
+          .list(request.params.repositoryId)
+          .map((worktree) => WorktreeSchema.parse(worktree)),
+    );
+    app.post("/api/v1/checkouts/open", async (request) =>
+      WorktreeOperationResultSchema.parse(
+        await worktrees.open(OpenCheckoutCommandSchema.parse(request.body)),
+      ),
+    );
+    app.post("/api/v1/worktrees", async (request, reply) => {
+      const command = CreateWorktreeCommandSchema.parse(request.body);
+      const assignments = topologyOrder.assertAgentsStopped(command.assignAgentIds);
+      const result = await worktrees.create(command);
+      if (result.checkout !== undefined && assignments.length > 0) {
+        await topologyOrder.assignCheckoutToAgents(assignments, result.checkout.id);
+      }
+      return reply.status(201).send(WorktreeOperationResultSchema.parse(result));
+    });
+    app.delete<{ Params: { worktreeId: string } }>(
+      "/api/v1/worktrees/:worktreeId",
+      async (request) => {
+        const command = RemoveWorktreeCommandSchema.parse(request.body ?? {});
+        return WorktreeOperationResultSchema.parse(
+          await worktrees.remove(request.params.worktreeId, command),
+        );
+      },
+    );
     app.get("/api/v1/snapshot", async () => ({
       ...snapshotReadModel.read(),
       messages: [],
@@ -800,11 +876,42 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       "/api/v1/groups/:groupId/agent-order",
       async (request) =>
         ReorderGroupAgentsResultSchema.parse(
-          await topology.reorderAgents(
+          await topologyOrder.reorderAgents(
             request.params.groupId,
             ReorderGroupAgentsCommandSchema.parse(request.body),
           ),
         ),
+    );
+
+    app.put("/api/v1/group-order", async (request) =>
+      ReorderGroupsResultSchema.parse(
+        await topologyOrder.reorderGroups(ReorderGroupsCommandSchema.parse(request.body)),
+      ),
+    );
+
+    app.post<{ Params: { groupId: string; agentId: string } }>(
+      "/api/v1/groups/:groupId/agents/:agentId/reparent",
+      async (request) =>
+        ReparentGroupAgentResultSchema.parse(
+          await topologyOrder.reparentAgent(
+            request.params.groupId,
+            request.params.agentId,
+            ReparentGroupAgentCommandSchema.parse(request.body),
+          ),
+        ),
+    );
+
+    app.put<{ Params: { groupId: string; agentId: string } }>(
+      "/api/v1/groups/:groupId/agents/:agentId/checkout",
+      async (request, reply) => {
+        const command = AssignAgentCheckoutCommandSchema.parse(request.body);
+        await topologyOrder.assignCheckout(
+          request.params.groupId,
+          request.params.agentId,
+          command.checkoutId,
+        );
+        return reply.status(204).send();
+      },
     );
 
     app.post<{ Params: { groupId: string; agentId: string } }>(
@@ -961,6 +1068,9 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       actionWaits,
       openWaits,
       topology,
+      topologyOrder,
+      checkouts,
+      worktrees,
       loadedConfig,
       runtimePath,
       guard,

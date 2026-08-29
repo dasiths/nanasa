@@ -117,6 +117,7 @@ export type ConfiguredAgent = z.infer<typeof ConfiguredAgentSchema>;
 export const ConfiguredGroupSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
+    order: z.number().int().nonnegative().max(255).optional(),
     instructions: z.array(InstructionPathSchema).max(32).default([]),
     agents: z.record(ConfiguredAgentIdSchema, ConfiguredAgentSchema).default({}),
   })

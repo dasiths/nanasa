@@ -1,4 +1,4 @@
-export const DATABASE_SCHEMA_VERSION = 6;
+export const DATABASE_SCHEMA_VERSION = 7;
 
 export const DATABASE_BASELINE_SQL = `
   CREATE TABLE schema_metadata (
@@ -19,11 +19,19 @@ export const DATABASE_BASELINE_SQL = `
   CREATE TABLE groups (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
+    order_index INTEGER NOT NULL CHECK (order_index >= 0),
     membership_revision INTEGER NOT NULL CHECK (membership_revision >= 0),
     message_sequence INTEGER NOT NULL DEFAULT 0 CHECK (message_sequence >= 0),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   ) STRICT;
+
+  CREATE TABLE topology_order_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    order_revision INTEGER NOT NULL CHECK (order_revision >= 0)
+  ) STRICT;
+
+  INSERT INTO topology_order_state (singleton, order_revision) VALUES (1, 0);
 
   CREATE TABLE roles (
     id TEXT PRIMARY KEY,
@@ -52,6 +60,8 @@ export const DATABASE_BASELINE_SQL = `
     agent_profile_id TEXT NOT NULL REFERENCES agent_profiles(id),
     alias TEXT NOT NULL,
     role_id TEXT REFERENCES roles(id),
+    checkout_id TEXT REFERENCES checkouts(id),
+    order_index INTEGER NOT NULL CHECK (order_index >= 0),
     state TEXT NOT NULL CHECK (state IN ('active', 'removed')),
     joined_at TEXT NOT NULL,
     removed_at TEXT,
@@ -61,16 +71,23 @@ export const DATABASE_BASELINE_SQL = `
   CREATE TABLE repositories (
     id TEXT PRIMARY KEY,
     common_directory TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
     object_format TEXT NOT NULL CHECK (object_format IN ('sha1', 'sha256')),
-    created_at TEXT NOT NULL
+    ref_storage TEXT NOT NULL CHECK (ref_storage IN ('files', 'reftable')),
+    primary_checkout_id TEXT,
+    revision INTEGER NOT NULL CHECK (revision >= 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
   ) STRICT;
 
   CREATE TABLE checkouts (
     id TEXT PRIMARY KEY,
     repository_id TEXT NOT NULL REFERENCES repositories(id),
+    checkout_key TEXT NOT NULL UNIQUE,
     path TEXT NOT NULL UNIQUE,
     git_directory TEXT NOT NULL,
-    head TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('primary', 'linked', 'bare')),
+    head TEXT,
     branch TEXT,
     dirty INTEGER NOT NULL CHECK (dirty IN (0, 1)),
     observed_at TEXT NOT NULL
@@ -80,11 +97,30 @@ export const DATABASE_BASELINE_SQL = `
     id TEXT PRIMARY KEY,
     repository_id TEXT NOT NULL REFERENCES repositories(id),
     checkout_id TEXT NOT NULL UNIQUE REFERENCES checkouts(id),
+    source_checkout_id TEXT NOT NULL REFERENCES checkouts(id),
     path TEXT NOT NULL UNIQUE,
+    branch TEXT NOT NULL,
+    base TEXT NOT NULL,
     provenance_token TEXT NOT NULL UNIQUE,
+    operation_generation INTEGER NOT NULL CHECK (operation_generation > 0),
     state TEXT NOT NULL CHECK (state IN ('creating', 'ready', 'removing', 'removed', 'failed')),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE git_operations (
+    id TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL REFERENCES repositories(id),
+    checkout_id TEXT REFERENCES checkouts(id),
+    worktree_id TEXT,
+    kind TEXT NOT NULL CHECK (kind IN ('inspect', 'create-worktree', 'remove-worktree', 'refresh')),
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    target_path TEXT,
+    request_json TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')),
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    error_code TEXT
   ) STRICT;
 
   CREATE TABLE runs (
@@ -93,6 +129,7 @@ export const DATABASE_BASELINE_SQL = `
     member_id TEXT NOT NULL,
     agent_profile_id TEXT NOT NULL REFERENCES agent_profiles(id),
     checkout_id TEXT REFERENCES checkouts(id),
+    resolved_working_directory TEXT,
     generation INTEGER NOT NULL CHECK (generation > 0),
     status TEXT NOT NULL CHECK (status IN ('starting', 'running', 'stopping', 'stopped', 'failed')),
     desired_state TEXT NOT NULL CHECK (desired_state IN ('running', 'stopped')),
@@ -109,8 +146,7 @@ export const DATABASE_BASELINE_SQL = `
     terminal_json TEXT,
     started_at TEXT NOT NULL,
     stopped_at TEXT,
-    UNIQUE (group_id, member_id, generation),
-    FOREIGN KEY (group_id, member_id) REFERENCES memberships(group_id, member_id)
+    UNIQUE (group_id, member_id, generation)
   ) STRICT;
 
   CREATE TABLE runtime_observations (

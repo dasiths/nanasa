@@ -20,6 +20,7 @@ export function repositoryTmuxNamespace(repositoryRoot: string): string {
 
 export function controlMetadata(options: {
   repositoryRoot: string;
+  repositoryId?: string;
   guard: DaemonInstanceGuard;
   daemonEpoch: number;
   lifecycle: DaemonLifecycle;
@@ -32,7 +33,7 @@ export function controlMetadata(options: {
     productVersion: PRODUCT_VERSION,
     configVersion: 2,
     databaseSchemaVersion: DATABASE_SCHEMA_VERSION,
-    repositoryId: repositoryIdentity(options.repositoryRoot),
+    repositoryId: options.repositoryId ?? repositoryIdentity(options.repositoryRoot),
     instanceId: options.guard.instanceId,
     daemonEpoch: options.daemonEpoch,
     lifecycle,

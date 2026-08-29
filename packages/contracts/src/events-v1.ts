@@ -10,6 +10,7 @@ import {
 } from "./control-v1.js";
 import { AgentProfileSchema } from "./provider-v1.js";
 import { AgentStatusSummarySchema } from "./status-v2.js";
+import { CheckoutSchema, RepositorySchema, WorktreeSchema } from "./git-v1.js";
 
 export const EVENT_PROTOCOL_VERSION = 1 as const;
 export const EventCursorSchema = z.number().int().nonnegative();
@@ -84,10 +85,14 @@ export const PortalSnapshotSchema = z
     daemonEpoch: z.number().int().nonnegative(),
     sequence: z.number().int().nonnegative(),
     generatedAt: TimestampSchema,
+    orderRevision: z.number().int().nonnegative().default(0),
     groups: z.array(GroupSchema),
     agentProfiles: z.array(AgentProfileSchema),
     memberships: z.array(GroupMembershipSchema),
     runs: z.array(AgentRunSchema),
+    repositories: z.array(RepositorySchema).default([]),
+    checkouts: z.array(CheckoutSchema).default([]),
+    worktrees: z.array(WorktreeSchema).default([]),
     agentStatuses: z.array(AgentStatusSummarySchema).optional(),
     messages: z.array(MessageSchema),
     deliveryOutcomes: z.array(DeliveryOutcomeSchema),

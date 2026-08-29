@@ -6,11 +6,12 @@ import type {
   UpdateGroupCommand,
   UpdateRolePresentationCommand,
 } from "@nanasa/contracts";
-import { Cable, CircleAlert, Laptop, Moon, Play, RefreshCw, Sun, X } from "lucide-react";
+import { Cable, CircleAlert, GitBranch, Laptop, Moon, Play, RefreshCw, Sun, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { api, type PortalClient } from "./api.js";
 import { AdHocConsoleDialog } from "./components/ad-hoc-console-dialog.js";
+import { CheckoutWorktreeDialog } from "./components/checkout-worktree-dialog.js";
 import { type AddAgentInput, GroupTree } from "./components/group-tree.js";
 import { MessageWorkspace } from "./components/message-workspace.js";
 import { TerminalWorkspace } from "./components/terminal-workspace.js";
@@ -37,6 +38,7 @@ export function App({ client = api }: AppProps) {
   const [terminalConnectionRevision, setTerminalConnectionRevision] = useState(0);
   const [portalSubmissionSuspended, setPortalSubmissionSuspended] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false);
+  const [checkoutsOpen, setCheckoutsOpen] = useState(false);
   const startAllInFlight = useRef(new Map<string, Promise<void>>());
   const previousEventStatus = useRef(eventStatus);
   const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -147,6 +149,15 @@ export function App({ client = api }: AppProps) {
     runAction(`role:${roleId}:presentation`, () => client.updateRolePresentation(roleId, command));
   const reorderAgents = (groupId: string, command: ReorderGroupAgentsCommand) =>
     runAction(`${groupId}:reorder`, () => client.reorderAgents(groupId, command));
+  const reorderGroups = (groupIds: string[], expectedOrderRevision: number) =>
+    runAction("groups:reorder", () => client.reorderGroups({ groupIds, expectedOrderRevision }));
+  const reparentAgent = (sourceGroupId: string, agentId: string, targetGroupId: string) =>
+    runAction(`${sourceGroupId}:${agentId}:reparent`, () =>
+      client.reparentAgent(sourceGroupId, agentId, {
+        targetGroupId,
+        expectedOrderRevision: snapshot?.orderRevision ?? 0,
+      }),
+    );
   const removeAgent = (groupId: string, agentId: string) =>
     runAction(`${groupId}:${agentId}:remove`, () => client.removeAgent(groupId, agentId));
 
@@ -237,6 +248,8 @@ export function App({ client = api }: AppProps) {
           onUpdateAgent={updateAgent}
           onUpdateRolePresentation={updateRolePresentation}
           onReorderAgents={reorderAgents}
+          onReorderGroups={reorderGroups}
+          onReparentAgent={reparentAgent}
           onRemoveAgent={removeAgent}
           onStartRun={startRun}
           onStopRun={stopRun}
@@ -270,6 +283,15 @@ export function App({ client = api }: AppProps) {
             )}
           </div>
           <div className="header-actions">
+            <button
+              type="button"
+              className="compact-button"
+              aria-label="Manage Git checkouts and worktrees"
+              onClick={() => setCheckoutsOpen(true)}
+            >
+              <GitBranch aria-hidden="true" size={15} />
+              <span>Checkouts</span>
+            </button>
             {selectedGroup !== undefined && (
               <button
                 type="button"
@@ -415,6 +437,15 @@ export function App({ client = api }: AppProps) {
         </div>
       </section>
       {consoleOpen && <AdHocConsoleDialog client={client} onClose={() => setConsoleOpen(false)} />}
+      {checkoutsOpen && (
+        <CheckoutWorktreeDialog
+          client={client}
+          snapshot={snapshot}
+          config={config}
+          onChanged={refresh}
+          onClose={() => setCheckoutsOpen(false)}
+        />
+      )}
     </main>
   );
 }

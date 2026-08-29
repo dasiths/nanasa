@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -17,7 +18,7 @@ describe("operator authority", () => {
   it("persists a strictly increasing daemon epoch across replacement", async () => {
     const repository = mkdtempSync(join(tmpdir(), "nanasa-epoch-"));
     temporaryDirectories.push(repository);
-    mkdirSync(join(repository, ".git"));
+    execFileSync("git", ["init", "--quiet", repository]);
     mkdirSync(join(repository, ".nanasa"));
     writeFileSync(join(repository, ".nanasa", "config.yaml"), "version: 2\nintegrations: {}\n");
     const loadedConfig = loadNanasaConfig(repository);
@@ -39,7 +40,7 @@ describe("operator authority", () => {
   it("rejects hostile authorities, enforces one-use bootstrap and CSRF, and revokes sessions", async () => {
     const repository = mkdtempSync(join(tmpdir(), "nanasa-authority-"));
     temporaryDirectories.push(repository);
-    mkdirSync(join(repository, ".git"));
+    execFileSync("git", ["init", "--quiet", repository]);
     mkdirSync(join(repository, ".nanasa"));
     writeFileSync(join(repository, ".nanasa", "config.yaml"), "version: 2\nintegrations: {}\n");
     const daemon = await createDaemon({

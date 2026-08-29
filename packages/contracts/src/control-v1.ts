@@ -87,6 +87,7 @@ export const GroupSchema = z
   .object({
     id: IdentifierSchema,
     name: z.string().trim().min(1).max(100),
+    order: z.number().int().nonnegative().default(0),
     membershipRevision: z.number().int().nonnegative(),
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
@@ -133,6 +134,8 @@ export const GroupMembershipSchema = z
     agentProfileId: IdentifierSchema,
     alias: z.string().trim().min(1).max(100),
     roleId: RoleIdSchema.optional(),
+    checkoutId: IdentifierSchema.optional(),
+    order: z.number().int().nonnegative().default(0),
     state: MembershipStateSchema,
     joinedAt: TimestampSchema,
     removedAt: TimestampSchema.optional(),
@@ -170,6 +173,8 @@ export const AgentRunSchema = z
     groupId: IdentifierSchema,
     memberId: IdentifierSchema,
     agentProfileId: IdentifierSchema,
+    checkoutId: IdentifierSchema.optional(),
+    resolvedWorkingDirectory: z.string().trim().min(1).max(4_096).optional(),
     generation: z.number().int().positive(),
     status: RunStatusSchema,
     desiredState: DesiredRunStateSchema.default("running"),
@@ -233,7 +238,7 @@ export type RemoveGroupAgentResult = z.infer<typeof RemoveGroupAgentResultSchema
 export const ReorderGroupAgentsCommandSchema = z
   .object({
     agentIds: z.array(ConfiguredAgentIdSchema).max(256),
-    expectedAgentRevision: z.number().int().nonnegative(),
+    expectedOrderRevision: z.number().int().nonnegative(),
   })
   .strict()
   .superRefine((command, context) => {
@@ -255,7 +260,55 @@ export const ReorderGroupAgentsResultSchema = z
   .object({
     groupId: IdentifierSchema,
     agentIds: z.array(ConfiguredAgentIdSchema).max(256),
-    agentRevision: z.number().int().nonnegative(),
+    orderRevision: z.number().int().nonnegative(),
   })
   .strict();
 export type ReorderGroupAgentsResult = z.infer<typeof ReorderGroupAgentsResultSchema>;
+
+export const ReorderGroupsCommandSchema = z
+  .object({
+    groupIds: z.array(IdentifierSchema).max(256),
+    expectedOrderRevision: z.number().int().nonnegative(),
+  })
+  .strict()
+  .superRefine((command, context) => {
+    const seen = new Set<string>();
+    for (const [index, groupId] of command.groupIds.entries()) {
+      if (seen.has(groupId)) {
+        context.addIssue({
+          code: "custom",
+          message: "Group order must not contain duplicate group IDs",
+          path: ["groupIds", index],
+        });
+      }
+      seen.add(groupId);
+    }
+  });
+export type ReorderGroupsCommand = z.infer<typeof ReorderGroupsCommandSchema>;
+
+export const ReorderGroupsResultSchema = z
+  .object({
+    groupIds: z.array(IdentifierSchema).max(256),
+    orderRevision: z.number().int().nonnegative(),
+  })
+  .strict();
+export type ReorderGroupsResult = z.infer<typeof ReorderGroupsResultSchema>;
+
+export const ReparentGroupAgentCommandSchema = z
+  .object({
+    targetGroupId: IdentifierSchema,
+    expectedOrderRevision: z.number().int().nonnegative(),
+  })
+  .strict();
+export type ReparentGroupAgentCommand = z.infer<typeof ReparentGroupAgentCommandSchema>;
+
+export const ReparentGroupAgentResultSchema = z
+  .object({
+    agentId: ConfiguredAgentIdSchema,
+    memberId: IdentifierSchema,
+    sourceGroupId: IdentifierSchema,
+    targetGroupId: IdentifierSchema,
+    orderRevision: z.number().int().nonnegative(),
+  })
+  .strict();
+export type ReparentGroupAgentResult = z.infer<typeof ReparentGroupAgentResultSchema>;

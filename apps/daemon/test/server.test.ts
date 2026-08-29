@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAX_MESSAGE_TEXT_BYTES } from "@nanasa/contracts";
@@ -16,7 +17,23 @@ async function createDaemon(options: DaemonOptions = {}) {
   if (repository === undefined) {
     repository = mkdtempSync(join(tmpdir(), "nanasa-api-config-"));
     temporaryDirectories.push(repository);
-    mkdirSync(join(repository, ".git"));
+    execFileSync("git", ["init", "--quiet", repository]);
+    execFileSync(
+      "git",
+      [
+        "-C",
+        repository,
+        "-c",
+        "user.name=Nanasa Test",
+        "-c",
+        "user.email=nanasa@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "initial",
+      ],
+      { stdio: "ignore" },
+    );
     mkdirSync(join(repository, ".nanasa"));
     mkdirSync(join(repository, ".nanasa", "instructions"));
     writeFileSync(
@@ -128,6 +145,47 @@ afterEach(() => {
 });
 
 describe("daemon REST API", () => {
+  it("discovers checkouts and manages provenance-fenced worktrees through routes", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const snapshot = (await daemon.app.inject({ method: "GET", url: "/api/snapshot" })).json<{
+      repositories: Array<{ id: string; primaryCheckoutId: string }>;
+      checkouts: Array<{ id: string; repositoryId: string; kind: string }>;
+    }>();
+    expect(snapshot.repositories).toHaveLength(1);
+    expect(snapshot.checkouts).toEqual([
+      expect.objectContaining({
+        id: snapshot.repositories[0]!.primaryCheckoutId,
+        repositoryId: snapshot.repositories[0]!.id,
+        kind: "primary",
+      }),
+    ]);
+    const created = await daemon.app.inject({
+      method: "POST",
+      url: "/api/worktrees",
+      payload: {
+        sourceCheckoutId: snapshot.checkouts[0]!.id,
+        branch: "feature/api-worktree",
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const result = created.json<{
+      worktree: { id: string; operationGeneration: number; state: string };
+      checkout: { kind: string };
+    }>();
+    expect(result).toMatchObject({ worktree: { state: "ready" }, checkout: { kind: "linked" } });
+    const removed = await daemon.app.inject({
+      method: "DELETE",
+      url: `/api/worktrees/${result.worktree.id}`,
+      payload: {
+        force: false,
+        expectedOperationGeneration: result.worktree.operationGeneration,
+      },
+    });
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json()).toMatchObject({ worktree: { state: "removed" } });
+    await daemon.app.close();
+  });
+
   it("projects direct roles and requires restart for launch or prompt changes", async () => {
     const daemon = await createDaemon({ dataPath: ":memory:" });
     const group = (
@@ -245,10 +303,10 @@ describe("daemon REST API", () => {
     const reordered = await daemon.app.inject({
       method: "PUT",
       url: `/api/groups/${group.id}/agent-order`,
-      payload: { agentIds, expectedAgentRevision: 3 },
+      payload: { agentIds, expectedOrderRevision: 4 },
     });
     expect(reordered.statusCode).toBe(200);
-    expect(reordered.json()).toEqual({ groupId: group.id, agentIds, agentRevision: 3 });
+    expect(reordered.json()).toEqual({ groupId: group.id, agentIds, orderRevision: 5 });
     expect(daemon.store.getSnapshot()).toMatchObject({
       groups: [{ id: group.id, membershipRevision: 3 }],
       memberships: [
@@ -275,10 +333,10 @@ describe("daemon REST API", () => {
     const stale = await daemon.app.inject({
       method: "PUT",
       url: `/api/groups/${group.id}/agent-order`,
-      payload: { agentIds, expectedAgentRevision: 2 },
+      payload: { agentIds, expectedOrderRevision: 4 },
     });
     expect(stale.statusCode).toBe(409);
-    expect(stale.json()).toMatchObject({ code: "agent_order_stale" });
+    expect(stale.json()).toMatchObject({ code: "topology_order_stale" });
     await daemon.app.close();
   });
 

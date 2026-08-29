@@ -43,6 +43,7 @@ describe("database baseline", () => {
       expect.arrayContaining([
         "daemon_epochs",
         "groups",
+        "topology_order_state",
         "roles",
         "memberships",
         "runs",
@@ -63,6 +64,7 @@ describe("database baseline", () => {
         "repositories",
         "checkouts",
         "worktrees",
+        "git_operations",
         "terminal_checkpoints",
         "extensions",
         "domain_events",

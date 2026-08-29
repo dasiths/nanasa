@@ -646,7 +646,13 @@ export class TmuxRuntime {
         requestedModelSource: provisioned.snapshot.desiredModelSource,
       });
     }
-    return this.#launchCommand(run, launchArguments, profile.workingDirectory, environment, size);
+    return this.#launchCommand(
+      run,
+      launchArguments,
+      run.resolvedWorkingDirectory ?? profile.workingDirectory,
+      environment,
+      size,
+    );
   }
 
   async #launchCommand(

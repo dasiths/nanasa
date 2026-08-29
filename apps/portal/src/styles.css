@@ -771,6 +771,68 @@ textarea {
   width: min(680px, calc(100vw - 24px));
 }
 
+.checkout-dialog {
+  width: min(820px, calc(100vw - 24px));
+}
+
+.checkout-dialog h3 {
+  font-size: 0.9rem;
+}
+
+.checkout-operation-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.55fr) auto;
+  align-items: end;
+  gap: 9px;
+}
+
+.checkout-operation-form label,
+.checkout-assignment {
+  display: grid;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.checkout-list {
+  display: grid;
+  gap: 7px;
+  margin: 7px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.checkout-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 9px;
+}
+
+.checkout-list li > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.checkout-list small {
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+.checkout-list span {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+.checkout-assignment + .checkout-assignment {
+  margin-top: 7px;
+}
+
 .agent-settings-identifiers {
   display: grid;
   gap: 7px;
@@ -2136,6 +2198,10 @@ textarea {
 }
 
 @media (max-width: 720px) {
+  .checkout-operation-form {
+    grid-template-columns: 1fr;
+  }
+
   .portal-shell {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(190px, 35vh) minmax(0, 1fr);

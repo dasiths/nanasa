@@ -139,7 +139,10 @@ export class PackageAcceptanceService {
     const repository = mkdtempSync(join(tmpdir(), "nanasa-acceptance-"));
     const port = await freePort();
     const tmuxServer = `nanasa-e2e-${browserName}-${process.pid}-${randomUUID().slice(0, 8)}`;
-    mkdirSync(join(repository, ".git"));
+    const initialized = spawnSync("git", ["init", "--quiet", repository], { encoding: "utf8" });
+    if (initialized.status !== 0) {
+      throw new Error(initialized.stderr || "Could not initialize acceptance Git repository");
+    }
     mkdirSync(join(repository, ".nanasa"));
     writeFileSync(
       join(repository, ".nanasa", "config.yaml"),

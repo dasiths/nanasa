@@ -149,6 +149,7 @@ const memberships: GroupMembership[] = [
     memberId: "builder",
     agentProfileId: profile.id,
     alias: "Builder",
+    order: 0,
     state: "active",
     joinedAt: timestamp,
   },
@@ -159,6 +160,7 @@ const memberships: GroupMembership[] = [
     agentProfileId: profile.id,
     alias: "Reviewer",
     roleId: "reviewer",
+    order: 1,
     state: "active",
     joinedAt: timestamp,
   },
@@ -168,6 +170,7 @@ const memberships: GroupMembership[] = [
     memberId: "auditor",
     agentProfileId: profile.id,
     alias: "Auditor",
+    order: 0,
     state: "active",
     joinedAt: timestamp,
   },
@@ -178,10 +181,12 @@ const snapshot: PortalSnapshot = {
   daemonEpoch: 1,
   sequence: 7,
   generatedAt: timestamp,
+  orderRevision: 4,
   groups: [
     {
       id: "group-backend",
       name: "Backend",
+      order: 0,
       membershipRevision: 4,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -189,6 +194,7 @@ const snapshot: PortalSnapshot = {
     {
       id: "group-review",
       name: "Review",
+      order: 1,
       membershipRevision: 2,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -197,6 +203,9 @@ const snapshot: PortalSnapshot = {
   agentProfiles: [profile],
   memberships,
   runs: [],
+  repositories: [],
+  checkouts: [],
+  worktrees: [],
   messages: [],
   deliveryOutcomes: [],
 };
@@ -269,8 +278,14 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     reorderAgents: vi.fn().mockResolvedValue({
       groupId: "group-backend",
       agentIds: ["builder-agent", "reviewer-agent"],
-      agentRevision: 4,
+      orderRevision: 4,
     }),
+    reorderGroups: vi.fn(),
+    reparentAgent: vi.fn(),
+    assignCheckout: vi.fn(),
+    createWorktree: vi.fn(),
+    openCheckout: vi.fn(),
+    removeWorktree: vi.fn(),
     updateRolePresentation: vi.fn().mockResolvedValue(config.roles.reviewer),
     startRun: vi.fn().mockResolvedValue(run),
     startAllRuns: vi.fn().mockResolvedValue({ groupId: "group-backend", outcomes: [] }),
@@ -633,7 +648,7 @@ describe("portal application", () => {
     await waitFor(() =>
       expect(client.reorderAgents).toHaveBeenCalledWith("group-backend", {
         agentIds: ["reviewer-agent", "builder-agent"],
-        expectedAgentRevision: 4,
+        expectedOrderRevision: snapshot.orderRevision,
       }),
     );
   });

@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -23,7 +24,7 @@ afterEach(() => {
 function createDaemon(options: DaemonOptions = {}) {
   const repository = mkdtempSync(join(tmpdir(), "nanasa-mcp-config-"));
   temporaryDirectories.push(repository);
-  mkdirSync(join(repository, ".git"));
+  execFileSync("git", ["init", "--quiet", repository]);
   mkdirSync(join(repository, ".nanasa"));
   writeFileSync(
     join(repository, ".nanasa", "config.yaml"),

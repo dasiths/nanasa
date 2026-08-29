@@ -6,8 +6,6 @@ import type {
   Group,
   GroupMembership,
   RemoveGroupAgentResult,
-  ReorderGroupAgentsCommand,
-  ReorderGroupAgentsResult,
   RoleDefinition,
   UpdateGroupAgentCommand,
   UpdateGroupCommand,
@@ -18,6 +16,7 @@ import { dockerMemberName, formatMemberId } from "./member-id.js";
 import { normalizeAgentOrder } from "./membership-order.js";
 import { RunRuntimeCoordinator } from "./run-runtime-coordinator.js";
 import { DomainError, NanasaStore } from "./store.js";
+import { normalizeGroupOrder } from "./topology-order-service.js";
 
 function stableId(prefix: string, scope: string, idempotencyKey?: string): string {
   if (idempotencyKey === undefined) return `${prefix}_${randomUUID()}`;
@@ -67,14 +66,14 @@ export class TopologyService {
     const mutation = await this.#repository.mutate((config) => ({
       config: {
         ...config,
-        groups: {
+        groups: normalizeGroupOrder({
           ...config.groups,
           [groupId]: config.groups[groupId] ?? {
             name: command.name.trim(),
             instructions: command.instructions ?? [],
             agents: {},
           },
-        },
+        }),
       },
       result: groupId,
     }));
@@ -148,7 +147,7 @@ export class TopologyService {
       }
       const groups = { ...config.groups };
       delete groups[groupId];
-      return { config: { ...config, groups }, result: groupId };
+      return { config: { ...config, groups: normalizeGroupOrder(groups) }, result: groupId };
     });
     return this.#coordinator.deleteGroup(groupId, idempotencyKey);
   }
@@ -301,47 +300,6 @@ export class TopologyService {
     });
     await this.#coordinator.removeMembership(groupId, current.memberId, idempotencyKey);
     return { groupId, agentId, deletedRuns: 0, revokedDeliveries };
-  }
-
-  public async reorderAgents(
-    groupId: string,
-    command: ReorderGroupAgentsCommand,
-  ): Promise<ReorderGroupAgentsResult> {
-    const agentRevision = this.#store.getGroup(groupId).membershipRevision;
-    if (command.expectedAgentRevision !== agentRevision) {
-      throw new DomainError(
-        "agent_order_stale",
-        "Agents changed while preparing the new order; refresh and retry",
-        409,
-      );
-    }
-    const mutation = await this.#repository.mutate((config) => {
-      const group = config.groups[groupId];
-      if (group === undefined) throw new DomainError("group_not_found", "Group not found", 404);
-      if (
-        command.agentIds.length !== Object.keys(group.agents).length ||
-        command.agentIds.some((agentId) => group.agents[agentId] === undefined)
-      ) {
-        throw new DomainError(
-          "agent_order_stale",
-          "Agents changed while preparing the new order; refresh and retry",
-          409,
-        );
-      }
-      const agents = Object.fromEntries(
-        command.agentIds.map((agentId, order) => [agentId, { ...group.agents[agentId]!, order }]),
-      );
-      return {
-        config: {
-          ...config,
-          groups: { ...config.groups, [groupId]: { ...group, agents } },
-        },
-        result: { groupId, agentIds: command.agentIds, agentRevision },
-      };
-    });
-    this.#store.reconcileTopology(mutation.loaded.config, mutation.loaded.status);
-    this.#store.recordRuntimeEvent("agent.reordered", "group", groupId, mutation.result);
-    return mutation.result;
   }
 
   public getAgentMembership(groupId: string, agentId: string): GroupMembership {

@@ -1143,7 +1143,7 @@ describe("NanasaStore schema migration", () => {
     const baseline = new DatabaseSync(baselinePath, { readOnly: true });
     expect(
       (baseline.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
-    ).toBe(6);
+    ).toBe(7);
     baseline.close();
     return;
     const directory = mkdtempSync(join(tmpdir(), "nanasa-delivery-migration-"));

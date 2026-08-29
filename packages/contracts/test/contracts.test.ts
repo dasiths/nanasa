@@ -13,10 +13,12 @@ import {
   AgentStatusDetailSchema,
   AgentStatusEventInputSchema,
   AgentStatusStateSchema,
+  CheckoutSchema,
   ConfigStatusSchema,
   ControlMetadataSchema,
   CredentialProfileReferenceSchema,
   CreateGroupAgentCommandSchema,
+  CreateWorktreeCommandSchema,
   DeleteGroupResultSchema,
   DeliveryOutcomeSchema,
   EventServerFrameSchema,
@@ -29,6 +31,8 @@ import {
   NativeSessionReferenceSchema,
   PortalSnapshotSchema,
   RemoveGroupAgentResultSchema,
+  RemoveWorktreeCommandSchema,
+  RepositorySchema,
   ReorderGroupAgentsCommandSchema,
   ReorderGroupAgentsResultSchema,
   StartAgentRunCommandSchema,
@@ -37,6 +41,7 @@ import {
   TerminalEndpointStatusSchema,
   UpdateGroupAgentCommandSchema,
   UpdateGroupCommandSchema,
+  WorktreeSchema,
 } from "../src/index.js";
 
 describe("versioned control-plane contracts", () => {
@@ -489,6 +494,63 @@ describe("agent run contracts", () => {
         updatedAt: "2026-08-10T12:00:00Z",
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("Git ownership contracts", () => {
+  it("separates common repository identity from checkout identity", () => {
+    const repository = RepositorySchema.parse({
+      id: "repo_one",
+      commonDirectory: "/repos/one/.git",
+      displayName: "one",
+      objectFormat: "sha1",
+      refStorage: "files",
+      primaryCheckoutId: "checkout_main",
+      revision: 1,
+      createdAt: "2026-08-29T12:00:00Z",
+      updatedAt: "2026-08-29T12:00:00Z",
+    });
+    const checkout = CheckoutSchema.parse({
+      id: "checkout_main",
+      repositoryId: repository.id,
+      checkoutKey: "a".repeat(64),
+      path: "/repos/one",
+      gitDirectory: "/repos/one/.git",
+      kind: "primary",
+      branch: "main",
+      dirty: false,
+      observedAt: "2026-08-29T12:00:00Z",
+    });
+    expect(checkout.repositoryId).toBe(repository.id);
+    expect(checkout.id).not.toBe(repository.id);
+  });
+
+  it("requires persisted provenance and operation generation for managed deletion", () => {
+    expect(
+      WorktreeSchema.parse({
+        id: "worktree_one",
+        repositoryId: "repo_one",
+        checkoutId: "checkout_one",
+        sourceCheckoutId: "checkout_main",
+        path: "/repos/worktrees/one",
+        branch: "feature/one",
+        base: "HEAD",
+        provenanceToken: "b".repeat(64),
+        operationGeneration: 3,
+        state: "ready",
+        createdAt: "2026-08-29T12:00:00Z",
+        updatedAt: "2026-08-29T12:00:00Z",
+      }),
+    ).toMatchObject({ operationGeneration: 3, state: "ready" });
+    expect(
+      RemoveWorktreeCommandSchema.parse({ force: true, expectedOperationGeneration: 3 }),
+    ).toEqual({ force: true, expectedOperationGeneration: 3 });
+    expect(
+      CreateWorktreeCommandSchema.parse({
+        sourceCheckoutId: "checkout_main",
+        branch: "feature/one",
+      }),
+    ).toMatchObject({ base: "HEAD", assignAgentIds: [] });
   });
 });
 
@@ -972,22 +1034,22 @@ describe("group CRUD contracts", () => {
 
     const reordered = {
       agentIds: ["agent_one", "agent_two"],
-      expectedAgentRevision: 3,
+      expectedOrderRevision: 3,
     };
     expect(ReorderGroupAgentsCommandSchema.parse(reordered)).toEqual(reordered);
     expect(
       ReorderGroupAgentsCommandSchema.safeParse({
         agentIds: ["agent_one", "agent_one"],
-        expectedAgentRevision: 3,
+        expectedOrderRevision: 3,
       }).success,
     ).toBe(false);
     expect(
       ReorderGroupAgentsResultSchema.parse({
         groupId: "group_1",
         agentIds: reordered.agentIds,
-        agentRevision: 4,
+        orderRevision: 4,
       }),
-    ).toEqual({ groupId: "group_1", agentIds: reordered.agentIds, agentRevision: 4 });
+    ).toEqual({ groupId: "group_1", agentIds: reordered.agentIds, orderRevision: 4 });
   });
 
   it("validates strict delete counts", () => {

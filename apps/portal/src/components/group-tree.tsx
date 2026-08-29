@@ -25,6 +25,7 @@ import {
   CircleStop,
   Copy,
   EllipsisVertical,
+  MoveRight,
   Palette,
   Pencil,
   Play,
@@ -75,6 +76,8 @@ interface GroupTreeProps {
   onUpdateAgent?(groupId: string, agentId: string, command: UpdateGroupAgentCommand): Promise<void>;
   onUpdateRolePresentation?(roleId: string, command: UpdateRolePresentationCommand): Promise<void>;
   onReorderAgents?(groupId: string, command: ReorderGroupAgentsCommand): Promise<void>;
+  onReorderGroups?(groupIds: string[], expectedOrderRevision: number): Promise<void>;
+  onReparentAgent?(sourceGroupId: string, agentId: string, targetGroupId: string): Promise<void>;
   onRemoveAgent(groupId: string, agentId: string): Promise<void>;
   onStartRun(groupId: string, agentId: string): Promise<void>;
   onStopRun(groupId: string, agentId: string): Promise<void>;
@@ -373,6 +376,70 @@ function ConfirmRemovalDialog({
           </button>
         </div>
       </div>
+    </dialog>
+  );
+}
+
+function ReparentAgentDialog({
+  name,
+  sourceGroupId,
+  groups,
+  busy,
+  onClose,
+  onMove,
+}: {
+  name: string;
+  sourceGroupId: string;
+  groups: readonly Group[];
+  busy: boolean;
+  onClose(): void;
+  onMove(targetGroupId: string): Promise<void>;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const targets = groups.filter((group) => group.id !== sourceGroupId);
+  const [targetGroupId, setTargetGroupId] = useState(targets[0]?.id ?? "");
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+  }, []);
+  return (
+    <dialog ref={dialogRef} className="confirmation-dialog" aria-labelledby="reparent-agent-title">
+      <form
+        className="confirmation-dialog-body"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void onMove(targetGroupId)
+            .then(onClose)
+            .catch(() => undefined);
+        }}
+      >
+        <h2 id="reparent-agent-title">Move {name}?</h2>
+        <p>The stopped agent keeps its stable ID and history. Live agents cannot be moved.</p>
+        <label>
+          Target group
+          <select value={targetGroupId} onChange={(event) => setTargetGroupId(event.target.value)}>
+            {targets.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="confirmation-actions">
+          <button type="button" className="compact-button" disabled={busy} onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="compact-button"
+            disabled={busy || targetGroupId.length === 0}
+          >
+            <MoveRight aria-hidden="true" size={15} /> Move agent
+          </button>
+        </div>
+      </form>
     </dialog>
   );
 }
@@ -998,6 +1065,8 @@ export function GroupTree({
   onUpdateAgent,
   onUpdateRolePresentation,
   onReorderAgents,
+  onReorderGroups,
+  onReparentAgent,
   onRemoveAgent,
   onStartRun,
   onStopRun,
@@ -1016,6 +1085,11 @@ export function GroupTree({
     agentId: string;
   }>();
   const [destructiveTarget, setDestructiveTarget] = useState<DestructiveTarget>();
+  const [reparentTarget, setReparentTarget] = useState<{
+    sourceGroupId: string;
+    agentId: string;
+    name: string;
+  }>();
   const [statusPopover, setStatusPopover] = useState<{
     membershipId: string;
     left: number;
@@ -1118,7 +1192,7 @@ export function GroupTree({
             </button>
           </div>
         )}
-        {snapshot.groups.map((group) => {
+        {snapshot.groups.map((group, groupIndex) => {
           const agents = Object.entries(config.groups[group.id]?.agents ?? {})
             .map(([agentId, agent], index) => ({ agentId, agent, index }))
             .sort(
@@ -1184,7 +1258,7 @@ export function GroupTree({
                 {editTarget?.groupId !== group.id && (
                   <ActionMenu
                     label={`Actions for group ${group.name}`}
-                    itemCount={4}
+                    itemCount={6}
                     triggerId={`group-actions-${group.id}`}
                   >
                     <button
@@ -1226,6 +1300,48 @@ export function GroupTree({
                     <button
                       type="button"
                       role="menuitem"
+                      className="action-menu-item"
+                      aria-label={`Move group ${group.name} up`}
+                      disabled={groupIndex === 0 || onReorderGroups === undefined}
+                      onClick={() => {
+                        const groupIds = snapshot.groups.map((candidate) => candidate.id);
+                        [groupIds[groupIndex - 1], groupIds[groupIndex]] = [
+                          groupIds[groupIndex] as string,
+                          groupIds[groupIndex - 1] as string,
+                        ];
+                        void onReorderGroups?.(groupIds, snapshot.orderRevision).catch(
+                          () => undefined,
+                        );
+                      }}
+                    >
+                      <ArrowUp aria-hidden="true" size={14} />
+                      <span>Move group up</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="action-menu-item"
+                      aria-label={`Move group ${group.name} down`}
+                      disabled={
+                        groupIndex === snapshot.groups.length - 1 || onReorderGroups === undefined
+                      }
+                      onClick={() => {
+                        const groupIds = snapshot.groups.map((candidate) => candidate.id);
+                        [groupIds[groupIndex], groupIds[groupIndex + 1]] = [
+                          groupIds[groupIndex + 1] as string,
+                          groupIds[groupIndex] as string,
+                        ];
+                        void onReorderGroups?.(groupIds, snapshot.orderRevision).catch(
+                          () => undefined,
+                        );
+                      }}
+                    >
+                      <ArrowDown aria-hidden="true" size={14} />
+                      <span>Move group down</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
                       className="action-menu-item danger-action"
                       aria-label={`Delete group ${group.name}`}
                       onClick={() =>
@@ -1259,6 +1375,9 @@ export function GroupTree({
                     const action = runAction(run);
                     const actionKey = `${group.id}:${agentId}`;
                     const integration = config.integrations[agent.integrationId];
+                    const checkout = snapshot.checkouts.find(
+                      (candidate) => candidate.id === member.checkoutId,
+                    );
                     const role =
                       agent.roleId === undefined ? undefined : config.roles[agent.roleId];
                     const recoveryDetail = run?.recoveryReason;
@@ -1376,6 +1495,14 @@ export function GroupTree({
                                   <dd>{role?.name ?? agent.roleId ?? "Unassigned"}</dd>
                                 </div>
                                 <div>
+                                  <dt>Checkout</dt>
+                                  <dd>
+                                    {checkout === undefined
+                                      ? "Unassigned"
+                                      : `${checkout.branch ?? "detached"} · ${checkout.path}`}
+                                  </dd>
+                                </div>
+                                <div>
                                   <dt>Semantic status</dt>
                                   <dd>
                                     {semanticLabel.replaceAll("_", " ")}
@@ -1447,7 +1574,7 @@ export function GroupTree({
                         {editTarget?.kind !== "agent" && (
                           <ActionMenu
                             label={`Actions for agent ${agent.name}`}
-                            itemCount={action === "none" ? 6 : 7}
+                            itemCount={action === "none" ? 7 : 8}
                             triggerId={`member-actions-${group.id}-${member.memberId}`}
                           >
                             <button
@@ -1480,7 +1607,7 @@ export function GroupTree({
                                 ];
                                 void onReorderAgents?.(group.id, {
                                   agentIds,
-                                  expectedAgentRevision: group.membershipRevision,
+                                  expectedOrderRevision: snapshot.orderRevision,
                                 }).catch(() => undefined);
                               }}
                             >
@@ -1505,7 +1632,7 @@ export function GroupTree({
                                 ];
                                 void onReorderAgents?.(group.id, {
                                   agentIds,
-                                  expectedAgentRevision: group.membershipRevision,
+                                  expectedOrderRevision: snapshot.orderRevision,
                                 }).catch(() => undefined);
                               }}
                             >
@@ -1578,6 +1705,27 @@ export function GroupTree({
                             <button
                               type="button"
                               role="menuitem"
+                              className="action-menu-item"
+                              aria-label={`Move ${agent.name} to another group`}
+                              disabled={
+                                action !== "start" ||
+                                onReparentAgent === undefined ||
+                                snapshot.groups.length < 2
+                              }
+                              onClick={() =>
+                                setReparentTarget({
+                                  sourceGroupId: group.id,
+                                  agentId,
+                                  name: agent.name,
+                                })
+                              }
+                            >
+                              <MoveRight aria-hidden="true" size={14} />
+                              <span>Move to group</span>
+                            </button>
+                            <button
+                              type="button"
+                              role="menuitem"
                               className="action-menu-item danger-action"
                               aria-label={`Remove agent ${agent.name}`}
                               onClick={() =>
@@ -1623,6 +1771,18 @@ export function GroupTree({
             destructiveTarget.kind === "group"
               ? onDeleteGroup(destructiveTarget.groupId)
               : onRemoveAgent(destructiveTarget.groupId, destructiveTarget.agentId)
+          }
+        />
+      )}
+      {reparentTarget !== undefined && onReparentAgent !== undefined && (
+        <ReparentAgentDialog
+          name={reparentTarget.name}
+          sourceGroupId={reparentTarget.sourceGroupId}
+          groups={snapshot.groups}
+          busy={busyAction === `${reparentTarget.sourceGroupId}:${reparentTarget.agentId}:reparent`}
+          onClose={() => setReparentTarget(undefined)}
+          onMove={(targetGroupId) =>
+            onReparentAgent(reparentTarget.sourceGroupId, reparentTarget.agentId, targetGroupId)
           }
         />
       )}
