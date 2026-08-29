@@ -33,7 +33,7 @@ function readJson<T>(path: string): T {
 function canonical(event: AgentStatusEventInput): Record<string, unknown> {
   const normalized: Record<string, unknown> = {
     event: event.event,
-    ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }),
+    ...(event.nativeSessionId === undefined ? {} : { sessionId: event.nativeSessionId }),
     ...(event.operationId === undefined ? {} : { operationId: event.operationId }),
     ...(event.requestId === undefined ? {} : { requestId: event.requestId }),
     ...(Object.keys(event.data).length === 0 ? {} : { data: event.data }),
@@ -103,6 +103,16 @@ async function runHook(
           ...process.env,
           NANASA_STATUS_URL: url,
           NANASA_MCP_TOKEN: "fixture-token",
+          NANASA_REPORTER_PROVIDER_ID: source,
+          NANASA_REPORTER_ADAPTER_ID: source,
+          NANASA_REPORTER_ID: `${source}-reporter`,
+          NANASA_REPORTER_SOURCE: source,
+          NANASA_REPORTER_PROTOCOL_VERSION: "2",
+          NANASA_REPORTER_VERSION: "2",
+          NANASA_REPORTER_RUN_ID: "run-golden",
+          NANASA_REPORTER_GENERATION: "1",
+          NANASA_REPORTER_EPOCH: "epoch-golden",
+          NANASA_REPORTER_SEQUENCE_FILE: `${scriptPath}.sequence.json`,
         },
         stdio: ["pipe", "ignore", "ignore"],
       },
@@ -111,6 +121,35 @@ async function runHook(
     child.once("close", (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
     child.stdin.end(input);
   });
+}
+
+function setReporterEnvironment(source: "pi" | "opencode"): void {
+  Object.assign(process.env, {
+    NANASA_REPORTER_PROVIDER_ID: source,
+    NANASA_REPORTER_ADAPTER_ID: source,
+    NANASA_REPORTER_ID: `${source}-reporter`,
+    NANASA_REPORTER_SOURCE: source,
+    NANASA_REPORTER_PROTOCOL_VERSION: "2",
+    NANASA_REPORTER_VERSION: "2",
+    NANASA_REPORTER_RUN_ID: "run-golden",
+    NANASA_REPORTER_GENERATION: "1",
+    NANASA_REPORTER_EPOCH: "epoch-golden",
+  });
+}
+
+function clearReporterEnvironment(): void {
+  for (const name of [
+    "NANASA_REPORTER_PROVIDER_ID",
+    "NANASA_REPORTER_ADAPTER_ID",
+    "NANASA_REPORTER_ID",
+    "NANASA_REPORTER_SOURCE",
+    "NANASA_REPORTER_PROTOCOL_VERSION",
+    "NANASA_REPORTER_VERSION",
+    "NANASA_REPORTER_RUN_ID",
+    "NANASA_REPORTER_GENERATION",
+    "NANASA_REPORTER_EPOCH",
+  ])
+    delete process.env[name];
 }
 
 describe("version-pinned status reporter traces", () => {
@@ -150,6 +189,7 @@ describe("version-pinned status reporter traces", () => {
     const previousToken = process.env.NANASA_MCP_TOKEN;
     process.env.NANASA_STATUS_URL = capture.url;
     process.env.NANASA_MCP_TOKEN = "fixture-token";
+    setReporterEnvironment("pi");
     try {
       type PiHandler = (
         event: Record<string, unknown>,
@@ -179,6 +219,7 @@ describe("version-pinned status reporter traces", () => {
       else process.env.NANASA_STATUS_URL = previousUrl;
       if (previousToken === undefined) delete process.env.NANASA_MCP_TOKEN;
       else process.env.NANASA_MCP_TOKEN = previousToken;
+      clearReporterEnvironment();
       await closeServer(capture.server);
     }
   });
@@ -194,6 +235,7 @@ describe("version-pinned status reporter traces", () => {
     const previousToken = process.env.NANASA_MCP_TOKEN;
     process.env.NANASA_STATUS_URL = capture.url;
     process.env.NANASA_MCP_TOKEN = "fixture-token";
+    setReporterEnvironment("opencode");
     try {
       const module = await import(`${pathToFileURL(modulePath).href}?test=${Date.now()}`);
       const plugin = await module.default();
@@ -209,6 +251,7 @@ describe("version-pinned status reporter traces", () => {
       else process.env.NANASA_STATUS_URL = previousUrl;
       if (previousToken === undefined) delete process.env.NANASA_MCP_TOKEN;
       else process.env.NANASA_MCP_TOKEN = previousToken;
+      clearReporterEnvironment();
       await closeServer(capture.server);
     }
   });

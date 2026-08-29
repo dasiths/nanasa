@@ -7,6 +7,7 @@ import {
   AgentRunSchema,
   AgentStatusDetailSchema,
   AgentStatusEventInputSchema,
+  AgentStatusStateSchema,
   ConfigStatusSchema,
   ControlMetadataSchema,
   CredentialProfileReferenceSchema,
@@ -352,13 +353,39 @@ describe("agent run contracts", () => {
 });
 
 describe("agent status contracts", () => {
+  const reporter = {
+    version: 2 as const,
+    providerId: "claude-code",
+    adapterId: "claude-code",
+    reporterId: "claude-hooks",
+    source: "claude-code" as const,
+    protocolVersion: 2 as const,
+    reporterVersion: "2",
+    runId: "run_1",
+    generation: 1,
+    reporterEpoch: "epoch_1",
+  };
+
+  it("defines exactly the nine canonical semantic states", () => {
+    expect(AgentStatusStateSchema.options).toEqual([
+      "starting",
+      "idle",
+      "working",
+      "waiting",
+      "blocked",
+      "suspected_stuck",
+      "stopped",
+      "failed",
+      "unknown",
+    ]);
+  });
+
   it("accepts normalized correlated tool and wait events", () => {
     expect(
       AgentStatusEventInputSchema.parse({
-        version: 1,
+        ...reporter,
         eventId: "event_1",
-        source: "claude-code",
-        reporterVersion: "1",
+        sourceSequence: 1,
         event: "tool.started",
         operationId: "tool_1",
         data: { tool: "Bash" },
@@ -366,10 +393,9 @@ describe("agent status contracts", () => {
     ).toMatchObject({ event: "tool.started", operationId: "tool_1" });
     expect(
       AgentStatusEventInputSchema.parse({
-        version: 1,
+        ...reporter,
         eventId: "event_2",
-        source: "opencode",
-        reporterVersion: "1",
+        sourceSequence: 2,
         event: "wait.opened",
         requestId: "request_1",
         data: {
@@ -384,21 +410,19 @@ describe("agent status contracts", () => {
   it("rejects missing correlation, caller identity, and unknown metadata", () => {
     expect(
       AgentStatusEventInputSchema.safeParse({
-        version: 1,
+        ...reporter,
         eventId: "event_1",
-        source: "pi",
-        reporterVersion: "1",
+        sourceSequence: 1,
         event: "tool.started",
       }).success,
     ).toBe(false);
     expect(
       AgentStatusEventInputSchema.safeParse({
-        version: 1,
+        ...reporter,
         eventId: "event_2",
-        source: "copilot",
-        reporterVersion: "1",
+        sourceSequence: 2,
         event: "session.ready",
-        runId: "forged",
+        unknownIdentity: "forged",
       }).success,
     ).toBe(false);
   });
@@ -427,6 +451,19 @@ describe("agent status contracts", () => {
         attention: "decision_required",
         observedAt: "2026-08-11T12:00:00Z",
         stateChangedAt: "2026-08-11T12:00:00Z",
+        statusRevision: 4,
+        completionRevision: 1,
+        operatorAcknowledgedCompletionRevision: 0,
+        completionPending: false,
+        interactiveReady: true,
+        staleAuthority: false,
+        authorityKind: "reporter",
+        authorityId: "reporter_session_1",
+        evidenceConfidence: "high",
+        processState: "present",
+        reporterEpoch: "epoch_1",
+        reporterLeaseExpiresAt: "2026-08-11T12:00:45Z",
+        readinessCoverage: "full",
         openWait: {
           requestId: "request_1",
           kind: "permission",

@@ -2,6 +2,7 @@ import { hostHeaderValidation, originValidation } from "@modelcontextprotocol/no
 import { AgentStatusEventInputSchema, type AgentProfile } from "@nanasa/contracts";
 import type { FastifyInstance } from "fastify";
 
+import { AgentStatusService } from "./agent-status-service.js";
 import { McpCredentialIssuer } from "./mcp-auth.js";
 import { NativeSessionService } from "./native-session-service.js";
 import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
@@ -12,6 +13,7 @@ export interface AgentStatusRouteOptions {
   allowedHostnames: string[];
   credentials: McpCredentialIssuer;
   store: NanasaStore;
+  statusService: AgentStatusService;
   nativeSessions?: NativeSessionService;
   adapters?: ProviderAdapterRegistry;
   providerStateRoot?: (profile: AgentProfile) => string;
@@ -54,6 +56,7 @@ export function registerAgentStatusRoutes(
     }
     limiter.check(principal.runId);
     const event = AgentStatusEventInputSchema.parse(request.body);
+    const result = options.statusService.ingestReporter(principal, event);
     if (
       options.nativeSessions !== undefined &&
       options.adapters !== undefined &&
@@ -76,7 +79,6 @@ export function registerAgentStatusRoutes(
         });
       }
     }
-    const result = options.store.ingestAgentStatusEvent(principal, event);
     return reply.status(202).send(result);
   });
 }

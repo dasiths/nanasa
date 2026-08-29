@@ -12,6 +12,7 @@ import { NativeSessionService } from "./native-session-service.js";
 import { DomainError, NanasaStore } from "./store.js";
 import { TmuxRuntime } from "./tmux-runtime.js";
 import { TtydSupervisor } from "./ttyd-supervisor.js";
+import type { RuntimeObservation } from "./runtime-observation.js";
 
 export interface RunRuntimeCoordinatorOptions {
   reconcileIntervalMs?: number;
@@ -23,6 +24,7 @@ export interface RunRuntimeCoordinatorOptions {
     integrationId: string;
     policy: NativeRecoveryPolicy;
   };
+  onRuntimeObservation?: (observation: RuntimeObservation) => void;
 }
 
 const RECOVERY_TERMINAL_SIZE = { cols: 120, rows: 40 } as const;
@@ -39,6 +41,7 @@ export class RunRuntimeCoordinator {
   readonly #now: () => Date;
   readonly #nativeSessions: NativeSessionService | undefined;
   readonly #nativeRecoveryPolicy: RunRuntimeCoordinatorOptions["nativeRecoveryPolicy"];
+  readonly #onRuntimeObservation: RunRuntimeCoordinatorOptions["onRuntimeObservation"];
   #pending: Promise<void> = Promise.resolve();
   #closing = false;
   #lastStatusProbeAt = 0;
@@ -60,6 +63,7 @@ export class RunRuntimeCoordinator {
     this.#now = options.now ?? (() => new Date());
     this.#nativeSessions = options.nativeSessions;
     this.#nativeRecoveryPolicy = options.nativeRecoveryPolicy;
+    this.#onRuntimeObservation = options.onRuntimeObservation;
     this.#reconcileTimer = setInterval(
       () => void this.reconcile().catch(() => undefined),
       options.reconcileIntervalMs ?? 1_000,
@@ -216,9 +220,10 @@ export class RunRuntimeCoordinator {
       for (const persisted of this.#store.listDesiredRunningRuns()) {
         const observationKey = `${persisted.id}:${persisted.generation}`;
         const observation = await this.#runtime.observeRun(persisted);
+        this.#onRuntimeObservation?.(observation);
         if (
           persisted.recoveryReason !== "terminal_runtime_migration" &&
-          observation.kind === "present"
+          observation.state === "present"
         ) {
           this.#missingConfirmations.delete(observationKey);
           let current = persisted;
@@ -275,18 +280,19 @@ export class RunRuntimeCoordinator {
           recoveredRuns.push(current);
           continue;
         }
-        if (observation.kind === "indeterminate") {
+        if (observation.state === "indeterminate") {
           this.#missingConfirmations.delete(observationKey);
           continue;
         }
-        if (observation.kind === "missing") {
+        if (observation.state === "missing") {
           const confirmations = (this.#missingConfirmations.get(observationKey) ?? 0) + 1;
           this.#missingConfirmations.set(observationKey, confirmations);
           if (confirmations < 2) continue;
           const finalObservation = await this.#runtime.observeRun(persisted);
-          if (finalObservation.kind !== "missing" && finalObservation.kind !== "dead") {
+          this.#onRuntimeObservation?.(finalObservation);
+          if (finalObservation.state !== "missing" && finalObservation.state !== "dead") {
             this.#missingConfirmations.delete(observationKey);
-            if (finalObservation.kind === "present") recoveredRuns.push(persisted);
+            if (finalObservation.state === "present") recoveredRuns.push(persisted);
             continue;
           }
         }

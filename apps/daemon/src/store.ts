@@ -13,6 +13,8 @@ import {
   AgentStatusEventInputSchema,
   type AgentStatusSummary,
   AgentStatusSummarySchema,
+  type CompletionAcknowledgement,
+  CompletionAcknowledgementSchema,
   type ClearMessageHistoryResult,
   ClearMessageHistoryResultSchema,
   type ConfigStatus,
@@ -49,6 +51,9 @@ import {
   type RecoveryPhase,
   type ProviderStateBinding,
   ProviderStateBindingSchema,
+  REPORTER_LEASE_MS,
+  type ReporterSession,
+  ReporterSessionSchema,
   type RunStatus,
   type StartGroupRunsResult,
   StartGroupRunsResultSchema,
@@ -57,6 +62,8 @@ import {
   type TerminalBinding,
   type TerminalCheckpoint,
   TerminalCheckpointSchema,
+  type ScreenObservation,
+  ScreenObservationSchema,
   type UpdateGroupCommand,
   UpdateGroupCommandSchema,
 } from "@nanasa/contracts";
@@ -273,6 +280,21 @@ function agentStatusSummary(detail: AgentStatusDetail): AgentStatusSummary {
     progressStage: detail.progressStage,
     nextStep: detail.nextStep,
     blocker: detail.blocker,
+    statusRevision: detail.statusRevision,
+    completionRevision: detail.completionRevision,
+    operatorAcknowledgedCompletionRevision: detail.operatorAcknowledgedCompletionRevision,
+    completionPending: detail.completionPending,
+    interactiveReady: detail.interactiveReady,
+    staleAuthority: detail.staleAuthority,
+    authorityKind: detail.authorityKind,
+    authorityId: detail.authorityId,
+    evidenceConfidence: detail.evidenceConfidence,
+    processState: detail.processState,
+    processFingerprint: detail.processFingerprint,
+    reporterEpoch: detail.reporterEpoch,
+    reporterLeaseExpiresAt: detail.reporterLeaseExpiresAt,
+    readinessCoverage: detail.readinessCoverage,
+    lastScreenObservation: detail.lastScreenObservation,
   });
 }
 
@@ -980,18 +1002,18 @@ export class NanasaStore {
     return this.#requireGroup(groupId);
   }
 
-  public listAgentStatuses(groupId: string): AgentStatusSummary[] {
+  public listAgentStatuses(groupId: string, operatorId?: string): AgentStatusSummary[] {
     this.#requireGroup(groupId);
     return this.listActiveMemberships(groupId)
       .sort((left, right) => left.memberId.localeCompare(right.memberId))
       .map((membership) =>
-        agentStatusSummary(this.#getAgentStatusDetail(groupId, membership.memberId)),
+        agentStatusSummary(this.#getAgentStatusDetail(groupId, membership.memberId, operatorId)),
       );
   }
 
-  public getAgentStatus(groupId: string, memberId: string): AgentStatusDetail {
+  public getAgentStatus(groupId: string, memberId: string, operatorId?: string): AgentStatusDetail {
     this.#requireGroup(groupId);
-    return this.#getAgentStatusDetail(groupId, memberId);
+    return this.#getAgentStatusDetail(groupId, memberId, operatorId);
   }
 
   public getActiveRun(groupId: string, memberId: string): AgentRun | undefined {
@@ -1136,6 +1158,7 @@ export class NanasaStore {
         observedAt: new Date().toISOString(),
       });
     } else if (status === "stopped" || status === "failed") {
+      this.revokeReporterAuthority(runId, current.generation, `run_${status}`);
       this.recordProcessStatus(runId, {
         event: "process.exited",
         eventId: `process-exited-${current.generation}-${status}`,
@@ -1180,6 +1203,142 @@ export class NanasaStore {
     return this.getRun(runId);
   }
 
+  public registerReporterSession(session: ReporterSession): ReporterSession {
+    const parsed = ReporterSessionSchema.parse(session);
+    this.#transaction(() => {
+      this.#database
+        .prepare(
+          `UPDATE reporter_sessions
+           SET revoked_at = COALESCE(revoked_at, ?), closed_at = COALESCE(closed_at, ?)
+           WHERE run_id = ? AND generation = ? AND reporter_epoch <> ? AND closed_at IS NULL`,
+        )
+        .run(
+          parsed.openedAt,
+          parsed.openedAt,
+          parsed.runId,
+          parsed.generation,
+          parsed.reporterEpoch,
+        );
+      this.#database
+        .prepare(
+          `INSERT INTO reporter_sessions
+             (id, run_id, generation, provider_id, adapter_id, reporter_id, source,
+              protocol_version, reporter_version, reporter_epoch, readiness_coverage,
+              source_sequence, native_session_id, process_fingerprint, opened_at,
+              lease_expires_at, revoked_at, closed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          parsed.id,
+          parsed.runId,
+          parsed.generation,
+          parsed.providerId,
+          parsed.adapterId,
+          parsed.reporterId,
+          parsed.source,
+          parsed.protocolVersion,
+          parsed.reporterVersion,
+          parsed.reporterEpoch,
+          parsed.readinessCoverage,
+          parsed.sourceSequence,
+          parsed.nativeSessionId ?? null,
+          parsed.processFingerprint ?? null,
+          parsed.openedAt,
+          parsed.leaseExpiresAt,
+          parsed.revokedAt ?? null,
+          parsed.closedAt ?? null,
+        );
+    });
+    return parsed;
+  }
+
+  public getCurrentReporterSession(runId: string, generation: number): ReporterSession | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM reporter_sessions
+         WHERE run_id = ? AND generation = ? AND revoked_at IS NULL AND closed_at IS NULL
+         ORDER BY opened_at DESC LIMIT 1`,
+      )
+      .get(runId, generation) as Record<string, unknown> | undefined;
+    if (row === undefined) return undefined;
+    return ReporterSessionSchema.parse({
+      id: row.id,
+      providerId: row.provider_id,
+      adapterId: row.adapter_id,
+      reporterId: row.reporter_id,
+      source: row.source,
+      protocolVersion: row.protocol_version,
+      reporterVersion: row.reporter_version,
+      runId: row.run_id,
+      generation: row.generation,
+      reporterEpoch: row.reporter_epoch,
+      sourceSequence: row.source_sequence,
+      nativeSessionId: row.native_session_id ?? undefined,
+      readinessCoverage: row.readiness_coverage,
+      processFingerprint: row.process_fingerprint ?? undefined,
+      openedAt: row.opened_at,
+      leaseExpiresAt: row.lease_expires_at,
+      revokedAt: row.revoked_at ?? undefined,
+      closedAt: row.closed_at ?? undefined,
+    });
+  }
+
+  public bindReporterProcess(runId: string, generation: number, processFingerprint: string): void {
+    const session = this.getCurrentReporterSession(runId, generation);
+    if (session === undefined) return;
+    if (
+      session.processFingerprint !== undefined &&
+      session.processFingerprint !== processFingerprint
+    ) {
+      this.revokeReporterAuthority(runId, generation, "process_replaced");
+      throw new DomainError(
+        "status_process_fingerprint_changed",
+        "Reporter authority was revoked because the foreground process changed",
+        409,
+      );
+    }
+    this.#database
+      .prepare(
+        `UPDATE reporter_sessions SET process_fingerprint = ?
+         WHERE id = ? AND revoked_at IS NULL AND closed_at IS NULL`,
+      )
+      .run(processFingerprint, session.id);
+  }
+
+  public revokeReporterAuthority(runId: string, generation: number, reason: string): void {
+    void reason;
+    const timestamp = new Date().toISOString();
+    this.#database
+      .prepare(
+        `UPDATE reporter_sessions SET revoked_at = COALESCE(revoked_at, ?), closed_at = COALESCE(closed_at, ?)
+         WHERE run_id = ? AND generation = ? AND closed_at IS NULL`,
+      )
+      .run(timestamp, timestamp, runId, generation);
+  }
+
+  public recordReporterRejection(event: Partial<AgentStatusEventInput>, code: string): void {
+    this.#database
+      .prepare(
+        `INSERT INTO reporter_rejections
+           (run_id, generation, reporter_epoch, source_sequence, code, rejected_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        event.runId ?? null,
+        event.generation ?? null,
+        event.reporterEpoch ?? null,
+        event.sourceSequence ?? null,
+        code,
+        new Date().toISOString(),
+      );
+    this.#database
+      .prepare(
+        `DELETE FROM reporter_rejections WHERE sequence NOT IN
+           (SELECT sequence FROM reporter_rejections ORDER BY sequence DESC LIMIT 256)`,
+      )
+      .run();
+  }
+
   public ingestAgentStatusEvent(
     identity: AgentStatusIdentity,
     event: AgentStatusEventInput,
@@ -1188,24 +1347,89 @@ export class NanasaStore {
     const observedAt = new Date().toISOString();
     const completed = this.#transaction(() => {
       const run = this.#requireCurrentAgentStatusRun(identity);
-      const duplicate = this.#database
+      const profile = this.#requireAgentProfile(run.agentProfileId);
+      const session = this.getCurrentReporterSession(run.id, run.generation);
+      const wrongIdentity =
+        input.runId !== run.id ||
+        input.generation !== run.generation ||
+        session === undefined ||
+        input.providerId !== profile.agentType ||
+        input.adapterId !== profile.kind ||
+        input.providerId !== session.providerId ||
+        input.adapterId !== session.adapterId ||
+        input.reporterId !== session.reporterId ||
+        input.source !== session.source ||
+        input.protocolVersion !== session.protocolVersion ||
+        input.reporterVersion !== session.reporterVersion ||
+        input.reporterEpoch !== session.reporterEpoch;
+      if (wrongIdentity) {
+        throw new DomainError(
+          "status_reporter_identity_fenced",
+          "Reporter identity is not authoritative",
+          409,
+        );
+      }
+      if (session.processFingerprint === undefined) {
+        throw new DomainError(
+          "status_process_unverified",
+          "Reporter process identity is not verified",
+          409,
+        );
+      }
+      if (Date.parse(observedAt) > Date.parse(session.leaseExpiresAt)) {
+        throw new DomainError(
+          "status_reporter_lease_expired",
+          "Reporter authority lease expired",
+          409,
+        );
+      }
+      if (input.sourceSequence <= session.sourceSequence) {
+        throw new DomainError(
+          "status_sequence_reordered",
+          "Reporter sequence is stale or reordered",
+          409,
+        );
+      }
+      if (
+        session.nativeSessionId !== undefined &&
+        input.nativeSessionId !== session.nativeSessionId
+      ) {
+        throw new DomainError(
+          "status_native_session_fenced",
+          "Reporter native session changed",
+          409,
+        );
+      }
+      const eventDuplicate = this.#database
         .prepare(
-          `SELECT 1 FROM runtime_observations
-           WHERE run_id = ? AND generation = ? AND event_id = ?`,
+          "SELECT 1 FROM runtime_observations WHERE run_id = ? AND generation = ? AND event_id = ?",
         )
         .get(run.id, run.generation, input.eventId);
-      if (duplicate !== undefined) {
-        return {
-          status: this.#getAgentStatusDetail(run.groupId, run.memberId),
-          duplicate: true,
-          domainEvents: [] as DomainEvent[],
-        };
+      if (eventDuplicate !== undefined) {
+        throw new DomainError(
+          "status_event_duplicate",
+          "Reporter event ID was already accepted",
+          409,
+        );
       }
+      const leaseExpiresAt = new Date(Date.parse(observedAt) + REPORTER_LEASE_MS).toISOString();
+      this.#database
+        .prepare(
+          `UPDATE reporter_sessions SET source_sequence = ?, native_session_id = COALESCE(native_session_id, ?),
+             lease_expires_at = ? WHERE id = ?`,
+        )
+        .run(input.sourceSequence, input.nativeSessionId ?? null, leaseExpiresAt, session.id);
       const previous = this.#agentStatusState(run);
       const next = reduceAgentStatus(previous, {
         event: "reporter.event",
         observedAt,
         input,
+        authority: {
+          sessionId: session.id,
+          reporterEpoch: session.reporterEpoch,
+          readinessCoverage: session.readinessCoverage,
+          leaseExpiresAt,
+        },
       });
       this.#insertAgentStatusEvent(
         run,
@@ -1219,7 +1443,7 @@ export class NanasaStore {
       this.#trimAgentStatusEvents(run.id, run.generation);
       return {
         status: this.#getAgentStatusDetail(run.groupId, run.memberId),
-        duplicate: false,
+        duplicate: false as const,
         domainEvents: this.#appendAgentStatusDomainEvents(run, previous, next),
       };
     });
@@ -1230,6 +1454,75 @@ export class NanasaStore {
       observedAt,
       status: completed.status,
     };
+  }
+
+  public recordScreenObservation(runId: string, screen: ScreenObservation): AgentStatusDetail {
+    const parsed = ScreenObservationSchema.parse(screen);
+    const completed = this.#transaction(() => {
+      const run = this.getRun(runId);
+      if (parsed.runId !== run.id || parsed.generation !== run.generation) {
+        throw new DomainError(
+          "status_screen_generation_fenced",
+          "Screen observation generation is stale",
+          409,
+        );
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO screen_observations (run_id, generation, observed_at, metadata_json)
+           VALUES (?, ?, ?, ?)`,
+        )
+        .run(run.id, run.generation, parsed.observedAt, JSON.stringify(parsed));
+      this.#database
+        .prepare(
+          `DELETE FROM screen_observations WHERE run_id = ? AND generation = ? AND sequence NOT IN
+             (SELECT sequence FROM screen_observations WHERE run_id = ? AND generation = ? ORDER BY sequence DESC LIMIT 20)`,
+        )
+        .run(run.id, run.generation, run.id, run.generation);
+      const previous = this.#agentStatusState(run);
+      const next = reduceAgentStatus(previous, {
+        event: "screen.classified",
+        eventId: `screen-${parsed.captureHash}-${parsed.manifestDigest}`,
+        observedAt: parsed.observedAt,
+        screen: parsed,
+      });
+      this.#upsertAgentStatusState(run, next);
+      return {
+        status: this.#getAgentStatusDetail(run.groupId, run.memberId),
+        domainEvents: this.#appendAgentStatusDomainEvents(run, previous, next),
+      };
+    });
+    for (const event of completed.domainEvents) this.#publish(event);
+    return completed.status;
+  }
+
+  public acknowledgeCompletion(operatorId: string, runId: string): CompletionAcknowledgement {
+    const run = this.getRun(runId);
+    const state = this.#agentStatusState(run);
+    const acknowledgement = CompletionAcknowledgementSchema.parse({
+      operatorId,
+      runId,
+      generation: run.generation,
+      completionRevision: state.completionRevision,
+      acknowledgedAt: new Date().toISOString(),
+    });
+    this.#database
+      .prepare(
+        `INSERT INTO completion_acknowledgements
+           (operator_id, run_id, generation, completion_revision, acknowledged_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(operator_id, run_id, generation) DO UPDATE SET
+           completion_revision = MAX(completion_acknowledgements.completion_revision, excluded.completion_revision),
+           acknowledged_at = excluded.acknowledged_at`,
+      )
+      .run(
+        acknowledgement.operatorId,
+        acknowledgement.runId,
+        acknowledgement.generation,
+        acknowledgement.completionRevision,
+        acknowledgement.acknowledgedAt,
+      );
+    return acknowledgement;
   }
 
   public reportAgentProgress(
@@ -2688,18 +2981,27 @@ export class NanasaStore {
       .prepare(
         `INSERT INTO status_revisions
            (run_id, generation, status_revision, completion_revision, status_json, reducer_state_json, updated_at)
-         VALUES (?, ?, 0, 0, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(run_id) DO UPDATE SET
            generation = excluded.generation,
-           status_revision = status_revisions.status_revision + 1,
+           status_revision = excluded.status_revision,
+           completion_revision = excluded.completion_revision,
            status_json = excluded.status_json,
            reducer_state_json = excluded.reducer_state_json,
            updated_at = excluded.updated_at`,
       )
-      .run(run.id, run.generation, serialized, serialized, state.observedAt);
+      .run(
+        run.id,
+        run.generation,
+        state.statusRevision,
+        state.completionRevision,
+        serialized,
+        serialized,
+        state.observedAt,
+      );
   }
 
-  #getAgentStatusDetail(groupId: string, memberId: string): AgentStatusDetail {
+  #getAgentStatusDetail(groupId: string, memberId: string, operatorId?: string): AgentStatusDetail {
     const membership = this.#getMembershipRow(groupId, memberId);
     if (membership === undefined || membership.state !== "active") {
       throw new DomainError("membership_not_active", "The member is not active", 404);
@@ -2719,7 +3021,7 @@ export class NanasaStore {
         agentType: profile.agentType,
         roleId: hydratedMembership.roleId,
         roleName: role?.name,
-        state: "not_started",
+        state: "unknown",
         phase: "startup",
         outcome: "unknown",
         confidence: "high",
@@ -2727,6 +3029,15 @@ export class NanasaStore {
         observedAt: hydratedMembership.joinedAt,
         stateChangedAt: hydratedMembership.joinedAt,
         cleanEndSeen: false,
+        statusRevision: 0,
+        completionRevision: 0,
+        operatorAcknowledgedCompletionRevision: 0,
+        completionPending: false,
+        interactiveReady: false,
+        staleAuthority: true,
+        authorityKind: "none",
+        evidenceConfidence: "high",
+        processState: "missing",
         evidence: [
           {
             source: "scheduler",
@@ -2739,13 +3050,24 @@ export class NanasaStore {
       });
     }
     const state = this.#agentStatusState(run);
-    const persistedState = state.state === "idle" ? "waiting" : state.state;
     const statusState =
-      run.status === "stopped" && !["stopped", "crashed"].includes(persistedState)
+      run.status === "stopped" && !["stopped", "failed"].includes(state.state)
         ? "stopped"
-        : run.status === "failed" && !["stopped", "crashed"].includes(persistedState)
-          ? "crashed"
-          : persistedState;
+        : run.status === "failed" && !["stopped", "failed"].includes(state.state)
+          ? "failed"
+          : state.state;
+    const acknowledgement =
+      operatorId === undefined
+        ? undefined
+        : (this.#database
+            .prepare(
+              `SELECT completion_revision FROM completion_acknowledgements
+               WHERE operator_id = ? AND run_id = ? AND generation = ?`,
+            )
+            .get(operatorId, run.id, run.generation) as
+            | { completion_revision: number }
+            | undefined);
+    const acknowledgedRevision = acknowledgement?.completion_revision ?? 0;
     return AgentStatusDetailSchema.parse({
       groupId,
       memberId,
@@ -2757,10 +3079,10 @@ export class NanasaStore {
       generation: run.generation,
       runStatus: run.status,
       state: statusState,
-      phase: statusState === "stopped" || statusState === "crashed" ? "exited" : state.phase,
-      outcome: statusState === "crashed" && state.outcome === "unknown" ? "failed" : state.outcome,
+      phase: statusState === "stopped" || statusState === "failed" ? "exited" : state.phase,
+      outcome: statusState === "failed" && state.outcome === "unknown" ? "failed" : state.outcome,
       confidence: state.confidence,
-      attention: statusState === "crashed" ? "process_failed" : state.attention,
+      attention: statusState === "failed" ? "process_failed" : state.attention,
       lastActivityAt: state.lastActivityAt,
       lastActivityKind: state.lastActivityKind,
       observedAt: state.observedAt,
@@ -2769,6 +3091,21 @@ export class NanasaStore {
       progressStage: state.progressStage,
       nextStep: state.nextStep,
       blocker: state.blocker,
+      statusRevision: state.statusRevision,
+      completionRevision: state.completionRevision,
+      operatorAcknowledgedCompletionRevision: acknowledgedRevision,
+      completionPending: statusState === "idle" && state.completionRevision > acknowledgedRevision,
+      interactiveReady: state.interactiveReady,
+      staleAuthority: state.staleAuthority,
+      authorityKind: state.authorityKind,
+      authorityId: state.authorityId,
+      evidenceConfidence: state.confidence,
+      processState: state.processState,
+      processFingerprint: state.processFingerprint,
+      reporterEpoch: state.reporterEpoch,
+      reporterLeaseExpiresAt: state.reporterLeaseExpiresAt,
+      readinessCoverage: state.readinessCoverage,
+      lastScreenObservation: state.lastScreenObservation,
       semanticLeaseExpiresAt: state.semanticLeaseExpiresAt,
       transportLeaseExpiresAt: state.transportLeaseExpiresAt,
       openWait: state.openWaits[0],

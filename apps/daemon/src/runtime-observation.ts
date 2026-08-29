@@ -1,30 +1,34 @@
-import type { AgentRun } from "@nanasa/contracts";
+import { randomUUID } from "node:crypto";
+import type {
+  AgentRun,
+  ProcessIdentityObservation,
+  RuntimeStatusObservation,
+} from "@nanasa/contracts";
 
 export type RuntimeObservationKind = "present" | "dead" | "missing" | "indeterminate";
-
-export interface RuntimeObservation {
-  kind: RuntimeObservationKind;
-  runId: string;
-  generation: number;
-  observedAt: string;
-  evidence?: string;
-  exitCode?: number;
-  signal?: string;
-}
+export type RuntimeObservation = RuntimeStatusObservation;
 
 export function runtimeObservation(
   run: AgentRun,
-  kind: RuntimeObservationKind,
-  options: Omit<RuntimeObservation, "kind" | "runId" | "generation" | "observedAt"> & {
+  state: RuntimeObservationKind,
+  options: {
     observedAt?: string;
-  } = {},
+    trigger?: RuntimeObservation["trigger"];
+    evidenceCode: string;
+    process?: ProcessIdentityObservation;
+    exitCode?: number;
+    signal?: string;
+  },
 ): RuntimeObservation {
   return {
-    kind,
+    id: `runtime_${randomUUID()}`,
+    state,
     runId: run.id,
     generation: run.generation,
     observedAt: options.observedAt ?? new Date().toISOString(),
-    ...(options.evidence === undefined ? {} : { evidence: options.evidence }),
+    trigger: options.trigger ?? "poll",
+    evidenceCode: options.evidenceCode,
+    ...(options.process === undefined ? {} : { process: options.process }),
     ...(options.exitCode === undefined ? {} : { exitCode: options.exitCode }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   };

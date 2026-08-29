@@ -9,6 +9,11 @@ import type {
   AgentStatusState,
   AgentStatusTransition,
   AgentStatusWait,
+  ProcessIdentityObservation,
+  ProcessState,
+  ReporterReadinessCoverage,
+  ScreenObservation,
+  StatusAuthorityKind,
 } from "@nanasa/contracts";
 
 const SEMANTIC_LEASE_MS = 45_000;
@@ -16,8 +21,14 @@ const TRANSPORT_LEASE_MS = 45_000;
 const MAX_HISTORY = 20;
 
 export type ProcessStatusObservation =
-  | { event: "process.alive"; eventId: string; observedAt: string }
+  | {
+      event: "process.alive";
+      eventId: string;
+      observedAt: string;
+      process?: ProcessIdentityObservation;
+    }
   | { event: "process.missing"; eventId: string; observedAt: string }
+  | { event: "process.indeterminate"; eventId: string; observedAt: string }
   | {
       event: "process.exited";
       eventId: string;
@@ -28,6 +39,13 @@ export type ProcessStatusObservation =
     }
   | { event: "lease.probed"; eventId: string; observedAt: string };
 
+export interface ReporterAuthority {
+  sessionId: string;
+  reporterEpoch: string;
+  readinessCoverage: ReporterReadinessCoverage;
+  leaseExpiresAt: string;
+}
+
 export interface ProgressStatusObservation {
   event: "progress.reported";
   eventId: string;
@@ -36,9 +54,15 @@ export interface ProgressStatusObservation {
 }
 
 export type AgentStatusObservation =
-  | { event: "reporter.event"; observedAt: string; input: AgentStatusEventInput }
+  | {
+      event: "reporter.event";
+      observedAt: string;
+      input: AgentStatusEventInput;
+      authority: ReporterAuthority;
+    }
   | ProcessStatusObservation
-  | ProgressStatusObservation;
+  | ProgressStatusObservation
+  | { event: "screen.classified"; eventId: string; observedAt: string; screen: ScreenObservation };
 
 export interface AgentStatusReducerState {
   runId: string;
@@ -66,6 +90,18 @@ export interface AgentStatusReducerState {
   staleProbeCount: number;
   evidence: AgentStatusEvidence[];
   recentTransitions: AgentStatusTransition[];
+  statusRevision: number;
+  completionRevision: number;
+  interactiveReady: boolean;
+  staleAuthority: boolean;
+  authorityKind: StatusAuthorityKind;
+  authorityId?: string | undefined;
+  processState: ProcessState;
+  processFingerprint?: string | undefined;
+  reporterEpoch?: string | undefined;
+  reporterLeaseExpiresAt?: string | undefined;
+  readinessCoverage?: ReporterReadinessCoverage | undefined;
+  lastScreenObservation?: ScreenObservation | undefined;
 }
 
 function addMilliseconds(timestamp: string, milliseconds: number): string {
@@ -77,8 +113,8 @@ function appendLimited<T>(items: readonly T[], item: T): T[] {
 }
 
 function evidenceSource(source: AgentStatusEventInput["source"]): AgentStatusEvidence["source"] {
-  if (source === "opencode") return "sse";
-  return "hook";
+  void source;
+  return "reporter";
 }
 
 function waitPhase(wait: AgentStatusWait): AgentStatusPhase {
@@ -94,24 +130,30 @@ function waitAttention(wait: AgentStatusWait): AgentStatusAttention {
 function transition(
   current: AgentStatusReducerState,
   next: AgentStatusReducerState,
+  completion = false,
 ): AgentStatusReducerState {
+  const revised = {
+    ...next,
+    statusRevision: current.statusRevision + 1,
+    completionRevision: current.completionRevision + (completion ? 1 : 0),
+  };
   if (
-    current.state === next.state &&
-    current.phase === next.phase &&
-    current.attention === next.attention &&
-    current.outcome === next.outcome
+    current.state === revised.state &&
+    current.phase === revised.phase &&
+    current.attention === revised.attention &&
+    current.outcome === revised.outcome
   ) {
-    return next;
+    return revised;
   }
   return {
-    ...next,
-    stateChangedAt: next.observedAt,
-    recentTransitions: appendLimited(next.recentTransitions, {
+    ...revised,
+    stateChangedAt: revised.observedAt,
+    recentTransitions: appendLimited(revised.recentTransitions, {
       from: current.state,
-      to: next.state,
-      phase: next.phase,
-      attention: next.attention,
-      occurredAt: next.observedAt,
+      to: revised.state,
+      phase: revised.phase,
+      attention: revised.attention,
+      occurredAt: revised.observedAt,
     }),
   };
 }
@@ -128,7 +170,7 @@ function resumeAfterWait(current: AgentStatusReducerState): AgentStatusReducerSt
   if (wait !== undefined) {
     return {
       ...current,
-      state: "waiting",
+      state: "blocked",
       phase: waitPhase(wait),
       attention: waitAttention(wait),
       confidence: "high",
@@ -171,6 +213,12 @@ export function createAgentStatusReducerState(
       },
     ],
     recentTransitions: [],
+    statusRevision: 0,
+    completionRevision: 0,
+    interactiveReady: false,
+    staleAuthority: true,
+    authorityKind: "none",
+    processState: "indeterminate",
   };
 }
 
@@ -185,9 +233,32 @@ export function reduceAgentStatus(
     next = withEvidence(
       {
         ...next,
+        processState: "present",
+        processFingerprint: observation.process?.processFingerprint,
         transportLeaseExpiresAt: addMilliseconds(observedAt, TRANSPORT_LEASE_MS),
       },
       { source: "process", kind: observation.event, observedAt, confidence: "high" },
+    );
+    return transition(current, next);
+  }
+
+  if (observation.event === "process.indeterminate") {
+    next = withEvidence(
+      {
+        ...next,
+        processState: "indeterminate",
+        interactiveReady: false,
+        ...(current.reporterLeaseExpiresAt === undefined ||
+        Date.parse(observedAt) > Date.parse(current.reporterLeaseExpiresAt)
+          ? {
+              state: "unknown" as const,
+              authorityKind: "none" as const,
+              staleAuthority: true,
+              attention: "reporter_stale" as const,
+            }
+          : {}),
+      },
+      { source: "process", kind: observation.event, observedAt, confidence: "low" },
     );
     return transition(current, next);
   }
@@ -197,11 +268,16 @@ export function reduceAgentStatus(
     next = withEvidence(
       {
         ...next,
-        state: stopped ? "stopped" : "crashed",
+        state: stopped ? "stopped" : "failed",
         phase: "exited",
         outcome:
           observation.operatorStopped === true ? "cancelled" : stopped ? current.outcome : "failed",
         confidence: "high",
+        authorityKind: "process",
+        authorityId: observation.eventId,
+        processState: "dead",
+        interactiveReady: false,
+        staleAuthority: false,
         attention: stopped ? "none" : "process_failed",
         processExitCode: observation.exitCode,
         processSignal: observation.signal,
@@ -226,10 +302,15 @@ export function reduceAgentStatus(
     next = withEvidence(
       {
         ...next,
-        state: "crashed",
+        state: "failed",
         phase: "exited",
         outcome: "failed",
         confidence: "medium",
+        authorityKind: "process",
+        authorityId: observation.eventId,
+        processState: "missing",
+        interactiveReady: false,
+        staleAuthority: false,
         attention: "process_failed",
         openTools: [],
         openWaits: [],
@@ -251,10 +332,11 @@ export function reduceAgentStatus(
     if (current.state === "starting" && transportExpired) {
       next = {
         ...next,
-        state: "waiting",
-        phase: "settled",
-        attention: "none",
+        state: "unknown",
+        attention: "reporter_stale",
         confidence: "low",
+        authorityKind: "none",
+        staleAuthority: true,
       };
     } else if (current.state === "working" && semanticExpired) {
       const staleProbeCount = current.staleProbeCount + 1;
@@ -269,6 +351,20 @@ export function reduceAgentStatus(
             }
           : {}),
       };
+    } else if (
+      semanticExpired ||
+      (current.reporterLeaseExpiresAt !== undefined &&
+        Date.parse(observedAt) > Date.parse(current.reporterLeaseExpiresAt))
+    ) {
+      next = {
+        ...next,
+        state: "unknown",
+        attention: "reporter_stale",
+        confidence: "low",
+        authorityKind: "none",
+        staleAuthority: true,
+        interactiveReady: false,
+      };
     }
     return transition(current, next);
   }
@@ -278,10 +374,18 @@ export function reduceAgentStatus(
     next = withEvidence(
       {
         ...next,
-        state: report.outcome === undefined ? "working" : "waiting",
+        state:
+          report.blocker !== undefined
+            ? "blocked"
+            : report.outcome === undefined
+              ? "working"
+              : "idle",
         phase: report.outcome === undefined ? "model" : "settled",
         outcome: report.outcome ?? current.outcome,
         confidence: "high",
+        authorityKind: "reporter",
+        authorityId: "status-api",
+        staleAuthority: false,
         attention: report.blocker === undefined ? "none" : "input_required",
         lastActivityAt: observedAt,
         lastActivityKind: observation.event,
@@ -307,6 +411,36 @@ export function reduceAgentStatus(
     return transition(current, next);
   }
 
+  if (observation.event === "screen.classified") {
+    const canBlock =
+      observation.screen.classification === "blocked" &&
+      observation.screen.visibleBlocker &&
+      (current.staleAuthority || current.readinessCoverage !== "full");
+    next = withEvidence(
+      {
+        ...next,
+        lastScreenObservation: observation.screen,
+        ...(canBlock
+          ? {
+              state: "blocked" as const,
+              authorityKind: "screen" as const,
+              authorityId: observation.screen.ruleId,
+              confidence: "medium" as const,
+              attention: "input_required" as const,
+              staleAuthority: false,
+            }
+          : {}),
+      },
+      {
+        source: "screen",
+        kind: `screen.${observation.screen.classification}`,
+        observedAt,
+        confidence: observation.screen.confidence,
+      },
+    );
+    return transition(current, next);
+  }
+
   const input = observation.input;
   const eventEvidence: AgentStatusEvidence = {
     source: evidenceSource(input.source),
@@ -318,6 +452,12 @@ export function reduceAgentStatus(
   next = withEvidence(
     {
       ...next,
+      authorityKind: "reporter",
+      authorityId: observation.authority.sessionId,
+      reporterEpoch: observation.authority.reporterEpoch,
+      reporterLeaseExpiresAt: observation.authority.leaseExpiresAt,
+      readinessCoverage: observation.authority.readinessCoverage,
+      staleAuthority: false,
       lastActivityAt: observedAt,
       lastActivityKind: input.event,
       transportLeaseExpiresAt: addMilliseconds(observedAt, TRANSPORT_LEASE_MS),
@@ -332,12 +472,23 @@ export function reduceAgentStatus(
     case "session.ready":
       next = {
         ...next,
-        state: "waiting",
+        state: "idle",
         phase: "settled",
         confidence: "high",
         attention: "none",
         cleanEndSeen: false,
+        interactiveReady: next.processState === "present",
         semanticLeaseExpiresAt: undefined,
+      };
+      break;
+    case "turn.waiting":
+      next = {
+        ...next,
+        state: "waiting",
+        phase: "model",
+        confidence: "high",
+        attention: "none",
+        semanticLeaseExpiresAt: addMilliseconds(observedAt, SEMANTIC_LEASE_MS),
       };
       break;
     case "turn.started":
@@ -382,7 +533,7 @@ export function reduceAgentStatus(
       };
       next = {
         ...next,
-        state: "waiting",
+        state: "blocked",
         phase: waitPhase(wait),
         confidence: "high",
         attention: waitAttention(wait),
@@ -432,7 +583,7 @@ export function reduceAgentStatus(
         ...next,
         ...(input.data.fatal === true
           ? {
-              state: "waiting" as const,
+              state: "failed" as const,
               phase: "settled" as const,
               outcome: "failed" as const,
               attention: "process_failed" as const,
@@ -453,7 +604,7 @@ export function reduceAgentStatus(
       } else {
         next = {
           ...next,
-          state: "waiting",
+          state: "idle",
           phase: "settled",
           confidence: "high",
           attention: "none",
@@ -464,7 +615,7 @@ export function reduceAgentStatus(
     case "session.ended":
       next = {
         ...next,
-        state: "waiting",
+        state: "idle",
         phase: "settled",
         confidence: "high",
         attention: "none",
@@ -487,5 +638,9 @@ export function reduceAgentStatus(
     next = resumeAfterWait(next);
   }
 
-  return transition(current, next);
+  const completed =
+    input.event === "turn.settled" &&
+    ["working", "suspected_stuck"].includes(current.state) &&
+    next.state === "idle";
+  return transition(current, next, completed);
 }

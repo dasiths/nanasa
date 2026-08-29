@@ -314,8 +314,8 @@ describe("Streamable HTTP MCP", () => {
     expect(listed.json().result.structuredContent).toMatchObject({
       groupId: run.groupId,
       statuses: [
-        { memberId: "alpha", state: "not_started" },
-        { memberId: "beta", state: "not_started" },
+        { memberId: "alpha", state: "unknown" },
+        { memberId: "beta", state: "unknown" },
         {
           memberId: "sender",
           roleId: "reviewer",
@@ -353,12 +353,37 @@ describe("Streamable HTTP MCP", () => {
   });
 
   it("authenticates and deduplicates reporter events without accepting caller identity", async () => {
-    const { daemon, agentToken } = await createFixture();
+    const { daemon, agentToken, run } = await createFixture();
+    daemon.store.registerReporterSession({
+      id: "reporter-mcp",
+      providerId: "fixture",
+      adapterId: "opencode",
+      reporterId: "opencode-plugin",
+      source: "opencode",
+      protocolVersion: 2,
+      reporterVersion: "2",
+      runId: run.id,
+      generation: run.generation,
+      reporterEpoch: "epoch-mcp",
+      readinessCoverage: "full",
+      sourceSequence: 0,
+      openedAt: "2026-08-29T12:00:00.000Z",
+      leaseExpiresAt: "2099-08-29T12:00:00.000Z",
+    });
+    daemon.store.bindReporterProcess(run.id, run.generation, "a".repeat(64));
     const payload = {
-      version: 1,
+      version: 2,
       eventId: "session-ready-1",
-      source: "claude-code",
-      reporterVersion: "1",
+      providerId: "fixture",
+      adapterId: "opencode",
+      reporterId: "opencode-plugin",
+      source: "opencode",
+      protocolVersion: 2,
+      reporterVersion: "2",
+      runId: run.id,
+      generation: run.generation,
+      reporterEpoch: "epoch-mcp",
+      sourceSequence: 1,
       event: "session.ready",
       data: {},
     };
@@ -376,7 +401,8 @@ describe("Streamable HTTP MCP", () => {
 
     expect(await submit(agentToken, payload)).toMatchObject({ statusCode: 202 });
     const duplicate = await submit(agentToken, payload);
-    expect(duplicate.json()).toMatchObject({ duplicate: true, status: { state: "waiting" } });
+    expect(duplicate).toMatchObject({ statusCode: 409 });
+    expect(duplicate.json()).toMatchObject({ code: "status_sequence_reordered" });
     expect((await submit(operatorToken, payload)).statusCode).toBe(403);
     expect(
       (
@@ -386,7 +412,7 @@ describe("Streamable HTTP MCP", () => {
           runId: "another-run",
         })
       ).statusCode,
-    ).toBe(400);
+    ).toBe(409);
     await daemon.app.close();
   });
 

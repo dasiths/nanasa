@@ -130,16 +130,32 @@ export const DATABASE_BASELINE_SQL = `
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES runs(id),
     generation INTEGER NOT NULL,
-    provider TEXT NOT NULL,
-    reporter TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    adapter_id TEXT NOT NULL,
+    reporter_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    protocol_version INTEGER NOT NULL CHECK (protocol_version = 2),
     reporter_version TEXT NOT NULL,
-    epoch INTEGER NOT NULL CHECK (epoch > 0),
+    reporter_epoch TEXT NOT NULL,
+    readiness_coverage TEXT NOT NULL CHECK (readiness_coverage IN ('full', 'partial', 'session_only')),
     source_sequence INTEGER NOT NULL DEFAULT 0 CHECK (source_sequence >= 0),
     native_session_id TEXT,
-    process_identity TEXT,
-    started_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    UNIQUE (run_id, generation, provider, reporter, epoch)
+    process_fingerprint TEXT,
+    opened_at TEXT NOT NULL,
+    lease_expires_at TEXT NOT NULL,
+    revoked_at TEXT,
+    closed_at TEXT,
+    UNIQUE (run_id, generation, reporter_epoch)
+  ) STRICT;
+
+  CREATE TABLE reporter_rejections (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT,
+    generation INTEGER,
+    reporter_epoch TEXT,
+    source_sequence INTEGER,
+    code TEXT NOT NULL,
+    rejected_at TEXT NOT NULL
   ) STRICT;
 
   CREATE TABLE status_revisions (
@@ -151,6 +167,23 @@ export const DATABASE_BASELINE_SQL = `
     status_json TEXT NOT NULL,
     reducer_state_json TEXT NOT NULL,
     updated_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE completion_acknowledgements (
+    operator_id TEXT NOT NULL,
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    generation INTEGER NOT NULL,
+    completion_revision INTEGER NOT NULL CHECK (completion_revision >= 0),
+    acknowledged_at TEXT NOT NULL,
+    PRIMARY KEY (operator_id, run_id, generation)
+  ) STRICT;
+
+  CREATE TABLE screen_observations (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    generation INTEGER NOT NULL,
+    observed_at TEXT NOT NULL,
+    metadata_json TEXT NOT NULL
   ) STRICT;
 
   CREATE TABLE status_progress_reports (
@@ -387,6 +420,9 @@ export const DATABASE_BASELINE_SQL = `
   CREATE INDEX deliveries_recipient_status ON deliveries (recipient_member_id, status);
   CREATE INDEX events_aggregate ON domain_events (aggregate_type, aggregate_id, sequence);
   CREATE INDEX runtime_observations_run_sequence ON runtime_observations (run_id, generation, sequence);
+  CREATE INDEX reporter_sessions_run_epoch ON reporter_sessions (run_id, generation, reporter_epoch);
+  CREATE INDEX reporter_rejections_run_sequence ON reporter_rejections (run_id, generation, sequence);
+  CREATE INDEX screen_observations_run_sequence ON screen_observations (run_id, generation, sequence);
   CREATE INDEX status_progress_reports_run_time ON status_progress_reports (run_id, generation, reported_at);
   CREATE INDEX terminal_checkpoints_owner_expiry ON terminal_checkpoints (owner_principal_id, expires_at);
 `;

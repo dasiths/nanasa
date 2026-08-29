@@ -17,7 +17,7 @@ export class ClaudeCodeAdapter implements ProviderAdapter {
   public readonly supportedVersions = Object.freeze([">=0.0.0"]);
   public readonly reporter = freezeReporterDescriptor({
     id: "claude-hooks",
-    version: "1",
+    version: "2",
     source: "claude-code",
     readinessEvents: ["session.ready"],
     coverage: {

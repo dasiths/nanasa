@@ -127,7 +127,7 @@ describe("RunRuntimeCoordinator", () => {
     });
     const runtime = {
       reconcile: vi.fn(async () => undefined),
-      observeRun: vi.fn(async () => ({ kind: "missing" })),
+      observeRun: vi.fn(async () => ({ state: "missing" })),
       recoverRun,
       removeViewSession: vi.fn(async () => undefined),
       removeStaleViewSessions: vi.fn(async () => undefined),
@@ -175,7 +175,7 @@ describe("RunRuntimeCoordinator", () => {
     const recoverRun = vi.fn();
     const runtime = {
       reconcile: vi.fn(async () => undefined),
-      observeRun: vi.fn(async () => ({ kind: "indeterminate", evidence: "tmux_timeout" })),
+      observeRun: vi.fn(async () => ({ state: "indeterminate", evidenceCode: "tmux_timeout" })),
       recoverRun,
       removeStaleViewSessions: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
@@ -237,7 +237,7 @@ describe("RunRuntimeCoordinator", () => {
     });
     const runtime = {
       reconcile: vi.fn(async () => undefined),
-      observeRun: vi.fn(async () => ({ kind: "present" })),
+      observeRun: vi.fn(async () => ({ state: "present" })),
       recoverRun,
       removeViewSession: vi.fn(async () => undefined),
       removeStaleViewSessions: vi.fn(async () => undefined),

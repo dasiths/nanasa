@@ -22,7 +22,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
   public readonly supportedVersions = Object.freeze([">=0.0.0"]);
   public readonly reporter = freezeReporterDescriptor({
     id: "opencode-plugin",
-    version: "1",
+    version: "2",
     source: "opencode",
     readinessEvents: ["session.ready"],
     coverage: {

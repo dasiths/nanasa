@@ -39,9 +39,9 @@ export class NativeSessionService {
     if (input.event.event !== "session.ready") return undefined;
     const reported =
       input.event.data.nativeSession ??
-      (input.event.sessionId === undefined
+      (input.event.nativeSessionId === undefined
         ? undefined
-        : { kind: "id" as const, value: input.event.sessionId });
+        : { kind: "id" as const, value: input.event.nativeSessionId });
     if (reported === undefined) return undefined;
     if (
       input.event.source !== input.adapter.reporter.source ||

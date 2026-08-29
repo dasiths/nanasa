@@ -34,7 +34,7 @@ export class TmuxTerminalDelivery {
     return (
       run.status === "running" &&
       run.terminal?.serverName === this.#runtime.serverName &&
-      (await this.#runtime.observeRun(run)).kind === "present"
+      (await this.#runtime.observeRun(run)).state === "present"
     );
   }
 

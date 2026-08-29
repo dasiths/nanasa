@@ -13,6 +13,7 @@ import type {
   AgentRuntimeConfiguration,
   AgentRuntimeProvisioner,
 } from "./agent-runtime-provisioner.js";
+import { ProcessIdentityObserver } from "./process-identity-observer.js";
 import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
 import { runtimeObservation, type RuntimeObservation } from "./runtime-observation.js";
 import { DomainError, NanasaStore } from "./store.js";
@@ -24,6 +25,8 @@ export interface TmuxRuntimeOptions {
   runtimeEnvironment?: (run: AgentRun) => Record<string, string>;
   runtimeProvisioner?: AgentRuntimeProvisioner;
   adapterRegistry?: ProviderAdapterRegistry;
+  processIdentityObserver?: ProcessIdentityObserver;
+  invalidationHooks?: Readonly<Record<string, string>>;
 }
 
 interface CommandOutput {
@@ -92,6 +95,8 @@ export class TmuxRuntime {
   readonly #runtimeEnvironment: (run: AgentRun) => Record<string, string>;
   readonly #runtimeProvisioner: AgentRuntimeProvisioner | undefined;
   readonly #adapters: ProviderAdapterRegistry;
+  readonly #processIdentityObserver: ProcessIdentityObserver;
+  readonly #invalidationHooks: Readonly<Record<string, string>>;
   readonly #reconciliations = new Set<Promise<void>>();
   readonly #detachedRunIds = new Set<string>();
   readonly #provisionedRuns = new Map<string, AgentRuntimeConfiguration>();
@@ -105,6 +110,9 @@ export class TmuxRuntime {
     this.#runtimeEnvironment = options.runtimeEnvironment ?? (() => ({}));
     this.#runtimeProvisioner = options.runtimeProvisioner;
     this.#adapters = options.adapterRegistry ?? ProviderAdapterRegistry.builtIn();
+    this.#processIdentityObserver =
+      options.processIdentityObserver ?? new ProcessIdentityObserver();
+    this.#invalidationHooks = options.invalidationHooks ?? {};
     if (!/^[A-Za-z0-9_.-]+$/.test(this.serverName)) {
       throw new Error(
         "tmux server name may contain only letters, numbers, dot, underscore, and dash",
@@ -347,7 +355,7 @@ export class TmuxRuntime {
   public async observeRun(run: AgentRun): Promise<RuntimeObservation> {
     const binding = run.terminal;
     if (binding === undefined || binding.serverName !== this.serverName) {
-      return runtimeObservation(run, "missing", { evidence: "terminal_binding_unavailable" });
+      return runtimeObservation(run, "missing", { evidenceCode: "terminal_binding_unavailable" });
     }
     let result: CommandOutput;
     try {
@@ -356,18 +364,18 @@ export class TmuxRuntime {
           "list-panes",
           "-a",
           "-F",
-          "#{session_id}\t#{window_id}\t#{pane_id}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_dead_signal}\t#{@nanasa-run-id}\t#{@nanasa-generation}",
+          "#{session_id}\t#{window_id}\t#{pane_id}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_dead_signal}\t#{@nanasa-run-id}\t#{@nanasa-generation}\t#{pane_pid}\t#{pane_tty}",
         ],
         true,
       );
-    } catch (error) {
+    } catch {
       return runtimeObservation(run, "indeterminate", {
-        evidence: error instanceof Error ? error.message : "tmux_observation_failed",
+        evidenceCode: "tmux_observation_failed",
       });
     }
     if (result.exitCode !== 0) {
       return runtimeObservation(run, "indeterminate", {
-        evidence: result.stderr.trim() || `tmux_exit_${result.exitCode}`,
+        evidenceCode: `tmux_exit_${result.exitCode}`,
       });
     }
     const pane = result.stdout
@@ -376,9 +384,10 @@ export class TmuxRuntime {
       .map((line) => line.split("\t"))
       .find((fields) => fields[2] === binding.paneId);
     if (pane === undefined) {
-      return runtimeObservation(run, "missing", { evidence: "owned_pane_missing" });
+      return runtimeObservation(run, "missing", { evidenceCode: "owned_pane_missing" });
     }
-    const [sessionId, windowId, paneId, dead, deadStatus, deadSignal, runId, generation] = pane;
+    const [sessionId, windowId, paneId, dead, deadStatus, deadSignal, runId, generation, panePid] =
+      pane;
     if (
       sessionId !== binding.sessionId ||
       windowId !== binding.windowId ||
@@ -386,19 +395,38 @@ export class TmuxRuntime {
       runId !== run.id ||
       generation !== String(run.generation)
     ) {
-      return runtimeObservation(run, "missing", { evidence: "owned_pane_identity_mismatch" });
+      return runtimeObservation(run, "missing", { evidenceCode: "owned_pane_identity_mismatch" });
     }
     if (dead === "1") {
       return runtimeObservation(run, "dead", {
-        evidence: "tmux_retained_exit",
+        evidenceCode: "tmux_retained_exit",
         ...(/^-?\d+$/.test(deadStatus ?? "") ? { exitCode: Number(deadStatus) } : {}),
         ...(deadSignal === undefined || deadSignal.length === 0 ? {} : { signal: deadSignal }),
       });
     }
     if (dead !== "0") {
-      return runtimeObservation(run, "indeterminate", { evidence: "malformed_tmux_dead_state" });
+      return runtimeObservation(run, "indeterminate", {
+        evidenceCode: "malformed_tmux_dead_state",
+      });
     }
-    return runtimeObservation(run, "present", { evidence: "exact_owned_pane" });
+    if (!/^\d+$/.test(panePid ?? "")) {
+      return runtimeObservation(run, "indeterminate", { evidenceCode: "pane_pid_malformed" });
+    }
+    try {
+      const profile = this.#store.getAgentProfile(run.agentProfileId);
+      const process = await this.#processIdentityObserver.observe(
+        Number(panePid),
+        this.#adapters.get(profile.kind),
+      );
+      return runtimeObservation(run, "present", {
+        evidenceCode: "exact_owned_pane_and_process",
+        process,
+      });
+    } catch {
+      return runtimeObservation(run, "indeterminate", {
+        evidenceCode: "process_identity_unavailable",
+      });
+    }
   }
 
   public async interruptRun(run: AgentRun): Promise<void> {
@@ -666,6 +694,9 @@ export class TmuxRuntime {
       await this.#tmux(["set-option", "-g", "mouse", "on"]);
       await this.#tmux(["set-option", "-g", "extended-keys", "on"]);
       await this.#tmux(["set-option", "-g", "set-clipboard", "on"]);
+      for (const [hook, command] of Object.entries(this.#invalidationHooks)) {
+        await this.#tmux(["set-hook", "-g", hook, `run-shell -b ${shellQuote(command)}`]);
+      }
       const terminalFeatures = await this.#tmux(["show-options", "-gv", "terminal-features"], true);
       if (!terminalFeatures.stdout.includes("xterm-256color:extkeys:clipboard")) {
         await this.#tmux([

@@ -28,6 +28,7 @@ import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 import { AdHocConsoleManager } from "./ad-hoc-console-manager.js";
 import { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
 import { registerAgentStatusRoutes } from "./agent-status-routes.js";
+import { AgentStatusService } from "./agent-status-service.js";
 import { AuthorityPolicy } from "./authority-policy.js";
 import { discoverAndLoadNanasaConfig, type LoadedNanasaConfig } from "./config-v2.js";
 import { ConfigRepository } from "./config-repository.js";
@@ -46,6 +47,7 @@ import { OperatorAuth } from "./operator-auth.js";
 import { GeneratedOverlayTransaction } from "./generated-overlay-transaction.js";
 import { ProviderStateRepository } from "./provider-state-repository.js";
 import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
+import { ReporterRegistry } from "./reporter-registry.js";
 import { RepositoryTrustService } from "./repository-trust-service.js";
 import { UserCredentialBroker } from "./user-credential-broker.js";
 import { controlMetadata, repositoryTmuxNamespace } from "./protocol-metadata.js";
@@ -58,6 +60,7 @@ import { registerTerminalProxy } from "./terminal-proxy.js";
 import { TmuxRuntime } from "./tmux-runtime.js";
 import { TopologyService } from "./topology-service.js";
 import { TtydSupervisor } from "./ttyd-supervisor.js";
+import { TmuxEventObserver, type TmuxInvalidationKind } from "./tmux-event-observer.js";
 
 export interface DaemonOptions {
   dataPath?: string;
@@ -212,6 +215,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     const statusEndpointUrl =
       options.statusEndpointUrl ?? "http://127.0.0.1:3210/api/v1/agent-status/events";
     const statusEndpoint = new URL(statusEndpointUrl);
+    const tmuxInvalidationUrl = new URL("/api/v1/internal/tmux-invalidation", statusEndpoint);
     if (
       statusEndpoint.protocol !== "http:" ||
       !["127.0.0.1", "localhost", "[::1]"].includes(statusEndpoint.hostname) ||
@@ -245,6 +249,16 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     const credentialBroker = new UserCredentialBroker();
     const repositoryTrust = new RepositoryTrustService(store);
     const nativeSessions = new NativeSessionService(store);
+    const reporterRegistry = new ReporterRegistry(store, {
+      runtimeDirectory: runtimePath,
+      adapters: providerAdapters,
+    });
+    const statusService = new AgentStatusService(store, reporterRegistry);
+    const coordinatorReference: { current?: RunRuntimeCoordinator } = {};
+    const tmuxServerName = options.tmuxServerName ?? repositoryTmuxNamespace(loadedConfig.repoRoot);
+    const tmuxEvents = new TmuxEventObserver(tmuxServerName, () => {
+      void coordinatorReference.current?.reconcile().catch(() => undefined);
+    });
     const runtimeProvisioner = new AgentRuntimeProvisioner({
       integrationsDirectory: loadedConfig.integrationsDirectory,
       integrations: Object.fromEntries(
@@ -281,14 +295,24 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       },
     });
     const runtime = new TmuxRuntime(store, {
-      serverName: options.tmuxServerName ?? repositoryTmuxNamespace(loadedConfig.repoRoot),
+      serverName: tmuxServerName,
       ...(options.tmuxPath === undefined ? {} : { tmuxPath: options.tmuxPath }),
       runtimeProvisioner,
       adapterRegistry: providerAdapters,
+      invalidationHooks: {
+        "pane-died": tmuxEvents.hookCommand(tmuxInvalidationUrl.toString(), "pane_died"),
+        "pane-exited": tmuxEvents.hookCommand(tmuxInvalidationUrl.toString(), "pane_exited"),
+        "after-select-pane": tmuxEvents.hookCommand(
+          tmuxInvalidationUrl.toString(),
+          "pane_mode_changed",
+        ),
+        "alert-bell": tmuxEvents.hookCommand(tmuxInvalidationUrl.toString(), "bell"),
+      },
       runtimeEnvironment: (run) => ({
         ...(options.mcp?.enabled === true ? { NANASA_MCP_URL: mcpEndpointUrl } : {}),
         NANASA_MCP_TOKEN: mcpCredentials.issueAgent(run),
         NANASA_STATUS_URL: statusEndpointUrl,
+        ...reporterRegistry.environment(run),
       }),
     });
     const terminalEndpoints = new TerminalEndpointRegistry(store);
@@ -314,6 +338,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         ? {}
         : { reconcileIntervalMs: options.reconcileIntervalMs }),
       nativeSessions,
+      onRuntimeObservation: (observation) => statusService.observeRuntime(observation),
       nativeRecoveryPolicy: (run) => {
         const profile = store.getAgentProfile(run.agentProfileId);
         const integration = loadedConfig.config.integrations[profile.agentType];
@@ -321,6 +346,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         return { integrationId: profile.agentType, policy: integration.nativeRecovery };
       },
     });
+    coordinatorReference.current = coordinator;
     const topology = new TopologyService(configRepository, store, coordinator);
     await topology.reconcile();
 
@@ -348,7 +374,8 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         !path.startsWith("/api/v1/") ||
         path === "/api/v1/meta" ||
         path === "/api/v1/auth/bootstrap" ||
-        path === "/api/v1/agent-status/events"
+        path === "/api/v1/agent-status/events" ||
+        path === "/api/v1/internal/tmux-invalidation"
       ) {
         return;
       }
@@ -417,11 +444,46 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     app.get("/health", async () => ({ status: "ok" }));
     app.get("/api/v1/meta", async () => metadata());
     operatorAuth.registerRoutes(app);
+    app.post(
+      "/api/v1/internal/tmux-invalidation",
+      { bodyLimit: 2 * 1024 },
+      async (request, reply) => {
+        const authorization = request.headers.authorization;
+        const token = authorization?.startsWith("Bearer ") ? authorization.slice(7) : "";
+        const body = request.body as Partial<{
+          serverName: string;
+          kind: TmuxInvalidationKind;
+          paneId: string;
+          windowId: string;
+          sessionId: string;
+        }>;
+        if (body.serverName !== tmuxServerName || body.kind === undefined) {
+          throw new DomainError("tmux_invalidation_invalid", "Tmux invalidation is invalid", 400);
+        }
+        try {
+          tmuxEvents.notify(token, {
+            serverName: body.serverName,
+            kind: body.kind,
+            ...(body.paneId === undefined ? {} : { paneId: body.paneId }),
+            ...(body.windowId === undefined ? {} : { windowId: body.windowId }),
+            ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
+          });
+        } catch {
+          throw new DomainError(
+            "tmux_invalidation_unauthorized",
+            "Tmux invalidation is unauthorized",
+            401,
+          );
+        }
+        return reply.status(204).send();
+      },
+    );
     registerAgentStatusRoutes(app, {
       path: "/api/v1/agent-status/events",
       allowedHostnames: [statusEndpoint.hostname],
       credentials: mcpCredentials,
       store,
+      statusService,
       nativeSessions,
       adapters: providerAdapters,
       providerStateRoot: (profile) => {

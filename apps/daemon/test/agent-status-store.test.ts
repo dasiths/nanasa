@@ -38,6 +38,23 @@ function createFixture(path = ":memory:") {
     status: "running",
     startedAt: "2026-08-11T12:00:00.000Z",
   });
+  store.registerReporterSession({
+    id: "reporter_status",
+    providerId: "claude-code",
+    adapterId: "claude-code",
+    reporterId: "claude-hooks",
+    source: "claude-code",
+    protocolVersion: 2,
+    reporterVersion: "2",
+    runId: run.id,
+    generation: run.generation,
+    reporterEpoch: "epoch_status",
+    readinessCoverage: "full",
+    sourceSequence: 0,
+    openedAt: "2026-08-11T12:00:00.000Z",
+    leaseExpiresAt: "2099-08-11T12:00:00.000Z",
+  });
+  store.bindReporterProcess(run.id, run.generation, "a".repeat(64));
   return {
     store,
     group,
@@ -58,13 +75,22 @@ function event(
     operationId?: string;
     requestId?: string;
     data?: Record<string, unknown>;
+    sourceSequence?: number;
   } = {},
 ) {
   return {
-    version: 1 as const,
+    version: 2 as const,
     eventId,
+    providerId: "claude-code",
+    adapterId: "claude-code",
+    reporterId: "claude-hooks",
     source: "claude-code" as const,
-    reporterVersion: "1",
+    protocolVersion: 2 as const,
+    reporterVersion: "2",
+    runId: "run_status",
+    generation: 1,
+    reporterEpoch: "epoch_status",
+    sourceSequence: options.sourceSequence ?? 1,
     event: kind as never,
     operationId: options.operationId,
     requestId: options.requestId,
@@ -78,9 +104,10 @@ describe("NanasaStore agent status", () => {
     const before = store.listEvents().length;
 
     const ready = store.ingestAgentStatusEvent(identity, event("ready_1", "session.ready"));
-    expect(ready).toMatchObject({ duplicate: false, status: { state: "waiting" } });
-    const duplicate = store.ingestAgentStatusEvent(identity, event("ready_1", "session.ready"));
-    expect(duplicate).toMatchObject({ duplicate: true, status: { state: "waiting" } });
+    expect(ready).toMatchObject({ duplicate: false, status: { state: "idle" } });
+    expect(() =>
+      store.ingestAgentStatusEvent(identity, event("ready_1", "session.ready")),
+    ).toThrowError(expect.objectContaining({ code: "status_sequence_reordered" }));
     expect(
       store
         .listEvents()
@@ -88,7 +115,7 @@ describe("NanasaStore agent status", () => {
         .map((item) => item.type),
     ).toEqual(["agent-status.changed"]);
     expect(store.getSnapshot().agentStatuses).toEqual([
-      expect.objectContaining({ groupId: group.id, memberId: "worker", state: "waiting" }),
+      expect.objectContaining({ groupId: group.id, memberId: "worker", state: "idle" }),
     ]);
     store.close();
   });
@@ -119,7 +146,7 @@ describe("NanasaStore agent status", () => {
 
     const reopened = new NanasaStore(databasePath);
     expect(reopened.getAgentStatus(group.id, "worker")).toMatchObject({
-      state: "waiting",
+      state: "blocked",
       attention: "decision_required",
       lastProgressSummary: "Status persistence implemented",
       nextStep: "Add HTTP ingestion",
@@ -137,7 +164,7 @@ describe("NanasaStore agent status", () => {
     store.close();
   });
 
-  it("classifies an unexpected process exit as crashed", () => {
+  it("classifies an unexpected process exit as failed", () => {
     const { store, group, run } = createFixture();
     const status = store.recordProcessStatus(run.id, {
       event: "process.exited",
@@ -146,12 +173,12 @@ describe("NanasaStore agent status", () => {
       signal: "SIGKILL",
     });
     expect(status).toMatchObject({
-      state: "crashed",
+      state: "failed",
       outcome: "failed",
       attention: "process_failed",
       processSignal: "SIGKILL",
     });
-    expect(store.getAgentStatus(group.id, "worker").state).toBe("crashed");
+    expect(store.getAgentStatus(group.id, "worker").state).toBe("failed");
     store.close();
   });
 
@@ -173,7 +200,7 @@ describe("NanasaStore agent status", () => {
     });
     const status = store.getAgentStatus(group.id, "pi-worker");
     expect(status).toMatchObject({
-      state: "not_started",
+      state: "unknown",
       confidence: "high",
     });
     expect(status).not.toHaveProperty("runId");

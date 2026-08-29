@@ -4,18 +4,17 @@ import { AgentTypeKeySchema, IntegrationIdSchema } from "./provider-v1.js";
 import { RoleIdSchema } from "./control-v1.js";
 
 export const STATUS_PROTOCOL_VERSION = 2 as const;
+export const REPORTER_LEASE_MS = 45_000 as const;
 export const AgentStatusStateSchema = z.enum([
-  "not_started",
   "starting",
+  "idle",
   "working",
   "waiting",
-  "idle",
   "blocked",
-  "done",
-  "unknown",
   "suspected_stuck",
   "stopped",
-  "crashed",
+  "failed",
+  "unknown",
 ]);
 export const AgentStatusPhaseSchema = z.enum([
   "startup",
@@ -44,6 +43,7 @@ export const AgentStatusEventKindSchema = z.enum([
   "reporter.ready",
   "session.ready",
   "turn.started",
+  "turn.waiting",
   "turn.settled",
   "tool.started",
   "tool.finished",
@@ -64,6 +64,16 @@ export const AgentWaitKindSchema = z.enum([
   "plan_approval",
 ]);
 export const AgentReplyChannelSchema = z.enum(["terminal", "hook", "rpc", "acp", "api"]);
+export const ReporterReadinessCoverageSchema = z.enum(["full", "partial", "session_only"]);
+export const StatusAuthorityKindSchema = z.enum(["process", "reporter", "screen", "none"]);
+export const ProcessStateSchema = z.enum(["present", "dead", "missing", "indeterminate"]);
+export const ScreenClassificationSchema = z.enum([
+  "blocked",
+  "working_hint",
+  "idle_hint",
+  "unknown",
+  "skip",
+]);
 
 export type AgentStatusState = z.infer<typeof AgentStatusStateSchema>;
 export type AgentStatusPhase = z.infer<typeof AgentStatusPhaseSchema>;
@@ -74,6 +84,11 @@ export type AgentStatusSource = z.infer<typeof AgentStatusSourceSchema>;
 export type AgentStatusEventKind = z.infer<typeof AgentStatusEventKindSchema>;
 export type AgentWaitKind = z.infer<typeof AgentWaitKindSchema>;
 export type AgentReplyChannel = z.infer<typeof AgentReplyChannelSchema>;
+export type ReporterReadinessCoverage = z.infer<typeof ReporterReadinessCoverageSchema>;
+export type StatusAuthorityKind = z.infer<typeof StatusAuthorityKindSchema>;
+export type ProcessState = z.infer<typeof ProcessStateSchema>;
+
+const FingerprintSchema = z.string().regex(/^[0-9a-f]{64}$/);
 
 const AgentStatusEventDataSchema = z
   .object({
@@ -98,13 +113,21 @@ const AgentStatusEventDataSchema = z
 
 export const AgentStatusEventInputSchema = z
   .object({
-    version: z.literal(1),
+    version: z.literal(2),
     eventId: IdentifierSchema,
+    providerId: IntegrationIdSchema,
+    adapterId: AgentTypeKeySchema,
+    reporterId: IdentifierSchema,
     source: AgentStatusSourceSchema,
+    protocolVersion: z.literal(STATUS_PROTOCOL_VERSION),
     reporterVersion: z.string().trim().min(1).max(32),
+    runId: IdentifierSchema,
+    generation: z.number().int().positive(),
+    reporterEpoch: IdentifierSchema,
+    sourceSequence: z.number().int().positive(),
+    nativeSessionId: z.string().trim().min(1).max(4_096).optional(),
     event: AgentStatusEventKindSchema,
     occurredAt: TimestampSchema.optional(),
-    sessionId: IdentifierSchema.optional(),
     turnId: IdentifierSchema.optional(),
     operationId: IdentifierSchema.optional(),
     requestId: IdentifierSchema.optional(),
@@ -167,7 +190,7 @@ export type AgentStatusWait = z.infer<typeof AgentStatusWaitSchema>;
 
 export const AgentStatusEvidenceSchema = z
   .object({
-    source: z.enum(["scheduler", "process", "hook", "rpc", "acp", "sse", "status_api"]),
+    source: z.enum(["scheduler", "process", "reporter", "screen", "status_api"]),
     kind: z.string().trim().min(1).max(100),
     observedAt: TimestampSchema,
     confidence: AgentStatusConfidenceSchema,
@@ -192,28 +215,75 @@ export const RuntimeObservationSchema = z
     id: IdentifierSchema,
     runId: IdentifierSchema,
     generation: z.number().int().positive(),
-    state: z.enum(["present", "missing", "indeterminate"]),
-    processIdentity: z.string().trim().min(1).max(512).optional(),
+    state: ProcessStateSchema,
     observedAt: TimestampSchema,
-    evidence: z.record(z.string(), z.unknown()),
+    trigger: z.enum(["poll", "tmux_hook", "write_guard"]),
+    process: z
+      .object({
+        foregroundPgid: z.number().int().positive(),
+        leaderPid: z.number().int().positive(),
+        pidStartIdentity: z.string().trim().min(1).max(128),
+        executableFingerprint: FingerprintSchema,
+        argvFingerprint: FingerprintSchema,
+        processFingerprint: FingerprintSchema,
+        expectedProviderMatch: z.enum(["match", "mismatch", "unknown"]),
+        wrapperChain: z.array(z.string().trim().min(1).max(128)).max(64),
+      })
+      .strict()
+      .optional(),
+    exitCode: z.number().int().optional(),
+    signal: z.string().trim().min(1).max(64).optional(),
+    evidenceCode: z.string().trim().min(1).max(128),
   })
   .strict();
+export type RuntimeStatusObservation = z.infer<typeof RuntimeObservationSchema>;
+export type ProcessIdentityObservation = NonNullable<RuntimeStatusObservation["process"]>;
 
 export const ReporterSessionSchema = z
   .object({
     id: IdentifierSchema,
+    providerId: IntegrationIdSchema,
+    adapterId: AgentTypeKeySchema,
+    reporterId: IdentifierSchema,
+    source: AgentStatusSourceSchema,
+    protocolVersion: z.literal(STATUS_PROTOCOL_VERSION),
+    reporterVersion: z.string().trim().min(1).max(32),
     runId: IdentifierSchema,
     generation: z.number().int().positive(),
-    provider: IntegrationIdSchema,
-    reporter: z.string().trim().min(1).max(64),
-    reporterVersion: z.string().trim().min(1).max(32),
-    epoch: z.number().int().positive(),
+    reporterEpoch: IdentifierSchema,
     sourceSequence: z.number().int().nonnegative(),
     nativeSessionId: z.string().trim().min(1).max(4_096).optional(),
-    startedAt: TimestampSchema,
-    expiresAt: TimestampSchema,
+    readinessCoverage: ReporterReadinessCoverageSchema,
+    processFingerprint: FingerprintSchema.optional(),
+    openedAt: TimestampSchema,
+    leaseExpiresAt: TimestampSchema,
+    revokedAt: TimestampSchema.optional(),
+    closedAt: TimestampSchema.optional(),
   })
   .strict();
+export type ReporterSession = z.infer<typeof ReporterSessionSchema>;
+
+export const ScreenObservationSchema = z
+  .object({
+    runId: IdentifierSchema,
+    generation: z.number().int().positive(),
+    paneId: z.string().trim().min(1).max(64),
+    observedAt: TimestampSchema,
+    captureHash: FingerprintSchema,
+    rows: z.number().int().nonnegative().max(80),
+    bytes: z.number().int().nonnegative().max(65_536),
+    truncated: z.boolean(),
+    alternateScreen: z.boolean(),
+    manifestId: IdentifierSchema,
+    manifestVersion: z.string().trim().min(1).max(32),
+    manifestDigest: FingerprintSchema,
+    ruleId: IdentifierSchema.optional(),
+    classification: ScreenClassificationSchema,
+    confidence: z.enum(["medium", "low"]),
+    visibleBlocker: z.boolean(),
+  })
+  .strict();
+export type ScreenObservation = z.infer<typeof ScreenObservationSchema>;
 
 export const AgentStatusSummarySchema = z
   .object({
@@ -239,6 +309,21 @@ export const AgentStatusSummarySchema = z
     progressStage: z.string().trim().min(1).max(100).optional(),
     nextStep: z.string().trim().min(1).max(1_000).optional(),
     blocker: z.string().trim().min(1).max(1_000).optional(),
+    statusRevision: z.number().int().nonnegative(),
+    completionRevision: z.number().int().nonnegative(),
+    operatorAcknowledgedCompletionRevision: z.number().int().nonnegative(),
+    completionPending: z.boolean(),
+    interactiveReady: z.boolean(),
+    staleAuthority: z.boolean(),
+    authorityKind: StatusAuthorityKindSchema,
+    authorityId: IdentifierSchema.optional(),
+    evidenceConfidence: AgentStatusConfidenceSchema,
+    processState: ProcessStateSchema,
+    processFingerprint: FingerprintSchema.optional(),
+    reporterEpoch: IdentifierSchema.optional(),
+    reporterLeaseExpiresAt: TimestampSchema.optional(),
+    readinessCoverage: ReporterReadinessCoverageSchema.optional(),
+    lastScreenObservation: ScreenObservationSchema.optional(),
   })
   .strict();
 export type AgentStatusSummary = z.infer<typeof AgentStatusSummarySchema>;
@@ -266,3 +351,14 @@ export const StatusRevisionSchema = z
     createdAt: TimestampSchema,
   })
   .strict();
+
+export const CompletionAcknowledgementSchema = z
+  .object({
+    operatorId: IdentifierSchema,
+    runId: IdentifierSchema,
+    generation: z.number().int().positive(),
+    completionRevision: z.number().int().nonnegative(),
+    acknowledgedAt: TimestampSchema,
+  })
+  .strict();
+export type CompletionAcknowledgement = z.infer<typeof CompletionAcknowledgementSchema>;

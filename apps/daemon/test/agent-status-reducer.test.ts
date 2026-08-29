@@ -22,14 +22,28 @@ function reporterEvent(
     event: "reporter.event",
     observedAt: options.observedAt ?? "2026-08-11T12:00:01.000Z",
     input: {
-      version: 1,
+      version: 2,
       eventId: `event-${event}-${options.operationId ?? options.requestId ?? "one"}`,
+      providerId: "claude-code",
+      adapterId: "claude-code",
+      reporterId: "claude-hooks",
       source: "claude-code",
-      reporterVersion: "1",
+      protocolVersion: 2,
+      reporterVersion: "2",
+      runId: current.runId,
+      generation: current.generation,
+      reporterEpoch: "epoch-one",
+      sourceSequence: current.statusRevision + 1,
       event: event as never,
       operationId: options.operationId,
       requestId: options.requestId,
       data: options.data ?? {},
+    },
+    authority: {
+      sessionId: "reporter-one",
+      reporterEpoch: "epoch-one",
+      readinessCoverage: "full",
+      leaseExpiresAt: "2026-08-11T13:00:00.000Z",
     },
   });
 }
@@ -38,7 +52,7 @@ describe("agent status reducer", () => {
   it("tracks correlated tools and settles only after all work closes", () => {
     let state = createAgentStatusReducerState("run_1", 1, startedAt);
     state = reporterEvent(state, "session.ready");
-    expect(state.state).toBe("waiting");
+    expect(state.state).toBe("idle");
 
     state = reporterEvent(state, "tool.started", { operationId: "tool_1" });
     state = reporterEvent(state, "tool.started", { operationId: "tool_2" });
@@ -49,7 +63,7 @@ describe("agent status reducer", () => {
     expect(state.state).toBe("working");
     state = reporterEvent(state, "tool.finished", { operationId: "tool_2" });
     state = reporterEvent(state, "turn.settled");
-    expect(state).toMatchObject({ state: "waiting", phase: "settled", openTools: [] });
+    expect(state).toMatchObject({ state: "idle", phase: "settled", openTools: [] });
   });
 
   it("keeps explicit waits out of stuck inference until the matching request closes", () => {
@@ -73,7 +87,7 @@ describe("agent status reducer", () => {
       eventId: "probe_2",
       observedAt: "2026-08-11T13:01:00.000Z",
     });
-    expect(state).toMatchObject({ state: "waiting", attention: "decision_required" });
+    expect(state).toMatchObject({ state: "blocked", attention: "decision_required" });
 
     state = reporterEvent(state, "tool.started", { operationId: "parallel-tool" });
     state = reduceAgentStatus(state, {
@@ -82,7 +96,7 @@ describe("agent status reducer", () => {
       observedAt: "2026-08-11T13:02:00.000Z",
       report: { stage: "blocked", summary: "Waiting for approval" },
     });
-    expect(state).toMatchObject({ state: "waiting", attention: "decision_required" });
+    expect(state).toMatchObject({ state: "blocked", attention: "decision_required" });
 
     state = reporterEvent(state, "wait.closed", { requestId: "request_1" });
     expect(state).toMatchObject({ state: "working", attention: "none", openWaits: [] });
@@ -107,7 +121,7 @@ describe("agent status reducer", () => {
       },
     );
 
-    expect(state).toMatchObject({ state: "waiting", attention });
+    expect(state).toMatchObject({ state: "blocked", attention });
   });
 
   it("requires two expired progress probes before suspecting a stuck agent", () => {
@@ -131,7 +145,7 @@ describe("agent status reducer", () => {
     });
   });
 
-  it("treats a long-lived process without reporter events as waiting", () => {
+  it("treats a long-lived process without reporter events as unknown", () => {
     let state = createAgentStatusReducerState("run_1", 1, startedAt);
     state = reduceAgentStatus(state, {
       event: "process.alive",
@@ -144,14 +158,14 @@ describe("agent status reducer", () => {
       observedAt: "2026-08-11T12:01:00.000Z",
     });
     expect(state).toMatchObject({
-      state: "waiting",
-      phase: "settled",
+      state: "unknown",
+      phase: "startup",
       confidence: "low",
-      attention: "none",
+      attention: "reporter_stale",
     });
   });
 
-  it("classifies unexpected exit as crashed and operator exit as stopped", () => {
+  it("classifies unexpected exit as failed and operator exit as stopped", () => {
     const working = reporterEvent(
       createAgentStatusReducerState("run_1", 1, startedAt),
       "turn.started",
@@ -163,7 +177,7 @@ describe("agent status reducer", () => {
         observedAt: "2026-08-11T12:00:05.000Z",
         exitCode: 0,
       }),
-    ).toMatchObject({ state: "crashed", outcome: "failed", processExitCode: 0 });
+    ).toMatchObject({ state: "failed", outcome: "failed", processExitCode: 0 });
     expect(
       reduceAgentStatus(working, {
         event: "process.exited",
@@ -179,7 +193,7 @@ describe("agent status reducer", () => {
     let state = reporterEvent(createAgentStatusReducerState("run_1", 1, startedAt), "turn.started");
     state = reporterEvent(state, "session.ended");
     expect(state).toMatchObject({
-      state: "waiting",
+      state: "idle",
       phase: "settled",
       cleanEndSeen: true,
     });

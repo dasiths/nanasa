@@ -22,7 +22,7 @@ export class CopilotAdapter implements ProviderAdapter {
   public readonly supportedVersions = Object.freeze([">=0.0.0"]);
   public readonly reporter = freezeReporterDescriptor({
     id: "copilot-hooks",
-    version: "1",
+    version: "2",
     source: "copilot",
     readinessEvents: ["session.ready"],
     coverage: {

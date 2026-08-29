@@ -1,6 +1,8 @@
-export const STATUS_REPORTER_VERSION = "1";
+export const STATUS_REPORTER_VERSION = "2";
 
 export const HOOK_STATUS_REPORTER_SOURCE = String.raw`import { createHash, randomUUID } from "node:crypto";
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 const source = process.argv[2];
 const configuredEvent = process.argv[3];
@@ -16,15 +18,48 @@ function stableId(...parts) {
   return createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 32);
 }
 
+function nextSequence() {
+  const path = process.env.NANASA_REPORTER_SEQUENCE_FILE;
+  const epoch = process.env.NANASA_REPORTER_EPOCH;
+  if (!path || !epoch) return undefined;
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const lock = path + ".lock";
+  let descriptor;
+  try {
+    descriptor = openSync(lock, "wx", 0o600);
+    let sequence = 0;
+    try {
+      const current = JSON.parse(readFileSync(path, "utf8"));
+      if (current.epoch === epoch && Number.isSafeInteger(current.sequence)) sequence = current.sequence;
+    } catch {}
+    sequence += 1;
+    const temporary = path + "." + process.pid + ".tmp";
+    writeFileSync(temporary, JSON.stringify({ epoch, sequence }), { mode: 0o600 });
+    renameSync(temporary, path);
+    return sequence;
+  } catch { return undefined; }
+  finally { if (descriptor !== undefined) closeSync(descriptor); rmSync(lock, { force: true }); }
+}
+
 function base(input, event, fields = {}) {
+  const sourceSequence = nextSequence();
+  if (sourceSequence === undefined) return undefined;
   return {
-    version: 1,
+    version: 2,
     eventId: randomUUID(),
-    source,
-    reporterVersion: "1",
+    providerId: process.env.NANASA_REPORTER_PROVIDER_ID,
+    adapterId: process.env.NANASA_REPORTER_ADAPTER_ID,
+    reporterId: process.env.NANASA_REPORTER_ID,
+    source: process.env.NANASA_REPORTER_SOURCE || source,
+    protocolVersion: Number(process.env.NANASA_REPORTER_PROTOCOL_VERSION),
+    reporterVersion: process.env.NANASA_REPORTER_VERSION,
+    runId: process.env.NANASA_REPORTER_RUN_ID,
+    generation: Number(process.env.NANASA_REPORTER_GENERATION),
+    reporterEpoch: process.env.NANASA_REPORTER_EPOCH,
+    sourceSequence,
     event,
     occurredAt: new Date().toISOString(),
-    ...(input.session_id || input.sessionId ? { sessionId: input.session_id || input.sessionId } : {}),
+    ...(input.session_id || input.sessionId ? { nativeSessionId: input.session_id || input.sessionId } : {}),
     ...fields,
   };
 }
@@ -78,7 +113,7 @@ function normalize(input) {
 async function send(event) {
   const url = process.env.NANASA_STATUS_URL;
   const token = process.env.NANASA_MCP_TOKEN;
-  if (!url || !token) return;
+  if (!url || !token || !event) return;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 500);
   try {
@@ -102,10 +137,11 @@ export const PI_STATUS_REPORTER_SOURCE = String.raw`function reporter() {
   const url = process.env.NANASA_STATUS_URL;
   const token = process.env.NANASA_MCP_TOKEN;
   let sessionId;
+  let sourceSequence = 0;
   let heartbeat;
   const send = (event, fields = {}) => {
     if (!url || !token) return;
-    const envelope = { version: 1, eventId: crypto.randomUUID(), source: "pi", reporterVersion: "1", event, occurredAt: new Date().toISOString(), ...(sessionId ? { sessionId } : {}), ...fields };
+    const envelope = { version: 2, eventId: crypto.randomUUID(), providerId: process.env.NANASA_REPORTER_PROVIDER_ID, adapterId: process.env.NANASA_REPORTER_ADAPTER_ID, reporterId: process.env.NANASA_REPORTER_ID, source: process.env.NANASA_REPORTER_SOURCE, protocolVersion: Number(process.env.NANASA_REPORTER_PROTOCOL_VERSION), reporterVersion: process.env.NANASA_REPORTER_VERSION, runId: process.env.NANASA_REPORTER_RUN_ID, generation: Number(process.env.NANASA_REPORTER_GENERATION), reporterEpoch: process.env.NANASA_REPORTER_EPOCH, sourceSequence: ++sourceSequence, event, occurredAt: new Date().toISOString(), ...(sessionId ? { nativeSessionId: sessionId } : {}), ...fields };
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1000);
     void fetch(url, { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify(envelope), signal: controller.signal }).catch(() => undefined).finally(() => clearTimeout(timeout));
@@ -134,9 +170,10 @@ export const OPENCODE_STATUS_REPORTER_SOURCE = String.raw`export const NanasaSta
   const url = process.env.NANASA_STATUS_URL;
   const token = process.env.NANASA_MCP_TOKEN;
   const sessions = new Set();
+  let sourceSequence = 0;
   const send = (event, sessionId, fields = {}) => {
     if (!url || !token) return;
-    const envelope = { version: 1, eventId: crypto.randomUUID(), source: "opencode", reporterVersion: "1", event, occurredAt: new Date().toISOString(), ...(sessionId ? { sessionId } : {}), ...fields };
+    const envelope = { version: 2, eventId: crypto.randomUUID(), providerId: process.env.NANASA_REPORTER_PROVIDER_ID, adapterId: process.env.NANASA_REPORTER_ADAPTER_ID, reporterId: process.env.NANASA_REPORTER_ID, source: process.env.NANASA_REPORTER_SOURCE, protocolVersion: Number(process.env.NANASA_REPORTER_PROTOCOL_VERSION), reporterVersion: process.env.NANASA_REPORTER_VERSION, runId: process.env.NANASA_REPORTER_RUN_ID, generation: Number(process.env.NANASA_REPORTER_GENERATION), reporterEpoch: process.env.NANASA_REPORTER_EPOCH, sourceSequence: ++sourceSequence, event, occurredAt: new Date().toISOString(), ...(sessionId ? { nativeSessionId: sessionId } : {}), ...fields };
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1000);
     void fetch(url, { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify(envelope), signal: controller.signal }).catch(() => undefined).finally(() => clearTimeout(timeout));
