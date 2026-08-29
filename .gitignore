@@ -160,3 +160,6 @@ apps/daemon/:memory:*
 # Nanasa repository-local runtime data. Commit .nanasa/config.yaml.
 .nanasa/state/
 .nanasa/runtime/
+
+# GitHub Copilot tracking files
+.copilot-tracking
