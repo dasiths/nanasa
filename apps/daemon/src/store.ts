@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   type AgentProfile,
@@ -53,6 +51,8 @@ import {
   type SubmitMessageCommand,
   SubmitMessageCommandSchema,
   type TerminalBinding,
+  type TerminalCheckpoint,
+  TerminalCheckpointSchema,
   type UpdateGroupCommand,
   UpdateGroupCommandSchema,
 } from "@nanasa/contracts";
@@ -65,6 +65,7 @@ import {
 } from "./agent-status-reducer.js";
 import { dockerMemberName, formatMemberId, type MemberNameGenerator } from "./member-id.js";
 import { orderedAgentEntries } from "./membership-order.js";
+import { openNanasaDatabase } from "./persistence/database.js";
 
 interface AddMembershipInput {
   memberId?: string;
@@ -110,8 +111,6 @@ interface AgentProfileRow {
   name: string;
   agent_type: string | null;
   kind: string;
-  adapter: string | null;
-  capabilities_json: string | null;
   command: string;
   args_json: string;
   working_directory: string | null;
@@ -144,8 +143,6 @@ interface RunRow {
   recovery_attempts: number | null;
   recovery_not_before: string | null;
   recovery_reason: string | null;
-  adapter_session_id: string | null;
-  adapter_session_json: string | null;
   terminal_json: string | null;
   started_at: string;
   stopped_at: string | null;
@@ -171,15 +168,9 @@ interface MessageRow {
 interface DeliveryRow {
   message_id: string;
   recipient_member_id: string;
-  requested_mode: string;
-  applied_mode: string | null;
-  fallback_applied: number;
   reason: string | null;
   status: string;
   attempts: number;
-  adapter: string | null;
-  adapter_session_id: string | null;
-  adapter_message_id: string | null;
   lease_owner: string | null;
   lease_expires_at: string | null;
   next_attempt_at: string | null;
@@ -191,8 +182,6 @@ interface DeliveryRow {
 interface AgentStatusCurrentRow {
   reducer_state_json: string;
 }
-
-const DATABASE_SCHEMA_VERSION = 4;
 
 export interface AgentStatusIdentity {
   groupId: string;
@@ -285,18 +274,11 @@ export class NanasaStore {
   readonly #memberNameGenerator: MemberNameGenerator;
 
   public constructor(path: string, options: NanasaStoreOptions = {}) {
-    if (path !== ":memory:") {
-      mkdirSync(dirname(path), { recursive: true });
-    }
-
-    this.#database = new DatabaseSync(path);
+    this.#database = openNanasaDatabase(path);
     this.#config = options.config;
     this.#configStatus = options.configStatus;
     this.#messageRetentionPerGroup = options.config?.messages.retentionPerGroup ?? 1_000;
     this.#memberNameGenerator = options.memberNameGenerator ?? dockerMemberName;
-    this.#database.exec("PRAGMA foreign_keys = ON");
-    this.#database.exec("PRAGMA journal_mode = WAL");
-    this.#migrate();
   }
 
   public close(): void {
@@ -311,6 +293,17 @@ export class NanasaStore {
   public reconcileTopology(config: NanasaConfig, configStatus?: ConfigStatus): void {
     const timestamp = new Date().toISOString();
     this.#transaction(() => {
+      for (const [roleId, definition] of Object.entries(config.roles)) {
+        this.#database
+          .prepare(
+            `INSERT INTO roles (id, definition_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               definition_json = excluded.definition_json,
+               updated_at = excluded.updated_at`,
+          )
+          .run(roleId, JSON.stringify(definition), timestamp, timestamp);
+      }
       for (const configuredGroup of Object.values(config.groups)) {
         for (const [agentId, configuredAgent] of Object.entries(configuredGroup.agents)) {
           const integration = config.integrations[configuredAgent.integrationId];
@@ -324,15 +317,13 @@ export class NanasaStore {
           this.#database
             .prepare(
               `INSERT INTO agent_profiles
-                 (id, name, agent_type, kind, adapter, capabilities_json, command, args_json,
+                 (id, name, agent_type, kind, command, args_json,
                   working_directory, environment_json, created_at, updated_at)
-               VALUES (?, ?, ?, ?, 'terminal', '[]', ?, ?, ?, ?, ?, ?)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                  name = excluded.name,
                  agent_type = excluded.agent_type,
                  kind = excluded.kind,
-                 adapter = excluded.adapter,
-                 capabilities_json = excluded.capabilities_json,
                  command = excluded.command,
                  args_json = excluded.args_json,
                  working_directory = excluded.working_directory,
@@ -549,17 +540,17 @@ export class NanasaStore {
           .run(groupId);
         this.#database
           .prepare(
-            "DELETE FROM agent_task_reports WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?)",
+            "DELETE FROM status_progress_reports WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?)",
           )
           .run(groupId);
         this.#database
           .prepare(
-            "DELETE FROM agent_status_events WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?)",
+            "DELETE FROM runtime_observations WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?)",
           )
           .run(groupId);
         this.#database
           .prepare(
-            "DELETE FROM agent_status_current WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?)",
+            "DELETE FROM status_revisions WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?)",
           )
           .run(groupId);
         const deletedRuns = this.#database
@@ -618,17 +609,15 @@ export class NanasaStore {
         this.#database
           .prepare(
             `INSERT INTO agent_profiles
-              (id, name, agent_type, kind, adapter, capabilities_json, command, args_json,
+              (id, name, agent_type, kind, command, args_json,
                working_directory, environment_json, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             profile.id,
             profile.name,
             profile.agentType,
             profile.kind,
-            "terminal",
-            "[]",
             profile.command,
             JSON.stringify(profile.args),
             profile.workingDirectory ?? null,
@@ -822,9 +811,8 @@ export class NanasaStore {
           `INSERT INTO runs
              (id, group_id, member_id, agent_profile_id, generation, status,
             desired_state, recovery_phase, recovery_attempts, recovery_not_before,
-            recovery_reason, adapter_session_id, adapter_session_json, terminal_json,
-            started_at, stopped_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            recovery_reason, terminal_json, started_at, stopped_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.id,
@@ -838,8 +826,6 @@ export class NanasaStore {
           input.recoveryAttempts,
           input.recoveryNotBefore ?? null,
           input.recoveryReason ?? null,
-          null,
-          null,
           input.terminal === undefined ? null : JSON.stringify(input.terminal),
           input.startedAt,
           input.stoppedAt ?? null,
@@ -1098,7 +1084,7 @@ export class NanasaStore {
       const run = this.#requireCurrentAgentStatusRun(identity);
       const duplicate = this.#database
         .prepare(
-          `SELECT 1 FROM agent_status_events
+          `SELECT 1 FROM runtime_observations
            WHERE run_id = ? AND generation = ? AND event_id = ?`,
         )
         .get(run.id, run.generation, input.eventId);
@@ -1151,7 +1137,7 @@ export class NanasaStore {
       const eventId = `progress_${randomUUID()}`;
       this.#database
         .prepare(
-          `INSERT INTO agent_task_reports
+          `INSERT INTO status_progress_reports
              (id, run_id, generation, stage, summary, next_step, blocker, outcome, reported_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
@@ -1200,7 +1186,7 @@ export class NanasaStore {
       const run = this.getRun(runId);
       const duplicate = this.#database
         .prepare(
-          `SELECT 1 FROM agent_status_events
+          `SELECT 1 FROM runtime_observations
            WHERE run_id = ? AND generation = ? AND event_id = ?`,
         )
         .get(run.id, run.generation, observation.eventId);
@@ -1697,8 +1683,7 @@ export class NanasaStore {
     const result = this.#database
       .prepare(
         `UPDATE deliveries
-         SET status = 'delivering', applied_mode = ?, fallback_applied = ?,
-             reason = ?, adapter = ?, run_id = ?, run_generation = ?, updated_at = ?
+         SET status = 'delivering', reason = ?, run_id = ?, run_generation = ?, updated_at = ?
          WHERE message_id = ? AND recipient_member_id = ? AND status = 'received'
            AND lease_owner = ?
            AND EXISTS (
@@ -1711,10 +1696,7 @@ export class NanasaStore {
            )`,
       )
       .run(
-        "terminal",
-        0,
         null,
-        "terminal",
         claim.run.id,
         claim.run.generation,
         timestamp,
@@ -1729,20 +1711,18 @@ export class NanasaStore {
     return Number(result.changes) === 1;
   }
 
-  public markDeliveryConsumed(claim: DeliveryClaim, owner: string): boolean {
+  public markDeliveryTerminalInjected(claim: DeliveryClaim, owner: string): boolean {
     const timestamp = new Date().toISOString();
     const event = this.#transaction(() => {
       const updated = this.#database
         .prepare(
           `UPDATE deliveries
-           SET status = 'consumed', adapter_session_id = ?, adapter_message_id = ?,
-               lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+             SET status = 'terminal_injected', lease_owner = NULL, lease_expires_at = NULL,
+               updated_at = ?
            WHERE message_id = ? AND recipient_member_id = ? AND status = 'delivering'
              AND lease_owner = ? AND run_id = ? AND run_generation = ?`,
         )
         .run(
-          null,
-          null,
           timestamp,
           claim.message.id,
           claim.delivery.recipientMemberId,
@@ -1754,7 +1734,7 @@ export class NanasaStore {
       return this.#appendEvent("delivery.status-changed", "message", claim.message.id, {
         messageId: claim.message.id,
         recipientMemberId: claim.delivery.recipientMemberId,
-        status: "consumed",
+        status: "terminal_injected",
       });
     });
     if (event === undefined) return false;
@@ -1853,6 +1833,110 @@ export class NanasaStore {
       )
       .all(afterSequence) as unknown as EventRow[];
     return rows.map((row) => this.#hydrateEvent(row));
+  }
+
+  public saveTerminalCheckpoint(
+    ownerPrincipalId: string,
+    checkpoint: Omit<TerminalCheckpoint, "id" | "ownerPrincipalId">,
+  ): TerminalCheckpoint {
+    if (this.#config?.terminal.checkpoints.enabled !== true) {
+      throw new DomainError(
+        "terminal_checkpoints_disabled",
+        "Terminal checkpoint storage is disabled by configuration",
+        409,
+      );
+    }
+    const value = TerminalCheckpointSchema.parse({
+      ...checkpoint,
+      id: `checkpoint_${randomUUID()}`,
+      ownerPrincipalId,
+    });
+    const run = this.getRun(value.runId);
+    if (run.generation !== value.generation) {
+      throw new DomainError(
+        "terminal_checkpoint_generation_mismatch",
+        "Terminal checkpoint generation does not match the run",
+        409,
+      );
+    }
+    this.#database
+      .prepare(
+        `INSERT INTO terminal_checkpoints
+           (id, owner_principal_id, run_id, generation, terminal_binding_json, captured_at,
+            line_count, byte_count, truncated, sensitivity_policy, storage_reference,
+            expires_at, deleted_at, deletion_audit_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+      )
+      .run(
+        value.id,
+        value.ownerPrincipalId,
+        value.runId,
+        value.generation,
+        JSON.stringify(value.terminalBinding),
+        value.capturedAt,
+        value.lineCount,
+        value.byteCount,
+        value.truncated ? 1 : 0,
+        value.sensitivity,
+        value.storageReference,
+        value.expiresAt,
+      );
+    return value;
+  }
+
+  public listTerminalCheckpoints(ownerPrincipalId: string): TerminalCheckpoint[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT * FROM terminal_checkpoints
+         WHERE owner_principal_id = ? AND deleted_at IS NULL
+         ORDER BY captured_at DESC, id`,
+      )
+      .all(ownerPrincipalId) as Array<Record<string, unknown>>;
+    return rows.map((row) =>
+      TerminalCheckpointSchema.parse({
+        id: row.id,
+        ownerPrincipalId: row.owner_principal_id,
+        runId: row.run_id,
+        generation: row.generation,
+        terminalBinding: JSON.parse(String(row.terminal_binding_json)),
+        capturedAt: row.captured_at,
+        lineCount: row.line_count,
+        byteCount: row.byte_count,
+        truncated: row.truncated === 1,
+        sensitivity: row.sensitivity_policy,
+        storageReference: row.storage_reference,
+        expiresAt: row.expires_at,
+      }),
+    );
+  }
+
+  public deleteTerminalCheckpoint(ownerPrincipalId: string, checkpointId: string): boolean {
+    const occurredAt = new Date().toISOString();
+    return this.#transaction(() => {
+      const checkpoint = this.#database
+        .prepare(
+          `SELECT id FROM terminal_checkpoints
+           WHERE id = ? AND owner_principal_id = ? AND deleted_at IS NULL`,
+        )
+        .get(checkpointId, ownerPrincipalId);
+      if (checkpoint === undefined) return false;
+      const auditId = `audit_${randomUUID()}`;
+      this.#database
+        .prepare(
+          `INSERT INTO audits
+             (id, principal_id, action, resource_type, resource_id, metadata_json, occurred_at)
+           VALUES (?, ?, 'terminal-checkpoint.delete', 'terminal-checkpoint', ?, '{}', ?)`,
+        )
+        .run(auditId, ownerPrincipalId, checkpointId, occurredAt);
+      this.#database
+        .prepare(
+          `UPDATE terminal_checkpoints
+           SET deleted_at = ?, deletion_audit_id = ?
+           WHERE id = ? AND owner_principal_id = ?`,
+        )
+        .run(occurredAt, auditId, checkpointId, ownerPrincipalId);
+      return true;
+    });
   }
 
   public recordRuntimeEvent(
@@ -2134,22 +2218,15 @@ export class NanasaStore {
     this.#database
       .prepare(
         `INSERT INTO deliveries
-           (message_id, recipient_member_id, requested_mode, applied_mode, fallback_applied,
-            reason, status, attempts, adapter, adapter_session_id, adapter_message_id, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (message_id, recipient_member_id, reason, status, attempts, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(
         outcome.messageId,
         outcome.recipientMemberId,
-        "terminal",
-        "terminal",
-        0,
         outcome.reason ?? null,
         outcome.status,
         outcome.attempts,
-        "terminal",
-        null,
-        null,
         outcome.updatedAt,
       );
   }
@@ -2194,7 +2271,7 @@ export class NanasaStore {
         : null;
     this.#database
       .prepare(
-        `INSERT INTO agent_status_events
+        `INSERT INTO runtime_observations
            (event_id, run_id, generation, source, kind, source_occurred_at,
             observed_at, payload_json)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -2214,9 +2291,9 @@ export class NanasaStore {
   #trimAgentStatusEvents(runId: string, generation: number): void {
     this.#database
       .prepare(
-        `DELETE FROM agent_status_events
+        `DELETE FROM runtime_observations
          WHERE run_id = ? AND generation = ? AND sequence NOT IN (
-           SELECT sequence FROM agent_status_events
+           SELECT sequence FROM runtime_observations
            WHERE run_id = ? AND generation = ?
            ORDER BY sequence DESC LIMIT 256
          )`,
@@ -2252,7 +2329,7 @@ export class NanasaStore {
 
   #agentStatusState(run: AgentRun): AgentStatusReducerState {
     const row = this.#database
-      .prepare("SELECT reducer_state_json FROM agent_status_current WHERE run_id = ?")
+      .prepare("SELECT reducer_state_json FROM status_revisions WHERE run_id = ?")
       .get(run.id) as unknown as AgentStatusCurrentRow | undefined;
     return row === undefined
       ? createAgentStatusReducerState(run.id, run.generation, run.startedAt)
@@ -2263,11 +2340,12 @@ export class NanasaStore {
     const serialized = JSON.stringify(state);
     this.#database
       .prepare(
-        `INSERT INTO agent_status_current
-           (run_id, generation, status_json, reducer_state_json, updated_at)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO status_revisions
+           (run_id, generation, status_revision, completion_revision, status_json, reducer_state_json, updated_at)
+         VALUES (?, ?, 0, 0, ?, ?, ?)
          ON CONFLICT(run_id) DO UPDATE SET
            generation = excluded.generation,
+           status_revision = status_revisions.status_revision + 1,
            status_json = excluded.status_json,
            reducer_state_json = excluded.reducer_state_json,
            updated_at = excluded.updated_at`,
@@ -2435,11 +2513,10 @@ export class NanasaStore {
   }
 
   #hydrateAgentProfile(row: AgentProfileRow): AgentProfile {
-    const agentType = row.agent_type ?? this.#inferAgentType(row.kind, row.command, row.args_json);
     return AgentProfileSchema.parse({
       id: row.id,
       name: row.name,
-      agentType,
+      agentType: row.agent_type,
       kind: row.kind,
       command: row.command,
       args: JSON.parse(row.args_json),
@@ -2484,10 +2561,6 @@ export class NanasaStore {
   }
 
   #hydrateMessage(row: MessageRow): Message {
-    const storedDelivery = JSON.parse(row.delivery_json) as {
-      mode?: string;
-      expiresAt?: string;
-    };
     return MessageSchema.parse({
       id: row.id,
       groupId: row.group_id,
@@ -2497,9 +2570,7 @@ export class NanasaStore {
       sender: JSON.parse(row.sender_json),
       audience: JSON.parse(row.audience_json),
       body: JSON.parse(row.body_json),
-      delivery: {
-        ...(storedDelivery.expiresAt === undefined ? {} : { expiresAt: storedDelivery.expiresAt }),
-      },
+      delivery: JSON.parse(row.delivery_json),
       replyTo: row.reply_to ?? undefined,
       rootId: row.root_id ?? undefined,
       causationId: row.causation_id ?? undefined,
@@ -2541,389 +2612,5 @@ export class NanasaStore {
       this.#database.exec("ROLLBACK");
       throw error;
     }
-  }
-
-  #inferAgentType(kind: string, command: string, argsJson: string): string {
-    if (kind === "claude-code") {
-      const args = JSON.parse(argsJson) as unknown[];
-      return command === "make" && args[0] === "claude-copilot" ? "claude-copilot" : "claude-code";
-    }
-    return kind;
-  }
-
-  #migrate(): void {
-    const initialVersion = this.#database.prepare("PRAGMA user_version").get() as unknown as {
-      user_version: number;
-    };
-    if (initialVersion.user_version > DATABASE_SCHEMA_VERSION) {
-      throw new Error(`Unsupported database schema version ${initialVersion.user_version}`);
-    }
-    this.#database.exec(`
-      CREATE TABLE IF NOT EXISTS groups (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        membership_revision INTEGER NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        message_sequence INTEGER NOT NULL DEFAULT 0
-      ) STRICT;
-
-      CREATE TABLE IF NOT EXISTS agent_profiles (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        agent_type TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        adapter TEXT NOT NULL,
-        capabilities_json TEXT NOT NULL,
-        command TEXT NOT NULL,
-        args_json TEXT NOT NULL,
-        working_directory TEXT,
-        environment_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      ) STRICT;
-
-      CREATE TABLE IF NOT EXISTS memberships (
-        id TEXT PRIMARY KEY,
-        group_id TEXT NOT NULL REFERENCES groups(id),
-        member_id TEXT NOT NULL,
-        agent_profile_id TEXT NOT NULL REFERENCES agent_profiles(id),
-        alias TEXT NOT NULL,
-        role_id TEXT,
-        state TEXT NOT NULL CHECK (state IN ('active', 'removed')),
-        joined_at TEXT NOT NULL,
-        removed_at TEXT,
-        UNIQUE (group_id, member_id)
-      ) STRICT;
-
-      CREATE TABLE IF NOT EXISTS runs (
-        id TEXT PRIMARY KEY,
-        group_id TEXT NOT NULL REFERENCES groups(id),
-        member_id TEXT NOT NULL,
-        agent_profile_id TEXT NOT NULL REFERENCES agent_profiles(id),
-        generation INTEGER NOT NULL,
-        status TEXT NOT NULL,
-        desired_state TEXT NOT NULL,
-        recovery_phase TEXT NOT NULL,
-        recovery_attempts INTEGER NOT NULL DEFAULT 0,
-        recovery_not_before TEXT,
-        recovery_reason TEXT,
-        adapter_session_id TEXT,
-        adapter_session_json TEXT,
-        terminal_json TEXT,
-        started_at TEXT NOT NULL,
-        stopped_at TEXT,
-        UNIQUE (group_id, member_id, generation),
-        FOREIGN KEY (group_id, member_id) REFERENCES memberships(group_id, member_id)
-      ) STRICT;
-
-      CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY,
-        group_id TEXT NOT NULL REFERENCES groups(id),
-        group_seq INTEGER NOT NULL,
-        conversation_id TEXT NOT NULL,
-        intent TEXT NOT NULL,
-        sender_json TEXT NOT NULL,
-        audience_json TEXT NOT NULL,
-        body_json TEXT NOT NULL,
-        delivery_json TEXT NOT NULL,
-        reply_to TEXT REFERENCES messages(id),
-        root_id TEXT REFERENCES messages(id),
-        causation_id TEXT REFERENCES messages(id),
-        hop INTEGER NOT NULL,
-        created_at TEXT NOT NULL,
-        UNIQUE (group_id, group_seq)
-      ) STRICT;
-
-      CREATE TABLE IF NOT EXISTS deliveries (
-        message_id TEXT NOT NULL REFERENCES messages(id),
-        recipient_member_id TEXT NOT NULL,
-        requested_mode TEXT NOT NULL,
-        applied_mode TEXT,
-        fallback_applied INTEGER NOT NULL,
-        reason TEXT,
-        status TEXT NOT NULL,
-        attempts INTEGER NOT NULL,
-        adapter TEXT,
-        adapter_session_id TEXT,
-        adapter_message_id TEXT,
-        lease_owner TEXT,
-        lease_expires_at TEXT,
-        next_attempt_at TEXT,
-        run_id TEXT,
-        run_generation INTEGER,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (message_id, recipient_member_id)
-      ) STRICT;
-
-      CREATE TABLE IF NOT EXISTS domain_events (
-        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-        id TEXT NOT NULL UNIQUE,
-        type TEXT NOT NULL,
-        aggregate_type TEXT NOT NULL,
-        aggregate_id TEXT NOT NULL,
-        occurred_at TEXT NOT NULL,
-        payload_json TEXT NOT NULL
-      ) STRICT;
-
-      CREATE TABLE IF NOT EXISTS idempotency_keys (
-        scope TEXT NOT NULL,
-        key TEXT NOT NULL,
-        response_json TEXT NOT NULL,
-        event_sequence INTEGER NOT NULL REFERENCES domain_events(sequence),
-        created_at TEXT NOT NULL,
-        invalidated_at TEXT,
-        PRIMARY KEY (scope, key)
-      ) STRICT;
-
-      CREATE INDEX IF NOT EXISTS deliveries_recipient_status
-        ON deliveries (recipient_member_id, status);
-      CREATE INDEX IF NOT EXISTS events_aggregate
-        ON domain_events (aggregate_type, aggregate_id, sequence);
-    `);
-    this.#migrateLegacyColumns();
-    this.#migrateTerminalRuntime();
-    this.#migrateAgentStatusFoundation();
-    this.#migrateMessageHistory();
-    this.#migrateRoleAssignments();
-  }
-
-  #migrateLegacyColumns(): void {
-    const columns = (table: string) =>
-      new Set(
-        (
-          this.#database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
-        ).map((column) => column.name),
-      );
-    const addColumn = (table: string, name: string, definition: string) => {
-      if (!columns(table).has(name)) {
-        this.#database.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
-      }
-    };
-
-    addColumn("agent_profiles", "agent_type", "TEXT");
-    addColumn("agent_profiles", "adapter", "TEXT");
-    addColumn("agent_profiles", "capabilities_json", "TEXT");
-    this.#database.exec(`
-      UPDATE agent_profiles
-      SET agent_type = CASE
-        WHEN kind = 'claude-code' AND command = 'make'
-          AND json_extract(args_json, '$[0]') = 'claude-copilot' THEN 'claude-copilot'
-        ELSE kind
-      END
-      WHERE agent_type IS NULL;
-      UPDATE agent_profiles
-      SET adapter = CASE kind
-        WHEN 'copilot' THEN 'copilot-cli'
-        WHEN 'pi' THEN 'pi-rpc'
-        ELSE 'terminal'
-      END
-      WHERE adapter IS NULL;
-      UPDATE agent_profiles
-      SET capabilities_json = CASE
-        WHEN kind = 'pi' THEN '["queue","steer"]'
-        ELSE '["queue"]'
-      END
-      WHERE capabilities_json IS NULL;
-      UPDATE agent_profiles
-      SET adapter = 'copilot-cli', capabilities_json = '["queue"]'
-      WHERE adapter = 'copilot-sdk';
-    `);
-
-    addColumn("runs", "desired_state", "TEXT");
-    addColumn("runs", "recovery_phase", "TEXT");
-    addColumn("runs", "recovery_attempts", "INTEGER NOT NULL DEFAULT 0");
-    addColumn("runs", "recovery_not_before", "TEXT");
-    addColumn("runs", "recovery_reason", "TEXT");
-    addColumn("runs", "adapter_session_json", "TEXT");
-    this.#database.exec(`
-      UPDATE runs
-      SET desired_state = CASE WHEN status = 'stopped' THEN 'stopped' ELSE 'running' END
-      WHERE desired_state IS NULL;
-      UPDATE runs SET recovery_phase = 'idle' WHERE recovery_phase IS NULL;
-      UPDATE runs
-      SET adapter_session_json = json_set(adapter_session_json, '$.adapter', 'copilot-cli')
-      WHERE json_extract(adapter_session_json, '$.adapter') = 'copilot-sdk';
-    `);
-
-    addColumn("deliveries", "adapter", "TEXT");
-    addColumn("deliveries", "adapter_session_id", "TEXT");
-    addColumn("deliveries", "adapter_message_id", "TEXT");
-    addColumn("deliveries", "lease_owner", "TEXT");
-    addColumn("deliveries", "lease_expires_at", "TEXT");
-    addColumn("deliveries", "next_attempt_at", "TEXT");
-    addColumn("deliveries", "run_id", "TEXT");
-    addColumn("deliveries", "run_generation", "INTEGER");
-    this.#database.exec(`
-      UPDATE deliveries SET adapter = 'copilot-cli' WHERE adapter = 'copilot-sdk';
-      CREATE INDEX IF NOT EXISTS deliveries_dispatch
-        ON deliveries (status, next_attempt_at, lease_expires_at, updated_at);
-    `);
-  }
-
-  #migrateTerminalRuntime(): void {
-    const version = this.#database.prepare("PRAGMA user_version").get() as unknown as {
-      user_version: number;
-    };
-    if (version.user_version >= 1) return;
-
-    this.#transaction(() => {
-      this.#database.exec(`
-        UPDATE runs
-        SET recovery_reason = 'terminal_runtime_migration',
-            recovery_phase = 'reconciling',
-            recovery_attempts = 0,
-            recovery_not_before = NULL
-        WHERE desired_state = 'running'
-          AND status IN ('starting', 'running')
-          AND agent_profile_id IN (
-            SELECT id FROM agent_profiles
-            WHERE adapter IN ('copilot-cli', 'pi-rpc', 'copilot-sdk')
-          );
-
-        UPDATE agent_profiles
-        SET adapter = 'terminal', capabilities_json = '[]';
-
-        UPDATE runs
-        SET recovery_phase = 'restarting'
-        WHERE recovery_phase = 'resuming';
-
-        UPDATE deliveries
-        SET requested_mode = 'terminal',
-            applied_mode = 'terminal',
-            fallback_applied = 0,
-            adapter = 'terminal',
-            adapter_session_id = NULL,
-            adapter_message_id = NULL,
-            status = CASE
-              WHEN status IN ('received', 'delivering') THEN 'queued'
-              ELSE status
-            END,
-            reason = CASE
-              WHEN status IN ('received', 'delivering') THEN NULL
-              ELSE reason
-            END,
-            lease_owner = NULL,
-            lease_expires_at = NULL,
-            next_attempt_at = NULL,
-            run_id = NULL,
-            run_generation = NULL
-        WHERE status IN ('queued', 'retrying', 'received', 'delivering');
-
-        PRAGMA user_version = 1;
-      `);
-    });
-  }
-
-  #migrateAgentStatusFoundation(): void {
-    const version = this.#database.prepare("PRAGMA user_version").get() as unknown as {
-      user_version: number;
-    };
-    if (version.user_version >= 2) return;
-    this.#transaction(() => {
-      this.#database.exec(`
-        CREATE TABLE IF NOT EXISTS agent_status_events (
-          sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-          event_id TEXT NOT NULL,
-          run_id TEXT NOT NULL REFERENCES runs(id),
-          generation INTEGER NOT NULL,
-          source TEXT NOT NULL,
-          kind TEXT NOT NULL,
-          source_occurred_at TEXT,
-          observed_at TEXT NOT NULL,
-          payload_json TEXT NOT NULL,
-          UNIQUE (run_id, generation, event_id)
-        ) STRICT;
-
-        CREATE TABLE IF NOT EXISTS agent_status_current (
-          run_id TEXT PRIMARY KEY REFERENCES runs(id),
-          generation INTEGER NOT NULL,
-          status_json TEXT NOT NULL,
-          reducer_state_json TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        ) STRICT;
-
-        CREATE TABLE IF NOT EXISTS agent_task_reports (
-          id TEXT PRIMARY KEY,
-          run_id TEXT NOT NULL REFERENCES runs(id),
-          generation INTEGER NOT NULL,
-          stage TEXT NOT NULL,
-          summary TEXT NOT NULL,
-          next_step TEXT,
-          blocker TEXT,
-          outcome TEXT,
-          reported_at TEXT NOT NULL
-        ) STRICT;
-
-        CREATE INDEX IF NOT EXISTS agent_status_events_run_sequence
-          ON agent_status_events (run_id, generation, sequence);
-        CREATE INDEX IF NOT EXISTS agent_task_reports_run_time
-          ON agent_task_reports (run_id, generation, reported_at);
-
-        PRAGMA user_version = 2;
-      `);
-    });
-  }
-
-  #migrateMessageHistory(): void {
-    const version = this.#database.prepare("PRAGMA user_version").get() as unknown as {
-      user_version: number;
-    };
-    if (version.user_version >= 3) return;
-    this.#transaction(() => {
-      const groupColumns = new Set(
-        (this.#database.prepare("PRAGMA table_info(groups)").all() as Array<{ name: string }>).map(
-          (column) => column.name,
-        ),
-      );
-      if (!groupColumns.has("message_sequence")) {
-        this.#database.exec(
-          "ALTER TABLE groups ADD COLUMN message_sequence INTEGER NOT NULL DEFAULT 0",
-        );
-      }
-      const idempotencyColumns = new Set(
-        (
-          this.#database.prepare("PRAGMA table_info(idempotency_keys)").all() as Array<{
-            name: string;
-          }>
-        ).map((column) => column.name),
-      );
-      if (!idempotencyColumns.has("invalidated_at")) {
-        this.#database.exec("ALTER TABLE idempotency_keys ADD COLUMN invalidated_at TEXT");
-      }
-      this.#database.exec(`
-        UPDATE groups SET message_sequence = COALESCE(
-          (SELECT MAX(group_seq) FROM messages WHERE messages.group_id = groups.id), 0
-        );
-        UPDATE domain_events
-        SET payload_json = json_object(
-          'groupId', json_extract(payload_json, '$.message.groupId'),
-          'groupSeq', json_extract(payload_json, '$.message.groupSeq')
-        )
-        WHERE type = 'message.submitted'
-          AND json_extract(payload_json, '$.message.id') IS NOT NULL;
-        PRAGMA user_version = 3;
-      `);
-    });
-  }
-
-  #migrateRoleAssignments(): void {
-    const version = this.#database.prepare("PRAGMA user_version").get() as unknown as {
-      user_version: number;
-    };
-    if (version.user_version >= 4) return;
-    this.#transaction(() => {
-      const membershipColumns = new Set(
-        (
-          this.#database.prepare("PRAGMA table_info(memberships)").all() as Array<{
-            name: string;
-          }>
-        ).map((column) => column.name),
-      );
-      if (!membershipColumns.has("role_id")) {
-        this.#database.exec("ALTER TABLE memberships ADD COLUMN role_id TEXT");
-      }
-      this.#database.exec("PRAGMA user_version = 4");
-    });
   }
 }

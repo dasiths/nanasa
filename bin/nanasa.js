@@ -14,6 +14,7 @@ function usage() {
        nanasa setup
        nanasa doctor
       nanasa auth <integration> [--agent <agent-id>]
+      nanasa reset --from-alpha --confirm <repository-root>
 
 Commands:
   start              Start the daemon and portal (default)
@@ -21,6 +22,7 @@ Commands:
   setup              Prepare repository-local integration configuration homes
   doctor             Validate configuration, commands, and integration homes
   auth               Launch an integration CLI in its isolated home
+  reset              Back up and destructively reset alpha config, state, and owned runtimes
 
 Options:
   --host <host>       Listen host; MCP requires loopback (default: 127.0.0.1)
@@ -109,6 +111,16 @@ function parseAuthOptions(args) {
     index += 1;
   }
   return { integrationId, agentId };
+}
+
+function parseResetOptions(args) {
+  if (args[0] !== "--from-alpha") {
+    throw new Error("nanasa reset requires --from-alpha");
+  }
+  if (args[1] !== "--confirm" || args[2] === undefined || args.length !== 3) {
+    throw new Error("nanasa reset --from-alpha requires --confirm <repository-root>");
+  }
+  return { confirmation: resolve(args[2]) };
 }
 
 function optionValue(args, index, option) {
@@ -214,7 +226,7 @@ export async function main(args = process.argv.slice(2), startPath = process.cwd
     initialize(startPath);
     return;
   }
-  if (["setup", "doctor", "auth"].includes(command)) {
+  if (["setup", "doctor", "auth", "reset"].includes(command)) {
     const repositoryRoot = findConfigRoot(startPath);
     if (repositoryRoot === undefined) {
       throw new Error(
@@ -229,9 +241,14 @@ export async function main(args = process.argv.slice(2), startPath = process.cwd
     } else if (command === "doctor") {
       if (rest.length > 0) throw new Error("nanasa doctor does not accept options");
       admin.doctorIntegrations(repositoryRoot);
-    } else {
+    } else if (command === "auth") {
       const options = parseAuthOptions(rest);
       admin.authenticateAgent(repositoryRoot, options.integrationId, options.agentId);
+    } else {
+      const options = parseResetOptions(rest);
+      const template = readFileSync(join(packageRoot, "templates", "config.yaml"), "utf8");
+      await admin.resetAlphaRepository(repositoryRoot, options.confirmation, template);
+      ensureNanasaIgnore(repositoryRoot);
     }
     return;
   }

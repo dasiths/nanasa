@@ -33,19 +33,20 @@ function createDaemon(options: DaemonOptions = {}) {
     );
     writeFileSync(
       join(repository, ".nanasa", "config.yaml"),
-      `integrations:
+      `version: 2
+integrations:
   copilot:
     name: GitHub Copilot
     kind: copilot
     command: [copilot]
     cwd: .
-    agentConfigHome: { scope: integration }
+    providerState: { scope: integration }
   claude-copilot:
     name: Claude Code via Copilot
     kind: claude-code
     command: [make, claude-copilot]
     cwd: .
-    agentConfigHome: { scope: integration }
+    providerState: { scope: integration }
 roles:
   reviewer:
     name: Reviewer
@@ -404,7 +405,7 @@ describe("daemon REST API", () => {
         sender: { kind: "operator", operatorId: "operator_1" },
         audience: { kind: "group", membershipRevision: 2 },
         body: { contentType: "text/markdown", text: "Review this API." },
-        delivery: { mode: "steer" },
+        delivery: {},
         hop: 0,
       },
     });
@@ -502,7 +503,7 @@ describe("daemon REST API", () => {
         sender: { kind: "operator", operatorId: "operator_1" },
         audience: { kind: "group", membershipRevision: 1 },
         body: { contentType: "text/plain", text: "No recipients." },
-        delivery: { mode: "queue" },
+        delivery: {},
       },
     });
     expect(staleBroadcast.statusCode).toBe(409);
@@ -515,7 +516,7 @@ describe("daemon REST API", () => {
         sender: { kind: "agent", memberId: "missing", runId: "missing" },
         audience: { kind: "dm", memberId: "missing" },
         body: { contentType: "text/plain", text: "Stop." },
-        delivery: { mode: "queue" },
+        delivery: {},
       },
     });
     expect(unauthorizedControl.statusCode).toBe(400);

@@ -84,7 +84,11 @@ const config: NanasaConfig = {
       name: "GitHub Copilot",
       kind: "copilot",
       command: ["copilot", "--acp", "--stdio"],
-      agentConfigHome: { scope: "integration" },
+      providerState: { scope: "integration" },
+      credentials: { kind: "provider-managed" },
+      model: { resumePolicy: "preserve-native" },
+      nativeRecovery: "resume-or-restart",
+      extensions: [],
       environment: {},
     },
     "claude-copilot": {
@@ -92,7 +96,11 @@ const config: NanasaConfig = {
       name: "Claude through Copilot",
       kind: "claude-code",
       command: ["make", "claude-copilot"],
-      agentConfigHome: { scope: "integration" },
+      providerState: { scope: "integration" },
+      credentials: { kind: "provider-managed" },
+      model: { resumePolicy: "preserve-native" },
+      nativeRecovery: "resume-or-restart",
+      extensions: [],
       environment: {},
     },
     "custom-agent": {
@@ -100,10 +108,26 @@ const config: NanasaConfig = {
       name: "Custom reviewer",
       kind: "opencode",
       command: ["custom-reviewer"],
-      agentConfigHome: { scope: "integration" },
+      providerState: { scope: "integration" },
+      credentials: { kind: "provider-managed" },
+      model: { resumePolicy: "preserve-native" },
+      nativeRecovery: "resume-or-restart",
+      extensions: [],
       environment: {},
     },
   },
+  version: 2,
+  repository: { path: ".", checkout: { kind: "current" } },
+  terminal: {
+    checkpoints: {
+      enabled: false,
+      maxLines: 5_000,
+      maxBytes: 1_048_576,
+      retentionSeconds: 86_400,
+      sensitivity: "repository-private",
+    },
+  },
+  extensions: {},
 };
 
 const profile: AgentProfile = {
@@ -1438,7 +1462,7 @@ describe("portal application", () => {
         {
           messageId: agentMessage.id,
           recipientMemberId: "builder",
-          status: "consumed",
+          status: "terminal_injected",
           attempts: 2,
           updatedAt: agentMessage.createdAt,
         },
@@ -1464,7 +1488,7 @@ describe("portal application", () => {
     const agentBubble = screen.getByText(/^From: Reviewer/).closest("article");
     expect(agentBubble).not.toBeNull();
     const agentDelivery = within(agentBubble!).getByRole("button", {
-      name: "Sent to 1 · 1 consumed",
+      name: "Sent to 1 · 1 terminal_injected",
     });
     await user.click(agentDelivery);
     expect(within(agentBubble!).getByText("Builder")).toBeInTheDocument();

@@ -79,7 +79,7 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
   await history.getByRole("button", { name: /Sent to 1/ }).click();
   await expect(history).toContainText("Alpha");
   await nanasa.waitForPaneText(paneByMember.get(members[0]!.memberId)!, "acceptance-dm");
-  await expect(history).toContainText("consumed");
+  await expect(history).toContainText("terminal_injected");
   expect(nanasa.capturePane(paneByMember.get(members[1]!.memberId)!)).not.toContain(
     "acceptance-dm",
   );
@@ -140,7 +140,9 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
   );
   const agentMessage = page.getByText("acceptance-agent-to-agent").locator("..");
   await expect(agentMessage).toContainText("From: Alpha");
-  await expect(agentMessage.getByRole("button", { name: /Sent to 1/ })).toContainText("consumed");
+  await expect(agentMessage.getByRole("button", { name: /Sent to 1/ })).toContainText(
+    "terminal_injected",
+  );
 
   await nanasa.agentMcpRequest(
     paneByMember.get(members[0]!.memberId)!,

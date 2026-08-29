@@ -78,11 +78,12 @@ test("init creates one repository-local config without runtime state", () => {
   );
   const original = readFileSync(configPath, "utf8");
   assert.match(original, /^integrations:$/m);
-  assert.doesNotMatch(original, /^version:/m);
+  assert.match(original, /^version: 2$/m);
   assert.doesNotMatch(original, /^agentProfiles:|^agentTypes:/m);
   assert.match(original, /command: \[copilot\]/);
   assert.match(original, /command: \[pi\]/);
-  assert.doesNotMatch(original, /^\s+(adapter|capabilities|recovery):/m);
+  assert.doesNotMatch(original, /^\s+(adapter|capabilities|recovery|agentConfigHome):/m);
+  assert.match(original, /^\s+providerState: \{ scope: membership \}$/m);
   assert.doesNotMatch(original, /packagefeedproxy|pkgs\.visualstudio|\/workspaces\/nanasa/);
 
   writeFileSync(configPath, `${original}# operator-owned\n`);
@@ -131,13 +132,14 @@ test("setup and doctor prepare private repository-local integrations", () => {
   assert.equal(runCli(repository, ["init"]).status, 0);
   writeFileSync(
     join(repository, ".nanasa", "config.yaml"),
-    `integrations:
+    `version: 2
+integrations:
   fixture:
     name: Fixture
     kind: copilot
     command: [node]
     cwd: .
-    agentConfigHome: { scope: integration }
+    providerState: { scope: integration }
 `,
   );
 
@@ -149,7 +151,7 @@ test("setup and doctor prepare private repository-local integrations", () => {
   assert.equal(setup.status, 0, setup.stderr);
   const integrations = join(repository, ".nanasa", "integrations");
   assert.equal(statSync(integrations).mode & 0o777, 0o700);
-  assert.equal(existsSync(join(integrations, "integrations", "fixture")), true);
+  assert.equal(existsSync(join(integrations, "integrations", "fixture", "state")), true);
 
   const doctor = runCli(repository, ["doctor"]);
   assert.equal(doctor.status, 0, doctor.stderr);
@@ -176,13 +178,14 @@ writeFileSync(process.env.AUTH_CAPTURE, JSON.stringify({
   );
   writeFileSync(
     join(repository, ".nanasa", "config.yaml"),
-    `integrations:
+    `version: 2
+integrations:
   fixture:
     name: Fixture Copilot
     kind: copilot
     command: [node, ${JSON.stringify(scriptPath)}]
     cwd: .
-    agentConfigHome: { scope: custom, path: "auth/{integrationId}" }
+    providerState: { scope: custom, path: "auth/{integrationId}" }
 `,
   );
 
@@ -206,13 +209,14 @@ test("agent-scoped auth requires a stable agent identifier", () => {
   assert.equal(runCli(repository, ["init"]).status, 0);
   writeFileSync(
     join(repository, ".nanasa", "config.yaml"),
-    `integrations:
+    `version: 2
+integrations:
   fixture:
     name: Fixture
     kind: copilot
     command: [node]
     cwd: .
-    agentConfigHome: { scope: agent }
+    providerState: { scope: membership }
 `,
   );
 
@@ -280,7 +284,8 @@ test("packed package installs cleanly and initializes terminal-only config", () 
   const config = readFileSync(configPath, "utf8");
   assert.match(config, /^integrations:$/m);
   assert.match(config, /command: \[copilot\]/);
-  assert.doesNotMatch(config, /^version:|^agentProfiles:|^agentTypes:/m);
-  assert.doesNotMatch(config, /^\s+(adapter|capabilities|recovery):/m);
+  assert.match(config, /^version: 2$/m);
+  assert.doesNotMatch(config, /^agentProfiles:|^agentTypes:/m);
+  assert.doesNotMatch(config, /^\s+(adapter|capabilities|recovery|agentConfigHome):/m);
   assert.equal(existsSync(join(repository, ".nanasa", "state")), false);
 });

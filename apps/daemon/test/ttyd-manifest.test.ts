@@ -86,8 +86,6 @@ function runningRun(store: NanasaStore): AgentRun {
     name: "Terminal",
     agentType: "opencode",
     kind: "opencode",
-    adapter: "terminal",
-    capabilities: ["queue"],
     command: "opencode",
     args: [],
     environment: {},

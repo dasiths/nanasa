@@ -116,7 +116,7 @@ function commandBase(principal: McpPrincipal, input: z.infer<typeof MessageField
         ? { kind: "agent" as const, memberId: principal.memberId, runId: principal.runId }
         : { kind: "operator" as const, operatorId: principal.operatorId },
     body: { contentType: input.contentType, text: input.text },
-    delivery: { mode: "terminal" as const },
+    delivery: {},
     replyTo: input.replyTo,
     hop: 0,
   };

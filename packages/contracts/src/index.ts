@@ -1,3 +1,13 @@
+export * from "./actions-v1.js";
+export * from "./config-v2.js";
+export * from "./control-v1.js";
+export * from "./events-v1.js";
+export * from "./git-v1.js";
+export * from "./provider-v1.js";
+export * from "./status-v2.js";
+export * from "./terminal-v1.js";
+
+/* Disabled pre-v2 monolith; removal is completed after dependent updates.
 import { z } from "zod";
 
 const IdentifierSchema = z.string().trim().min(1).max(128);
@@ -1056,7 +1066,7 @@ export const DeliveryStatusSchema = z.enum([
   "queued",
   "received",
   "delivering",
-  "consumed",
+  "terminal_injected",
   "processed",
   "retrying",
   "dead-letter",
@@ -1162,3 +1172,4 @@ export const PortalSnapshotSchema = z.object({
 });
 
 export type PortalSnapshot = z.infer<typeof PortalSnapshotSchema>;
+*/

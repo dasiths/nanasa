@@ -278,14 +278,15 @@ describeRuntime("real tmux and ttyd runtime", () => {
     mkdirSync(join(directory, ".nanasa"));
     writeFileSync(
       join(directory, ".nanasa", "config.yaml"),
-      `integrations:
+      `version: 2
+integrations:
   test-echo:
     name: Echo fixture
     kind: opencode
     command: ${JSON.stringify(["node", "-e", fixtureCode])}
     cwd: .
     environment: { NANASA_MEMBER: shared }
-    agentConfigHome: { scope: integration }
+    providerState: { scope: integration }
 groups: {}
 messages: { retentionPerGroup: 1000 }
 `,

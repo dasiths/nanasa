@@ -34,8 +34,6 @@ function runningRun(store: NanasaStore): AgentRun {
     name: "Fixture",
     agentType: "copilot",
     kind: "copilot",
-    adapter: "copilot-cli",
-    capabilities: ["queue"],
     command: "node",
     args: [],
     environment: {},

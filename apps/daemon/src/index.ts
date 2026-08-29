@@ -1,7 +1,7 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { discoverAndLoadNanasaConfig, loadNanasaConfig } from "./config.js";
+import { discoverAndLoadNanasaConfig, loadNanasaConfig } from "./config-v2.js";
 import { isLoopbackHost, validateMcpEndpointConfiguration } from "./mcp-config.js";
 import { createDaemon } from "./server.js";
 
@@ -11,7 +11,7 @@ export {
   discoverRepositoryRoot,
   loadNanasaConfig,
   nanasaPaths,
-} from "./config.js";
+} from "./config-v2.js";
 export { createDaemon } from "./server.js";
 export { DomainError, NanasaStore } from "./store.js";
 

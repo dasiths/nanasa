@@ -21,8 +21,6 @@ function createFixture(store = new NanasaStore(":memory:"), delivery: { expiresA
     name: "Native",
     agentType: "pi",
     kind: "pi",
-    adapter: "pi-rpc",
-    capabilities: ["queue", "steer"],
     command: "pi",
     args: [],
     environment: {},
@@ -67,7 +65,7 @@ describe("DeliveryDispatcher", () => {
     expect(target.deliver).toHaveBeenCalledTimes(1);
     expect(store.listDeliveries(submission.message.id)).toMatchObject([
       {
-        status: "consumed",
+        status: "terminal_injected",
         attempts: 1,
       },
     ]);
@@ -79,7 +77,7 @@ describe("DeliveryDispatcher", () => {
       payload: {
         messageId: submission.message.id,
         recipientMemberId: "worker",
-        status: "consumed",
+        status: "terminal_injected",
       },
     });
     unsubscribe();
@@ -113,7 +111,7 @@ describe("DeliveryDispatcher", () => {
     await Promise.all([firstTick, secondTick]);
 
     expect(primary.listDeliveries(submission.message.id)).toMatchObject([
-      { status: "consumed", attempts: 1 },
+      { status: "terminal_injected", attempts: 1 },
     ]);
     await Promise.all([first.close(), second.close()]);
     secondary.close();
@@ -277,7 +275,7 @@ describe("DeliveryDispatcher", () => {
 
     expect(target.deliver).toHaveBeenCalledOnce();
     expect(reopened.listDeliveries(submission.message.id)).toMatchObject([
-      { status: "consumed", attempts: 1 },
+      { status: "terminal_injected", attempts: 1 },
     ]);
     await dispatcher.close();
     reopened.close();

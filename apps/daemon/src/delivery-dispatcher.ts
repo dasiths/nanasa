@@ -110,7 +110,7 @@ export class DeliveryDispatcher {
     try {
       if (!this.#store.beginDelivery(claim, this.#owner)) return;
       await this.#target.deliver(claim);
-      this.#store.markDeliveryConsumed(claim, this.#owner);
+      this.#store.markDeliveryTerminalInjected(claim, this.#owner);
     } catch (error) {
       this.#retry(claim, error instanceof Error ? error.message : "terminal_delivery_failed");
     }

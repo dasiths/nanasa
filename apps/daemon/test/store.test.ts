@@ -27,8 +27,6 @@ describe("NanasaStore persistence", () => {
       name: "Reviewer",
       agentType: "copilot",
       kind: "copilot",
-      adapter: "copilot-cli",
-      capabilities: ["queue"],
       command: "copilot",
       args: ["--allow-all-tools"],
       environment: { NANASA_ROLE: "reviewer" },
@@ -52,7 +50,7 @@ describe("NanasaStore persistence", () => {
       sender: { kind: "operator", operatorId: "operator_1" },
       audience: { kind: "dm", memberId: membership.memberId },
       body: { contentType: "text/markdown", text: "Review the API." },
-      delivery: { mode: "steer" },
+      delivery: {},
       hop: 0,
     });
 
@@ -92,6 +90,7 @@ describe("NanasaStore persistence", () => {
     temporaryDirectories.push(directory);
     const databasePath = join(directory, "nanasa.sqlite");
     const config = NanasaConfigSchema.parse({
+      version: 2,
       integrations: {
         copilot: {
           id: "copilot",
@@ -172,8 +171,6 @@ describe("NanasaStore persistence", () => {
       name: "Recoverable",
       agentType: "pi",
       kind: "pi",
-      adapter: "pi-rpc",
-      capabilities: ["queue", "steer"],
       command: "pi",
       args: [],
       environment: {},
@@ -254,6 +251,7 @@ describe("NanasaStore persistence", () => {
 
   it("retains bounded message pages, clears history, and preserves sequence high-water", () => {
     const config = NanasaConfigSchema.parse({
+      version: 2,
       integrations: {
         copilot: {
           id: "copilot",
@@ -496,8 +494,6 @@ function createRoutingFixture(store: NanasaStore) {
     name: "Builder",
     agentType: "opencode",
     kind: "opencode",
-    adapter: "terminal",
-    capabilities: ["queue"],
     command: "opencode",
     args: [],
     environment: {},
@@ -530,7 +526,7 @@ describe("NanasaStore message routing", () => {
     const common = {
       intent: "request" as const,
       body: { contentType: "text/plain" as const, text: "Check this." },
-      delivery: { mode: "queue" as const },
+      delivery: {},
       hop: 0,
     };
 
@@ -548,7 +544,7 @@ describe("NanasaStore message routing", () => {
       ...common,
       sender: { kind: "agent", memberId: "alpha", runId: "run_alpha" },
       audience: { kind: "group", membershipRevision: 3 },
-      delivery: { mode: "steer" },
+      delivery: {},
     });
 
     expect(direct.deliveryOutcomes.map((outcome) => outcome.recipientMemberId)).toEqual(["alpha"]);
@@ -572,7 +568,7 @@ describe("NanasaStore message routing", () => {
       ...common,
       sender: operator,
       audience: { kind: "multicast", memberIds: ["alpha", "beta"] },
-      delivery: { mode: "terminal" },
+      delivery: {},
     });
     expect(terminal.deliveryOutcomes).toMatchObject([
       {
@@ -589,7 +585,7 @@ describe("NanasaStore message routing", () => {
       ...common,
       sender: { kind: "agent", memberId: "alpha", runId: "run_alpha" },
       audience: { kind: "group", membershipRevision: 3 },
-      delivery: { mode: "terminal" },
+      delivery: {},
     });
     expect(agentTerminalBroadcast.deliveryOutcomes).toMatchObject([
       {
@@ -610,7 +606,7 @@ describe("NanasaStore message routing", () => {
     const base = {
       intent: "request" as const,
       body: { contentType: "text/plain" as const, text: "Check this." },
-      delivery: { mode: "queue" as const },
+      delivery: {},
       hop: 0,
     };
 
@@ -650,7 +646,15 @@ describe("NanasaStore message routing", () => {
 });
 
 describe("NanasaStore schema migration", () => {
-  it("performs the terminal-only schema migration once without replacing persisted state", () => {
+  it("refuses schema 4 rather than migrating alpha state", () => {
+    const legacyPath = join(mkdtempSync(join(tmpdir(), "nanasa-schema-4-")), "nanasa.sqlite");
+    const oldSchema = new DatabaseSync(legacyPath);
+    oldSchema.exec("CREATE TABLE legacy (id TEXT PRIMARY KEY) STRICT; PRAGMA user_version = 4");
+    oldSchema.close();
+    expect(() => new NanasaStore(legacyPath)).toThrowError(
+      /Refusing to mutate old database schema 4/,
+    );
+    return;
     const directory = mkdtempSync(join(tmpdir(), "nanasa-terminal-migration-"));
     temporaryDirectories.push(directory);
     const databasePath = join(directory, "nanasa.sqlite");
@@ -666,8 +670,6 @@ describe("NanasaStore schema migration", () => {
         name: "Legacy Pi",
         agentType: "pi",
         kind: "pi",
-        adapter: "pi-rpc",
-        capabilities: ["queue", "steer"],
         command: "pi",
         args: [],
         environment: {},
@@ -724,7 +726,7 @@ describe("NanasaStore schema migration", () => {
       sender: { kind: "operator", operatorId: "operator" },
       audience: { kind: "dm", memberId: "worker" },
       body: { contentType: "text/plain", text: "Pending" },
-      delivery: { mode: "steer" },
+      delivery: {},
       hop: 0,
     });
     const completed = store.submitMessage(group.id, {
@@ -732,7 +734,7 @@ describe("NanasaStore schema migration", () => {
       sender: { kind: "operator", operatorId: "operator" },
       audience: { kind: "dm", memberId: "worker" },
       body: { contentType: "text/plain", text: "Completed" },
-      delivery: { mode: "queue" },
+      delivery: {},
       hop: 0,
     });
     const eventIds = store.listEvents().map((event) => event.id);
@@ -831,8 +833,6 @@ describe("NanasaStore schema migration", () => {
           name: "Legacy Pi",
           agentType: "pi",
           kind: "pi",
-          adapter: "pi-rpc",
-          capabilities: ["queue", "steer"],
           command: "pi",
           args: [],
           environment: {},
@@ -905,7 +905,15 @@ describe("NanasaStore schema migration", () => {
     expect(existsSync(sessionFile)).toBe(true);
   });
 
-  it("projects persisted adapter compatibility rows out of canonical snapshots", () => {
+  it("refuses future schemas for mutation", () => {
+    const futurePath = join(mkdtempSync(join(tmpdir(), "nanasa-schema-future-")), "nanasa.sqlite");
+    const future = new DatabaseSync(futurePath);
+    future.exec("CREATE TABLE future (id TEXT PRIMARY KEY) STRICT; PRAGMA user_version = 999");
+    future.close();
+    expect(() => new NanasaStore(futurePath)).toThrowError(
+      /Refusing to mutate future database schema 999/,
+    );
+    return;
     const directory = mkdtempSync(join(tmpdir(), "nanasa-copilot-adapter-migration-"));
     temporaryDirectories.push(directory);
     const databasePath = join(directory, "nanasa.sqlite");
@@ -914,8 +922,6 @@ describe("NanasaStore schema migration", () => {
       name: "Historical Copilot",
       agentType: "copilot",
       kind: "copilot",
-      adapter: "copilot-cli",
-      capabilities: ["queue"],
       command: "copilot",
       args: [],
       environment: {},
@@ -936,7 +942,7 @@ describe("NanasaStore schema migration", () => {
     migrated.close();
   });
 
-  it("infers configured profile metadata for legacy rows", () => {
+  it("refuses unversioned nonempty databases", () => {
     const directory = mkdtempSync(join(tmpdir(), "nanasa-schema-"));
     temporaryDirectories.push(directory);
     const databasePath = join(directory, "nanasa.sqlite");
@@ -986,6 +992,10 @@ describe("NanasaStore schema migration", () => {
     `);
     legacy.close();
 
+    expect(() => new NanasaStore(databasePath)).toThrowError(
+      /Refusing to mutate old database schema 0/,
+    );
+    return;
     const store = new NanasaStore(databasePath);
     expect(store.getAgentProfile("legacy_claude")).toMatchObject({
       id: "legacy_claude",
@@ -1026,7 +1036,17 @@ describe("NanasaStore schema migration", () => {
     migrated.close();
   });
 
-  it("normalizes historical delivery modes when hydrating portal state", () => {
+  it("reopens the cohesive baseline idempotently", () => {
+    const baselineDirectory = mkdtempSync(join(tmpdir(), "nanasa-baseline-reopen-"));
+    const baselinePath = join(baselineDirectory, "nanasa.sqlite");
+    new NanasaStore(baselinePath).close();
+    new NanasaStore(baselinePath).close();
+    const baseline = new DatabaseSync(baselinePath, { readOnly: true });
+    expect(
+      (baseline.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
+    ).toBe(5);
+    baseline.close();
+    return;
     const directory = mkdtempSync(join(tmpdir(), "nanasa-delivery-migration-"));
     temporaryDirectories.push(directory);
     const databasePath = join(directory, "nanasa.sqlite");
@@ -1036,8 +1056,6 @@ describe("NanasaStore schema migration", () => {
       name: "Legacy",
       agentType: "opencode",
       kind: "opencode",
-      adapter: "terminal",
-      capabilities: ["queue"],
       command: "opencode",
       args: [],
       environment: {},
@@ -1052,7 +1070,7 @@ describe("NanasaStore schema migration", () => {
       sender: { kind: "operator", operatorId: "operator" },
       audience: { kind: "dm", memberId: member.memberId },
       body: { contentType: "text/plain", text: "Historical" },
-      delivery: { mode: "queue" },
+      delivery: {},
       hop: 0,
     });
     store.close();

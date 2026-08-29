@@ -1,33 +1,33 @@
-export * from "./config-v2.js";
-
-/* Removed unversioned config implementation.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-
 import {
-  AdapterKindSchema,
-  AgentCapabilitySchema,
-  AgentConfigHomeSchema,
   AgentKindSchema,
-  type ConfigDiagnostic,
-  type ConfigStatus,
+  CONFIG_VERSION,
   ConfigStatusSchema,
   ConfiguredGroupSchema,
+  CredentialProfileReferenceSchema,
+  DesiredModelPolicySchema,
   InstructionPathSchema,
   IntegrationConfigSchema,
   IntegrationIdSchema,
   MessageConfigSchema,
+  NativeRecoveryPolicySchema,
+  type ConfigDiagnostic,
+  type ConfigStatus,
   type NanasaConfig,
   NanasaConfigSchema,
-  RecoveryPolicySchema,
+  ProviderExtensionManifestSchema,
+  ProviderStatePolicySchema,
+  RepositoryIntentSchema,
   RoleDefinitionSchema,
   RoleIdSchema,
+  TerminalPolicySchema,
 } from "@nanasa/contracts";
 import { isScalar, LineCounter, parseDocument, visit } from "yaml";
 import { z } from "zod";
-import { resolveAgentConfigHome, validateAgentConfigHome } from "./agent-config-home.js";
 import { validateInstructionFiles } from "./instruction-resolver.js";
+import { resolveProviderStateHome, validateProviderStatePolicy } from "./provider-state-home.js";
 
 const CONFIG_RELATIVE_PATH = join(".nanasa", "config.yaml");
 const MAX_CONFIG_BYTES = 256 * 1024;
@@ -39,24 +39,36 @@ const RawIntegrationConfigSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
     kind: AgentKindSchema,
-    adapter: AdapterKindSchema.optional(),
     command: z.array(z.string().min(1).max(4_096)).min(1).max(64),
     cwd: z.string().min(1).max(4_096).optional(),
-    agentConfigHome: AgentConfigHomeSchema.default({ scope: "integration" }),
+    providerState: ProviderStatePolicySchema.default({ scope: "membership" }),
+    credentials: CredentialProfileReferenceSchema.default({ kind: "provider-managed" }),
+    model: DesiredModelPolicySchema.default({ resumePolicy: "preserve-native" }),
+    nativeRecovery: NativeRecoveryPolicySchema.default("resume-or-restart"),
+    extensions: z.array(IntegrationIdSchema).max(32).default([]),
     environment: z
       .record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string().max(16_384))
       .default({}),
-    recovery: RecoveryPolicySchema.optional(),
-    capabilities: z.array(AgentCapabilitySchema).min(1).max(2).optional(),
   })
   .strict();
-
 type RawIntegrationConfig = z.infer<typeof RawIntegrationConfigSchema>;
 
 const RawNanasaConfigSchema = z
   .object({
+    version: z.literal(CONFIG_VERSION),
+    repository: RepositoryIntentSchema.default({ path: ".", checkout: { kind: "current" } }),
+    terminal: TerminalPolicySchema.default({
+      checkpoints: {
+        enabled: false,
+        maxLines: 5_000,
+        maxBytes: 1_048_576,
+        retentionSeconds: 86_400,
+        sensitivity: "repository-private",
+      },
+    }),
     instructions: z.array(InstructionPathSchema).max(32).default([]),
     integrations: z.record(IntegrationIdSchema, RawIntegrationConfigSchema),
+    extensions: z.record(IntegrationIdSchema, ProviderExtensionManifestSchema).default({}),
     roles: z.record(RoleIdSchema, RoleDefinitionSchema).default({}),
     groups: z.record(z.string().trim().min(1).max(128), ConfiguredGroupSchema).default({}),
     messages: MessageConfigSchema.default({ retentionPerGroup: 1_000 }),
@@ -71,15 +83,13 @@ export interface NanasaPaths {
   runtimeDirectory: string;
   integrationsDirectory: string;
 }
-
 export interface LoadedNanasaConfig extends NanasaPaths {
   config: NanasaConfig;
   status: ConfigStatus;
 }
-
 export class ConfigLoadError extends Error {
   public constructor(public readonly status: ConfigStatus) {
-    super(status.diagnostics.map((diagnostic) => diagnostic.message).join("; "));
+    super(status.diagnostics.map((item) => item.message).join("; "));
     this.name = "ConfigLoadError";
   }
 }
@@ -88,31 +98,19 @@ function startingDirectory(startPath: string): string {
   const resolved = resolve(startPath);
   return existsSync(resolved) && statSync(resolved).isFile() ? dirname(resolved) : resolved;
 }
-
 export function discoverRepositoryRoot(startPath = process.cwd()): string {
   let current = startingDirectory(startPath);
   let gitRoot: string | undefined;
-
   while (true) {
-    if (existsSync(join(current, CONFIG_RELATIVE_PATH))) {
-      return realpathSync(current);
-    }
-    if (gitRoot === undefined && existsSync(join(current, ".git"))) {
-      gitRoot = current;
-    }
+    if (existsSync(join(current, CONFIG_RELATIVE_PATH))) return realpathSync(current);
+    if (gitRoot === undefined && existsSync(join(current, ".git"))) gitRoot = current;
     const parent = dirname(current);
-    if (parent === current) {
-      break;
-    }
+    if (parent === current) break;
     current = parent;
   }
-
-  if (gitRoot !== undefined) {
-    return realpathSync(gitRoot);
-  }
+  if (gitRoot !== undefined) return realpathSync(gitRoot);
   throw new Error(`Could not discover a repository root from ${startPath}`);
 }
-
 export function nanasaPaths(repoRoot: string): NanasaPaths {
   const root = realpathSync(resolve(repoRoot));
   const stateDirectory = join(root, ".nanasa", "state");
@@ -125,22 +123,14 @@ export function nanasaPaths(repoRoot: string): NanasaPaths {
     integrationsDirectory: join(root, ".nanasa", "integrations"),
   };
 }
-
 function diagnostic(
   code: string,
   message: string,
   path: Array<string | number> = [],
   position?: { line: number; column: number },
 ): ConfigDiagnostic {
-  return {
-    severity: "error",
-    code,
-    message,
-    path,
-    ...(position === undefined ? {} : position),
-  };
+  return { severity: "error", code, message, path, ...(position === undefined ? {} : position) };
 }
-
 function errorStatus(paths: NanasaPaths, diagnostics: ConfigDiagnostic[]): ConfigStatus {
   return ConfigStatusSchema.parse({
     state: "error",
@@ -149,11 +139,8 @@ function errorStatus(paths: NanasaPaths, diagnostics: ConfigDiagnostic[]): Confi
     diagnostics,
   });
 }
-
-function assertInsideRepository(repoRoot: string, configuredPath: string): string {
-  if (configuredPath.includes("\0")) {
-    throw new Error("Working directory may not contain NUL characters");
-  }
+function assertInsideRepository(repoRoot: string, configuredPath: string, label: string): string {
+  if (configuredPath.includes("\0")) throw new Error(`${label} may not contain NUL characters`);
   const candidate = resolve(repoRoot, configuredPath);
   const relativePath = relative(repoRoot, candidate);
   if (
@@ -161,45 +148,33 @@ function assertInsideRepository(repoRoot: string, configuredPath: string): strin
     relativePath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
     isAbsolute(relativePath)
   ) {
-    throw new Error("Working directory must remain beneath the repository root");
+    throw new Error(`${label} must remain beneath the repository root`);
   }
-  if (!existsSync(candidate) || !statSync(candidate).isDirectory()) {
-    throw new Error("Working directory must reference an existing directory");
-  }
+  if (!existsSync(candidate) || !statSync(candidate).isDirectory())
+    throw new Error(`${label} must reference an existing directory`);
   const realCandidate = realpathSync(candidate);
-  const realRelativePath = relative(repoRoot, realCandidate);
+  const realRelative = relative(repoRoot, realCandidate);
   if (
-    realRelativePath === ".." ||
-    realRelativePath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
-    isAbsolute(realRelativePath)
+    realRelative === ".." ||
+    realRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
+    isAbsolute(realRelative)
   ) {
-    throw new Error("Working directory symlinks must remain beneath the repository root");
+    throw new Error(`${label} symlinks must remain beneath the repository root`);
   }
   return realCandidate;
 }
-
 function validateIntegration(integration: RawIntegrationConfig): string | undefined {
-  if (integration.command.some((argument) => argument.includes("\0"))) {
+  if (integration.command.some((argument) => argument.includes("\0")))
     return "Command arguments may not contain NUL characters";
-  }
   for (const [name, value] of Object.entries(integration.environment)) {
-    if (["NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES"].includes(name)) {
+    if (["NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES"].includes(name))
       return `Environment variable ${name} is not allowed`;
-    }
-    if (value.includes("\0")) {
-      return `Environment variable ${name} may not contain NUL characters`;
-    }
-  }
-  if (integration.adapter === "copilot-cli" && integration.kind !== "copilot") {
-    return "The copilot-cli adapter requires copilot compatibility";
-  }
-  if (integration.adapter === "pi-rpc" && integration.kind !== "pi") {
-    return "The pi-rpc adapter requires pi compatibility";
+    if (value.includes("\0")) return `Environment variable ${name} may not contain NUL characters`;
   }
   try {
-    validateAgentConfigHome(integration.agentConfigHome);
+    validateProviderStatePolicy(integration.providerState);
   } catch (error) {
-    return error instanceof Error ? error.message : "Invalid agent configuration home";
+    return error instanceof Error ? error.message : "Invalid provider state policy";
   }
   return undefined;
 }
@@ -220,21 +195,23 @@ export function parseNanasaConfigSource(
     stringKeys: true,
     lineCounter,
   });
-
   if (document.errors.length > 0) {
-    const diagnostics = document.errors.map((error) => {
-      const offset = error.pos[0];
-      const position = offset === undefined ? undefined : lineCounter.linePos(offset);
-      return diagnostic(
-        error.code,
-        error.message,
-        [],
-        position === undefined ? undefined : { line: position.line, column: position.col },
-      );
-    });
-    throw new ConfigLoadError(errorStatus(paths, diagnostics));
+    throw new ConfigLoadError(
+      errorStatus(
+        paths,
+        document.errors.map((error) => {
+          const offset = error.pos[0];
+          const position = offset === undefined ? undefined : lineCounter.linePos(offset);
+          return diagnostic(
+            error.code,
+            error.message,
+            [],
+            position === undefined ? undefined : { line: position.line, column: position.col },
+          );
+        }),
+      ),
+    );
   }
-
   const astDiagnostics: ConfigDiagnostic[] = [];
   let nodeCount = 0;
   visit(document, {
@@ -270,12 +247,8 @@ export function parseNanasaConfigSource(
       return undefined;
     },
   });
-  if (astDiagnostics.length > 0) {
-    throw new ConfigLoadError(errorStatus(paths, astDiagnostics));
-  }
-
-  const rawDocument = document.toJS({ maxAliasCount: 0 });
-  const parsed = RawNanasaConfigSchema.safeParse(rawDocument);
+  if (astDiagnostics.length > 0) throw new ConfigLoadError(errorStatus(paths, astDiagnostics));
+  const parsed = RawNanasaConfigSchema.safeParse(document.toJS({ maxAliasCount: 0 }));
   if (!parsed.success) {
     throw new ConfigLoadError(
       errorStatus(
@@ -290,83 +263,75 @@ export function parseNanasaConfigSource(
       ),
     );
   }
-
+  let repositoryPath: string;
+  try {
+    repositoryPath = assertInsideRepository(
+      paths.repoRoot,
+      parsed.data.repository.path,
+      "Repository path",
+    );
+  } catch (error) {
+    throw new ConfigLoadError(
+      errorStatus(paths, [
+        diagnostic(
+          "invalid_repository",
+          error instanceof Error ? error.message : "Invalid repository path",
+          ["repository", "path"],
+        ),
+      ]),
+    );
+  }
   const integrations = Object.fromEntries(
-    Object.entries(parsed.data.integrations).map(([integrationId, rawIntegration]) => {
-      let cwd: string | undefined;
+    Object.entries(parsed.data.integrations).map(([id, raw]) => {
+      let cwd: string;
       try {
-        cwd = assertInsideRepository(paths.repoRoot, rawIntegration.cwd ?? ".");
+        cwd = assertInsideRepository(repositoryPath, raw.cwd ?? ".", "Working directory");
       } catch (error) {
         throw new ConfigLoadError(
           errorStatus(paths, [
             diagnostic(
               "invalid_cwd",
               error instanceof Error ? error.message : "Invalid working directory",
-              ["integrations", integrationId, "cwd"],
+              ["integrations", id, "cwd"],
             ),
           ]),
         );
       }
-      const invalidReason = validateIntegration(rawIntegration);
-      if (invalidReason !== undefined) {
+      const invalid = validateIntegration(raw);
+      if (invalid !== undefined)
         throw new ConfigLoadError(
-          errorStatus(paths, [
-            diagnostic("invalid_integration", invalidReason, ["integrations", integrationId]),
-          ]),
+          errorStatus(paths, [diagnostic("invalid_integration", invalid, ["integrations", id])]),
         );
-      }
-      const normalized = IntegrationConfigSchema.safeParse({
-        ...rawIntegration,
-        id: integrationId,
-        cwd,
-      });
-      if (!normalized.success) {
-        throw new ConfigLoadError(
-          errorStatus(
-            paths,
-            normalized.error.issues.map((issue) =>
-              diagnostic("invalid_integration", issue.message, [
-                "integrations",
-                integrationId,
-                ...issue.path.filter(
-                  (segment): segment is string | number => typeof segment !== "symbol",
-                ),
-              ]),
-            ),
-          ),
-        );
-      }
-      return [integrationId, normalized.data];
+      return [id, IntegrationConfigSchema.parse({ ...raw, id, cwd })];
     }),
   );
   const resolvedHomes = new Map<string, string>();
-  for (const [integrationId, integration] of Object.entries(integrations)) {
-    const home = resolveAgentConfigHome(
+  for (const [id, integration] of Object.entries(integrations)) {
+    const validationAgent =
+      integration.providerState.scope === "membership" ? "agent_validation" : undefined;
+    const home = resolveProviderStateHome(
       paths.integrationsDirectory,
-      integrationId,
-      integration.agentConfigHome,
-      "agent_validation",
+      id,
+      integration.providerState,
+      validationAgent,
     );
-    const existingIntegrationId = resolvedHomes.get(home);
-    if (existingIntegrationId !== undefined) {
+    const collision = resolvedHomes.get(home);
+    if (collision !== undefined)
       throw new ConfigLoadError(
         errorStatus(paths, [
-          diagnostic(
-            "agent_config_home_collision",
-            `Agent configuration home collides with ${existingIntegrationId}`,
-            ["integrations", integrationId, "agentConfigHome"],
-          ),
+          diagnostic("provider_state_collision", `Provider state home collides with ${collision}`, [
+            "integrations",
+            id,
+            "providerState",
+          ]),
         ]),
       );
-    }
-    resolvedHomes.set(home, integrationId);
+    resolvedHomes.set(home, id);
   }
   const config = NanasaConfigSchema.parse({
-    instructions: parsed.data.instructions,
+    ...parsed.data,
+    repository: { ...parsed.data.repository, path: repositoryPath },
     integrations,
-    roles: parsed.data.roles,
-    groups: parsed.data.groups,
-    messages: parsed.data.messages,
   });
   try {
     validateInstructionFiles(paths.repoRoot, config);
@@ -386,21 +351,18 @@ export function parseNanasaConfigSource(
 
 export function loadNanasaConfig(repoRoot: string): LoadedNanasaConfig {
   const paths = nanasaPaths(repoRoot);
-  if (!existsSync(paths.configPath)) {
+  if (!existsSync(paths.configPath))
     throw new ConfigLoadError(
       errorStatus(paths, [
         diagnostic("config_not_found", "Nanasa configuration file was not found"),
       ]),
     );
-  }
-  const size = statSync(paths.configPath).size;
-  if (size > MAX_CONFIG_BYTES) {
+  if (statSync(paths.configPath).size > MAX_CONFIG_BYTES)
     throw new ConfigLoadError(
       errorStatus(paths, [
         diagnostic("config_too_large", `Configuration exceeds ${MAX_CONFIG_BYTES} bytes`),
       ]),
     );
-  }
   const source = readFileSync(paths.configPath, "utf8");
   const { config } = parseNanasaConfigSource(source, paths);
   const revision = createHash("sha256").update(source).digest("hex");
@@ -413,8 +375,6 @@ export function loadNanasaConfig(repoRoot: string): LoadedNanasaConfig {
   });
   return { ...paths, config, status };
 }
-
 export function discoverAndLoadNanasaConfig(startPath = process.cwd()): LoadedNanasaConfig {
   return loadNanasaConfig(discoverRepositoryRoot(startPath));
 }
-*/

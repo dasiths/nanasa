@@ -27,7 +27,8 @@ function createDaemon(options: DaemonOptions = {}) {
   mkdirSync(join(repository, ".nanasa"));
   writeFileSync(
     join(repository, ".nanasa", "config.yaml"),
-    `integrations:
+    `version: 2
+integrations:
   fixture:
     name: Fixture
     kind: opencode

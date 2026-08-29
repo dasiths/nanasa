@@ -17,7 +17,7 @@ import {
   loadNanasaConfig,
   nanasaPaths,
   parseNanasaConfigSource,
-} from "./config.js";
+} from "./config-v2.js";
 
 export interface ConfigMutation<T> {
   config: NanasaConfig;

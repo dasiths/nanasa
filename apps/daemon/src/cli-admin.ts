@@ -2,8 +2,13 @@ import { spawnSync } from "node:child_process";
 import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync } from "node:fs";
 import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { IntegrationConfig } from "@nanasa/contracts";
-import { agentConfigHomeEnvironment, resolveAgentConfigHome } from "./agent-config-home.js";
-import { loadNanasaConfig } from "./config.js";
+import { loadNanasaConfig } from "./config-v2.js";
+import { providerStateEnvironment, resolveProviderStateHome } from "./provider-state-home.js";
+import {
+  formatRedactedResetInventory,
+  inventoryAlphaResources,
+  resetFromAlpha,
+} from "./persistence/reset-service.js";
 
 const DIRECTORY_MODE = 0o700;
 
@@ -82,26 +87,26 @@ function selectedHome(
   agentId?: string,
 ): string {
   if (
-    (integration.agentConfigHome.scope === "agent" ||
-      (integration.agentConfigHome.scope === "custom" &&
-        integration.agentConfigHome.path.includes("{agentId}"))) &&
+    (integration.providerState.scope === "membership" ||
+      (integration.providerState.scope === "custom" &&
+        integration.providerState.path.includes("{agentId}"))) &&
     agentId === undefined
   ) {
     throw new Error(`${integration.id} requires --agent <agent-id>`);
   }
-  return resolveAgentConfigHome(
+  return resolveProviderStateHome(
     loadNanasaConfig(repositoryRoot).integrationsDirectory,
     integration.id,
-    integration.agentConfigHome,
+    integration.providerState,
     agentId,
   );
 }
 
 function hasSharedHome(integration: IntegrationConfig): boolean {
   return !(
-    integration.agentConfigHome.scope === "agent" ||
-    (integration.agentConfigHome.scope === "custom" &&
-      integration.agentConfigHome.path.includes("{agentId}"))
+    integration.providerState.scope === "membership" ||
+    (integration.providerState.scope === "custom" &&
+      integration.providerState.path.includes("{agentId}"))
   );
 }
 
@@ -162,7 +167,7 @@ export function authenticateAgent(
     env: {
       ...process.env,
       ...integration.environment,
-      ...agentConfigHomeEnvironment(integration.kind, configHome),
+      ...providerStateEnvironment(integration.kind, configHome),
     },
     stdio: "inherit",
   });
@@ -170,4 +175,23 @@ export function authenticateAgent(
   if (result.status !== 0) {
     throw new Error(`${command} exited with status ${result.status ?? "unknown"}`);
   }
+}
+
+export async function resetAlphaRepository(
+  repositoryRoot: string,
+  confirmation: string,
+  configTemplate: string,
+): Promise<void> {
+  const inventory = inventoryAlphaResources(repositoryRoot);
+  process.stdout.write(
+    `Nanasa alpha reset inventory (content redacted):\n${formatRedactedResetInventory(inventory)}\n`,
+  );
+  const result = await resetFromAlpha({
+    repositoryRoot,
+    confirmation,
+    configTemplate,
+  });
+  process.stdout.write(
+    `Reset complete. Verified backup: ${result.backupDirectory}. Removed ${result.removedOwnedTmuxPanes} owned tmux pane(s).\n`,
+  );
 }

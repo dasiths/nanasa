@@ -1,13 +1,18 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentRun } from "@nanasa/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
 
 import { createDaemon, type DaemonContext } from "../src/server.js";
+import { loadNanasaConfig } from "../src/config-v2.js";
 
 const daemons = new Set<DaemonContext>();
 const servers = new Set<Server>();
+const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   for (const daemon of daemons) {
@@ -20,7 +25,19 @@ afterEach(async () => {
     );
   }
   servers.clear();
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
+
+function loadedConfig() {
+  const repository = mkdtempSync(join(tmpdir(), "nanasa-terminal-proxy-"));
+  temporaryDirectories.push(repository);
+  mkdirSync(join(repository, ".git"));
+  mkdirSync(join(repository, ".nanasa"));
+  writeFileSync(join(repository, ".nanasa", "config.yaml"), "version: 2\nintegrations: {}\n");
+  return loadNanasaConfig(repository);
+}
 
 function runningRun(daemon: DaemonContext): AgentRun {
   const group = daemon.store.createGroup({ name: "Proxy tests" });
@@ -28,8 +45,6 @@ function runningRun(daemon: DaemonContext): AgentRun {
     name: "Fixture",
     agentType: "copilot",
     kind: "copilot",
-    adapter: "copilot-cli",
-    capabilities: ["queue"],
     command: "node",
     args: [],
     environment: {},
@@ -74,7 +89,7 @@ describe("terminal endpoint proxy", () => {
       response.end(JSON.stringify({ path: request.url }));
     });
     const upstreamPort = await listen(upstream);
-    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const daemon = await createDaemon({ dataPath: ":memory:", loadedConfig: loadedConfig() });
     daemons.add(daemon);
     const run = runningRun(daemon);
     const record = daemon.terminalEndpoints.begin(run, 1);
@@ -185,7 +200,7 @@ describe("terminal endpoint proxy", () => {
       connection.on("message", (data, binary) => connection.send(data, { binary }));
     });
     const upstreamPort = await listen(upstreamHttp);
-    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const daemon = await createDaemon({ dataPath: ":memory:", loadedConfig: loadedConfig() });
     daemons.add(daemon);
     const run = runningRun(daemon);
     const record = await readyEndpoint(daemon, run, upstreamPort);

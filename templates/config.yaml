@@ -1,3 +1,14 @@
+version: 2
+repository:
+  path: .
+  checkout: { kind: current }
+terminal:
+  checkpoints:
+    enabled: false
+    maxLines: 5000
+    maxBytes: 1048576
+    retentionSeconds: 86400
+    sensitivity: repository-private
 instructions: []
 integrations:
   copilot:
@@ -5,25 +16,38 @@ integrations:
     kind: copilot
     command: [copilot]
     cwd: .
-    agentConfigHome: { scope: integration }
+    providerState: { scope: membership }
+    credentials: { kind: provider-managed }
+    model: { resumePolicy: preserve-native }
+    nativeRecovery: resume-or-restart
   pi:
     name: Pi
     kind: pi
     command: [pi]
     cwd: .
-    agentConfigHome: { scope: integration }
+    providerState: { scope: membership }
+    credentials: { kind: provider-managed }
+    model: { resumePolicy: preserve-native }
+    nativeRecovery: resume-or-restart
   opencode:
     name: OpenCode
     kind: opencode
     command: [opencode]
     cwd: .
-    agentConfigHome: { scope: integration }
+    providerState: { scope: membership }
+    credentials: { kind: provider-managed }
+    model: { resumePolicy: preserve-native }
+    nativeRecovery: resume-or-restart
   claude-code:
     name: Claude Code
     kind: claude-code
     command: [claude]
     cwd: .
-    agentConfigHome: { scope: integration }
+    providerState: { scope: membership }
+    credentials: { kind: provider-managed }
+    model: { resumePolicy: preserve-native }
+    nativeRecovery: resume-or-restart
+extensions: {}
 roles:
   project-manager:
     name: Project Manager

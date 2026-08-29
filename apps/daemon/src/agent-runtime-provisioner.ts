@@ -10,8 +10,8 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentConfigHome, AgentProfile, GroupMembership } from "@nanasa/contracts";
-import { agentConfigHomeEnvironment, resolveAgentConfigHome } from "./agent-config-home.js";
+import type { AgentProfile, GroupMembership, ProviderStatePolicy } from "@nanasa/contracts";
+import { providerStateEnvironment, resolveProviderStateHome } from "./provider-state-home.js";
 import type { EffectiveAgentPrompt } from "./instruction-resolver.js";
 import {
   HOOK_STATUS_REPORTER_SOURCE,
@@ -29,7 +29,7 @@ export interface AgentRuntimeConfiguration {
 
 export interface AgentRuntimeProvisionerOptions {
   integrationsDirectory: string;
-  agentConfigHomes: Readonly<Record<string, AgentConfigHome>>;
+  providerStates: Readonly<Record<string, ProviderStatePolicy>>;
   mcpEndpointUrl: string;
   piExtensionPath?: string;
   promptResolver?: (membership: GroupMembership, profile: AgentProfile) => EffectiveAgentPrompt;
@@ -158,11 +158,11 @@ export class AgentRuntimeProvisioner {
     if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(membership.id)) {
       throw new Error(`Agent ID is not safe for agent persistence: ${membership.id}`);
     }
-    const policy = this.#options.agentConfigHomes[profile.agentType];
+    const policy = this.#options.providerStates[profile.agentType];
     if (policy === undefined) {
       throw new Error(`Agent configuration home is missing for ${profile.agentType}`);
     }
-    const configHome = resolveAgentConfigHome(
+    const configHome = resolveProviderStateHome(
       this.#options.integrationsDirectory,
       profile.agentType,
       policy,
@@ -245,7 +245,7 @@ export class AgentRuntimeProvisioner {
         }
         return {
           command: [...command, "--additional-mcp-config", `@${configPath}`],
-          environment: agentConfigHomeEnvironment(profile.kind, configHome),
+          environment: providerStateEnvironment(profile.kind, configHome),
         };
       }
       case "claude-code": {
@@ -323,7 +323,7 @@ export class AgentRuntimeProvisioner {
         }
         return {
           command,
-          environment: agentConfigHomeEnvironment(profile.kind, configHome),
+          environment: providerStateEnvironment(profile.kind, configHome),
         };
       }
       case "pi": {
@@ -360,7 +360,7 @@ export class AgentRuntimeProvisioner {
         }
         return {
           command: [...command, "--extension", extensionPath, "--extension", statusExtensionPath],
-          environment: agentConfigHomeEnvironment(profile.kind, configHome),
+          environment: providerStateEnvironment(profile.kind, configHome),
         };
       }
       case "opencode": {
@@ -407,7 +407,7 @@ export class AgentRuntimeProvisioner {
         return {
           command,
           environment: {
-            ...agentConfigHomeEnvironment(profile.kind, configHome),
+            ...providerStateEnvironment(profile.kind, configHome),
             OPENCODE_CONFIG: configPath,
             OPENCODE_CONFIG_DIR: configDirectory,
           },

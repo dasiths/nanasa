@@ -28,7 +28,7 @@ import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 import { AdHocConsoleManager } from "./ad-hoc-console-manager.js";
 import { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
 import { registerAgentStatusRoutes } from "./agent-status-routes.js";
-import { discoverAndLoadNanasaConfig, type LoadedNanasaConfig } from "./config.js";
+import { discoverAndLoadNanasaConfig, type LoadedNanasaConfig } from "./config-v2.js";
 import { ConfigRepository } from "./config-repository.js";
 import { DeliveryDispatcher } from "./delivery-dispatcher.js";
 import { resolveEffectiveAgentPrompt } from "./instruction-resolver.js";
@@ -189,10 +189,10 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       : {
           runtimeProvisioner: new AgentRuntimeProvisioner({
             integrationsDirectory: loadedConfig.integrationsDirectory,
-            agentConfigHomes: Object.fromEntries(
+            providerStates: Object.fromEntries(
               Object.entries(loadedConfig.config.integrations).map(([key, integration]) => [
                 key,
-                integration.agentConfigHome,
+                integration.providerState,
               ]),
             ),
             mcpEndpointUrl,

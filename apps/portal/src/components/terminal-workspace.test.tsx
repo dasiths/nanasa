@@ -34,6 +34,18 @@ const roles = {
 } satisfies NanasaConfig["roles"];
 
 const config = {
+  version: 2,
+  repository: { path: ".", checkout: { kind: "current" } },
+  terminal: {
+    checkpoints: {
+      enabled: false,
+      maxLines: 5_000,
+      maxBytes: 1_048_576,
+      retentionSeconds: 86_400,
+      sensitivity: "repository-private",
+    },
+  },
+  extensions: {},
   instructions: [],
   integrations: {
     copilot: {
@@ -41,7 +53,11 @@ const config = {
       name: "GitHub Copilot",
       kind: "copilot",
       command: ["copilot"],
-      agentConfigHome: { scope: "integration" },
+      providerState: { scope: "integration" },
+      credentials: { kind: "provider-managed" },
+      model: { resumePolicy: "preserve-native" },
+      nativeRecovery: "resume-or-restart",
+      extensions: [],
       environment: {},
     },
   },
