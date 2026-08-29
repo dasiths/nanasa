@@ -2,7 +2,7 @@
 title: Nanasa
 description: Local coding-agent pool with tmux terminals, authenticated MCP messaging, and coordinator-visible status
 author: Nanasa
-ms.date: 2026-08-11
+ms.date: 2026-08-29
 ms.topic: overview
 ---
 
@@ -23,21 +23,19 @@ without an agent account.
 
 ## Architecture
 
-The Fastify daemon owns application state and terminal-provider processes. It
-stores projected agent runtime state, runs, messages, delivery outcomes, and
-domain events in SQLite. A private tmux server owns the durable agent panes. The
-daemon creates one deterministic linked tmux view session and supervises one
-loopback-only ttyd process for each active run.
+The Fastify daemon stores projected agent runtime state, runs, messages,
+delivery outcomes, and domain events in SQLite. A private tmux server owns the
+durable agent panes. The daemon's `nanasa-terminal.v1` gateway creates disposable
+Node PTY attachments to deterministic linked tmux view sessions.
 
-The daemon publishes terminal status under `/api/runs/:runId/terminal` and
-proxies each ready ttyd endpoint through a bounded same-origin `/terminals`
-path. Upstream ports remain private. The React portal renders only ttyd iframes;
-it does not implement a separate terminal renderer or terminal protocol.
+The portal owns xterm, terminal selection, themes, safe links, clipboard
+prompts, search, and accessible transcripts. The gateway enforces one controller,
+bounded observers, exact generations, heartbeats, flow control, and cleanup.
+Terminal bytes remain outside SQLite and domain events.
 
-During development, Vite proxies both `/api` and `/terminals` to the daemon. In
-production, the daemon serves the built portal from `apps/portal/dist` with an
-extensionless SPA fallback. API, event WebSocket, and terminal proxy routes keep
-precedence over static content.
+During development, Vite proxies `/api` HTTP and WebSocket traffic to the
+daemon. In production, the daemon serves the built portal from
+`apps/portal/dist` with an extensionless SPA fallback.
 
 New agents receive a readable stable member ID in the form
 `<integration>.<adjective>-<surname>`, for example `pi.focused-hopper`. Nanasa
@@ -49,13 +47,10 @@ editable.
 
 * Node.js 22 or later
 * tmux
-* ttyd 1.7.7, available on `PATH` or configured through `NANASA_TTYD_PATH`
 * An installed and authenticated agent CLI for each enabled integration
 
-The development container installs the pinned ttyd binary for amd64 and arm64
-and verifies its published checksum. The npm package does not bundle ttyd because
-it is a native executable. `nanasa start` checks `ttyd --version` before starting
-and explains how to configure a nonstandard executable path.
+The pinned `node-pty` dependency builds the Linux attachment boundary from
+source for the host architecture. The package supports Linux x86_64 and arm64.
 
 Each integration requires its command to be installed and authenticated as
 required by that CLI. Nanasa does not initiate interactive authentication or
@@ -78,12 +73,12 @@ npx nanasa start
 or runtime state. Edit the generated agent commands for the CLIs available in
 your environment, then commit `.nanasa/config.yaml`. Ignore `.nanasa/state/` and
 `.nanasa/runtime/`, and `.nanasa/integrations/`; they contain SQLite state, the
-MCP signing secret, ttyd manifests, provider authentication state, generated
+MCP signing secret, provider authentication state, generated
 hooks and extensions, and persistent agent configuration for one checkout.
 
 `nanasa setup` validates the configuration and creates private integration
 homes without starting an agent or changing provider-global settings. `nanasa
-doctor` checks configured commands, ttyd, and integration directory ownership
+doctor` checks configured commands and integration directory ownership
 and permissions. Authenticate a configured CLI inside its isolated home with:
 
 ```bash
@@ -241,7 +236,6 @@ The installed command accepts these options:
 * `--host <host>` overrides `NANASA_HOST`; MCP requires a loopback host
 * `--port <port>` overrides `NANASA_PORT`
 * `--mcp` enables authenticated MCP at `NANASA_MCP_PATH` (default `/mcp`)
-* `--ttyd-path <path>` overrides `NANASA_TTYD_PATH`
 
 The installed command also supports `setup`, `doctor`, and `auth` as described
 above. These commands operate only beneath the repository's `.nanasa`
@@ -280,7 +274,7 @@ pnpm dev
 ```
 
 Open <http://127.0.0.1:5173>. Vite proxies `/api` requests, domain-event
-WebSockets, and `/terminals` ttyd HTTP and WebSocket traffic to
+WebSockets, and terminal gateway WebSocket traffic to
 <http://127.0.0.1:3210>. Set `VITE_DAEMON_URL` to proxy to another daemon
 origin.
 
@@ -292,7 +286,6 @@ The daemon accepts these environment variables:
 * `NANASA_DATA_PATH`, default `.nanasa/state/nanasa.sqlite`
 * `NANASA_RUNTIME_PATH`, default `.nanasa/runtime`
 * `NANASA_TMUX_SERVER`, default `nanasa`
-* `NANASA_TTYD_PATH`, default `ttyd`
 * `NANASA_SERVE_PORTAL`, default enabled only when `NODE_ENV=production`
 * `NANASA_PORTAL_PATH`, set automatically by the installed command
 * `NANASA_MCP_ENABLED`, default `false`
@@ -315,50 +308,37 @@ pnpm build
 pnpm smoke
 ```
 
-`pnpm smoke` uses a safe Node.js line-echo fixture. It creates isolated data and
-a unique tmux server, starts two runs in one group, and exercises ttyd index,
-token, WebSocket input isolation, client disconnect, daemon restart, ttyd crash
-recovery, owner-pane exit, and operator-stop cleanup.
+`pnpm smoke` validates the bounded gateway protocol, Unicode terminal bytes,
+alternate-screen transitions, and effect filtering.
 
 ## Terminal behavior
 
 The group tmux session and its panes own the running agent processes. Closing a
-browser terminal disconnects only ttyd's disposable tmux client. Gracefully
-stopping or restarting the daemon terminates supervised ttyd children but leaves
-active owner panes and their linked view sessions available for reconciliation.
+browser terminal removes only its disposable attachment PTY. Active owner panes
+and linked view sessions remain available for reconciliation.
 
-Each active run has its own ttyd process and deterministic single-window view
-session. This prevents two runs in the same group from changing one another's
-current tmux window. ttyd permits one live browser client per run. Tabs therefore
-mount only the selected terminal, while grid mode mounts one client for each
-visible run. Close another tab, grid, or browser using the same run before
-reconnecting.
-
-ttyd provides the browser terminal implementation and terminal WebSocket. The
-daemon allows only the endpoint index, token, and WebSocket paths, validates
-same-origin upgrades, strips credentials before forwarding, and never exposes
-the loopback upstream address.
+Each run permits one controller and up to three observers. Only the controller
+can send keyboard input, paste, focus, resize, or approve terminal effects.
+Explicit takeover revokes the previous lease. Slow clients and expired leases
+are disconnected without terminating the owner pane.
 
 Nanasa configures its private tmux server rather than loading `~/.tmux.conf`.
-It enables extended keys and clipboard signaling, advertises xterm extended-key
-and clipboard features, and uses CSI-u on tmux 3.5 or newer. tmux 3.2 through
+It enables extended keys, uses an external-only clipboard policy, advertises
+xterm extended-key features, and uses CSI-u on tmux 3.5 or newer. tmux 3.2 through
 3.4 use the supported `modifyOtherKeys` format. Agent PTYs disable software flow
 control so `Ctrl+S` and `Ctrl+Q` reach the active application instead of pausing
 terminal output.
 
-Use the browser or platform terminal shortcuts for clipboard operations, usually
-`Ctrl+Shift+C` and `Ctrl+Shift+V` on Linux and Windows or `Cmd+C` and `Cmd+V` on
-macOS. Plain `Ctrl+C` remains an interrupt sent to the agent. tmux copy mode and
-applications may also use OSC 52 through ttyd; browser focus, clipboard
-permissions, and secure-context policy still apply. Enabling clipboard signaling
-allows terminal applications to replace clipboard contents, so only run trusted
-agent commands.
+Use Shift+drag on Linux and Windows or Option+drag on macOS to override
+application mouse mode and create a local selection. Copy and Paste toolbar and
+context-menu actions provide permission feedback. OSC 52 reads are rejected.
+Valid controller-only writes require a visible prompt and explicit approval.
 
 Every agent command runs directly in its verified owner pane. Interrupt sends
 Ctrl+C to that pane. Message delivery loads text into the pane, enables bracketed
 paste, pastes the content, and sends Enter separately. A successful outcome
 means terminal injection completed; it does not claim that the CLI processed or
-completed the request. Delivery retries when a live ttyd browser writer owns the
+completed the request. Delivery retries when a live terminal controller owns the
 pane or when tmux is temporarily unavailable.
 
 Terminal input is also the agent-to-agent message channel. The authenticated MCP
@@ -581,8 +561,8 @@ Terminal tabs, status bars, iframe titles, and accessible names show both the
 editable name and stable member ID. The agent-set revision remains an internal
 broadcast concurrency token and is not shown in the workspace header.
 
-Browser terminals configure 10,000 lines of xterm scrollback and enable tmux
-mouse routing. PageUp and PageDown pass through ttyd and tmux to raw-mode coding
+Browser terminals configure 10,000 lines of local xterm scrollback and enable
+tmux mouse routing. PageUp and PageDown pass through xterm and tmux to raw-mode coding
 agent TUIs. Wheel events reach TUIs that enable terminal mouse reporting; for
 ordinary shells, tmux can use the wheel for copy-mode scrollback. Full-screen
 alternate-screen TUIs own their visible history, so xterm cannot display normal
@@ -617,7 +597,7 @@ tab layout without blocking portal controls.
 
 ## Known limitations
 
-* ttyd 1.7.7 is the validated version; other system versions are not guaranteed
+* Linux x86_64 and arm64 are the validated native PTY host architectures
 * Terminal delivery confirms guarded paste and Enter injection, not semantic
   model processing
 * Remote MCP access requires operator-managed TLS termination and network access

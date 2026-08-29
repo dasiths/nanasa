@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { PortalClient } from "../api.js";
 import { useTerminalEndpoint } from "../hooks/use-terminal-endpoint.js";
+import { TerminalConsole } from "../terminal/terminal-console.js";
 
 function ConsoleTerminal({
   client,
@@ -18,18 +19,19 @@ function ConsoleTerminal({
 
   if (status?.state === "ready") {
     return (
-      <iframe
-        className="console-frame"
-        src={status.url}
-        title="Ad hoc console terminal"
-        referrerPolicy="same-origin"
+      <TerminalConsole
+        client={client}
+        endpoint={status}
+        runGeneration={session.generation}
+        theme={document.documentElement.dataset.theme === "light" ? "light" : "dark"}
+        label="Ad hoc console terminal"
       />
     );
   }
 
   return (
     <div className="console-state" role={error === undefined ? "status" : "alert"}>
-      {loading || status?.state === "starting" || status?.state === "backoff" ? (
+      {loading || status?.state === "starting" ? (
         <LoaderCircle className="spin" aria-hidden="true" size={22} />
       ) : (
         <CircleAlert aria-hidden="true" size={22} />

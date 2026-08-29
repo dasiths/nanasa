@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,7 +28,6 @@ Options:
   --host <host>       Listen host; MCP requires loopback (default: 127.0.0.1)
   --port <port>       Listen port (default: NANASA_PORT or 3210)
   --mcp               Enable authenticated MCP (default path: /mcp)
-  --ttyd-path <path>  ttyd executable (default: NANASA_TTYD_PATH or ttyd)
   -h, --help          Show this help
   -v, --version       Show the installed version`;
 }
@@ -143,9 +142,6 @@ function parseStartOptions(args) {
       index += 1;
     } else if (argument === "--mcp") {
       environment.NANASA_MCP_ENABLED = "true";
-    } else if (argument === "--ttyd-path") {
-      environment.NANASA_TTYD_PATH = optionValue(args, index, argument);
-      index += 1;
     } else {
       throw new Error(`Unknown option: ${argument}`);
     }
@@ -158,18 +154,6 @@ function packageVersion() {
   return packageJson.version;
 }
 
-function verifyTtyd(ttydPath) {
-  const result = spawnSync(ttydPath, ["--version"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (result.error !== undefined || result.status !== 0) {
-    throw new Error(
-      `Could not run ${ttydPath} --version. Install ttyd 1.7.7 through your system or devcontainer, or set NANASA_TTYD_PATH.`,
-    );
-  }
-}
-
 async function start(startPath, args) {
   const repositoryRoot = findConfigRoot(startPath);
   if (repositoryRoot === undefined) {
@@ -178,8 +162,6 @@ async function start(startPath, args) {
     );
   }
   const options = parseStartOptions(args);
-  const ttydPath = options.NANASA_TTYD_PATH ?? process.env.NANASA_TTYD_PATH ?? "ttyd";
-  verifyTtyd(ttydPath);
 
   const child = spawn(process.execPath, [join(packageRoot, "dist", "daemon", "index.js")], {
     cwd: repositoryRoot,
@@ -191,7 +173,6 @@ async function start(startPath, args) {
       NANASA_REPO_ROOT: repositoryRoot,
       NANASA_SERVE_PORTAL: "true",
       NANASA_PORTAL_PATH: join(packageRoot, "dist", "portal"),
-      NANASA_TTYD_PATH: ttydPath,
     },
   });
 

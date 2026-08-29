@@ -14,11 +14,11 @@ import type { PortalClient } from "../api.js";
 import { copyToClipboard } from "../copy-to-clipboard.js";
 import { usePortalPreferences } from "../hooks/use-portal-preferences.js";
 import { useTerminalEndpoint } from "../hooks/use-terminal-endpoint.js";
+import { TerminalConsole } from "../terminal/terminal-console.js";
 import { RoleIdentity, roleColorClass } from "./role-identity.js";
 
 const endpointLabels: Record<Exclude<TerminalEndpointState, "ready">, string> = {
   starting: "Terminal starting",
-  backoff: "Terminal retrying",
   unavailable: "Terminal unavailable",
   stopped: "Terminal stopped",
 };
@@ -99,27 +99,25 @@ function TerminalPane({
           <strong>Routing message</strong>
         </div>
       ) : status?.state === "ready" ? (
-        <iframe
-          className="ttyd-frame"
-          src={status.url}
-          title={`${alias} (${memberId}) ttyd terminal`}
-          referrerPolicy="same-origin"
+        <TerminalConsole
+          client={client}
+          endpoint={status}
+          runGeneration={run.generation}
+          theme={document.documentElement.dataset.theme === "light" ? "light" : "dark"}
+          label={`${alias} (${memberId}) terminal console`}
         />
       ) : (
         <div
           className="terminal-state"
           role={endpointState === "unavailable" || error !== undefined ? "alert" : "status"}
         >
-          {loading || endpointState === "starting" || endpointState === "backoff" ? (
+          {loading || endpointState === "starting" ? (
             <LoaderCircle className="spin" aria-hidden="true" size={22} />
           ) : (
             <CircleAlert aria-hidden="true" size={22} />
           )}
           <strong>{stateLabel}</strong>
           {detail !== undefined && <span>{detail}</span>}
-          {status?.retryAfterMs !== undefined && (
-            <span>Retrying in {Math.ceil(status.retryAfterMs / 1_000)} seconds.</span>
-          )}
           {(endpointState === "unavailable" || error !== undefined) && (
             <button type="button" onClick={retry}>
               <RefreshCw aria-hidden="true" size={15} />
@@ -260,13 +258,6 @@ export function TerminalWorkspace({
             />
           ))}
       </div>
-      {availableRuns.length > 0 && (
-        <div className="terminal-mode-note">
-          <CircleAlert aria-hidden="true" size={14} />
-          One live terminal client is allowed per run. If ttyd asks to reconnect, close the other
-          open terminal view first.
-        </div>
-      )}
     </div>
   );
 }

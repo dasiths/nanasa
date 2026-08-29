@@ -23,7 +23,7 @@ const runningRun: AgentRun = {
 };
 
 describe("RunRuntimeCoordinator", () => {
-  it("stops ttyd and removes the view session before killing the owner pane", async () => {
+  it("stops the gateway and removes the view session before killing the owner pane", async () => {
     const operations: string[] = [];
     const stoppedRun: AgentRun = {
       ...runningRun,
@@ -49,7 +49,7 @@ describe("RunRuntimeCoordinator", () => {
     };
     const supervisor = {
       stop: vi.fn(async () => {
-        operations.push("ttyd:stop");
+        operations.push("gateway:stop");
       }),
       close: vi.fn(async () => undefined),
     };
@@ -70,7 +70,7 @@ describe("RunRuntimeCoordinator", () => {
       );
       expect(operations).toEqual([
         "status:stopping",
-        "ttyd:stop",
+        "gateway:stop",
         "view-session:remove",
         "owner-pane:stop",
       ]);
@@ -134,7 +134,7 @@ describe("RunRuntimeCoordinator", () => {
       ensureViewSession: vi.fn(async () => "view"),
       close: vi.fn(async () => undefined),
     };
-    const ttyd = {
+    const gateway = {
       stop: vi.fn(async () => undefined),
       reconcile: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
@@ -142,7 +142,7 @@ describe("RunRuntimeCoordinator", () => {
     const coordinator = new RunRuntimeCoordinator(
       store,
       runtime as never,
-      ttyd as never,
+      gateway as never,
       { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
       { reconcileIntervalMs: 60_000, now: () => new Date("2026-08-10T12:00:00.000Z") },
     );
@@ -451,7 +451,7 @@ describe("RunRuntimeCoordinator", () => {
       runtime as never,
       {
         start: vi.fn(),
-        stop: vi.fn(async () => operations.push("ttyd:stop")),
+        stop: vi.fn(async () => operations.push("gateway:stop")),
         close: vi.fn(async () => undefined),
       } as never,
       {
@@ -469,7 +469,7 @@ describe("RunRuntimeCoordinator", () => {
       expect(operations).toEqual([
         "run:start",
         "status:stopping",
-        "ttyd:stop",
+        "gateway:stop",
         "view:remove",
         "run:stop",
         "membership:remove",
@@ -540,7 +540,7 @@ describe("RunRuntimeCoordinator", () => {
       store as never,
       runtime as never,
       {
-        stop: vi.fn(async (runId: string) => operations.push(`${runId}:ttyd-stop`)),
+        stop: vi.fn(async (runId: string) => operations.push(`${runId}:gateway-stop`)),
         close: vi.fn(async () => undefined),
       } as never,
       { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
@@ -551,7 +551,7 @@ describe("RunRuntimeCoordinator", () => {
       expect(await coordinator.deleteGroup("group-one", "delete-key")).toEqual(result);
       expect(operations).toEqual([
         "run-alpha:stopping",
-        "run-alpha:ttyd-stop",
+        "run-alpha:gateway-stop",
         "run-alpha:view-remove",
         "run-alpha:runtime-stop",
         "run-beta:desired-stopped",

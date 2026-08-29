@@ -197,84 +197,94 @@ describe("message policy contracts", () => {
 });
 
 describe("terminal endpoint status contracts", () => {
-  it.each(["starting", "backoff", "unavailable", "stopped"] as const)(
-    "accepts the %s state without a URL",
+  it.each(["starting", "unavailable", "stopped"] as const)(
+    "accepts the %s state without a stream URL",
     (state) => {
       expect(
-        TerminalEndpointStatusSchema.parse({ runId: "run_1", provider: "ttyd", state }),
+        TerminalEndpointStatusSchema.parse({
+          runId: "run_1",
+          provider: "nanasa-terminal.v1",
+          state,
+        }),
       ).toEqual({
         runId: "run_1",
-        provider: "ttyd",
+        provider: "nanasa-terminal.v1",
         state,
       });
     },
   );
 
-  it("accepts a ready endpoint with a same-origin URL", () => {
-    expect(
-      TerminalEndpointStatusSchema.parse({
-        runId: "run_1",
-        provider: "ttyd",
-        state: "ready",
-        url: "/terminals/0123456789abcdef0123456789abcdef/",
-      }),
-    ).toEqual({
+  it("accepts a ready endpoint with final protocol limits", () => {
+    const endpoint = {
       runId: "run_1",
-      provider: "ttyd",
-      state: "ready",
-      url: "/terminals/0123456789abcdef0123456789abcdef/",
-    });
-  });
-
-  it("accepts retry and error metadata without exposing an upstream", () => {
-    expect(
-      TerminalEndpointStatusSchema.parse({
-        runId: "run_1",
-        provider: "ttyd",
-        state: "backoff",
-        retryAfterMs: 2_000,
-        error: { code: "ttyd_exited", message: "Terminal provider exited" },
-      }),
-    ).toMatchObject({
-      provider: "ttyd",
-      retryAfterMs: 2_000,
-      error: { code: "ttyd_exited" },
-    });
+      provider: "nanasa-terminal.v1",
+      state: "ready" as const,
+      streamUrl: "/api/v1/terminal-stream/run_1",
+      protocol: "nanasa-terminal.v1",
+      limits: {
+        maxFrameBytes: 262_144,
+        maxInputBytes: 65_536,
+        maxPasteBytes: 196_608,
+        maxOutputQueueBytes: 1_048_576,
+        maxViewers: 4,
+        maxObservers: 3,
+        maxReadLines: 5_000,
+        maxReadBytes: 1_048_576,
+        heartbeatMs: 5_000,
+        leaseMs: 15_000,
+        reconnectHistoryFrames: 256,
+      },
+      observers: 0,
+    };
+    expect(TerminalEndpointStatusSchema.parse(endpoint)).toEqual(endpoint);
   });
 
   it.each([
     [
       "a non-ready endpoint URL",
-      { runId: "run_1", provider: "ttyd", state: "starting", url: "/terminals/x/" },
+      {
+        runId: "run_1",
+        provider: "nanasa-terminal.v1",
+        state: "starting",
+        streamUrl: "/api/v1/terminal-stream/run_1",
+      },
     ],
-    ["a ready endpoint without a URL", { runId: "run_1", provider: "ttyd", state: "ready" }],
+    [
+      "a ready endpoint without a descriptor",
+      { runId: "run_1", provider: "nanasa-terminal.v1", state: "ready" },
+    ],
     ["a missing provider", { runId: "run_1", state: "unavailable" }],
     ["a different provider", { runId: "run_1", provider: "custom", state: "unavailable" }],
     [
       "an absolute ready endpoint URL",
       {
         runId: "run_1",
-        provider: "ttyd",
+        provider: "nanasa-terminal.v1",
         state: "ready",
-        url: "https://example.com/terminals/0123456789abcdef0123456789abcdef/",
+        streamUrl: "https://example.com/api/v1/terminal-stream/run_1",
       },
     ],
     [
       "an endpoint key with the wrong shape",
       {
         runId: "run_1",
-        provider: "ttyd",
+        provider: "nanasa-terminal.v1",
         state: "ready",
-        url: "/terminals/not-a-valid-endpoint-key/",
+        streamUrl: "/terminals/not-a-valid-endpoint-key/",
       },
     ],
     [
       "an upstream port",
-      { runId: "run_1", provider: "ttyd", state: "unavailable", upstreamPort: 7681 },
+      { runId: "run_1", provider: "nanasa-terminal.v1", state: "unavailable", upstreamPort: 7681 },
     ],
     [
       "an upstream host",
-      { runId: "run_1", provider: "ttyd", state: "unavailable", upstreamHost: "127.0.0.1" },
+      {
+        runId: "run_1",
+        provider: "nanasa-terminal.v1",
+        state: "unavailable",
+        upstreamHost: "127.0.0.1",
+      },
     ],
   ])("rejects %s", (_name, status) => {
     expect(TerminalEndpointStatusSchema.safeParse(status).success).toBe(false);

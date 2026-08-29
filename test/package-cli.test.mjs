@@ -100,18 +100,16 @@ test("start fails clearly before launch when configuration is absent", () => {
   assert.match(result.stderr, /Run nanasa init first/);
 });
 
-test("start explains the ttyd system prerequisite before daemon launch", () => {
+test("start rejects retired terminal-provider options", () => {
   const repository = temporaryRepository();
   assert.equal(runCli(repository, ["init"]).status, 0);
   const nested = join(repository, "packages", "example");
   const mkdir = spawnSync("mkdir", ["-p", nested]);
   assert.equal(mkdir.status, 0);
 
-  const missingTtyd = join(repository, "missing-ttyd");
-  const result = runCli(nested, ["start", "--ttyd-path", missingTtyd]);
+  const result = runCli(nested, ["start", "--legacy-terminal-path", "/missing"]);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /Install ttyd 1\.7\.7 through your system or devcontainer/);
-  assert.match(result.stderr, /NANASA_TTYD_PATH/);
+  assert.match(result.stderr, /Unknown option: --legacy-terminal-path/);
   assert.equal(existsSync(join(repository, ".nanasa", "state")), false);
   assert.equal(existsSync(join(nested, ".nanasa")), false);
 });

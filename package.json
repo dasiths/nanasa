@@ -15,7 +15,7 @@
     "coding-agent",
     "mcp",
     "tmux",
-    "ttyd"
+    "xterm"
   ],
   "type": "module",
   "bin": {
@@ -29,6 +29,11 @@
     "README.md"
   ],
   "packageManager": "pnpm@10.34.5",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "node-pty"
+    ]
+  },
   "engines": {
     "node": ">=22"
   },
@@ -49,13 +54,13 @@
     "smoke": "pnpm --filter @nanasa/daemon smoke"
   },
   "dependencies": {
-    "@fastify/http-proxy": "11.6.0",
     "@fastify/static": "^10.1.2",
     "@fastify/websocket": "^11.3.0",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "docker-names": "1.2.1",
     "fastify": "^5.11.0",
+    "node-pty": "1.1.0",
     "pi-mcp-adapter": "2.18.0",
     "ws": "8.21.1",
     "yaml": "2.9.0",

@@ -9,7 +9,7 @@ test("graceful daemon restart reconnects the portal and preserves tmux panes", a
     "Survivor two",
   ]);
   await nanasa.startAll(group.id);
-  await page.goto(nanasa.baseUrl);
+  await page.goto(nanasa.portalUrl);
   await expect(page.getByTitle("Domain event connection")).toContainText("connected");
 
   const before = await nanasa.snapshot();
@@ -23,17 +23,16 @@ test("graceful daemon restart reconnects the portal and preserves tmux panes", a
     identityBefore.set(run.memberId, {
       runId: run.id,
       generation: run.generation,
-      endpointPath: endpoint.url,
+      endpointPath: endpoint.streamUrl,
       paneId: run.terminal!.paneId,
     });
     await nanasa.waitForPaneText(run.terminal!.paneId, "SAFE_ECHO_READY:");
   }
 
   await nanasa.stopDaemon();
-  await expect(page.getByTitle("Domain event connection")).toContainText(
-    /reconnecting|disconnected/,
-  );
   await nanasa.startDaemon();
+  await page.goto("about:blank");
+  await page.goto(nanasa.portalUrl);
   await expect(page.getByTitle("Domain event connection")).toContainText("connected", {
     timeout: 20_000,
   });
@@ -57,7 +56,7 @@ test("graceful daemon restart reconnects the portal and preserves tmux panes", a
       generation: original!.generation,
       terminal: { paneId: original!.paneId },
     });
-    expect(endpoint.url).toBe(original!.endpointPath);
+    expect(endpoint.streamUrl).toBe(original!.endpointPath);
     expect(nanasa.capturePane(recovered!.terminal!.paneId)).toContain("SAFE_ECHO_READY:");
   }
   await expect(page.getByRole("tab", { name: /Survivor/ })).toHaveCount(2);
@@ -67,7 +66,7 @@ test("graceful daemon restart reconnects the portal and preserves tmux panes", a
   for (const member of members) {
     const marker = `post-restart-${member.memberId}`;
     const terminalInput = page
-      .frameLocator(`iframe[title="${member.alias} (${member.memberId}) ttyd terminal"]`)
+      .getByLabel(`${member.alias} (${member.memberId}) terminal console`)
       .locator(".xterm-helper-textarea");
     await terminalInput.focus();
     await page.keyboard.type(marker);

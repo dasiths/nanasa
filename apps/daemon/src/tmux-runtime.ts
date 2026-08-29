@@ -7,6 +7,8 @@ import type {
   GroupMembership,
   NativeSessionReference,
   TerminalBinding,
+  TerminalReadRequest,
+  TerminalReadResult,
 } from "@nanasa/contracts";
 
 import type {
@@ -17,7 +19,7 @@ import { ProcessIdentityObserver } from "./process-identity-observer.js";
 import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
 import { runtimeObservation, type RuntimeObservation } from "./runtime-observation.js";
 import { DomainError, NanasaStore } from "./store.js";
-import { ttydViewSessionName } from "./ttyd-supervisor.js";
+import { terminalViewSessionName } from "./terminal/terminal-input-arbiter.js";
 
 export interface TmuxRuntimeOptions {
   serverName?: string;
@@ -38,6 +40,7 @@ interface CommandOutput {
 interface OwnedPaneStatus {
   dead: boolean;
   inMode: boolean;
+  alternateOn: boolean;
   currentCommand: string;
 }
 
@@ -272,7 +275,7 @@ export class TmuxRuntime {
     if (binding === undefined || binding.serverName !== this.serverName) {
       throw new Error("Run does not have a binding on this tmux server");
     }
-    const viewSession = ttydViewSessionName(run.id);
+    const viewSession = terminalViewSessionName(run.id);
     if (!(await this.#viewMatches(viewSession, binding))) {
       await this.#tmux(["kill-session", "-t", `=${viewSession}`], true);
       const bootstrapWindowId = (
@@ -307,7 +310,7 @@ export class TmuxRuntime {
     await this.#tmux(["set-option", "-t", viewSession, "prefix2", "None"]);
     await this.#tmux(["set-option", "-t", viewSession, "status", "off"]);
     await this.#tmux(["set-option", "-t", viewSession, "destroy-unattached", "off"]);
-    await this.#tmux(["set-option", "-g", "mouse", "on"]);
+    await this.#tmux(["set-option", "-t", viewSession, "mouse", "on"]);
     await this.#tmux(["set-option", "-w", "-t", `${viewSession}:1`, "window-size", "latest"]);
     if (!(await this.#viewMatches(viewSession, binding))) {
       throw new Error(`tmux view session ${viewSession} does not match its owner pane`);
@@ -316,11 +319,13 @@ export class TmuxRuntime {
   }
 
   public async removeViewSession(runId: string): Promise<void> {
-    await this.#tmux(["kill-session", "-t", `=${ttydViewSessionName(runId)}`], true);
+    await this.#tmux(["kill-session", "-t", `=${terminalViewSessionName(runId)}`], true);
   }
 
   public async removeStaleViewSessions(activeRunIds: ReadonlySet<string>): Promise<void> {
-    const desired = new Set([...activeRunIds, ...this.#detachedRunIds].map(ttydViewSessionName));
+    const desired = new Set(
+      [...activeRunIds, ...this.#detachedRunIds].map(terminalViewSessionName),
+    );
     const result = await this.#tmux(["list-sessions", "-F", "#{session_name}"], true);
     if (result.exitCode !== 0) {
       return;
@@ -432,6 +437,54 @@ export class TmuxRuntime {
   public async interruptRun(run: AgentRun): Promise<void> {
     await this.#ownedPaneStatus(run);
     await this.#tmux(["send-keys", "-t", terminalInputTarget(run.terminal!), "C-c"]);
+  }
+
+  public async readTerminal(request: TerminalReadRequest): Promise<TerminalReadResult> {
+    const run = this.#store.getRun(request.runId);
+    if (run.generation !== request.generation) {
+      throw new DomainError(
+        "terminal_read_generation_mismatch",
+        "Terminal read generation does not match the run",
+        409,
+      );
+    }
+    const status = await this.#ownedPaneStatus(run, true, true);
+    const binding = run.terminal as TerminalBinding;
+    const start = request.source === "history" ? `-${request.maxLines}` : "0";
+    const captured = await this.#tmux([
+      "capture-pane",
+      "-p",
+      "-t",
+      binding.paneId,
+      "-S",
+      start,
+      "-E",
+      "-",
+    ]);
+    const lines = captured.stdout.replaceAll("\r\n", "\n").split("\n");
+    const boundedLines = lines.length > request.maxLines ? lines.slice(-request.maxLines) : lines;
+    const lineTruncated = boundedLines.length !== lines.length;
+    const text = boundedLines.join("\n");
+    const encoded = Buffer.from(text, "utf8");
+    const byteTruncated = encoded.length > request.maxBytes;
+    const boundedText = byteTruncated
+      ? encoded
+          .subarray(encoded.length - request.maxBytes)
+          .toString("utf8")
+          .replace(/^\uFFFD/, "")
+      : text;
+    return {
+      runId: run.id,
+      generation: run.generation,
+      binding,
+      source: request.source,
+      text: boundedText,
+      lineCount: boundedText.length === 0 ? 0 : boundedText.split("\n").length,
+      byteCount: Buffer.byteLength(boundedText, "utf8"),
+      truncated: lineTruncated || byteTruncated,
+      alternateScreen: status.alternateOn,
+      capturedAt: new Date().toISOString(),
+    };
   }
 
   public reconcile(markOrphanedStarting = false): Promise<void> {
@@ -693,18 +746,13 @@ export class TmuxRuntime {
       await this.#tmux(["set-option", "-g", "remain-on-exit", "on"]);
       await this.#tmux(["set-option", "-g", "mouse", "on"]);
       await this.#tmux(["set-option", "-g", "extended-keys", "on"]);
-      await this.#tmux(["set-option", "-g", "set-clipboard", "on"]);
+      await this.#tmux(["set-option", "-g", "set-clipboard", "external"]);
       for (const [hook, command] of Object.entries(this.#invalidationHooks)) {
         await this.#tmux(["set-hook", "-g", hook, `run-shell -b ${shellQuote(command)}`]);
       }
       const terminalFeatures = await this.#tmux(["show-options", "-gv", "terminal-features"], true);
-      if (!terminalFeatures.stdout.includes("xterm-256color:extkeys:clipboard")) {
-        await this.#tmux([
-          "set-option",
-          "-as",
-          "terminal-features",
-          ",xterm-256color:extkeys:clipboard",
-        ]);
+      if (!terminalFeatures.stdout.includes("xterm-256color:extkeys")) {
+        await this.#tmux(["set-option", "-as", "terminal-features", ",xterm-256color:extkeys"]);
       }
       // tmux 3.5+ supports CSI-u. Older supported versions use modifyOtherKeys,
       // which Pi also understands.
@@ -765,7 +813,7 @@ export class TmuxRuntime {
         "-t",
         `${binding.sessionId}:${binding.windowId}`,
         "-F",
-        "#{session_id}\t#{window_id}\t#{pane_id}\t#{pane_dead}\t#{pane_in_mode}\t#{pane_current_command}\t#{@nanasa-run-id}\t#{@nanasa-generation}",
+        "#{session_id}\t#{window_id}\t#{pane_id}\t#{pane_dead}\t#{pane_in_mode}\t#{alternate_on}\t#{pane_current_command}\t#{@nanasa-run-id}\t#{@nanasa-generation}",
       ],
       true,
     );
@@ -776,7 +824,17 @@ export class TmuxRuntime {
       .map((line) => line.split("\t"))
       .find(([, , paneId]) => paneId === binding.paneId);
     if (pane === undefined) throw new Error("terminal_owner_pane_mismatch");
-    const [sessionId, windowId, paneId, dead, inMode, currentCommand, runId, generation] = pane;
+    const [
+      sessionId,
+      windowId,
+      paneId,
+      dead,
+      inMode,
+      alternateOn,
+      currentCommand,
+      runId,
+      generation,
+    ] = pane;
     if (
       sessionId !== binding.sessionId ||
       windowId !== binding.windowId ||
@@ -790,6 +848,11 @@ export class TmuxRuntime {
       throw new Error("terminal_owner_pane_mismatch");
     }
     if (inMode !== "0" && !allowCopyMode) throw new Error("terminal_pane_in_copy_mode");
-    return { dead: false, inMode: inMode !== "0", currentCommand };
+    return {
+      dead: false,
+      inMode: inMode !== "0",
+      alternateOn: alternateOn === "1",
+      currentCommand,
+    };
   }
 }

@@ -45,6 +45,8 @@ function canonical(value: unknown): string {
 }
 
 export class RepositoryTrustService {
+  #lastDecisionTime = 0;
+
   public constructor(private readonly persistence: RepositoryTrustPersistence) {}
 
   public digest(manifest: RepositoryLaunchManifest): string {
@@ -65,6 +67,7 @@ export class RepositoryTrustService {
   }
 
   public trust(manifest: RepositoryLaunchManifest, principalId: string): RepositoryTrustReceipt {
+    const decidedAt = this.#nextDecisionTimestamp();
     return this.persistence.saveRepositoryTrust(
       Object.freeze({
         id: `trust_${randomUUID()}`,
@@ -72,7 +75,7 @@ export class RepositoryTrustService {
         subjectDigest: this.digest(manifest),
         principalId,
         decision: "trusted",
-        decidedAt: new Date().toISOString(),
+        decidedAt,
       }),
     );
   }
@@ -92,6 +95,7 @@ export class RepositoryTrustService {
   }
 
   public revoke(manifest: RepositoryLaunchManifest, principalId: string): RepositoryTrustReceipt {
+    const decidedAt = this.#nextDecisionTimestamp();
     return this.persistence.saveRepositoryTrust(
       Object.freeze({
         id: `trust_${randomUUID()}`,
@@ -99,9 +103,14 @@ export class RepositoryTrustService {
         subjectDigest: this.digest(manifest),
         principalId,
         decision: "revoked",
-        decidedAt: new Date().toISOString(),
-        revokedAt: new Date().toISOString(),
+        decidedAt,
+        revokedAt: decidedAt,
       }),
     );
+  }
+
+  #nextDecisionTimestamp(): string {
+    this.#lastDecisionTime = Math.max(Date.now(), this.#lastDecisionTime + 1);
+    return new Date(this.#lastDecisionTime).toISOString();
   }
 }

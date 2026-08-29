@@ -9,7 +9,7 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
     "Beta",
     "Gamma",
   ]);
-  await page.goto(nanasa.baseUrl);
+  await page.goto(nanasa.portalUrl);
 
   await page
     .getByRole("button", { name: "Start all non-running agents in Acceptance team" })
@@ -35,22 +35,20 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
       .map((run) => [run.memberId, run.terminal?.paneId]),
   );
   for (const member of members) {
-    expect(member.memberId).toMatch(/^echo\.[a-z0-9]+(?:-[a-z0-9]+)+$/);
+    expect(member.memberId).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)+$/);
     const paneId = paneByMember.get(member.memberId);
     expect(paneId).toBeDefined();
     await nanasa.waitForPaneText(paneId as string, "SAFE_ECHO_READY:");
   }
 
-  const alphaFrame = page.frameLocator(
-    `iframe[title="Alpha (${members[0]!.memberId}) ttyd terminal"]`,
-  );
-  const alphaInput = alphaFrame.locator(".xterm-helper-textarea");
+  const alphaTerminal = page.getByLabel(`Alpha (${members[0]!.memberId}) terminal console`);
+  const alphaInput = alphaTerminal.locator(".xterm-helper-textarea");
   await alphaInput.focus();
   await page.keyboard.press("PageUp");
   await page.keyboard.press("PageDown");
   await nanasa.waitForPaneText(paneByMember.get(members[0]!.memberId)!, "SAFE_KEY:PageUp");
   await nanasa.waitForPaneText(paneByMember.get(members[0]!.memberId)!, "SAFE_KEY:PageDown");
-  const alphaScreen = await alphaFrame.locator(".xterm-screen").boundingBox();
+  const alphaScreen = await alphaTerminal.locator(".xterm-screen").boundingBox();
   expect(alphaScreen).not.toBeNull();
   await page.mouse.move(
     alphaScreen!.x + alphaScreen!.width / 2,
@@ -136,7 +134,7 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
   );
   await nanasa.waitForPaneText(
     paneByMember.get(members[1]!.memberId)!,
-    `[From: Alpha | Member: ${members[0]!.memberId} | Intent: inform]`,
+    `[From: Alpha | Member: ${members[0]!.memberId} | Message:`,
   );
   const agentMessage = page.getByText("acceptance-agent-to-agent").locator("..");
   await expect(agentMessage).toContainText("From: Alpha");

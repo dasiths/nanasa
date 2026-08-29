@@ -33,7 +33,7 @@ await build({
     "daemon/index": "apps/daemon/src/index.ts",
     "cli/admin": "apps/daemon/src/cli-admin.ts",
   },
-  external: ["@fastify/*", "@modelcontextprotocol/*", "fastify", "ws", "yaml", "zod"],
+  external: ["@fastify/*", "@modelcontextprotocol/*", "fastify", "node-pty", "ws", "yaml", "zod"],
   format: "esm",
   outdir: outputDirectory,
   platform: "node",

@@ -11,7 +11,7 @@ import { DeliveryDispatcher } from "./delivery-dispatcher.js";
 import { NativeSessionService } from "./native-session-service.js";
 import { DomainError, NanasaStore } from "./store.js";
 import { TmuxRuntime } from "./tmux-runtime.js";
-import { TtydSupervisor } from "./ttyd-supervisor.js";
+import { TerminalGateway } from "./terminal/terminal-gateway.js";
 import type { RuntimeObservation } from "./runtime-observation.js";
 
 export interface RunRuntimeCoordinatorOptions {
@@ -33,7 +33,7 @@ const STATUS_PROBE_INTERVAL_MS = 15_000;
 export class RunRuntimeCoordinator {
   readonly #store: NanasaStore;
   readonly #runtime: TmuxRuntime;
-  readonly #supervisor: TtydSupervisor;
+  readonly #supervisor: TerminalGateway;
   readonly #dispatcher: DeliveryDispatcher;
   readonly #reconcileTimer: NodeJS.Timeout;
   readonly #recoveryMaxAttempts: number;
@@ -50,7 +50,7 @@ export class RunRuntimeCoordinator {
   public constructor(
     store: NanasaStore,
     runtime: TmuxRuntime,
-    supervisor: TtydSupervisor,
+    supervisor: TerminalGateway,
     dispatcher: DeliveryDispatcher,
     options: RunRuntimeCoordinatorOptions = {},
   ) {
@@ -304,18 +304,18 @@ export class RunRuntimeCoordinator {
         (run) => run.status === "running" && run.terminal !== undefined,
       );
       await this.#runtime.removeStaleViewSessions(new Set(running.map((run) => run.id)));
-      const readyForTtyd: AgentRun[] = [];
+      const readyForGateway: AgentRun[] = [];
       for (const run of running) {
         try {
           await this.#runtime.ensureViewSession(run);
-          readyForTtyd.push(run);
-        } catch (error) {
+          readyForGateway.push(run);
+        } catch {
           await this.#supervisor.stop(run.id);
-          this.#supervisor.unavailable(run, error);
+          this.#supervisor.unavailable(run);
         }
       }
-      await this.#supervisor.reconcile(readyForTtyd);
-      for (const run of readyForTtyd) {
+      await this.#supervisor.reconcile(readyForGateway);
+      for (const run of readyForGateway) {
         if (run.recoveryPhase === "recovered" || run.recoveryPhase === "resuming") continue;
         try {
           this.#store.transitionRunRecovery(run.id, run.generation, "recovered", {
@@ -357,8 +357,8 @@ export class RunRuntimeCoordinator {
     try {
       await this.#runtime.ensureViewSession(run);
       this.#supervisor.start(run);
-    } catch (error) {
-      this.#supervisor.unavailable(run, error);
+    } catch {
+      this.#supervisor.unavailable(run);
     }
     return run;
   }

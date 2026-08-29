@@ -137,10 +137,6 @@ export function doctorIntegrations(repositoryRoot: string): void {
       inspectPrivateDirectory(selectedHome(repositoryRoot, integration), problems, true);
     }
   }
-  const ttydCommand = process.env.NANASA_TTYD_PATH ?? "ttyd";
-  if (executablePath(ttydCommand, process.env) === undefined) {
-    problems.push(`ttyd command not found: ${ttydCommand}`);
-  }
   if (problems.length > 0) {
     for (const problem of problems) process.stderr.write(`ERROR ${problem}\n`);
     throw new Error(

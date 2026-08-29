@@ -17,7 +17,7 @@ function retryDelay(
   if (status?.state === "ready" || status?.state === "stopped") {
     return undefined;
   }
-  return status?.retryAfterMs ?? Math.min(500 * 2 ** attempt, 8_000);
+  return Math.min(500 * 2 ** attempt, 8_000);
 }
 
 export function useTerminalEndpoint(

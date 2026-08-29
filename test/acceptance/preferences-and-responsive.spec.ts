@@ -8,7 +8,8 @@ test("theme and terminal layout persist and synchronize across tabs", async ({
   const { group } = await nanasa.seedGroup("Preferences team", ["One", "Two"]);
   await nanasa.startAll(group.id);
   const secondPage = await context.newPage();
-  await Promise.all([page.goto(nanasa.baseUrl), secondPage.goto(nanasa.baseUrl)]);
+  await page.goto(nanasa.portalUrl);
+  await secondPage.goto(nanasa.baseUrl);
 
   await page.getByRole("button", { name: "Use dark theme" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
@@ -38,7 +39,7 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
 }) => {
   await nanasa.seedGroup("Responsive team", ["Narrow"]);
   await page.setViewportSize({ width: 1280, height: 800 });
-  await page.goto(nanasa.baseUrl);
+  await page.goto(nanasa.portalUrl);
 
   const desktopRail = await page
     .getByRole("complementary", { name: "Groups and agents" })

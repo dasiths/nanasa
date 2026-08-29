@@ -613,6 +613,42 @@ export class NanasaStore {
           .run(groupId);
         this.#database
           .prepare(
+            "UPDATE deliveries SET run_id = NULL, run_generation = NULL WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?)",
+          )
+          .run(groupId);
+        for (const table of [
+          "terminal_checkpoints",
+          "models",
+          "native_sessions",
+          "completion_acknowledgements",
+          "screen_observations",
+        ] as const) {
+          this.#database
+            .prepare(
+              `DELETE FROM ${table} WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?)`,
+            )
+            .run(groupId);
+        }
+        this.#database
+          .prepare(
+            "DELETE FROM action_acknowledgements WHERE action_id IN (SELECT id FROM actions WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?))",
+          )
+          .run(groupId);
+        this.#database
+          .prepare(
+            "DELETE FROM action_attempts WHERE action_id IN (SELECT id FROM actions WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?))",
+          )
+          .run(groupId);
+        this.#database
+          .prepare(
+            "DELETE FROM open_waits WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?)",
+          )
+          .run(groupId);
+        this.#database
+          .prepare("DELETE FROM actions WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?)")
+          .run(groupId);
+        this.#database
+          .prepare(
             "DELETE FROM status_progress_reports WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?)",
           )
           .run(groupId);
@@ -624,6 +660,11 @@ export class NanasaStore {
         this.#database
           .prepare(
             "DELETE FROM status_revisions WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?)",
+          )
+          .run(groupId);
+        this.#database
+          .prepare(
+            "DELETE FROM reporter_sessions WHERE run_id IN (SELECT id FROM runs WHERE group_id = ?)",
           )
           .run(groupId);
         const deletedRuns = this.#database
@@ -2333,6 +2374,18 @@ export class NanasaStore {
         expiresAt: row.expires_at,
       }),
     );
+  }
+
+  public listTerminalCheckpointOwners(): string[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT DISTINCT owner_principal_id
+         FROM terminal_checkpoints
+         WHERE deleted_at IS NULL
+         ORDER BY owner_principal_id`,
+      )
+      .all() as Array<{ owner_principal_id: string }>;
+    return rows.map((row) => row.owner_principal_id);
   }
 
   public deleteTerminalCheckpoint(ownerPrincipalId: string, checkpointId: string): boolean {

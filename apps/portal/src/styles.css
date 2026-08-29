@@ -1392,13 +1392,122 @@ textarea {
   background: #4a5b56;
 }
 
-.ttyd-frame {
+.terminal-console {
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
-  border: 0;
   background: var(--terminal);
+  color: var(--text);
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  position: relative;
+}
+
+.xterm-host {
+  min-height: 0;
+  overflow: hidden;
+  padding: 4px;
+}
+
+.xterm-host:focus-within {
+  outline: 2px solid #59c7a4;
+  outline-offset: -2px;
+}
+
+.terminal-actions,
+.terminal-lease-banner,
+.terminal-search {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  padding: 4px 8px;
+}
+
+.terminal-actions span {
+  margin-left: auto;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-lease-banner {
+  background: color-mix(in srgb, var(--terminal) 80%, #3f7967);
+  font-size: 12px;
+}
+
+.terminal-lease-banner button {
+  margin-left: auto;
+}
+
+.terminal-selection-hint,
+.terminal-feedback {
+  font-size: 12px;
+  margin: 0;
+  min-height: 18px;
+  padding: 1px 8px;
+}
+
+.terminal-context-menu {
+  background: #18231f;
+  border: 1px solid #53645e;
+  border-radius: 6px;
+  box-shadow: 0 8px 28px #0008;
+  display: grid;
+  min-width: 220px;
+  padding: 6px;
+  position: fixed;
+  z-index: 100;
+}
+
+.terminal-context-menu button {
+  justify-content: flex-start;
+}
+
+.terminal-context-menu p {
+  font-size: 11px;
+  margin: 6px;
+  max-width: 260px;
+}
+
+.terminal-effect-prompt {
+  background: #18231f;
+  border: 1px solid #53645e;
+  bottom: 28px;
+  left: 12px;
+  max-width: 420px;
+  padding: 12px;
+  position: absolute;
+  z-index: 90;
+}
+
+.terminal-effect-prompt pre {
+  max-height: 80px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.terminal-transcript-dialog {
+  background: #18231f;
+  color: var(--text);
+  max-height: 85vh;
+  width: min(900px, 92vw);
+}
+
+.terminal-transcript-dialog header {
+  align-items: start;
+  display: flex;
+  justify-content: space-between;
+}
+
+.terminal-transcript-dialog pre {
+  background: var(--terminal);
+  max-height: 32vh;
+  overflow: auto;
+  padding: 12px;
+  user-select: text;
+  white-space: pre-wrap;
 }
 
 .terminal-state {

@@ -230,7 +230,9 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     stoppedAt: timestamp,
   };
   return {
-    createConsole: vi.fn().mockResolvedValue({ id: "console-one", runId: "console-one" }),
+    createConsole: vi
+      .fn()
+      .mockResolvedValue({ id: "console-one", runId: "console-one", generation: 1 }),
     closeConsole: vi.fn().mockResolvedValue(undefined),
     loadMetadata: vi.fn().mockResolvedValue({
       apiVersion: 1,
@@ -303,6 +305,9 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
       },
     }),
     getTerminalEndpointStatus: vi.fn(),
+    readTerminal: vi.fn(),
+    listTerminalCheckpoints: vi.fn().mockResolvedValue([]),
+    getTerminalCheckpoint: vi.fn(),
     createEventsSocket: vi.fn().mockImplementation(inertSocket),
   };
 }

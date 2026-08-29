@@ -12,10 +12,6 @@ export default defineConfig({
         changeOrigin: true,
         ws: true,
       },
-      "/terminals": {
-        target: daemonTarget,
-        ws: true,
-      },
     },
   },
   test: {

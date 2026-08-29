@@ -37,6 +37,11 @@ import {
   SubmitMessageCommandSchema,
   type TerminalEndpointStatus,
   TerminalEndpointStatusSchema,
+  type TerminalCheckpoint,
+  TerminalCheckpointContentSchema,
+  TerminalCheckpointSchema,
+  type TerminalReadResult,
+  TerminalReadResultSchema,
   type UpdateGroupAgentCommand,
   UpdateGroupAgentCommandSchema,
   type UpdateGroupCommand,
@@ -88,6 +93,11 @@ export interface PortalClient {
   ): Promise<MessagePage>;
   clearMessages(groupId: string): Promise<ClearMessageHistoryResult>;
   getTerminalEndpointStatus(runId: string): Promise<TerminalEndpointStatus>;
+  readTerminal(runId: string, generation: number): Promise<TerminalReadResult>;
+  listTerminalCheckpoints(): Promise<TerminalCheckpoint[]>;
+  getTerminalCheckpoint(
+    checkpointId: string,
+  ): Promise<{ checkpoint: TerminalCheckpoint; text: string }>;
   createEventsSocket(afterSequence: number, instanceId: string): WebSocket;
 }
 
@@ -220,6 +230,20 @@ export const api: PortalClient = {
     request(
       `${CONTROL_API_PREFIX}/runs/${encodeURIComponent(runId)}/terminal`,
       TerminalEndpointStatusSchema,
+    ),
+  readTerminal: (runId, generation) =>
+    request(
+      `${CONTROL_API_PREFIX}/runs/${encodeURIComponent(runId)}/terminal/read?generation=${generation}&source=history&maxLines=500&maxBytes=262144`,
+      TerminalReadResultSchema,
+    ),
+  listTerminalCheckpoints: () =>
+    request(`${CONTROL_API_PREFIX}/terminal-checkpoints`, {
+      parse: (value: unknown) => TerminalCheckpointSchema.array().parse(value),
+    }),
+  getTerminalCheckpoint: (checkpointId) =>
+    request(
+      `${CONTROL_API_PREFIX}/terminal-checkpoints/${encodeURIComponent(checkpointId)}`,
+      TerminalCheckpointContentSchema,
     ),
   createEventsSocket: (afterSequence, instanceId) => control.openEvents(afterSequence, instanceId),
 };

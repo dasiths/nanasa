@@ -2,18 +2,15 @@
 title: Nanasa portal
 description: Development and production build notes for the Nanasa operational portal
 author: Nanasa
-ms.date: 2026-08-10
+ms.date: 2026-08-29
 ms.topic: reference
 ---
 
 ## Development
 
-The portal uses relative `/api` URLs for application REST and event WebSocket
-traffic. Terminal status responses contain bounded relative `/terminals` URLs,
-which the portal mounts as ttyd iframes. Vite proxies both route families to the
-daemon at `http://127.0.0.1:3210` by default. The terminal proxy preserves the
-browser authority so the daemon and ttyd can enforce same-origin WebSocket
-upgrades.
+The portal uses relative `/api` URLs for application REST, event WebSocket, and
+`nanasa-terminal.v1` traffic. The daemon remains at
+`http://127.0.0.1:3210` by default.
 
 Set `VITE_DAEMON_URL` when the daemon uses another origin:
 
@@ -23,29 +20,27 @@ VITE_DAEMON_URL=http://127.0.0.1:4210 pnpm --filter @nanasa/portal dev
 
 ## Terminal views
 
-ttyd is the portal's only terminal provider. Tab layout mounts one iframe for
-the selected run. Grid layout mounts one iframe for each visible run. Every
-iframe uses the daemon-provided same-origin URL, a descriptive title, and a
-same-origin referrer policy. Tabs, status bars, iframe titles, and accessible
+The portal owns xterm and selected addons. Tab layout mounts the selected run,
+while grid layout mounts each visible run. Tabs, status bars, and accessible
 terminal names include both the member alias and stable member ID.
 
-Each ttyd endpoint permits one live client. If ttyd asks to reconnect, close any
-other tab, grid, or browser showing that run before retrying. Unmounting an
-iframe removes only ttyd's disposable tmux client; the owner pane and agent
-process continue in the daemon's private tmux server. Starting, retrying,
-unavailable, and stopped states render outside the iframe.
+One controller and bounded observers can view a run. Observers receive output
+and can copy local selections, but cannot send input, paste, resize, focus, or
+approve effects. Unmounting a view removes only its disposable attachment.
 
-ttyd provides 10,000 lines of xterm scrollback. PageUp and PageDown remain input
+xterm provides 10,000 lines of local scrollback. PageUp and PageDown remain input
 for the active TUI, and tmux mouse mode forwards wheel events to mouse-aware
 applications or uses them for copy-mode scrollback. Full-screen alternate-screen
 TUIs own their visible history, so browser scrollbars can remain stationary even
 while the application scrolls internally.
 
-The daemon enables tmux extended-key reporting and clipboard signaling for the
+The daemon enables tmux extended-key reporting and external-only clipboard signaling for the
 private server. Modified Enter bindings therefore reach compatible TUIs. Agent
 PTYs disable software flow control so `Ctrl+S` and `Ctrl+Q` remain application
-input. Clipboard operations use browser/platform shortcuts such as
-`Ctrl+Shift+C` and `Ctrl+Shift+V`; plain `Ctrl+C` remains an interrupt.
+input. Shift+drag selects locally on Linux and Windows. Option+drag performs the
+same override on macOS. Trusted copy and paste events are preferred, while
+toolbar actions provide a permission-aware fallback. Prompted OSC 52 writes are
+controller-only, and reads are rejected.
 
 The portal displays every persisted group message as a shared chronological chat
 timeline in a bottom-right floating overlay. Portal senders appear as Human;
@@ -63,8 +58,8 @@ grid layout remain independent, with grid rendering up to three agent columns,
 then two and one at smaller breakpoints.
 
 Messages floats over the terminal workspace. Before any portal or agent-originated
-delivery, the portal temporarily disconnects writable
-ttyd clients so the daemon can paste text into each verified recipient pane and
+delivery, the portal temporarily suspends terminal controllers so the daemon can
+paste text into each verified recipient pane and
 send Enter separately. A consumed outcome confirms terminal injection, not
 semantic completion by the agent CLI.
 

@@ -103,7 +103,6 @@ async function start(): Promise<void> {
     configuredPath("NANASA_RUNTIME_PATH", process.env.NANASA_RUNTIME_PATH) ??
     loadedConfig.runtimeDirectory;
   const tmuxServerName = process.env.NANASA_TMUX_SERVER ?? "nanasa";
-  const ttydPath = process.env.NANASA_TTYD_PATH ?? "ttyd";
   const mcpEnabled = configuredBoolean("NANASA_MCP_ENABLED", process.env.NANASA_MCP_ENABLED, false);
   const mcpPath = process.env.NANASA_MCP_PATH ?? "/mcp";
   const mcpOperatorToken = process.env.NANASA_MCP_OPERATOR_TOKEN;
@@ -131,7 +130,6 @@ async function start(): Promise<void> {
     loadedConfig,
     logger: true,
     ...(process.env.NANASA_TMUX_SERVER === undefined ? {} : { tmuxServerName }),
-    ttydPath,
     statusEndpointUrl,
     servePortal,
     portalAssetsPath,

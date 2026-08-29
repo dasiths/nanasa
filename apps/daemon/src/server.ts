@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { dirname, join } from "node:path";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
@@ -20,6 +21,11 @@ import {
   StartGroupRunsResultSchema,
   StopAgentRunCommandSchema,
   TerminalEndpointStatusSchema,
+  TerminalCheckpointCaptureSchema,
+  TerminalCheckpointContentSchema,
+  TerminalCheckpointSchema,
+  TerminalReadRequestSchema,
+  TerminalReadResultSchema,
   UpdateGroupAgentCommandSchema,
   UpdateGroupCommandSchema,
   UpdateRolePresentationCommandSchema,
@@ -55,11 +61,12 @@ import { RunRuntimeCoordinator } from "./run-runtime-coordinator.js";
 import { SnapshotReadModel } from "./snapshot-read-model.js";
 import { DomainError, NanasaStore } from "./store.js";
 import { TmuxTerminalDelivery } from "./terminal-delivery.js";
-import { TerminalEndpointRegistry } from "./terminal-endpoint-registry.js";
-import { registerTerminalProxy } from "./terminal-proxy.js";
+import { ArtifactPreviewService } from "./terminal/artifact-preview-service.js";
+import { TerminalControlService } from "./terminal/terminal-control-service.js";
+import { TerminalGateway } from "./terminal/terminal-gateway.js";
+import { TerminalReadService } from "./terminal/terminal-read-service.js";
 import { TmuxRuntime } from "./tmux-runtime.js";
 import { TopologyService } from "./topology-service.js";
-import { TtydSupervisor } from "./ttyd-supervisor.js";
 import { TmuxEventObserver, type TmuxInvalidationKind } from "./tmux-event-observer.js";
 
 export interface DaemonOptions {
@@ -70,7 +77,6 @@ export interface DaemonOptions {
   logger?: boolean | FastifyBaseLogger;
   tmuxServerName?: string;
   tmuxPath?: string;
-  ttydPath?: string;
   reconcileIntervalMs?: number;
   statusEndpointUrl?: string;
   servePortal?: boolean;
@@ -95,8 +101,8 @@ export interface DaemonContext {
   store: NanasaStore;
   runtime: TmuxRuntime;
   coordinator: RunRuntimeCoordinator;
-  terminalEndpoints: TerminalEndpointRegistry;
-  ttydSupervisor: TtydSupervisor;
+  terminalGateway: TerminalGateway;
+  terminalReads: TerminalReadService;
   consoles: AdHocConsoleManager;
   dispatcher: DeliveryDispatcher;
   messageCommands: MessageCommandService;
@@ -315,25 +321,25 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         ...reporterRegistry.environment(run),
       }),
     });
-    const terminalEndpoints = new TerminalEndpointRegistry(store);
-    const terminalDelivery = new TmuxTerminalDelivery(runtime, terminalEndpoints);
-    const ttydSupervisor = new TtydSupervisor(terminalEndpoints, {
-      ...(options.ttydPath === undefined ? {} : { ttydPath: options.ttydPath }),
-      ...(options.tmuxPath === undefined ? {} : { tmuxPath: options.tmuxPath }),
-      manifestDirectory: join(runtimePath, "ttyd"),
-      onLifecycleEvent: (type, runId, payload) => {
-        store.recordRuntimeEvent(type, "run", runId, payload);
-      },
-    });
-    const consoles = new AdHocConsoleManager(
+    const terminalControl = new TerminalControlService(store);
+    const terminalReads = new TerminalReadService(
+      store,
       runtime,
-      ttydSupervisor,
-      terminalEndpoints,
-      loadedConfig.repoRoot,
+      join(runtimePath, "terminal-checkpoints"),
+      loadedConfig.config.terminal.checkpoints,
     );
+    const terminalGateway = new TerminalGateway(
+      terminalControl,
+      terminalReads,
+      daemonEpoch,
+      options.tmuxPath ?? "tmux",
+    );
+    const artifactPreviews = new ArtifactPreviewService(loadedConfig.repoRoot);
+    const terminalDelivery = new TmuxTerminalDelivery(runtime, terminalGateway);
+    const consoles = new AdHocConsoleManager(runtime, terminalGateway, loadedConfig.repoRoot);
     const dispatcher = new DeliveryDispatcher(store, terminalDelivery);
     const messageCommands = new MessageCommandService(store);
-    const coordinator = new RunRuntimeCoordinator(store, runtime, ttydSupervisor, dispatcher, {
+    const coordinator = new RunRuntimeCoordinator(store, runtime, terminalGateway, dispatcher, {
       ...(options.reconcileIntervalMs === undefined
         ? {}
         : { reconcileIntervalMs: options.reconcileIntervalMs }),
@@ -356,7 +362,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
 
     app.addHook("onRequest", async (request, reply) => {
       const path = requestPath(request.url);
-      if (!path.startsWith("/api/v1") && !path.startsWith("/terminals/")) return;
+      if (!path.startsWith("/api/v1")) return;
       authorityPolicy.validate(request);
       if (path.startsWith("/api/v1")) {
         reply.header("X-Nanasa-API-Version", "1");
@@ -366,10 +372,6 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
 
     app.addHook("preHandler", async (request) => {
       const path = requestPath(request.url);
-      if (path.startsWith("/terminals/")) {
-        operatorAuth.authorize(request);
-        return;
-      }
       if (
         !path.startsWith("/api/v1/") ||
         path === "/api/v1/meta" ||
@@ -523,7 +525,86 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       deliveryOutcomes: [],
     }));
     app.get<{ Params: { runId: string } }>("/api/v1/runs/:runId/terminal", async (request) =>
-      TerminalEndpointStatusSchema.parse(terminalEndpoints.status(request.params.runId)),
+      TerminalEndpointStatusSchema.parse(terminalGateway.status(request.params.runId)),
+    );
+    app.get<{
+      Params: { runId: string };
+      Querystring: { generation?: string; source?: string; maxLines?: string; maxBytes?: string };
+    }>("/api/v1/runs/:runId/terminal/read", async (request) =>
+      TerminalReadResultSchema.parse(
+        await terminalReads.read(
+          TerminalReadRequestSchema.parse({
+            runId: request.params.runId,
+            generation: Number(request.query.generation),
+            source: request.query.source ?? "history",
+            maxLines: request.query.maxLines === undefined ? 200 : Number(request.query.maxLines),
+            maxBytes:
+              request.query.maxBytes === undefined ? 65_536 : Number(request.query.maxBytes),
+          }),
+        ),
+      ),
+    );
+    app.get("/api/v1/terminal-checkpoints", async (request) => {
+      const principal = operatorAuth.authenticate(request).operatorId;
+      return terminalReads
+        .list(principal)
+        .map((checkpoint) => TerminalCheckpointSchema.parse(checkpoint));
+    });
+    app.post<{ Params: { runId: string } }>(
+      "/api/v1/runs/:runId/terminal/checkpoints",
+      async (request, reply) => {
+        const principal = operatorAuth.authenticate(request).operatorId;
+        const command = TerminalCheckpointCaptureSchema.parse(request.body);
+        return reply
+          .status(201)
+          .send(
+            TerminalCheckpointSchema.parse(
+              await terminalReads.captureCheckpoint(
+                principal,
+                request.params.runId,
+                command.generation,
+                command.source,
+              ),
+            ),
+          );
+      },
+    );
+    app.get<{ Params: { checkpointId: string } }>(
+      "/api/v1/terminal-checkpoints/:checkpointId",
+      async (request) =>
+        TerminalCheckpointContentSchema.parse(
+          terminalReads.retrieve(
+            operatorAuth.authenticate(request).operatorId,
+            request.params.checkpointId,
+          ),
+        ),
+    );
+    app.delete<{ Params: { checkpointId: string } }>(
+      "/api/v1/terminal-checkpoints/:checkpointId",
+      async (request, reply) => {
+        const deleted = terminalReads.delete(
+          operatorAuth.authenticate(request).operatorId,
+          request.params.checkpointId,
+        );
+        if (!deleted)
+          throw new DomainError(
+            "terminal_checkpoint_not_found",
+            "Terminal checkpoint not found",
+            404,
+          );
+        return reply.status(204).send();
+      },
+    );
+    app.get<{ Querystring: { path?: string } }>(
+      "/api/v1/artifact-preview",
+      async (request, reply) => {
+        if (request.query.path === undefined)
+          throw new DomainError("artifact_path_required", "Artifact path is required", 400);
+        const preview = artifactPreviews.inspect(request.query.path);
+        reply.header("Content-Disposition", "inline");
+        reply.header("X-Content-Type-Options", "nosniff");
+        return reply.type(preview.mediaType).send(createReadStream(preview.absolutePath));
+      },
     );
     app.post("/api/v1/consoles", async (_request, reply) =>
       reply.status(201).send(AdHocConsoleSessionSchema.parse(await consoles.create())),
@@ -731,7 +812,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       },
     );
 
-    await registerTerminalProxy(app, terminalEndpoints);
+    terminalGateway.register(app);
 
     if (options.servePortal === true) {
       await app.register(fastifyStatic, {
@@ -763,8 +844,8 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       store,
       runtime,
       coordinator,
-      terminalEndpoints,
-      ttydSupervisor,
+      terminalGateway,
+      terminalReads,
       consoles,
       dispatcher,
       messageCommands,
