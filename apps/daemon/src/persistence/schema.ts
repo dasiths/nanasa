@@ -1,4 +1,4 @@
-export const DATABASE_SCHEMA_VERSION = 7;
+export const DATABASE_SCHEMA_VERSION = 8;
 
 export const DATABASE_BASELINE_SQL = `
   CREATE TABLE schema_metadata (
@@ -455,6 +455,7 @@ export const DATABASE_BASELINE_SQL = `
     truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
     sensitivity_policy TEXT NOT NULL CHECK (sensitivity_policy IN ('repository-private', 'encrypted')),
     storage_reference TEXT NOT NULL,
+    content_digest TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     deleted_at TEXT,
     deletion_audit_id TEXT,
@@ -492,6 +493,22 @@ export const DATABASE_BASELINE_SQL = `
     invalidated_at TEXT,
     PRIMARY KEY (scope, key)
   ) STRICT;
+
+  CREATE TABLE http_idempotency_keys (
+    principal_id TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('in-progress', 'completed')),
+    status_code INTEGER CHECK (status_code IS NULL OR status_code BETWEEN 100 AND 599),
+    response_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    PRIMARY KEY (principal_id, route_id, key)
+  ) STRICT;
+
+  CREATE INDEX http_idempotency_expiry ON http_idempotency_keys (expires_at);
 
   CREATE TABLE audits (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,

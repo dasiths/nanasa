@@ -17,6 +17,7 @@ import type {
   ProviderOverlayContext,
   ProviderOverlayPlan,
 } from "./provider-adapter.js";
+import { freezeProviderSemanticClaims } from "./provider-adapter.js";
 import { freezeReporterDescriptor } from "./provider-reporter-descriptor.js";
 
 export class OpenCodeAdapter implements ProviderAdapter {
@@ -33,7 +34,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
       turns: true,
       tools: true,
       waits: true,
-      effectiveModel: true,
+      effectiveModel: false,
       heartbeat: true,
     },
   });
@@ -44,6 +45,17 @@ export class OpenCodeAdapter implements ProviderAdapter {
     terminalSubmitSequence: "\r",
     waitReplyInput: closedTerminalWaitReplyInput,
   });
+  public readonly semantics = freezeProviderSemanticClaims(
+    {
+      reporterReadiness: true,
+      modelObservation: "desired-launch",
+      waitCoverage: true,
+      waitReplyChannels: ["terminal"],
+      nativeResume: true,
+    },
+    this.reporter,
+    this.control,
+  );
   public recognizeCommand(command: readonly string[]): boolean {
     return command.some((part) => /(?:^|[/\\])opencode(?:\.exe)?$/.test(part));
   }

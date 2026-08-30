@@ -14,6 +14,9 @@ export interface PortalPreferences {
   expandedGroupIds: string[];
   lastSectionByGroup: Record<string, WorkspaceSection>;
   activeRunByGroup: Record<string, string>;
+  pinnedRunIdsByGroup: Record<string, string[]>;
+  maximizedRunByGroup: Record<string, string>;
+  terminalSplitRatioByGroup: Record<string, number>;
   railCollapsed: boolean;
   density: "comfortable" | "compact";
   motion: MotionPreference;
@@ -33,6 +36,9 @@ export const defaultPortalPreferences: PortalPreferences = {
   expandedGroupIds: [],
   lastSectionByGroup: {},
   activeRunByGroup: {},
+  pinnedRunIdsByGroup: {},
+  maximizedRunByGroup: {},
+  terminalSplitRatioByGroup: {},
   railCollapsed: false,
   density: "comfortable",
   motion: "system",
@@ -53,6 +59,40 @@ function stringRecord<T extends string>(value: unknown, allowed?: readonly T[]):
         entry[0].length > 0 &&
         typeof entry[1] === "string" &&
         (allowed === undefined || allowed.includes(entry[1] as T)),
+    ),
+  );
+}
+
+function stringArrayRecord(value: unknown): Record<string, string[]> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, item]) => {
+      if (!Array.isArray(item)) return [];
+      return [
+        [
+          key,
+          [
+            ...new Set(
+              item.filter(
+                (entry): entry is string => typeof entry === "string" && entry.length > 0,
+              ),
+            ),
+          ],
+        ],
+      ];
+    }),
+  );
+}
+
+function splitRatioRecord(value: unknown): Record<string, number> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, number] =>
+        typeof entry[1] === "number" &&
+        Number.isFinite(entry[1]) &&
+        entry[1] >= 25 &&
+        entry[1] <= 75,
     ),
   );
 }
@@ -93,6 +133,9 @@ export function parsePortalPreferences(value: string | null): PortalPreferences 
         "settings",
       ]),
       activeRunByGroup: stringRecord(parsed.activeRunByGroup),
+      pinnedRunIdsByGroup: stringArrayRecord(parsed.pinnedRunIdsByGroup),
+      maximizedRunByGroup: stringRecord(parsed.maximizedRunByGroup),
+      terminalSplitRatioByGroup: splitRatioRecord(parsed.terminalSplitRatioByGroup),
       railCollapsed: parsed.railCollapsed === true,
       density: parsed.density === "compact" ? "compact" : "comfortable",
       motion: ["system", "reduce", "full"].includes(String(parsed.motion))
@@ -134,6 +177,101 @@ function publishPreferences(preferences: PortalPreferences): void {
   window.dispatchEvent(new CustomEvent(preferencesEvent, { detail: preferences }));
 }
 
+let localPreferenceQueue: Promise<void> = Promise.resolve();
+
+export function commitPortalPreferenceUpdate(
+  update: (current: PortalPreferences) => PortalPreferences,
+): Promise<PortalPreferences> {
+  const commit = () => {
+    const current = readPreferences();
+    const updated = update(current);
+    if (updated !== current) publishPreferences(updated);
+    return updated;
+  };
+  if (navigator.locks !== undefined) {
+    return navigator.locks.request("nanasa-portal-preferences-v2", { mode: "exclusive" }, commit);
+  }
+  const result = localPreferenceQueue.then(commit, commit);
+  localPreferenceQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+const RESOURCE_RECORD_FIELDS = [
+  "lastSectionByGroup",
+  "activeRunByGroup",
+  "pinnedRunIdsByGroup",
+  "maximizedRunByGroup",
+  "terminalSplitRatioByGroup",
+] as const;
+
+function equal(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+export function mergePortalPreferenceUpdate(
+  current: PortalPreferences,
+  updated: PortalPreferences,
+  stored: PortalPreferences,
+): PortalPreferences {
+  const merged: PortalPreferences = { ...stored, version: 2 };
+  for (const key of Object.keys(updated) as Array<keyof PortalPreferences>) {
+    if (
+      key === "version" ||
+      key === "notifications" ||
+      RESOURCE_RECORD_FIELDS.includes(key as (typeof RESOURCE_RECORD_FIELDS)[number])
+    ) {
+      continue;
+    }
+    if (!equal(current[key], updated[key])) {
+      Object.assign(merged, { [key]: updated[key] });
+      if (updated[key] === undefined) delete (merged as unknown as Record<string, unknown>)[key];
+    }
+  }
+  for (const field of RESOURCE_RECORD_FIELDS) {
+    const currentRecord = current[field] as Record<string, unknown>;
+    const updatedRecord = updated[field] as Record<string, unknown>;
+    const mergedRecord = { ...(stored[field] as Record<string, unknown>) };
+    for (const resourceId of new Set([
+      ...Object.keys(currentRecord),
+      ...Object.keys(updatedRecord),
+    ])) {
+      if (equal(currentRecord[resourceId], updatedRecord[resourceId])) continue;
+      if (field === "pinnedRunIdsByGroup") {
+        const before = (currentRecord[resourceId] ?? []) as string[];
+        const after = (updatedRecord[resourceId] ?? []) as string[];
+        const latest = (mergedRecord[resourceId] ?? []) as string[];
+        const removals = new Set(before.filter((runId) => !after.includes(runId)));
+        const additions = after.filter((runId) => !before.includes(runId));
+        const next = latest.filter((runId) => !removals.has(runId));
+        for (const runId of additions) if (!next.includes(runId)) next.push(runId);
+        if (next.length === 0 && updatedRecord[resourceId] === undefined) {
+          delete mergedRecord[resourceId];
+        } else {
+          mergedRecord[resourceId] = next;
+        }
+      } else if (updatedRecord[resourceId] === undefined) {
+        if (equal(mergedRecord[resourceId], currentRecord[resourceId])) {
+          delete mergedRecord[resourceId];
+        }
+      } else {
+        mergedRecord[resourceId] = updatedRecord[resourceId];
+      }
+    }
+    Object.assign(merged, { [field]: mergedRecord });
+  }
+  const notifications = { ...stored.notifications };
+  for (const field of ["inApp", "desktop", "sound"] as const) {
+    if (current.notifications[field] !== updated.notifications[field]) {
+      notifications[field] = updated.notifications[field];
+    }
+  }
+  merged.notifications = notifications;
+  return merged;
+}
+
 export function cleanStalePortalPreferences(
   preferences: PortalPreferences,
   groups: ReadonlyMap<string, ReadonlySet<string>>,
@@ -152,6 +290,24 @@ export function cleanStalePortalPreferences(
     activeRunByGroup: Object.fromEntries(
       Object.entries(preferences.activeRunByGroup).filter(
         ([groupId, runId]) => groups.get(groupId)?.has(runId) === true,
+      ),
+    ),
+    pinnedRunIdsByGroup: Object.fromEntries(
+      Object.entries(preferences.pinnedRunIdsByGroup)
+        .filter(([groupId]) => groupIds.has(groupId))
+        .map(([groupId, runIds]) => [
+          groupId,
+          runIds.filter((runId) => groups.get(groupId)?.has(runId) === true),
+        ]),
+    ),
+    maximizedRunByGroup: Object.fromEntries(
+      Object.entries(preferences.maximizedRunByGroup).filter(
+        ([groupId, runId]) => groups.get(groupId)?.has(runId) === true,
+      ),
+    ),
+    terminalSplitRatioByGroup: Object.fromEntries(
+      Object.entries(preferences.terminalSplitRatioByGroup).filter(([groupId]) =>
+        groupIds.has(groupId),
       ),
     ),
   };
@@ -198,11 +354,7 @@ export function usePortalPreferences() {
 
   const updatePreferences = useCallback(
     (update: (current: PortalPreferences) => PortalPreferences) => {
-      setPreferences((current) => {
-        const updated = update(current);
-        if (updated !== current) publishPreferences(updated);
-        return updated;
-      });
+      void commitPortalPreferenceUpdate(update).then(setPreferences);
     },
     [],
   );
@@ -212,9 +364,15 @@ export function usePortalPreferences() {
     [updatePreferences],
   );
   const reconcileResources = useCallback(
-    (groups: ReadonlyMap<string, ReadonlySet<string>>) =>
-      updatePreferences((current) => cleanStalePortalPreferences(current, groups)),
-    [updatePreferences],
+    (groups: ReadonlyMap<string, ReadonlySet<string>>) => {
+      const observed = preferences;
+      const cleaned = cleanStalePortalPreferences(observed, groups);
+      if (cleaned === observed) return;
+      void commitPortalPreferenceUpdate((stored) =>
+        mergePortalPreferenceUpdate(observed, cleaned, stored),
+      ).then(setPreferences);
+    },
+    [preferences],
   );
   const setSelectedGroup = useCallback(
     (selectedGroupId: string, section?: WorkspaceSection) =>

@@ -228,13 +228,13 @@ async function requestVoid(path: string, init: RequestInit): Promise<void> {
 function commandInit(
   method: "POST" | "PUT" | "PATCH" | "DELETE",
   body: unknown,
-  idempotencyKey: string = crypto.randomUUID(),
+  idempotencyKey?: string,
 ): RequestInit {
   return {
     method,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
-      "Idempotency-Key": idempotencyKey,
+      ...(idempotencyKey === undefined ? {} : { "Idempotency-Key": idempotencyKey }),
     },
     body: JSON.stringify(body),
   };
@@ -258,7 +258,7 @@ export const api: PortalClient = {
     request(
       `${CONTROL_API_PREFIX}/service/restart-plan`,
       BrowserRestartFrameSchema,
-      commandInit("POST", { reason }),
+      commandInit("POST", { reason }, crypto.randomUUID()),
     ),
   listProviderStates: () =>
     request(`${CONTROL_API_PREFIX}/provider-states`, ProviderStateBindingSchema.array()),
@@ -319,13 +319,13 @@ export const api: PortalClient = {
     request(
       `${CONTROL_API_PREFIX}/provider-states/${encodeURIComponent(bindingId)}/retain`,
       ProviderStateBindingSchema,
-      commandInit("POST", {}),
+      commandInit("POST", {}, crypto.randomUUID()),
     ),
   deleteProviderState: (bindingId) =>
     request(
       `${CONTROL_API_PREFIX}/provider-states/${encodeURIComponent(bindingId)}`,
       ProviderStateBindingSchema,
-      commandInit("DELETE", {}),
+      commandInit("DELETE", {}, crypto.randomUUID()),
     ),
   createGroup: (command) =>
     request(
@@ -364,43 +364,27 @@ export const api: PortalClient = {
       commandInit("DELETE", {}),
     ),
   reorderAgents: (groupId, command) =>
-    resources.topology.reorderAgents(
-      groupId,
-      ReorderGroupAgentsCommandSchema.parse(command),
-      crypto.randomUUID(),
-    ),
+    resources.topology.reorderAgents(groupId, ReorderGroupAgentsCommandSchema.parse(command)),
   reorderGroups: (command) =>
-    resources.topology.reorderGroups(
-      ReorderGroupsCommandSchema.parse(command),
-      crypto.randomUUID(),
-    ),
+    resources.topology.reorderGroups(ReorderGroupsCommandSchema.parse(command)),
   reparentAgent: (groupId, agentId, command) =>
     resources.topology.reparentAgent(
       groupId,
       agentId,
       ReparentGroupAgentCommandSchema.parse(command),
-      crypto.randomUUID(),
     ),
   assignCheckout: (groupId, agentId, command) =>
     resources.workspace.assignCheckout(
       groupId,
       agentId,
       AssignAgentCheckoutCommandSchema.parse(command),
-      crypto.randomUUID(),
     ),
   createWorktree: (command) =>
-    resources.workspace.createWorktree(
-      CreateWorktreeCommandSchema.parse(command),
-      crypto.randomUUID(),
-    ),
+    resources.workspace.createWorktree(CreateWorktreeCommandSchema.parse(command)),
   openCheckout: (command) =>
-    resources.workspace.openCheckout(OpenCheckoutCommandSchema.parse(command), crypto.randomUUID()),
+    resources.workspace.openCheckout(OpenCheckoutCommandSchema.parse(command)),
   removeWorktree: (worktreeId, command) =>
-    resources.workspace.removeWorktree(
-      worktreeId,
-      RemoveWorktreeCommandSchema.parse(command),
-      crypto.randomUUID(),
-    ),
+    resources.workspace.removeWorktree(worktreeId, RemoveWorktreeCommandSchema.parse(command)),
   updateRolePresentation: (roleId, command) =>
     request(
       `${CONTROL_API_PREFIX}/roles/${encodeURIComponent(roleId)}/presentation`,
@@ -413,11 +397,11 @@ export const api: PortalClient = {
       AgentRunSchema,
       commandInit("POST", {}),
     ),
-  startAllRuns: (groupId, idempotencyKey) =>
+  startAllRuns: (groupId) =>
     request(
       `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/runs/start-all`,
       StartGroupRunsResultSchema,
-      commandInit("POST", {}, idempotencyKey),
+      commandInit("POST", {}),
     ),
   stopRun: (groupId, agentId) =>
     request(
@@ -429,13 +413,13 @@ export const api: PortalClient = {
     request(
       `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/messages`,
       MessageSubmissionResultSchema,
-      commandInit("POST", SubmitMessageCommandSchema.parse(command)),
+      commandInit("POST", SubmitMessageCommandSchema.parse(command), crypto.randomUUID()),
     ),
   createAgentAction: (command) =>
     request(
       `${CONTROL_API_PREFIX}/agent-actions`,
       AgentActionSchema,
-      commandInit("POST", CreateAgentActionCommandSchema.parse(command)),
+      commandInit("POST", CreateAgentActionCommandSchema.parse(command), crypto.randomUUID()),
     ),
   loadActionWorkspace: (groupId) =>
     request(
@@ -446,7 +430,7 @@ export const api: PortalClient = {
     request(
       `${CONTROL_API_PREFIX}/agent-actions/${encodeURIComponent(actionId)}/cancel`,
       AgentActionSchema,
-      commandInit("POST", {}),
+      commandInit("POST", {}, crypto.randomUUID()),
     ),
   replyOpenWait: (waitId, command) =>
     request(
@@ -458,7 +442,7 @@ export const api: PortalClient = {
     request(
       `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/status/acknowledge`,
       AgentStatusDetailSchema,
-      commandInit("POST", {}),
+      commandInit("POST", {}, crypto.randomUUID()),
     ),
   loadMessages: (groupId, options = {}) => {
     const query = new URLSearchParams();
@@ -475,7 +459,7 @@ export const api: PortalClient = {
     request(
       `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/messages`,
       ClearMessageHistoryResultSchema,
-      commandInit("DELETE", {}),
+      commandInit("DELETE", {}, crypto.randomUUID()),
     ),
   getTerminalEndpointStatus: (runId) =>
     request(

@@ -197,6 +197,7 @@ export const TerminalCheckpointSchema = z
     truncated: z.boolean(),
     sensitivity: z.enum(["repository-private", "encrypted"]),
     storageReference: z.string().trim().min(1).max(4_096),
+    contentDigest: z.string().regex(/^[a-f0-9]{64}$/),
     expiresAt: TimestampSchema,
     deletedAt: TimestampSchema.optional(),
     deletionAuditId: IdentifierSchema.optional(),

@@ -50,7 +50,7 @@ export class OperationsResource {
     return request(this.client, path("runs", runId), AgentRunSchema);
   }
 
-  public startRun(groupId: string, agentId: string, size: object, key: string): Promise<AgentRun> {
+  public startRun(groupId: string, agentId: string, size: object, key?: string): Promise<AgentRun> {
     return request(
       this.client,
       path("groups", groupId, "agents", agentId, "run"),
@@ -59,7 +59,12 @@ export class OperationsResource {
     );
   }
 
-  public stopRun(groupId: string, agentId: string, force: boolean, key: string): Promise<AgentRun> {
+  public stopRun(
+    groupId: string,
+    agentId: string,
+    force: boolean,
+    key?: string,
+  ): Promise<AgentRun> {
     return request(
       this.client,
       path("groups", groupId, "agents", agentId, "run"),
@@ -68,7 +73,7 @@ export class OperationsResource {
     );
   }
 
-  public restartRun(runId: string, size: object, key: string): Promise<AgentRun> {
+  public restartRun(runId: string, size: object, key?: string): Promise<AgentRun> {
     return request(
       this.client,
       path("runs", runId, "restart"),
@@ -77,7 +82,7 @@ export class OperationsResource {
     );
   }
 
-  public startAll(groupId: string, size: object, key: string): Promise<StartGroupRunsResult> {
+  public startAll(groupId: string, size: object, key?: string): Promise<StartGroupRunsResult> {
     return request(
       this.client,
       path("groups", groupId, "runs", "start-all"),
@@ -86,7 +91,7 @@ export class OperationsResource {
     );
   }
 
-  public stopAll(groupId: string, force: boolean, key: string): Promise<AgentRun[]> {
+  public stopAll(groupId: string, force: boolean, key?: string): Promise<AgentRun[]> {
     return request(
       this.client,
       path("groups", groupId, "runs", "stop-all"),
@@ -95,7 +100,7 @@ export class OperationsResource {
     );
   }
 
-  public restartAll(groupId: string, size: object, key: string): Promise<AgentRun[]> {
+  public restartAll(groupId: string, size: object, key?: string): Promise<AgentRun[]> {
     return request(
       this.client,
       path("groups", groupId, "runs", "restart-all"),
@@ -104,7 +109,7 @@ export class OperationsResource {
     );
   }
 
-  public interrupt(runId: string, reason: string | undefined, key: string): Promise<void> {
+  public interrupt(runId: string, reason: string | undefined, key?: string): Promise<void> {
     return this.client.requestVoid(
       path("runs", runId, "interrupt"),
       commandInit("POST", reason === undefined ? {} : { reason }, key),
@@ -228,7 +233,7 @@ export class OperationsResource {
     );
   }
 
-  public replyWait(waitId: string, command: ReplyOpenWaitCommand, key: string): Promise<OpenWait> {
+  public replyWait(waitId: string, command: ReplyOpenWaitCommand, key?: string): Promise<OpenWait> {
     return request(
       this.client,
       path("open-waits", waitId, "reply"),

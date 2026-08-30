@@ -476,7 +476,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "required",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "extension_referenced",
           "extension_active_runs"
@@ -549,7 +549,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "extension_plan_stale"
         ]
@@ -573,7 +573,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "required",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "extension_trust_required",
           "extension_plan_stale",
@@ -599,7 +599,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "required",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "extension_not_installed",
           "extension_active_runs"
@@ -624,7 +624,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "required",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "extension_not_installed",
           "extension_active_runs"
@@ -649,7 +649,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "required",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "extension_rollback_unavailable",
           "extension_active_runs"
@@ -694,7 +694,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "validation_error"
         ]
@@ -740,7 +740,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "group_not_found",
           "active_run_group_change_requires_restart"
@@ -763,7 +763,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "group_not_found"
         ]
@@ -787,7 +787,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "topology_order_stale"
         ]
@@ -833,7 +833,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "group_not_found",
           "integration_not_found"
@@ -880,7 +880,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "agent_not_found",
           "active_run_agent_change_requires_restart"
@@ -903,7 +903,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "agent_not_found"
         ]
@@ -927,7 +927,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "topology_order_stale"
         ]
@@ -951,7 +951,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "active_run_reparent_forbidden",
           "topology_order_stale"
@@ -976,7 +976,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "active_run_checkout_change_forbidden",
           "checkout_not_found"
@@ -1047,7 +1047,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "role_not_found"
         ]
@@ -1117,7 +1117,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "run_already_active",
           "agent_not_found"
@@ -1140,7 +1140,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "run_not_found"
         ]
@@ -1164,7 +1164,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "required",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "run_not_found",
           "run_replaced"
@@ -1189,7 +1189,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "group_not_found"
         ]
@@ -1213,7 +1213,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "required",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "group_not_found"
         ]
@@ -1237,7 +1237,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "required",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "group_not_found"
         ]
@@ -1261,7 +1261,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "run_not_running",
           "terminal_unavailable"
@@ -1590,7 +1590,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "required",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "open_wait_replaced",
           "open_wait_reply_channel_unsupported"
@@ -1686,7 +1686,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "terminal_checkpoint_disabled"
         ]
@@ -1732,7 +1732,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "terminal_checkpoint_not_found"
         ]
@@ -1826,7 +1826,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": []
       }
     },
@@ -1870,7 +1870,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "optional",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "console_not_found"
         ]
@@ -1938,7 +1938,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "required",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "checkout_not_found",
           "worktree_operation_in_progress"
@@ -1985,7 +1985,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "required",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "worktree_operation_in_progress",
           "worktree_path_conflict"
@@ -2010,7 +2010,7 @@
           }
         },
         "x-body-limit": 65536,
-        "x-idempotency": "required",
+        "x-idempotency": "forbidden",
         "x-errors": [
           "worktree_not_found",
           "dirty_worktree_requires_force",

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { parse as parseYaml } from "yaml";
 import {
@@ -40,13 +39,24 @@ test("versioned fixtures parse through final contracts", () => {
   NanasaConfigSchema.parse(parseYaml(readFileSync(join(fixtures, "config-v2.yaml"), "utf8")));
 });
 
-test("database fixture declares and enforces schema version 7", () => {
-  const database = new DatabaseSync(":memory:");
-  database.exec(readFileSync(join(fixtures, "database-v7.sql"), "utf8"));
-  assert.equal(database.prepare("PRAGMA user_version").get().user_version, 7);
-  assert.equal(
-    database.prepare("SELECT schema_version FROM schema_metadata").get().schema_version,
-    7,
+test("database-v7 is a complete immutable prior-schema fixture", () => {
+  const databaseV7 = readFileSync(join(fixtures, "database-v7.sql"), "utf8");
+  assert.match(databaseV7, /PRAGMA user_version = 7/);
+  assert.match(databaseV7, /CREATE TABLE schema_metadata/);
+  assert.match(databaseV7, /CREATE TABLE terminal_checkpoints/);
+  assert.match(databaseV7, /CREATE TABLE retention_metadata/);
+  assert.match(databaseV7, /CREATE INDEX open_waits_target/);
+  assert.doesNotMatch(databaseV7, /content_digest|http_idempotency_keys/);
+  const productionSchema = readFileSync(
+    join(root, "..", "apps", "daemon", "src", "persistence", "schema.ts"),
+    "utf8",
   );
-  database.close();
+  const productionTables = [...productionSchema.matchAll(/CREATE TABLE (\w+)/g)].map(
+    (match) => match[1],
+  );
+  const fixtureTables = [...databaseV7.matchAll(/CREATE TABLE (\w+)/g)].map((match) => match[1]);
+  assert.deepEqual(
+    fixtureTables,
+    productionTables.filter((name) => name !== "http_idempotency_keys"),
+  );
 });

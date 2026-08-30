@@ -1,4 +1,5 @@
 import type {
+  AgentReplyChannel,
   AgentKind,
   AgentProfile,
   CredentialProfileReference,
@@ -8,6 +9,41 @@ import type {
 import type { EffectiveAgentPrompt } from "../instruction-resolver.js";
 import type { ProviderControlStrategy } from "./provider-control-strategy.js";
 import type { ProviderReporterDescriptor } from "./provider-reporter-descriptor.js";
+
+export interface ProviderSemanticClaims {
+  readonly reporterReadiness: boolean;
+  readonly modelObservation: "desired-launch" | "reporter-effective" | "native-session-effective";
+  readonly waitCoverage: boolean;
+  readonly waitReplyChannels: readonly AgentReplyChannel[];
+  readonly nativeResume: boolean;
+}
+
+export function freezeProviderSemanticClaims(
+  claims: ProviderSemanticClaims,
+  reporter: ProviderReporterDescriptor,
+  control: ProviderControlStrategy,
+): ProviderSemanticClaims {
+  if (claims.reporterReadiness !== reporter.coverage.session) {
+    throw new Error("Provider readiness claim must match reporter session coverage");
+  }
+  if (claims.waitCoverage !== reporter.coverage.waits) {
+    throw new Error("Provider wait claim must match reporter wait coverage");
+  }
+  if (
+    (!claims.waitCoverage && claims.waitReplyChannels.length > 0) ||
+    (claims.waitCoverage && claims.waitReplyChannels.length === 0) ||
+    claims.waitReplyChannels.some((channel) => !control.waitReplyChannels.includes(channel))
+  ) {
+    throw new Error("Provider wait reply claims must match reachable reporter/control channels");
+  }
+  if ((claims.modelObservation === "reporter-effective") !== reporter.coverage.effectiveModel) {
+    throw new Error("Provider model claim must match reporter effective-model coverage");
+  }
+  return Object.freeze({
+    ...claims,
+    waitReplyChannels: Object.freeze([...claims.waitReplyChannels]),
+  });
+}
 
 export interface GeneratedOverlayFile {
   readonly relativePath: string;
@@ -65,6 +101,7 @@ export interface ProviderAdapter {
   readonly supportedVersions: readonly string[];
   readonly reporter: ProviderReporterDescriptor;
   readonly control: ProviderControlStrategy;
+  readonly semantics: ProviderSemanticClaims;
   recognizeCommand(command: readonly string[]): boolean;
   stateEnvironment(stateRoot: string): Readonly<Record<string, string>>;
   modelArguments(model: string): readonly string[];

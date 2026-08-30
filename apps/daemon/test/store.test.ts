@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { NanasaConfigSchema } from "@nanasa/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { DATABASE_SCHEMA_VERSION } from "../src/persistence/schema.js";
 import { NanasaStore } from "../src/store.js";
 
 const temporaryDirectories: string[] = [];
@@ -322,6 +325,84 @@ describe("NanasaStore persistence", () => {
     expect(store.clearMessageHistory(group.id, "clear")).toEqual(cleared);
     expect(send("four", "four").message.groupSeq).toBe(4);
     store.close();
+  });
+});
+
+describe("NanasaStore HTTP idempotency transactions", () => {
+  it("rolls back reservation and SQLite domain mutation after a killed process", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "nanasa-idempotency-kill-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "nanasa.sqlite");
+    new NanasaStore(databasePath).close();
+    const moduleUrl = new URL("../src/store.ts", import.meta.url).href;
+    const child = spawn(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "--eval",
+        `import { NanasaStore } from ${JSON.stringify(moduleUrl)};
+const store = new NanasaStore(${JSON.stringify(databasePath)});
+store.executeHttpIdempotency(
+  { principalId: "operator", routeId: "groups.create", key: "killed", requestDigest: "digest" },
+  () => {
+    store.createGroup({ name: "Must roll back" });
+    process.stdout.write("transaction-open\\n");
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+    return { statusCode: 201, response: {} };
+  },
+);`,
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    await once(child.stdout!, "data");
+    child.kill("SIGKILL");
+    await once(child, "exit");
+
+    const reopened = new NanasaStore(databasePath);
+    expect(reopened.getSnapshot().groups).toEqual([]);
+    expect(
+      reopened.executeHttpIdempotency(
+        {
+          principalId: "operator",
+          routeId: "groups.create",
+          key: "killed",
+          requestDigest: "digest",
+        },
+        () => {
+          const group = reopened.createGroup({ name: "Committed" });
+          return { statusCode: 201, response: group };
+        },
+      ),
+    ).toMatchObject({ kind: "executed", statusCode: 201 });
+    expect(reopened.getSnapshot().groups).toHaveLength(1);
+    reopened.close();
+  });
+
+  it("never expires an uncertain stale reservation into re-execution", () => {
+    const directory = mkdtempSync(join(tmpdir(), "nanasa-idempotency-stale-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "nanasa.sqlite");
+    const store = new NanasaStore(databasePath);
+    const input = {
+      principalId: "operator",
+      routeId: "external.effect",
+      key: "uncertain",
+      requestDigest: "digest",
+      now: new Date("2026-08-30T00:00:00.000Z"),
+      inProgressTtlMs: 1,
+    };
+    expect(store.claimHttpIdempotency(input)).toEqual({ kind: "execute" });
+    store.close();
+    const reopened = new NanasaStore(databasePath);
+    expect(() =>
+      reopened.claimHttpIdempotency({
+        ...input,
+        now: new Date("2026-09-30T00:00:00.000Z"),
+      }),
+    ).toThrowError(expect.objectContaining({ code: "idempotency_outcome_uncertain" }));
+    reopened.close();
   });
 });
 
@@ -1137,13 +1218,14 @@ describe("NanasaStore schema migration", () => {
 
   it("reopens the cohesive baseline idempotently", () => {
     const baselineDirectory = mkdtempSync(join(tmpdir(), "nanasa-baseline-reopen-"));
+    temporaryDirectories.push(baselineDirectory);
     const baselinePath = join(baselineDirectory, "nanasa.sqlite");
     new NanasaStore(baselinePath).close();
     new NanasaStore(baselinePath).close();
     const baseline = new DatabaseSync(baselinePath, { readOnly: true });
     expect(
       (baseline.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
-    ).toBe(7);
+    ).toBe(DATABASE_SCHEMA_VERSION);
     baseline.close();
     return;
     const directory = mkdtempSync(join(tmpdir(), "nanasa-delivery-migration-"));

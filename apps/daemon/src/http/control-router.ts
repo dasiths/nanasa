@@ -1,14 +1,17 @@
+import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import {
   AdHocConsoleSessionSchema,
+  type AgentActionPrincipal,
   AgentActionSchema,
   AgentActionWorkspaceSchema,
   AgentRunSchema,
   AgentStatusDetailSchema,
   AgentStatusSummarySchema,
-  BrowserRestartFrameSchema,
   AssignAgentCheckoutCommandSchema,
+  BrowserRestartFrameSchema,
   CheckoutSchema,
+  type ControlMetadata,
   CreateAgentActionCommandSchema,
   CreateGroupAgentCommandSchema,
   CreateGroupCommandSchema,
@@ -16,24 +19,28 @@ import {
   DeleteGroupResultSchema,
   EventServerFrameSchema,
   ExtensionLifecycleCommandSchema,
-  InterruptAgentRunCommandSchema,
   InstallProviderExtensionCommandSchema,
+  InterruptAgentRunCommandSchema,
+  MAX_MESSAGE_TEXT_BYTES,
   OpenCheckoutCommandSchema,
   OpenWaitSchema,
+  OVERSIZED_MESSAGE_GUIDANCE,
   ProviderStateBindingSchema,
-  RepairProviderExtensionCommandSchema,
-  RemoveGroupAgentResultSchema,
+  type RemoteDescriptor,
   RemoteDescriptorSchema,
+  RemoveGroupAgentResultSchema,
   RemoveWorktreeCommandSchema,
   ReorderGroupAgentsCommandSchema,
   ReorderGroupAgentsResultSchema,
   ReorderGroupsCommandSchema,
   ReorderGroupsResultSchema,
+  RepairProviderExtensionCommandSchema,
   ReparentGroupAgentCommandSchema,
   ReparentGroupAgentResultSchema,
   ReplyOpenWaitCommandSchema,
   RepositorySchema,
   RoleDefinitionSchema,
+  type ServiceDescriptor,
   StartAgentRunCommandSchema,
   StartGroupRunsCommandSchema,
   StartGroupRunsResultSchema,
@@ -52,10 +59,6 @@ import {
   WaitForAgentActionCommandSchema,
   WorktreeOperationResultSchema,
   WorktreeSchema,
-  type AgentActionPrincipal,
-  type ControlMetadata,
-  type ServiceDescriptor,
-  type RemoteDescriptor,
 } from "@nanasa/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -127,6 +130,55 @@ export interface ControlRouterServices {
 
 type RouteHandler = (request: FastifyRequest, reply: FastifyReply) => unknown | Promise<unknown>;
 
+export const STABLE_IDEMPOTENCY_DOMAIN_ERROR_CODES = new Set([
+  "artifact_path_required",
+  "group_id_required",
+  "invalid_worktree_branch",
+  "tmux_invalidation_invalid",
+]);
+
+function deterministicError(error: unknown): { statusCode: number; response: unknown } | undefined {
+  if (
+    error instanceof DomainError &&
+    error.statusCode >= 400 &&
+    error.statusCode < 500 &&
+    STABLE_IDEMPOTENCY_DOMAIN_ERROR_CODES.has(error.code)
+  ) {
+    return { statusCode: error.statusCode, response: { code: error.code, message: error.message } };
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "issues" in error &&
+    Array.isArray(error.issues)
+  ) {
+    const oversized = error.issues.some(
+      (issue) =>
+        typeof issue === "object" &&
+        issue !== null &&
+        "message" in issue &&
+        String(issue.message).includes(`${MAX_MESSAGE_TEXT_BYTES}-byte UTF-8 limit`),
+    );
+    return oversized
+      ? {
+          statusCode: 413,
+          response: {
+            code: "message_body_too_large",
+            message: `Message text exceeds the ${MAX_MESSAGE_TEXT_BYTES}-byte UTF-8 limit. ${OVERSIZED_MESSAGE_GUIDANCE}`,
+          },
+        }
+      : {
+          statusCode: 400,
+          response: {
+            code: "validation_error",
+            message: "Request validation failed",
+            issues: error.issues,
+          },
+        };
+  }
+  return undefined;
+}
+
 function record(value: unknown): Record<string, string | undefined> {
   return value as Record<string, string | undefined>;
 }
@@ -135,7 +187,7 @@ function routeBody(declaration: ControlRouteDeclaration, request: FastifyRequest
   return declaration.schemas.body.parse(request.body ?? {});
 }
 
-function idempotencyKey(
+function requestIdempotencyKey(
   declaration: ControlRouteDeclaration,
   request: FastifyRequest,
 ): string | undefined {
@@ -168,6 +220,30 @@ function idempotencyKey(
     );
   }
   return value;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function requestDigest(request: FastifyRequest): string {
+  return createHash("sha256")
+    .update(
+      canonicalJson({
+        params: request.params ?? {},
+        query: request.query ?? {},
+        body: request.body ?? {},
+      }),
+    )
+    .digest("hex");
 }
 
 function operatorPrincipal(services: ControlRouterServices, request: FastifyRequest) {
@@ -207,7 +283,36 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
       method: declaration.method,
       url: declaration.path,
       bodyLimit: declaration.bodyLimit,
-      handler: async (request, reply) => handler(request, reply),
+      handler: async (request, reply) => {
+        if (declaration.method === "GET") return handler(request, reply);
+        const key = requestIdempotencyKey(declaration, request);
+        if (key === undefined) return handler(request, reply);
+        const reservation = {
+          principalId: operatorPrincipal(services, request).operatorId,
+          routeId: declaration.id,
+          key,
+          requestDigest: requestDigest(request),
+        };
+        const outcome = services.store.executeHttpIdempotency(reservation, () => {
+          try {
+            const response = handler(request, reply);
+            if (response instanceof Promise || response === reply) {
+              throw new Error(
+                `Idempotent route ${declaration.id} must return a synchronous response value`,
+              );
+            }
+            return { statusCode: reply.statusCode, response };
+          } catch (error) {
+            const retained = deterministicError(error);
+            if (retained !== undefined) return retained;
+            throw error;
+          }
+        });
+        if (outcome.kind === "replay") {
+          reply.header("Idempotency-Replayed", "true");
+        }
+        return reply.status(outcome.statusCode).send(outcome.response);
+      },
     });
   };
 
@@ -229,7 +334,6 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
   }));
   register("service.status", () => services.service());
   register("service.planRestart", (request) => {
-    idempotencyKey(controlRoute("service.planRestart"), request);
     const reason = z
       .object({ reason: z.enum(["upgrade", "rollback", "operator-restart"]) })
       .strict()
@@ -287,7 +391,6 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     ),
   );
   register("extensions.install", (request) => {
-    idempotencyKey(controlRoute("extensions.install"), request);
     return services.extensions.install(
       record(request.params).extensionId ?? "",
       InstallProviderExtensionCommandSchema.parse(
@@ -296,7 +399,6 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     );
   });
   register("extensions.repair", (request) => {
-    idempotencyKey(controlRoute("extensions.repair"), request);
     return services.extensions.repair(
       record(request.params).extensionId ?? "",
       RepairProviderExtensionCommandSchema.parse(
@@ -309,7 +411,6 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     ["extensions.rollback", "rollback"],
   ] as const) {
     register(id, (request) => {
-      idempotencyKey(controlRoute(id), request);
       return services.extensions[operation](
         record(request.params).extensionId ?? "",
         ExtensionLifecycleCommandSchema.parse(routeBody(controlRoute(id), request)),
@@ -317,7 +418,6 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     });
   }
   register("extensions.remove", (request) => {
-    idempotencyKey(controlRoute("extensions.remove"), request);
     return services.extensions.remove(
       record(request.params).extensionId ?? "",
       ExtensionLifecycleCommandSchema.parse(routeBody(controlRoute("extensions.remove"), request)),
@@ -332,7 +432,6 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     const declaration = controlRoute("groups.create");
     const group = await services.topology.createGroup(
       CreateGroupCommandSchema.parse(routeBody(declaration, request)),
-      idempotencyKey(declaration, request),
     );
     return reply.status(201).send(group);
   });
@@ -344,10 +443,7 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
   );
   register("groups.delete", async (request) =>
     DeleteGroupResultSchema.parse(
-      await services.topology.deleteGroup(
-        record(request.params).groupId ?? "",
-        idempotencyKey(controlRoute("groups.delete"), request),
-      ),
+      await services.topology.deleteGroup(record(request.params).groupId ?? ""),
     ),
   );
   register("groups.reorder", async (request) =>
@@ -377,7 +473,6 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     const membership = await services.topology.createAgent(
       record(request.params).groupId ?? "",
       CreateGroupAgentCommandSchema.parse(routeBody(declaration, request)),
-      idempotencyKey(declaration, request),
     );
     return reply.status(201).send(membership);
   });
@@ -393,7 +488,6 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
       await services.topology.removeAgent(
         record(request.params).groupId ?? "",
         record(request.params).agentId ?? "",
-        idempotencyKey(controlRoute("agents.delete"), request),
       ),
     ),
   );
@@ -483,7 +577,6 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     return services.coordinator.stopRun(params.groupId ?? "", membership.memberId);
   });
   register("runs.restart", async (request, reply) => {
-    idempotencyKey(controlRoute("runs.restart"), request);
     const command = StartAgentRunCommandSchema.parse(
       routeBody(controlRoute("runs.restart"), request),
     );
@@ -497,19 +590,16 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
       await services.coordinator.startAll(
         record(request.params).groupId ?? "",
         StartGroupRunsCommandSchema.parse(routeBody(declaration, request)),
-        idempotencyKey(declaration, request),
       ),
     );
   });
   register("runs.stopAll", async (request) => {
-    idempotencyKey(controlRoute("runs.stopAll"), request);
     StopAgentRunCommandSchema.parse(routeBody(controlRoute("runs.stopAll"), request));
     return AgentRunSchema.array().parse(
       await services.coordinator.stopAll(record(request.params).groupId ?? ""),
     );
   });
   register("runs.restartAll", async (request) => {
-    idempotencyKey(controlRoute("runs.restartAll"), request);
     const command = StartGroupRunsCommandSchema.parse(
       routeBody(controlRoute("runs.restartAll"), request),
     );
@@ -561,12 +651,12 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     const declaration = controlRoute("messages.submit");
     const principal = operatorPrincipal(services, request);
     const parsed = SubmitMessageCommandSchema.parse(routeBody(declaration, request));
-    const result = services.messageCommands.submit(
-      record(request.params).groupId ?? "",
-      { ...parsed, sender: { kind: "operator", operatorId: principal.operatorId } },
-      idempotencyKey(declaration, request),
-    );
-    return reply.status(201).send(result);
+    const result = services.messageCommands.submit(record(request.params).groupId ?? "", {
+      ...parsed,
+      sender: { kind: "operator", operatorId: principal.operatorId },
+    });
+    reply.status(201);
+    return result;
   });
   register("messages.list", (request) => {
     const query = record(request.query);
@@ -580,10 +670,7 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     });
   });
   register("messages.clear", (request) =>
-    services.messages.clear(
-      record(request.params).groupId ?? "",
-      idempotencyKey(controlRoute("messages.clear"), request),
-    ),
+    services.messages.clear(record(request.params).groupId ?? ""),
   );
   register("messages.deliveries", (request) =>
     services.deliveries.list(record(request.params).messageId ?? ""),
@@ -594,10 +681,11 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     const action = services.actions.create(
       actionPrincipal(services, request),
       CreateAgentActionCommandSchema.parse(routeBody(declaration, request)),
-      idempotencyKey(declaration, request) as string,
+      request.id,
     );
-    void services.actionScheduler.tick();
-    return reply.status(201).send(AgentActionSchema.parse(action));
+    setImmediate(() => void services.actionScheduler.tick());
+    reply.status(201);
+    return AgentActionSchema.parse(action);
   });
   register("actions.get", (request) =>
     AgentActionSchema.parse(

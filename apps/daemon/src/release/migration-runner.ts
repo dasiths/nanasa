@@ -1,13 +1,13 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { MigrationProbeSchema, type MigrationProbe } from "@nanasa/contracts";
+import { type MigrationProbe, MigrationProbeSchema } from "@nanasa/contracts";
 
 export interface MigrationStep {
   readonly from: number;
   readonly to: number;
   readonly name: string;
-  apply(database: DatabaseSync): void;
+  apply(database: DatabaseSync, context: { databasePath: string }): void;
 }
 
 export interface MigrationHooks {
@@ -137,7 +137,7 @@ export class MigrationRunner {
         hooks.beforeStep?.(step);
         database.exec("BEGIN IMMEDIATE");
         try {
-          step.apply(database);
+          step.apply(database, { databasePath: this.#path });
           database.exec(`PRAGMA user_version = ${step.to}`);
           const metadata = database
             .prepare(

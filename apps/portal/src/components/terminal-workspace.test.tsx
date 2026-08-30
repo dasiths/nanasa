@@ -1,5 +1,5 @@
 import type { PortalSnapshot, TerminalEndpointStatus } from "@nanasa/contracts";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PortalClient } from "../api.js";
 import { TerminalWorkspace } from "./terminal-workspace.js";
@@ -131,5 +131,84 @@ describe("TerminalWorkspace", () => {
       "Builder (member-one) terminal console",
     );
     expect(container.querySelector("iframe")).toBeNull();
+  });
+
+  it("persists pinning, maximize, and a browser-local grid split without remounting terminals", async () => {
+    const members = ["one", "two"].map((id, order) => ({
+      id: `agent-${id}`,
+      groupId: "group-one",
+      memberId: `member-${id}`,
+      agentProfileId: "profile-one",
+      alias: id === "one" ? "Builder" : "Reviewer",
+      order,
+      state: "active" as const,
+      joinedAt: timestamp,
+    }));
+    const runs = members.map((member, index) => ({
+      id: `run-${index + 1}`,
+      groupId: "group-one",
+      memberId: member.memberId,
+      agentProfileId: "profile-one",
+      generation: 1,
+      status: "running" as const,
+      desiredState: "running" as const,
+      recoveryPhase: "recovered" as const,
+      recoveryAttempts: 0,
+      launchKind: "fresh" as const,
+      requestedModelSource: "provider-default" as const,
+      terminal: {
+        serverName: "nanasa",
+        sessionId: "$1",
+        windowId: `@${index + 1}`,
+        paneId: `%${index + 1}`,
+      },
+      startedAt: timestamp,
+    }));
+    const { container } = render(
+      <TerminalWorkspace client={client()} members={members} runs={runs} />,
+    );
+    const initialMounts = await screen.findAllByTestId("owned-xterm");
+    expect(initialMounts).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Grid terminal layout" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Grid terminal layout" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Pin Reviewer terminal" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Terminal split ratio" }), {
+      target: { value: "65" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Maximize Builder terminal" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Unpin Reviewer terminal", hidden: true }),
+      ).toHaveAttribute("aria-pressed", "true"),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Restore Builder terminal" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    );
+    expect(container.querySelector(".terminal-pane-slot[hidden]")).not.toBeNull();
+    expect(container.querySelector(".terminal-layout")).toHaveStyle({
+      "--terminal-first-ratio": "65%",
+    });
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      expect.stringContaining("Reviewer"),
+      expect.stringContaining("Builder"),
+    ]);
+    expect(screen.getAllByTestId("owned-xterm")).toEqual([initialMounts[1], initialMounts[0]]);
+    expect(
+      JSON.parse(window.localStorage.getItem("nanasa.portal.preferences.v2") ?? "{}"),
+    ).toMatchObject({
+      pinnedRunIdsByGroup: { "group-one": ["run-2"] },
+      maximizedRunByGroup: { "group-one": "run-1" },
+      terminalSplitRatioByGroup: { "group-one": 65 },
+    });
   });
 });

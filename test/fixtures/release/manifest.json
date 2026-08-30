@@ -3,8 +3,8 @@
   "producer": "nanasa-0.1.0-next.11.0",
   "fixtures": {
     "config-v2.yaml": "6e3a67d2a8a1b39b814aad71830bcd8f0dc64a6d01f11023a14c9369f19769be",
-    "control-meta.v1.json": "7a791da078646208365ba92ce78ccb47f7b6d1312ce973a97f801f85a6f0fa2b",
-    "database-v7.sql": "8b7fc46c3de6ad5ee3b08e315dfe508d4c121ad69b6b4c3f59e630d9da58d106",
+    "control-meta.v1.json": "d88a8811c987f90c46ff3bb58924dda35addf779fa1b19264a0e4dc57b786815",
+    "database-v7.sql": "0808d086ab08b3702bbce00a0fb56487aad89c0d15f325264f97268b93981dc7",
     "event-frame.v1.json": "44f7965fc580deb9ed86c939606ba7ba453c0a6657e58905f5601edbd10cebc1",
     "reporter-event.v2.json": "b0ef8e5c3e8269b85cebfe1c281f353eba4eb58d22750e233141470f43f4b80a",
     "terminal-frame.v1.json": "f6eec4a240e72a69dad92af32c392adf887b320c7952e5a5bc0fe7bfd1cd8e11"

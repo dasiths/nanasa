@@ -4,8 +4,8 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -31,6 +31,13 @@ export type ServiceOperation =
 
 export interface ServiceCommandRunner {
   run(command: string, args: readonly string[]): SpawnSyncReturns<string>;
+}
+
+interface RemovalState {
+  loaded: string;
+  enabled: string;
+  active: string;
+  failed: string;
 }
 
 const defaultRunner: ServiceCommandRunner = {
@@ -186,11 +193,57 @@ export class SystemdUserService {
 
   public remove(): ServiceDescriptor {
     this.#assertSupported();
-    if (existsSync(this.unitPath)) {
-      this.#runner.run("systemctl", ["--user", "disable", "--now", this.unitName]);
+    const unitOnDisk = existsSync(this.unitPath);
+    const environmentOnDisk = existsSync(this.environmentPath);
+    const initial = this.#removalState();
+    const managerAbsent =
+      initial.loaded === "not-found" &&
+      initial.enabled === "not-found" &&
+      ["inactive", "unknown", "not-found"].includes(initial.active) &&
+      ["inactive", "unknown", "not-found"].includes(initial.failed);
+    const alreadyAbsent = !unitOnDisk && !environmentOnDisk && managerAbsent;
+
+    if (!alreadyAbsent) {
+      if (
+        initial.loaded !== "not-found" ||
+        !["inactive", "unknown", "not-found"].includes(initial.active)
+      ) {
+        this.#systemctlForRemoval(
+          "stop",
+          (state) =>
+            state.loaded === "not-found" &&
+            ["inactive", "unknown", "not-found"].includes(state.active),
+        );
+      }
+
+      let stopped = this.#removalState();
+      if (
+        initial.failed === "failed" ||
+        initial.active === "failed" ||
+        stopped.failed === "failed" ||
+        stopped.active === "failed"
+      ) {
+        this.#systemctlForRemoval(
+          "reset-failed",
+          (state) => state.loaded === "not-found" && state.failed === "not-found",
+        );
+        stopped = this.#removalState();
+      }
+
+      this.#assertStoppedState(stopped, "after stop and reset-failed");
+      if (this.#enablementNeedsDisable(stopped.enabled)) {
+        this.#systemctlForRemoval(
+          "disable",
+          (state) => state.enabled === "not-found" && state.loaded === "not-found",
+        );
+        stopped = this.#removalState();
+      }
+      this.#assertRemovalState(stopped, "before deleting unit files", false);
+
       rmSync(this.unitPath, { force: true });
       rmSync(this.environmentPath, { force: true });
       this.#systemctl("daemon-reload");
+      this.#assertRemovalState(this.#removalState(), "after daemon-reload", true);
     }
     return this.status("Service removed; tmux-owned runs were not terminated");
   }
@@ -329,5 +382,94 @@ export class SystemdUserService {
   #systemctl(...args: string[]): void {
     const result = this.#runner.run("systemctl", ["--user", ...args]);
     if (result.status !== 0) throw commandFailure(result, args[0] ?? "operation");
+  }
+
+  #systemctlForRemoval(
+    operation: "stop" | "disable" | "reset-failed",
+    absent: (state: RemovalState) => boolean,
+  ): void {
+    const result = this.#runner.run("systemctl", ["--user", operation, this.unitName]);
+    if (result.status === 0) return;
+    if (absent(this.#removalState())) return;
+    throw commandFailure(result, operation);
+  }
+
+  #removalState(): RemovalState {
+    const loaded = this.#runner.run("systemctl", [
+      "--user",
+      "show",
+      this.unitName,
+      "--property=LoadState",
+      "--value",
+    ]);
+    const enabled = this.#runner.run("systemctl", ["--user", "is-enabled", this.unitName]);
+    const active = this.#runner.run("systemctl", ["--user", "is-active", this.unitName]);
+    const failed = this.#runner.run("systemctl", ["--user", "is-failed", this.unitName]);
+    return {
+      loaded: loaded.stdout.trim() || (loaded.status === 4 ? "not-found" : "indeterminate"),
+      enabled: enabled.stdout.trim() || (enabled.status === 4 ? "not-found" : "indeterminate"),
+      active: active.stdout.trim() || (active.status === 4 ? "not-found" : "indeterminate"),
+      failed: failed.stdout.trim() || (failed.status === 4 ? "not-found" : "indeterminate"),
+    };
+  }
+
+  #enablementNeedsDisable(enabled: string): boolean {
+    if (["enabled", "enabled-runtime", "linked", "linked-runtime", "alias"].includes(enabled)) {
+      return true;
+    }
+    if (
+      [
+        "disabled",
+        "static",
+        "indirect",
+        "generated",
+        "transient",
+        "masked",
+        "masked-runtime",
+        "not-found",
+      ].includes(enabled)
+    ) {
+      return false;
+    }
+    throw new Error(`systemd user service enablement state is unsafe: enabled=${enabled}`);
+  }
+
+  #assertStoppedState(state: RemovalState, stage: string): void {
+    if (
+      !["inactive", "unknown", "not-found"].includes(state.active) ||
+      !["inactive", "unknown", "not-found"].includes(state.failed)
+    ) {
+      throw new Error(
+        `systemd user service removal state is unsafe ${stage}: loaded=${state.loaded}, enabled=${state.enabled}, active=${state.active}, failed=${state.failed}`,
+      );
+    }
+  }
+
+  #assertRemovalState(state: RemovalState, stage: string, requireAbsent: boolean): void {
+    const loadedStates = requireAbsent ? ["not-found"] : ["loaded", "not-found"];
+    const enabledStates = requireAbsent
+      ? ["disabled", "not-found"]
+      : [
+          "disabled",
+          "static",
+          "indirect",
+          "generated",
+          "transient",
+          "masked",
+          "masked-runtime",
+          "not-found",
+        ];
+    const activeStates = ["inactive", "unknown", "not-found"];
+    const failedStates = ["inactive", "unknown", "not-found"];
+    if (
+      !loadedStates.includes(state.loaded) ||
+      !enabledStates.includes(state.enabled) ||
+      !activeStates.includes(state.active) ||
+      !failedStates.includes(state.failed)
+    ) {
+      throw new Error(
+        `systemd user service removal state is unsafe ${stage}: loaded=${state.loaded}, enabled=${state.enabled}, active=${state.active}, failed=${state.failed}`,
+      );
+    }
   }
 }

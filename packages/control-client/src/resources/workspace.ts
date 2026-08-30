@@ -35,7 +35,10 @@ export class WorkspaceResource {
     );
   }
 
-  public openCheckout(command: OpenCheckoutCommand, key: string): Promise<WorktreeOperationResult> {
+  public openCheckout(
+    command: OpenCheckoutCommand,
+    key?: string,
+  ): Promise<WorktreeOperationResult> {
     return request(
       this.client,
       path("checkouts", "open"),
@@ -54,7 +57,7 @@ export class WorkspaceResource {
 
   public createWorktree(
     command: CreateWorktreeCommand,
-    key: string,
+    key?: string,
   ): Promise<WorktreeOperationResult> {
     return request(
       this.client,
@@ -67,7 +70,7 @@ export class WorkspaceResource {
   public removeWorktree(
     worktreeId: string,
     command: RemoveWorktreeCommand,
-    key: string,
+    key?: string,
   ): Promise<WorktreeOperationResult> {
     return request(
       this.client,
@@ -81,7 +84,7 @@ export class WorkspaceResource {
     groupId: string,
     agentId: string,
     command: AssignAgentCheckoutCommand,
-    key: string,
+    key?: string,
   ): Promise<void> {
     return this.client.requestVoid(
       path("groups", groupId, "agents", agentId, "checkout"),
@@ -97,7 +100,7 @@ export class WorkspaceResource {
     return request(this.client, path("consoles", consoleId), AdHocConsoleSessionSchema);
   }
 
-  public createConsole(key: string): Promise<AdHocConsoleSession> {
+  public createConsole(key?: string): Promise<AdHocConsoleSession> {
     return request(
       this.client,
       path("consoles"),
@@ -106,7 +109,7 @@ export class WorkspaceResource {
     );
   }
 
-  public closeConsole(consoleId: string, key: string): Promise<void> {
+  public closeConsole(consoleId: string, key?: string): Promise<void> {
     return this.client.requestVoid(path("consoles", consoleId), commandInit("DELETE", {}, key));
   }
 

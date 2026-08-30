@@ -352,7 +352,7 @@ export class PackageAcceptanceService {
   async startAll(groupId: string): Promise<void> {
     await this.request(`/api/v1/groups/${groupId}/runs/start-all`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Idempotency-Key": randomUUID() },
+      headers: { "Content-Type": "application/json" },
       body: "{}",
     });
     await waitFor("all echo agents to run", async () => {

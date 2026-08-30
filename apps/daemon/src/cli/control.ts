@@ -4,11 +4,12 @@ import { join, resolve } from "node:path";
 import { ControlClientError } from "@nanasa/control-client";
 import WebSocket from "ws";
 import { authenticateAgent, doctorIntegrations } from "../cli-admin.js";
+import { matchControlRoute } from "../http/route-registry.js";
 import { DATABASE_SCHEMA_VERSION } from "../persistence/database.js";
 import { repositoryIdentity } from "../protocol-metadata.js";
 import { loadBuildIdentity } from "../release/build-identity.js";
 import { MigrationRunner } from "../release/migration-runner.js";
-import { ReleaseManager } from "../release/release-manager.js";
+import { RELEASE_MIGRATIONS, ReleaseManager } from "../release/release-manager.js";
 import { createRemoteDescriptor } from "../remote/remote-descriptor.js";
 import { buildRemoteSshPlan, RemoteSshSession } from "../remote/remote-ssh.js";
 import { SystemdUserService } from "../service/systemd-user-service.js";
@@ -279,6 +280,7 @@ export async function runControlCli(
       const runner = new MigrationRunner(
         join(repositoryRoot, ".nanasa", "state", "nanasa.sqlite"),
         DATABASE_SCHEMA_VERSION,
+        RELEASE_MIGRATIONS,
       );
       outputSuccess(
         declaration.command === "probe" ? runner.preflight() : runner.apply(),
@@ -340,24 +342,28 @@ export async function runControlCli(
       if (declaration.method === undefined || declaration.path === undefined) {
         throw new Error(`Control command ${declaration.id} has no HTTP binding`);
       }
+      const path = (declaration.path as (args: readonly string[]) => string)(options.positionals);
+      const route = matchControlRoute(declaration.method, path);
+      if (declaration.mutating && route === undefined) {
+        throw new Error(`Control command ${declaration.id} has no shared route declaration`);
+      }
+      if (route?.idempotency === "forbidden" && options.idempotencyKey !== undefined) {
+        throw new CliUsageError(`Control command ${declaration.id} forbids --idempotency-key`);
+      }
       const headers: Record<string, string> = {};
-      if (declaration.mutating) {
+      if (declaration.mutating && route?.idempotency !== "forbidden") {
         headers["Idempotency-Key"] = options.idempotencyKey ?? randomUUID();
       }
       if (options.requestId !== undefined) headers["X-Request-Id"] = options.requestId;
       if (declaration.body !== "none") headers["Content-Type"] = "application/json; charset=utf-8";
-      const value = await loaded.transport.request(
-        (declaration.path as (args: readonly string[]) => string)(options.positionals),
-        declaration.response,
-        {
-          init: {
-            method: declaration.method,
-            headers,
-            signal: controller.signal,
-            ...(declaration.body === "none" ? {} : { body: JSON.stringify(options.body ?? {}) }),
-          },
+      const value = await loaded.transport.request(path, declaration.response, {
+        init: {
+          method: declaration.method,
+          headers,
+          signal: controller.signal,
+          ...(declaration.body === "none" ? {} : { body: JSON.stringify(options.body ?? {}) }),
         },
-      );
+      });
       outputSuccess(value, options.output === "text" ? "text" : declaration.output, stdout);
       return 0;
     } finally {

@@ -2,7 +2,7 @@ import { type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { BuildIdentity, RemoteDescriptor } from "@nanasa/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -351,12 +351,31 @@ describe("systemd and OpenSSH plans", () => {
     );
     const calls: string[][] = [];
     let active = "inactive\n";
+    let enabled = false;
+    let loaded = true;
+    let installedUnitPath = "";
     const runner: ServiceCommandRunner = {
       run: (command, args) => {
         calls.push([command, ...args]);
-        if (args.includes("is-active")) return result(active === "active\n" ? 0 : 3, active);
+        if (args.includes("show")) return result(0, loaded ? "loaded\n" : "not-found\n");
+        if (args.includes("is-enabled"))
+          return loaded
+            ? result(enabled ? 0 : 1, enabled ? "enabled\n" : "disabled\n")
+            : result(4, "not-found\n");
+        if (args.includes("is-active"))
+          return loaded ? result(active === "active\n" ? 0 : 3, active) : result(4);
+        if (args.includes("is-failed"))
+          return loaded
+            ? result(active === "failed\n" ? 0 : 1, active === "failed\n" ? active : "inactive\n")
+            : result(4, "not-found\n");
+        if (args.includes("enable")) enabled = true;
+        if (args.includes("disable")) {
+          enabled = false;
+          active = "inactive\n";
+        }
         if (args.includes("start") || args.includes("restart")) active = "active\n";
         if (args.includes("stop")) active = "inactive\n";
+        if (args.includes("daemon-reload") && !existsSync(installedUnitPath)) loaded = false;
         return result(0, command === "systemctl" && args[0] === "--version" ? "systemd 257\n" : "");
       },
     };
@@ -366,6 +385,7 @@ describe("systemd and OpenSSH plans", () => {
       home,
       runner,
     });
+    installedUnitPath = service.unitPath;
     expect(service.install().killMode).toBe("process");
     expect(readFileSync(service.unitPath, "utf8")).toContain("KillMode=process");
     expect(service.start().state).toBe("ready");
@@ -373,6 +393,265 @@ describe("systemd and OpenSSH plans", () => {
     expect(service.stop().state).toBe("inactive");
     expect(service.remove().state).toBe("not-installed");
     expect(calls.some((call) => call.includes("daemon-reload"))).toBe(true);
+    expect(calls.filter((call) => call.includes("is-enabled"))).toHaveLength(4);
+    expect(calls.filter((call) => call.includes("is-active"))).toHaveLength(8);
+    expect(calls.filter((call) => call.includes("is-failed"))).toHaveLength(4);
+  });
+
+  it("fails systemd removal on disable errors or unsafe state, except an absent unit", () => {
+    const createService = (mode: "failure" | "active" | "absent") => {
+      const root = fixtureDirectory(`systemd-remove-${mode}`);
+      const home = join(root, "home");
+      const repository = join(root, "repo");
+      const packageRoot = join(root, "package");
+      mkdirSync(join(repository, ".nanasa", "runtime"), { recursive: true });
+      mkdirSync(join(packageRoot, "bin"), { recursive: true });
+      mkdirSync(join(packageRoot, "templates", "systemd"), { recursive: true });
+      writeFileSync(join(packageRoot, "bin", "nanasa.js"), "#!/usr/bin/env node\n");
+      writeFileSync(
+        join(packageRoot, "templates", "systemd", "nanasa.service"),
+        readFileSync(join(repositoryRoot, "templates", "systemd", "nanasa.service")),
+      );
+      let reloaded = false;
+      const runner: ServiceCommandRunner = {
+        run: (command, args) => {
+          if (args[0] === "--version") return result(0, "systemd 257\n");
+          if (args.includes("show"))
+            return result(0, mode === "absent" || reloaded ? "not-found\n" : "loaded\n");
+          if (args.includes("disable")) {
+            if (mode === "failure") return result(1, "", "Access denied");
+            if (mode === "absent") return result(1, "", "Unit does not exist");
+            return result(0);
+          }
+          if (args.includes("is-enabled")) {
+            if (mode === "absent" || reloaded) return result(4, "not-found\n");
+            return mode === "failure" ? result(0, "enabled\n") : result(1, "disabled\n");
+          }
+          if (args.includes("is-active")) {
+            if (mode === "absent" || reloaded) return result(4);
+            return result(mode === "active" ? 0 : 3, mode === "active" ? "active\n" : "inactive\n");
+          }
+          if (args.includes("is-failed"))
+            return mode === "absent" || reloaded
+              ? result(4, "not-found\n")
+              : result(1, "inactive\n");
+          if (args.includes("stop") && mode !== "active") return result(0);
+          if (args.includes("daemon-reload")) reloaded = true;
+          return result(0, command === "systemctl" ? "" : command);
+        },
+      };
+      const service = new SystemdUserService({
+        repositoryRoot: repository,
+        packageRoot,
+        home,
+        runner,
+      });
+      mkdirSync(dirname(service.unitPath), { recursive: true });
+      writeFileSync(service.unitPath, "fixture\n");
+      writeFileSync(service.environmentPath, "fixture\n");
+      return service;
+    };
+
+    const failure = createService("failure");
+    expect(() => failure.remove()).toThrow(/disable failed/);
+    expect(existsSync(failure.unitPath)).toBe(true);
+
+    const active = createService("active");
+    expect(() => active.remove()).toThrow(/active=active/);
+    expect(existsSync(active.unitPath)).toBe(true);
+
+    const absent = createService("absent");
+    expect(absent.remove().state).toBe("not-installed");
+    expect(existsSync(absent.unitPath)).toBe(false);
+  });
+
+  it("removes a manager-loaded active unit when its unit file is already missing", () => {
+    const root = fixtureDirectory("systemd-remove-manager-only");
+    const home = join(root, "home");
+    const repository = join(root, "repo");
+    const packageRoot = join(root, "package");
+    mkdirSync(join(repository, ".nanasa", "runtime"), { recursive: true });
+    mkdirSync(join(packageRoot, "bin"), { recursive: true });
+    mkdirSync(join(packageRoot, "templates", "systemd"), { recursive: true });
+    writeFileSync(join(packageRoot, "bin", "nanasa.js"), "#!/usr/bin/env node\n");
+    writeFileSync(
+      join(packageRoot, "templates", "systemd", "nanasa.service"),
+      readFileSync(join(repositoryRoot, "templates", "systemd", "nanasa.service")),
+    );
+    let loaded = true;
+    let active = true;
+    const calls: string[][] = [];
+    const runner: ServiceCommandRunner = {
+      run: (command, args) => {
+        calls.push([command, ...args]);
+        if (args[0] === "--version") return result(0, "systemd 257\n");
+        if (args.includes("show")) return result(0, loaded ? "loaded\n" : "not-found\n");
+        if (args.includes("is-enabled")) return result(4, "not-found\n");
+        if (args.includes("is-active"))
+          return loaded ? result(active ? 0 : 3, active ? "active\n" : "inactive\n") : result(4);
+        if (args.includes("is-failed"))
+          return loaded ? result(1, "inactive\n") : result(4, "not-found\n");
+        if (args.includes("stop")) active = false;
+        if (args.includes("daemon-reload")) loaded = false;
+        return result(0);
+      },
+    };
+    const service = new SystemdUserService({
+      repositoryRoot: repository,
+      packageRoot,
+      home,
+      runner,
+    });
+    writeFileSync(service.environmentPath, "fixture\n");
+
+    expect(existsSync(service.unitPath)).toBe(false);
+    expect(service.remove().state).toBe("not-installed");
+    expect(existsSync(service.environmentPath)).toBe(false);
+    expect(calls.some((call) => call.includes("disable"))).toBe(false);
+    expect(calls.some((call) => call.includes("stop"))).toBe(true);
+    expect(calls.some((call) => call.includes("daemon-reload"))).toBe(true);
+    expect(calls.findIndex((call) => call.includes("stop"))).toBeLessThan(
+      calls.findIndex((call) => call.includes("daemon-reload")),
+    );
+  });
+
+  it("retains service files when stopping an active loaded unit fails", () => {
+    const root = fixtureDirectory("systemd-remove-stop-failure");
+    const home = join(root, "home");
+    const repository = join(root, "repo");
+    const packageRoot = join(root, "package");
+    mkdirSync(join(repository, ".nanasa", "runtime"), { recursive: true });
+    mkdirSync(join(packageRoot, "bin"), { recursive: true });
+    mkdirSync(join(packageRoot, "templates", "systemd"), { recursive: true });
+    writeFileSync(join(packageRoot, "bin", "nanasa.js"), "#!/usr/bin/env node\n");
+    writeFileSync(
+      join(packageRoot, "templates", "systemd", "nanasa.service"),
+      readFileSync(join(repositoryRoot, "templates", "systemd", "nanasa.service")),
+    );
+    const runner: ServiceCommandRunner = {
+      run: (_command, args) => {
+        if (args[0] === "--version") return result(0, "systemd 257\n");
+        if (args.includes("show")) return result(0, "loaded\n");
+        if (args.includes("is-enabled")) return result(0, "enabled\n");
+        if (args.includes("is-active")) return result(0, "active\n");
+        if (args.includes("is-failed")) return result(1, "inactive\n");
+        if (args.includes("stop")) return result(1, "", "Access denied");
+        return result(0);
+      },
+    };
+    const service = new SystemdUserService({
+      repositoryRoot: repository,
+      packageRoot,
+      home,
+      runner,
+    });
+    mkdirSync(dirname(service.unitPath), { recursive: true });
+    writeFileSync(service.unitPath, "fixture\n");
+    writeFileSync(service.environmentPath, "fixture\n");
+
+    expect(() => service.remove()).toThrow(/stop failed.*Access denied/);
+    expect(existsSync(service.unitPath)).toBe(true);
+    expect(existsSync(service.environmentPath)).toBe(true);
+  });
+
+  it("resets a failed unit before asserting final inactive removal state", () => {
+    const root = fixtureDirectory("systemd-remove-failed-state");
+    const home = join(root, "home");
+    const repository = join(root, "repo");
+    const packageRoot = join(root, "package");
+    mkdirSync(join(repository, ".nanasa", "runtime"), { recursive: true });
+    mkdirSync(join(packageRoot, "bin"), { recursive: true });
+    mkdirSync(join(packageRoot, "templates", "systemd"), { recursive: true });
+    writeFileSync(join(packageRoot, "bin", "nanasa.js"), "#!/usr/bin/env node\n");
+    writeFileSync(
+      join(packageRoot, "templates", "systemd", "nanasa.service"),
+      readFileSync(join(repositoryRoot, "templates", "systemd", "nanasa.service")),
+    );
+    let loaded = true;
+    let failed = true;
+    let enabled = true;
+    const calls: string[][] = [];
+    const runner: ServiceCommandRunner = {
+      run: (command, args) => {
+        calls.push([command, ...args]);
+        if (args[0] === "--version") return result(0, "systemd 257\n");
+        if (args.includes("show")) return result(0, loaded ? "loaded\n" : "not-found\n");
+        if (args.includes("is-enabled"))
+          return loaded
+            ? result(enabled ? 0 : 1, enabled ? "enabled\n" : "disabled\n")
+            : result(4, "not-found\n");
+        if (args.includes("is-active"))
+          return loaded ? result(3, failed ? "failed\n" : "inactive\n") : result(4, "not-found\n");
+        if (args.includes("is-failed"))
+          return loaded
+            ? result(failed ? 0 : 1, failed ? "failed\n" : "inactive\n")
+            : result(4, "not-found\n");
+        if (args.includes("reset-failed")) failed = false;
+        if (args.includes("disable")) enabled = false;
+        if (args.includes("daemon-reload")) loaded = false;
+        return result(0);
+      },
+    };
+    const service = new SystemdUserService({
+      repositoryRoot: repository,
+      packageRoot,
+      home,
+      runner,
+    });
+    mkdirSync(dirname(service.unitPath), { recursive: true });
+    writeFileSync(service.unitPath, "fixture\n");
+    writeFileSync(service.environmentPath, "fixture\n");
+
+    expect(service.remove().state).toBe("not-installed");
+    expect(calls.some((call) => call.includes("reset-failed"))).toBe(true);
+    expect(calls.findIndex((call) => call.includes("reset-failed"))).toBeLessThan(
+      calls.findIndex((call) => call.includes("disable")),
+    );
+  });
+
+  it("retains service files when manager disable fails", () => {
+    const root = fixtureDirectory("systemd-remove-disable-failure");
+    const home = join(root, "home");
+    const repository = join(root, "repo");
+    const packageRoot = join(root, "package");
+    mkdirSync(join(repository, ".nanasa", "runtime"), { recursive: true });
+    mkdirSync(join(packageRoot, "bin"), { recursive: true });
+    mkdirSync(join(packageRoot, "templates", "systemd"), { recursive: true });
+    writeFileSync(join(packageRoot, "bin", "nanasa.js"), "#!/usr/bin/env node\n");
+    writeFileSync(
+      join(packageRoot, "templates", "systemd", "nanasa.service"),
+      readFileSync(join(repositoryRoot, "templates", "systemd", "nanasa.service")),
+    );
+    let active = true;
+    const runner: ServiceCommandRunner = {
+      run: (_command, args) => {
+        if (args[0] === "--version") return result(0, "systemd 257\n");
+        if (args.includes("show")) return result(0, "loaded\n");
+        if (args.includes("is-enabled")) return result(0, "enabled\n");
+        if (args.includes("is-active"))
+          return result(active ? 0 : 3, active ? "active\n" : "inactive\n");
+        if (args.includes("is-failed")) return result(1, "inactive\n");
+        if (args.includes("stop")) {
+          active = false;
+          return result(0);
+        }
+        if (args.includes("disable")) return result(1, "", "Access denied");
+        return result(0);
+      },
+    };
+    const service = new SystemdUserService({
+      repositoryRoot: repository,
+      packageRoot,
+      home,
+      runner,
+    });
+    mkdirSync(dirname(service.unitPath), { recursive: true });
+    writeFileSync(service.unitPath, "fixture\n");
+    writeFileSync(service.environmentPath, "fixture\n");
+
+    expect(() => service.remove()).toThrow(/disable failed.*Access denied/);
+    expect(existsSync(service.unitPath)).toBe(true);
+    expect(existsSync(service.environmentPath)).toBe(true);
   });
 
   it("rejects SSH option injection and builds loopback-only keepalive forwarding", () => {

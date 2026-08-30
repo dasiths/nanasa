@@ -54,6 +54,24 @@ describe("typed control facade registries", () => {
     expect(matchControlRoute("GET", "/api/groups")).toBeUndefined();
   });
 
+  it("classifies every state-changing route without inherited forbidden policy", () => {
+    const nonGet = CONTROL_ROUTE_REGISTRY.filter((route) => route.method !== "GET");
+    const transactional = [
+      "service.planRestart",
+      "state.retain",
+      "state.delete",
+      "statuses.acknowledge",
+      "messages.submit",
+      "messages.clear",
+      "actions.create",
+      "actions.cancel",
+    ];
+    expect(
+      nonGet.filter((route) => route.idempotency !== "forbidden").map((route) => route.id),
+    ).toEqual(transactional);
+    expect(nonGet.every((route) => route.idempotency !== undefined)).toBe(true);
+  });
+
   it("generates OpenAPI 3.1 directly from every route declaration", () => {
     const document = generateControlOpenApi() as {
       openapi: string;
@@ -134,6 +152,37 @@ describe("typed control facade registries", () => {
       "rollback",
     ]);
     expect(CLI_COMMAND_REGISTRY.every((command) => command.summary.length > 0)).toBe(true);
+  });
+
+  it("binds every HTTP mutation command to the shared route idempotency policy", () => {
+    const commands = CLI_COMMAND_REGISTRY.filter(
+      (command) => command.mutating && command.method !== undefined && command.path !== undefined,
+    );
+    for (const command of commands) {
+      const positionals = command.positionals.map((name) => `${name}-fixture`);
+      const route = matchControlRoute(command.method!, command.path!(positionals));
+      expect(route, command.id).toBeDefined();
+      expect(route?.method).not.toBe("GET");
+    }
+    const replayableCommands = commands
+      .filter((command) => {
+        const positionals = command.positionals.map((name) => `${name}-fixture`);
+        return (
+          matchControlRoute(command.method!, command.path!(positionals))?.idempotency !==
+          "forbidden"
+        );
+      })
+      .map((command) => command.id);
+    expect(replayableCommands).toEqual([
+      "state.retain",
+      "state.delete",
+      "agent.prompt",
+      "status.ack",
+      "message.send",
+      "message.clear",
+      "action.create",
+      "action.cancel",
+    ]);
   });
 
   it("returns stable CLI exits for completion, usage, and control failures", async () => {

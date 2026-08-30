@@ -1370,8 +1370,45 @@ textarea {
 }
 
 .terminal-layout-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns:
+    minmax(0, var(--terminal-first-ratio, 50%))
+    minmax(0, calc(100% - var(--terminal-first-ratio, 50%)));
   grid-auto-rows: minmax(260px, 1fr);
+}
+
+.terminal-layout-maximized {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.terminal-split-control {
+  display: grid;
+  min-width: 150px;
+  grid-template-columns: auto minmax(70px, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+.terminal-split-control input {
+  padding: 0;
+}
+
+.terminal-pane-control {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+}
+
+.terminal-pane-control[aria-pressed="true"] {
+  background: rgb(125 179 216 / 20%);
+  color: #9dd3f6;
 }
 
 .terminal-pane {

@@ -1,5 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAX_MESSAGE_TEXT_BYTES } from "@nanasa/contracts";
@@ -360,7 +360,6 @@ describe("daemon REST API", () => {
     const renamedGroup = await daemon.app.inject({
       method: "PATCH",
       url: `/api/groups/${group.id}`,
-      headers: { "idempotency-key": "rename-group" },
       payload: { name: "Renamed group" },
     });
     expect(renamedGroup.statusCode).toBe(200);
@@ -384,7 +383,6 @@ describe("daemon REST API", () => {
     const removedAgent = await daemon.app.inject({
       method: "DELETE",
       url: `/api/groups/${group.id}/agents/${agent.id}`,
-      headers: { "idempotency-key": "remove-agent" },
     });
     expect(removedAgent.statusCode).toBe(200);
     expect(removedAgent.json()).toEqual({
@@ -403,7 +401,6 @@ describe("daemon REST API", () => {
     const deleted = await daemon.app.inject({
       method: "DELETE",
       url: `/api/groups/${group.id}`,
-      headers: { "idempotency-key": "delete-group" },
     });
     expect(deleted.statusCode).toBe(200);
     expect(deleted.json()).toEqual({
@@ -421,7 +418,7 @@ describe("daemon REST API", () => {
     await daemon.app.close();
   });
 
-  it("exposes group Start All with validated idempotency outcomes", async () => {
+  it("exposes group Start All without claiming idempotency for tmux effects", async () => {
     const daemon = await createDaemon({ dataPath: ":memory:" });
     const startAll = vi.spyOn(daemon.coordinator, "startAll").mockResolvedValue({
       groupId: "group-one",
@@ -438,7 +435,6 @@ describe("daemon REST API", () => {
     const response = await daemon.app.inject({
       method: "POST",
       url: "/api/groups/group-one/runs/start-all",
-      headers: { "idempotency-key": "start-team" },
       payload: { cols: 100, rows: 30 },
     });
 
@@ -447,7 +443,7 @@ describe("daemon REST API", () => {
       groupId: "group-one",
       outcomes: [{ memberId: "alpha", status: "already-running" }],
     });
-    expect(startAll).toHaveBeenCalledWith("group-one", { cols: 100, rows: 30 }, "start-team");
+    expect(startAll).toHaveBeenCalledWith("group-one", { cols: 100, rows: 30 });
     await daemon.app.close();
   });
 
@@ -480,7 +476,7 @@ describe("daemon REST API", () => {
     await daemon.app.close();
   });
 
-  it("supports idempotent operator commands and restores their results after restart", async () => {
+  it("restores transactionally idempotent message outcomes after restart", async () => {
     const dataPath = temporaryDatabase();
     const first = await createDaemon({ dataPath });
 
@@ -490,13 +486,10 @@ describe("daemon REST API", () => {
     const createGroup = {
       method: "POST" as const,
       url: "/api/groups",
-      headers: { "idempotency-key": "create-review-group" },
       payload: { name: "Review group" },
     };
     const groupResponse = await first.app.inject(createGroup);
-    const replayedGroupResponse = await first.app.inject(createGroup);
     expect(groupResponse.statusCode).toBe(201);
-    expect(replayedGroupResponse.json()).toEqual(groupResponse.json());
     const group = groupResponse.json<{ id: string }>();
 
     for (const name of ["reviewer", "tester"]) {
@@ -530,6 +523,20 @@ describe("daemon REST API", () => {
       operatorId: "operator-local-portal",
     });
     expect(submission.deliveryOutcomes).toHaveLength(2);
+    const messageReplay = await first.app.inject({
+      method: "POST",
+      url: `/api/groups/${group.id}/messages`,
+      headers: { "idempotency-key": "broadcast-review" },
+      payload: {
+        intent: "request",
+        sender: { kind: "operator", operatorId: "operator_1" },
+        audience: { kind: "group", membershipRevision: 2 },
+        body: { contentType: "text/markdown", text: "Review this API." },
+        delivery: {},
+      },
+    });
+    expect(messageReplay.headers["idempotency-replayed"]).toBe("true");
+    expect(messageReplay.json()).toEqual(messageResponse.json());
 
     const deliveriesResponse = await first.app.inject({
       method: "GET",
@@ -539,6 +546,21 @@ describe("daemon REST API", () => {
     await first.app.close();
 
     const reopened = await createDaemon({ dataPath });
+    const restartReplay = await reopened.app.inject({
+      method: "POST",
+      url: `/api/groups/${group.id}/messages`,
+      headers: { "idempotency-key": "broadcast-review" },
+      payload: {
+        intent: "request",
+        sender: { kind: "operator", operatorId: "operator_1" },
+        audience: { kind: "group", membershipRevision: 2 },
+        body: { contentType: "text/markdown", text: "Review this API." },
+        delivery: {},
+      },
+    });
+    expect(restartReplay.statusCode).toBe(201);
+    expect(restartReplay.headers["idempotency-replayed"]).toBe("true");
+    expect(restartReplay.json()).toEqual(messageResponse.json());
     const snapshot = (await reopened.app.inject({ method: "GET", url: "/api/snapshot" })).json<{
       groups: unknown[];
       memberships: unknown[];
@@ -562,6 +584,157 @@ describe("daemon REST API", () => {
     });
     expect(snapshot.config.integrations.copilot).not.toHaveProperty("adapter");
     await reopened.app.close();
+  });
+
+  it("centralizes digest, route, principal, concurrency, and failure idempotency semantics", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const request = {
+      method: "POST" as const,
+      url: "/api/v1/service/restart-plan",
+      headers: { "idempotency-key": "central-plan" },
+      payload: { reason: "upgrade" },
+    };
+    const first = await daemon.app.inject(request);
+    const replay = await daemon.app.inject(request);
+    expect(first.statusCode).toBe(200);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.headers["idempotency-replayed"]).toBe("true");
+    expect(replay.json()).toEqual(first.json());
+
+    const mismatch = await daemon.app.inject({
+      ...request,
+      payload: { reason: "rollback" },
+    });
+    expect(mismatch.statusCode).toBe(409);
+    expect(mismatch.json()).toMatchObject({ code: "idempotency_request_conflict" });
+
+    const routeScoped = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/provider-states/missing/retain",
+      headers: { "idempotency-key": "central-plan" },
+      payload: {},
+    });
+    expect(routeScoped.statusCode).toBe(404);
+
+    const credential = readFileSync(join(daemon.runtimePath, "operator-secret")).toString(
+      "base64url",
+    );
+    const principalScoped = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/service/restart-plan",
+      headers: {
+        authorization: `Bearer ${credential}`,
+        "idempotency-key": "central-plan",
+      },
+      payload: { reason: "upgrade" },
+    });
+    expect(principalScoped.statusCode).toBe(200);
+
+    const concurrentRequest = {
+      method: "POST" as const,
+      url: "/api/v1/service/restart-plan",
+      headers: { "idempotency-key": "concurrent-plan" },
+      payload: { reason: "operator-restart" },
+    };
+    const concurrent = await Promise.all([
+      daemon.app.inject(concurrentRequest),
+      daemon.app.inject(concurrentRequest),
+    ]);
+    expect(concurrent.map((item) => item.statusCode)).toEqual([200, 200]);
+    expect(
+      concurrent.filter((item) => item.headers["idempotency-replayed"] === "true"),
+    ).toHaveLength(1);
+
+    const originalLifecycle = daemon.store.setProviderStateLifecycle.bind(daemon.store);
+    vi.spyOn(daemon.store, "setProviderStateLifecycle")
+      .mockImplementationOnce(() => {
+        throw new Error("transient fault");
+      })
+      .mockImplementation(originalLifecycle);
+    const failed = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/provider-states/missing/retain",
+      headers: { "idempotency-key": "transient-retry" },
+      payload: {},
+    });
+    expect(failed.statusCode).toBe(500);
+    const replayedFailure = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/provider-states/missing/retain",
+      headers: { "idempotency-key": "transient-retry" },
+      payload: {},
+    });
+    expect(replayedFailure.statusCode).toBe(404);
+    expect(replayedFailure.headers["idempotency-replayed"]).toBeUndefined();
+    const providerStateTime = "2026-08-30T00:00:00.000Z";
+    daemon.store.upsertProviderState({
+      id: "missing",
+      integrationId: "copilot",
+      scope: "integration",
+      storageReference: "/tmp/nanasa-provider-state",
+      credentialReference: { kind: "provider-managed" },
+      lifecycle: "active",
+      createdAt: providerStateTime,
+      updatedAt: providerStateTime,
+    });
+    const transientRetry = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/provider-states/missing/retain",
+      headers: { "idempotency-key": "transient-retry" },
+      payload: {},
+    });
+    expect(transientRetry.statusCode).toBe(200);
+    expect(transientRetry.headers["idempotency-replayed"]).toBeUndefined();
+    expect(transientRetry.json()).toMatchObject({ id: "missing", lifecycle: "retained" });
+
+    const stableRequest = {
+      method: "POST" as const,
+      url: "/api/v1/service/restart-plan",
+      headers: { "idempotency-key": "stable-validation" },
+      payload: { reason: "not-a-reason" },
+    };
+    const stableFailure = await daemon.app.inject(stableRequest);
+    const stableReplay = await daemon.app.inject(stableRequest);
+    expect(stableFailure.statusCode).toBe(400);
+    expect(stableFailure.json()).toMatchObject({ code: "validation_error" });
+    expect(stableReplay.statusCode).toBe(400);
+    expect(stableReplay.headers["idempotency-replayed"]).toBe("true");
+    expect(stableReplay.json()).toEqual(stableFailure.json());
+    await daemon.app.close();
+  });
+
+  it("enforces declared idempotency policy before state-changing handlers", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const required = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/agent-actions",
+      payload: {
+        kind: "prompt",
+        groupId: "missing",
+        memberId: "missing",
+        prompt: "Must not reach domain validation",
+      },
+    });
+    expect(required.statusCode).toBe(400);
+    expect(required.json()).toMatchObject({ code: "idempotency_key_required" });
+
+    const forbidden = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/auth/revoke",
+      headers: { "idempotency-key": "unsupported-revoke-key" },
+      payload: {},
+    });
+    expect(forbidden.statusCode).toBe(400);
+    expect(forbidden.json()).toMatchObject({ code: "idempotency_not_supported" });
+    const rawInterrupt = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/runs/missing/interrupt",
+      headers: { "idempotency-key": "unsafe-effect" },
+      payload: { operatorId: "operator", reason: "Stop" },
+    });
+    expect(rawInterrupt.statusCode).toBe(400);
+    expect(rawInterrupt.json()).toMatchObject({ code: "idempotency_not_supported" });
+    await daemon.app.close();
   });
 
   it("exposes config status and rejects unconfigured or arbitrary agent launch data", async () => {
@@ -827,7 +1000,6 @@ describe("portal static assets", () => {
     const disabled = await daemon.app.inject({
       method: "POST",
       url: "/api/v1/extensions/nanasa.copilot/disable",
-      headers: { "idempotency-key": "extension-disable" },
       payload: { expectedLockRevision: details.plan.lockRevision },
     });
     expect(disabled.statusCode).toBe(200);
@@ -851,7 +1023,6 @@ describe("portal static assets", () => {
     const repaired = await daemon.app.inject({
       method: "POST",
       url: "/api/v1/extensions/nanasa.copilot/repair",
-      headers: { "idempotency-key": "extension-repair" },
       payload: {
         planDigest: repairPlan.planDigest,
         configRevision: repairPlan.configRevision,
@@ -862,7 +1033,6 @@ describe("portal static assets", () => {
     const remove = await daemon.app.inject({
       method: "DELETE",
       url: "/api/v1/extensions/nanasa.copilot",
-      headers: { "idempotency-key": "extension-remove" },
       payload: {
         expectedLockRevision: repaired.json<{ plan: { lockRevision: number } }>().plan.lockRevision,
       },

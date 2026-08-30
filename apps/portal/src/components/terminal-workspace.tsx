@@ -7,8 +7,19 @@ import type {
   RoleDefinition,
   TerminalEndpointState,
 } from "@nanasa/contracts";
-import { CircleAlert, Copy, Grid2X2, LoaderCircle, Monitor, RefreshCw, Rows3 } from "lucide-react";
-import { useState } from "react";
+import {
+  CircleAlert,
+  Copy,
+  Grid2X2,
+  LoaderCircle,
+  Maximize2,
+  Minimize2,
+  Monitor,
+  Pin,
+  RefreshCw,
+  Rows3,
+} from "lucide-react";
+import { type CSSProperties, useState } from "react";
 
 import type { PortalClient } from "../api.js";
 import { copyToClipboard } from "../copy-to-clipboard.js";
@@ -33,6 +44,10 @@ function TerminalPane({
   connectionRevision,
   suspended,
   theme,
+  pinned,
+  maximized,
+  onTogglePinned,
+  onToggleMaximized,
 }: {
   client: PortalClient;
   run: AgentRun;
@@ -43,6 +58,10 @@ function TerminalPane({
   connectionRevision: number;
   suspended: boolean;
   theme: "light" | "dark";
+  pinned: boolean;
+  maximized: boolean;
+  onTogglePinned(): void;
+  onToggleMaximized(): void;
 }) {
   const runRevision = `${run.generation}:${run.status}:${run.terminal?.paneId ?? "pending"}:${connectionRevision}`;
   const { status, loading, error, retry } = useTerminalEndpoint(client, run.id, runRevision);
@@ -76,6 +95,28 @@ function TerminalPane({
         <RoleIdentity role={role} compact />
         <span className="status-separator" aria-hidden="true" />
         <span>{endpointState ?? (loading ? "loading" : "unavailable")}</span>
+        <button
+          type="button"
+          className="terminal-pane-control"
+          aria-label={`${pinned ? "Unpin" : "Pin"} ${alias} terminal`}
+          aria-pressed={pinned}
+          onClick={onTogglePinned}
+        >
+          <Pin aria-hidden="true" size={12} />
+        </button>
+        <button
+          type="button"
+          className="terminal-pane-control"
+          aria-label={`${maximized ? "Restore" : "Maximize"} ${alias} terminal`}
+          aria-pressed={maximized}
+          onClick={onToggleMaximized}
+        >
+          {maximized ? (
+            <Minimize2 aria-hidden="true" size={12} />
+          ) : (
+            <Maximize2 aria-hidden="true" size={12} />
+          )}
+        </button>
         <div className="terminal-title-tools">
           <code
             className="terminal-member-id"
@@ -169,10 +210,30 @@ export function TerminalWorkspace({
           .sort((left, right) => right.generation - left.generation)[0],
     )
     .filter((run): run is AgentRun => run !== undefined);
-  const {
-    preferences: { terminalLayout: layout },
-    setTerminalLayout,
-  } = usePortalPreferences();
+  const groupId = availableRuns[0]?.groupId;
+  const { preferences, setTerminalLayout, updatePreferences } = usePortalPreferences();
+  const layout = preferences.terminalLayout;
+  const pinnedRunIds =
+    groupId === undefined ? [] : (preferences.pinnedRunIdsByGroup[groupId] ?? []);
+  const pinnedSet = new Set(pinnedRunIds);
+  const pinnedOrder = new Map(pinnedRunIds.map((runId, index) => [runId, index]));
+  const orderedRuns = availableRuns
+    .map((run, index) => ({ run, index }))
+    .sort(
+      (left, right) =>
+        Number(pinnedSet.has(right.run.id)) - Number(pinnedSet.has(left.run.id)) ||
+        (pinnedOrder.get(left.run.id) ?? Number.MAX_SAFE_INTEGER) -
+          (pinnedOrder.get(right.run.id) ?? Number.MAX_SAFE_INTEGER) ||
+        left.index - right.index,
+    )
+    .map(({ run }) => run);
+  const requestedMaximizedRunId =
+    groupId === undefined ? undefined : preferences.maximizedRunByGroup[groupId];
+  const maximizedRunId = availableRuns.some((run) => run.id === requestedMaximizedRunId)
+    ? requestedMaximizedRunId
+    : undefined;
+  const splitRatio =
+    groupId === undefined ? 50 : (preferences.terminalSplitRatioByGroup[groupId] ?? 50);
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const selectedCandidate = requestedActiveRunId ?? selectedRunId;
   const activeRunId = availableRuns.some((run) => run.id === selectedCandidate)
@@ -181,6 +242,28 @@ export function TerminalWorkspace({
   const selectRun = (runId: string) => {
     setSelectedRunId(runId);
     onSelectRun?.(runId);
+  };
+  const togglePinned = (runId: string) => {
+    if (groupId === undefined) return;
+    updatePreferences((current) => {
+      const existing = current.pinnedRunIdsByGroup[groupId] ?? [];
+      const next = existing.includes(runId)
+        ? existing.filter((candidate) => candidate !== runId)
+        : [...existing, runId];
+      return {
+        ...current,
+        pinnedRunIdsByGroup: { ...current.pinnedRunIdsByGroup, [groupId]: next },
+      };
+    });
+  };
+  const toggleMaximized = (runId: string) => {
+    if (groupId === undefined) return;
+    updatePreferences((current) => {
+      const maximizedRunByGroup = { ...current.maximizedRunByGroup };
+      if (maximizedRunByGroup[groupId] === runId) delete maximizedRunByGroup[groupId];
+      else maximizedRunByGroup[groupId] = runId;
+      return { ...current, maximizedRunByGroup };
+    });
   };
   const memberAlias = (run: AgentRun) =>
     members.find((member) => member.memberId === run.memberId)?.alias ?? run.memberId;
@@ -215,7 +298,7 @@ export function TerminalWorkspace({
     <div className="terminal-workspace">
       <div className="terminal-toolbar">
         <div className="terminal-tabs" role="tablist" aria-label="Agent terminals">
-          {availableRuns.map((run) => (
+          {orderedRuns.map((run) => (
             <div className="terminal-tab-item" role="presentation" key={run.id}>
               <button
                 type="button"
@@ -255,13 +338,42 @@ export function TerminalWorkspace({
             <Grid2X2 aria-hidden="true" size={16} />
           </button>
         </div>
+        {layout === "grid" && availableRuns.length > 1 && groupId !== undefined && (
+          <label className="terminal-split-control">
+            Split
+            <input
+              type="range"
+              aria-label="Terminal split ratio"
+              min="25"
+              max="75"
+              value={splitRatio}
+              onChange={(event) => {
+                const ratio = Number(event.target.value);
+                updatePreferences((current) => ({
+                  ...current,
+                  terminalSplitRatioByGroup: {
+                    ...current.terminalSplitRatioByGroup,
+                    [groupId]: ratio,
+                  },
+                }));
+              }}
+            />
+            <span>{splitRatio}%</span>
+          </label>
+        )}
       </div>
-      <div className={`terminal-layout terminal-layout-${layout}`}>
-        {availableRuns.map((run) => (
+      <div
+        className={`terminal-layout terminal-layout-${layout}${maximizedRunId === undefined ? "" : " terminal-layout-maximized"}`}
+        style={{ "--terminal-first-ratio": `${splitRatio}%` } as CSSProperties}
+      >
+        {orderedRuns.map((run) => (
           <div
             className="terminal-pane-slot"
             key={run.id}
-            hidden={layout === "tabs" && run.id !== activeRunId}
+            hidden={
+              (maximizedRunId !== undefined && run.id !== maximizedRunId) ||
+              (maximizedRunId === undefined && layout === "tabs" && run.id !== activeRunId)
+            }
           >
             <TerminalPane
               client={client}
@@ -273,6 +385,10 @@ export function TerminalWorkspace({
               connectionRevision={connectionRevision}
               suspended={suspended}
               theme={theme}
+              pinned={pinnedSet.has(run.id)}
+              maximized={maximizedRunId === run.id}
+              onTogglePinned={() => togglePinned(run.id)}
+              onToggleMaximized={() => toggleMaximized(run.id)}
             />
           </div>
         ))}

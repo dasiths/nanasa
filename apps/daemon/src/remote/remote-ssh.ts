@@ -4,7 +4,27 @@ import { resolve } from "node:path";
 import type { BuildIdentity, RemoteDescriptor } from "@nanasa/contracts";
 import { assertCompatibleRemote } from "./remote-descriptor.js";
 
-const SSH_TARGET = /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+$/;
+const SSH_USER = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,63})$/;
+const SSH_HOST = /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/;
+
+function assertSshTarget(value: string): void {
+  if (
+    value.startsWith("-") ||
+    [...value].some((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code <= 0x1f || code === 0x7f;
+    })
+  ) {
+    throw new Error("SSH target must not be an option or contain control characters");
+  }
+  const parts = value.split("@");
+  if (parts.length > 2) throw new Error("SSH target must be a host or user@host without options");
+  const host = parts.at(-1) ?? "";
+  const user = parts.length === 2 ? parts[0] : undefined;
+  if (!SSH_HOST.test(host) || host.includes("..") || (user !== undefined && !SSH_USER.test(user))) {
+    throw new Error("SSH target must be a host or user@host without options");
+  }
+}
 
 function shellQuote(value: string): string {
   if (value.includes("\0") || value.includes("\n") || value.includes("\r"))
@@ -22,8 +42,7 @@ export interface RemoteSshPlan {
 }
 
 export function buildRemoteSshPlan(target: string, repositoryPath: string): RemoteSshPlan {
-  if (!SSH_TARGET.test(target))
-    throw new Error("SSH target must be a host or user@host without options");
+  assertSshTarget(target);
   if (!repositoryPath.startsWith("/")) throw new Error("Remote repository path must be absolute");
   const repository = resolve(repositoryPath);
   const remoteCommand = `nanasa remote describe --repo ${shellQuote(repository)}`;
@@ -54,18 +73,31 @@ export function buildRemoteSshPlan(target: string, repositoryPath: string): Remo
       target,
       `nanasa service ${operation} --repo ${shellQuote(repository)}`,
     ],
-    tunnelArgs: (localPort, descriptor) => [
-      "-N",
-      "-o",
-      "ExitOnForwardFailure=yes",
-      "-o",
-      "ServerAliveInterval=15",
-      "-o",
-      "ServerAliveCountMax=3",
-      "-L",
-      `127.0.0.1:${localPort}:${descriptor.loopbackHost}:${descriptor.port}`,
-      target,
-    ],
+    tunnelArgs: (localPort, descriptor) => {
+      if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65_535) {
+        throw new Error("SSH local forwarding port is invalid");
+      }
+      if (
+        descriptor.loopbackHost !== "127.0.0.1" ||
+        !Number.isInteger(descriptor.port) ||
+        descriptor.port < 1 ||
+        descriptor.port > 65_535
+      ) {
+        throw new Error("SSH remote forwarding endpoint must be a valid IPv4 loopback port");
+      }
+      return [
+        "-N",
+        "-o",
+        "ExitOnForwardFailure=yes",
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=3",
+        "-L",
+        `127.0.0.1:${localPort}:${descriptor.loopbackHost}:${descriptor.port}`,
+        target,
+      ];
+    },
     reconnectCommand: `nanasa remote connect ${target} ${shellQuote(repository)}`,
   };
 }
@@ -188,8 +220,26 @@ export class RemoteSshSession {
     };
   }
 
-  public close(): void {
-    this.#tunnel?.kill("SIGTERM");
+  public async close(): Promise<void> {
+    const tunnel = this.#tunnel;
     this.#tunnel = undefined;
+    if (tunnel === undefined || tunnel.exitCode !== null || tunnel.signalCode !== null) return;
+    const exited = new Promise<void>((resolveExit) => tunnel.once("exit", () => resolveExit()));
+    tunnel.kill("SIGTERM");
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        exited,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("SSH tunnel did not close after SIGTERM")),
+            5_000,
+          );
+          timeout.unref();
+        }),
+      ]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
   }
 }

@@ -5,7 +5,7 @@
   "buildCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "releaseChannel": "next",
   "configVersion": 2,
-  "databaseSchemaVersion": 7,
+  "databaseSchemaVersion": 8,
   "repositoryId": "repo_fixture",
   "instanceId": "instance_fixture",
   "daemonEpoch": 1,

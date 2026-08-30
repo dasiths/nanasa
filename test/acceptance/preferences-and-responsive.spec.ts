@@ -25,12 +25,55 @@ test("theme and terminal layout persist and synchronize across tabs", async ({
     "true",
   );
 
+  await Promise.all([
+    page.getByRole("button", { name: "Pin One terminal" }).click(),
+    secondPage.getByRole("button", { name: "Pin Two terminal" }).click(),
+  ]);
+  await expect(page.getByRole("button", { name: "Unpin One terminal" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page.getByRole("button", { name: "Unpin Two terminal" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await Promise.all([
+    page.getByRole("slider", { name: "Terminal split ratio" }).fill("65"),
+    secondPage.getByRole("button", { name: "Maximize One terminal" }).click(),
+  ]);
+  await expect(page.getByRole("button", { name: "Unpin One terminal" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page.getByRole("button", { name: "Restore One terminal" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(
+    await page.evaluate(() => {
+      const stored = JSON.parse(localStorage.getItem("nanasa.portal.preferences.v2") ?? "{}") as {
+        pinnedRunIdsByGroup?: Record<string, string[]>;
+      };
+      return Object.values(stored.pinnedRunIdsByGroup ?? {})[0]?.length;
+    }),
+  ).toBe(2);
+  await expect(page.getByRole("slider", { name: "Terminal split ratio" })).toHaveValue("65");
+  await expect(secondPage.getByRole("button", { name: "Restore One terminal" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+
   await secondPage.reload();
   await expect(secondPage.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(secondPage.getByRole("button", { name: "Grid terminal layout" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
+  await expect(secondPage.getByRole("button", { name: "Unpin One terminal" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(secondPage.getByRole("slider", { name: "Terminal split ratio" })).toHaveValue("65");
 });
 
 test("desktop and mobile layouts remain usable without horizontal overflow", async ({

@@ -13,6 +13,7 @@ import type {
   ProviderOverlayContext,
   ProviderOverlayPlan,
 } from "./provider-adapter.js";
+import { freezeProviderSemanticClaims } from "./provider-adapter.js";
 import { freezeReporterDescriptor } from "./provider-reporter-descriptor.js";
 
 const READ_ONLY_SOURCE = `export default function (pi) {\n  const blocked = new Set(["bash", "edit", "write"]);\n  pi.on("tool_call", (event) => {\n    if (blocked.has(event.toolName)) return { block: true, reason: "The active Nanasa role is read-only", terminate: true };\n  });\n}\n`;
@@ -31,7 +32,7 @@ export class PiAdapter implements ProviderAdapter {
       turns: true,
       tools: true,
       waits: false,
-      effectiveModel: true,
+      effectiveModel: false,
       heartbeat: true,
     },
   });
@@ -42,6 +43,17 @@ export class PiAdapter implements ProviderAdapter {
     terminalSubmitSequence: "\r",
     waitReplyInput: closedTerminalWaitReplyInput,
   });
+  public readonly semantics = freezeProviderSemanticClaims(
+    {
+      reporterReadiness: true,
+      modelObservation: "desired-launch",
+      waitCoverage: false,
+      waitReplyChannels: [],
+      nativeResume: true,
+    },
+    this.reporter,
+    this.control,
+  );
   readonly #mcpAdapterPath: string;
 
   public constructor(mcpAdapterPath = fileURLToPath(import.meta.resolve("pi-mcp-adapter"))) {

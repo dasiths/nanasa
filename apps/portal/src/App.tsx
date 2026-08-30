@@ -29,6 +29,7 @@ import { useMessageReadCursors } from "./hooks/use-message-read-cursors.js";
 import { useAppliedTheme, usePortalPreferences } from "./hooks/use-portal-preferences.js";
 import { useDomainEvents, usePortalSnapshot } from "./hooks/use-portal-snapshot.js";
 import { memberStatusView } from "./member-status.js";
+import { playAttentionSound } from "./notification-sound.js";
 import { groupRoute, usePortalRouter } from "./router/portal-router.js";
 import { CommandPalette, type PortalCommand, useScopedShortcuts } from "./shell/command-palette.js";
 import { PortalShell } from "./shell/portal-shell.js";
@@ -164,6 +165,10 @@ export function App({ client = api }: AppProps) {
     const fresh = [...current].filter((id) => !previousAttention.current.has(id));
     previousAttention.current = current;
     if (fresh.length === 0 || document.visibilityState === "visible") return;
+    void playAttentionSound({
+      enabled: preferences.notifications.sound,
+      eventId: fresh.sort().join("|"),
+    });
     if (
       preferences.notifications.desktop &&
       "Notification" in window &&
@@ -179,7 +184,13 @@ export function App({ client = api }: AppProps) {
         notification.close();
       };
     }
-  }, [attentionStatuses, attentionSummary, navigate, preferences.notifications.desktop]);
+  }, [
+    attentionStatuses,
+    attentionSummary,
+    navigate,
+    preferences.notifications.desktop,
+    preferences.notifications.sound,
+  ]);
 
   const commands = useMemo<PortalCommand[]>(() => {
     const global: PortalCommand[] = [

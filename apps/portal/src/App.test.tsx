@@ -8,7 +8,7 @@ import type {
   PortalSnapshot,
   StartGroupRunsResult,
 } from "@nanasa/contracts";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -22,7 +22,10 @@ import {
   MessageWorkspace,
 } from "./components/message-workspace.js";
 import { MESSAGE_READ_CURSORS_KEY, messageUnreadCount } from "./hooks/use-message-read-cursors.js";
-import { PORTAL_PREFERENCES_KEY } from "./hooks/use-portal-preferences.js";
+import {
+  defaultPortalPreferences,
+  PORTAL_PREFERENCES_KEY,
+} from "./hooks/use-portal-preferences.js";
 
 vi.mock("./components/terminal-workspace.js", () => ({
   TerminalWorkspace: () => <div data-testid="terminal-surface">terminal-surface</div>,
@@ -390,6 +393,40 @@ function submissionResult(): MessageSubmissionResult {
   };
 }
 
+function attentionSnapshot(completionRevision: number): PortalSnapshot {
+  return {
+    ...snapshot,
+    agentStatuses: [
+      {
+        groupId: "group-backend",
+        memberId: "builder",
+        alias: "Builder",
+        agentType: "copilot",
+        runId: "run-builder",
+        generation: 1,
+        runStatus: "running",
+        state: "waiting",
+        phase: "question",
+        outcome: "unknown",
+        confidence: "high",
+        attention: "input_required",
+        observedAt: timestamp,
+        stateChangedAt: timestamp,
+        statusRevision: completionRevision + 1,
+        completionRevision,
+        operatorAcknowledgedCompletionRevision: 0,
+        completionPending: completionRevision > 0,
+        interactiveReady: true,
+        staleAuthority: false,
+        authorityKind: "reporter",
+        authorityId: "reporter-one",
+        evidenceConfidence: "high",
+        processState: "present",
+      },
+    ],
+  };
+}
+
 async function openMessageComposer(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByLabelText("Compose message"));
   return screen.getByRole("dialog", { name: "New message" });
@@ -412,7 +449,10 @@ describe("portal application", () => {
     window.localStorage.setItem(MESSAGE_OVERLAY_OPEN_KEY, "true");
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   it("refreshes the snapshot when a typed domain event arrives", async () => {
     const client = createClient();
@@ -443,6 +483,115 @@ describe("portal application", () => {
     );
 
     await waitFor(() => expect(client.loadSnapshot).toHaveBeenCalledTimes(2));
+  });
+
+  it("drives hidden-page attention sound through default-off, activation, and deduplication", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    let activated = true;
+    Object.defineProperty(navigator, "userActivation", {
+      configurable: true,
+      get: () => ({ hasBeenActive: activated }),
+    });
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (_name: string, _options: unknown, callback: () => boolean) =>
+          Promise.resolve(callback()),
+      },
+    });
+    const oscillator = {
+      type: "sine",
+      frequency: { value: 0 },
+      connect: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+      addEventListener: vi.fn(),
+    };
+    const audioContext = {
+      state: "running",
+      currentTime: 1,
+      destination: {},
+      createOscillator: vi.fn(() => oscillator),
+      createGain: vi.fn(() => ({
+        gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+        connect: vi.fn(),
+      })),
+      close: vi.fn(),
+    };
+    class TestAudioContext {
+      public constructor() {
+        return audioContext as never;
+      }
+    }
+    vi.stubGlobal("AudioContext", TestAudioContext);
+
+    const emitAttention = async (client: PortalClient, sequence: number) => {
+      const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
+      await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
+      await act(async () =>
+        socket!.onmessage!(
+          new MessageEvent("message", {
+            data: JSON.stringify({
+              type: "domain.event",
+              event: {
+                sequence,
+                id: `attention-${sequence}`,
+                type: "status.changed",
+                aggregateType: "run",
+                aggregateId: "run-builder",
+                occurredAt: timestamp,
+                payload: {},
+              },
+            }),
+          }),
+        ),
+      );
+    };
+
+    const defaultOff = createClient();
+    vi.mocked(defaultOff.loadSnapshot)
+      .mockResolvedValueOnce(snapshot)
+      .mockResolvedValue(attentionSnapshot(0));
+    render(<App client={defaultOff} />);
+    await screen.findByRole("heading", { name: "Backend" });
+    await emitAttention(defaultOff, 8);
+    await waitFor(() => expect(defaultOff.loadSnapshot).toHaveBeenCalledTimes(2));
+    expect(oscillator.start).not.toHaveBeenCalled();
+    cleanup();
+
+    window.localStorage.setItem(
+      PORTAL_PREFERENCES_KEY,
+      JSON.stringify({
+        ...defaultPortalPreferences,
+        notifications: { ...defaultPortalPreferences.notifications, sound: true },
+      }),
+    );
+    activated = false;
+    const enabled = createClient();
+    vi.mocked(enabled.loadSnapshot)
+      .mockResolvedValueOnce(snapshot)
+      .mockResolvedValueOnce(attentionSnapshot(0))
+      .mockResolvedValue(attentionSnapshot(1));
+    render(<App client={enabled} />);
+    await screen.findByRole("heading", { name: "Backend" });
+    await emitAttention(enabled, 8);
+    await waitFor(() => expect(enabled.loadSnapshot).toHaveBeenCalledTimes(2));
+    expect(oscillator.start).not.toHaveBeenCalled();
+
+    activated = true;
+    await emitAttention(enabled, 9);
+    await waitFor(() => expect(oscillator.start).toHaveBeenCalledTimes(1));
+    await emitAttention(enabled, 10);
+    await waitFor(() => expect(enabled.loadSnapshot).toHaveBeenCalledTimes(4));
+    expect(oscillator.start).toHaveBeenCalledTimes(1);
+    cleanup();
+
+    const remounted = createClient();
+    vi.mocked(remounted.loadSnapshot).mockResolvedValue(attentionSnapshot(1));
+    render(<App client={remounted} />);
+    await screen.findByRole("heading", { name: "Backend" });
+    await waitFor(() => expect(remounted.createEventsSocket).toHaveBeenCalled());
+    expect(oscillator.start).toHaveBeenCalledTimes(1);
   });
 
   it("coalesces an event burst into one in-flight snapshot and one trailing invalidation", async () => {

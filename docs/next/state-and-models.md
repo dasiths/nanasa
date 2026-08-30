@@ -7,7 +7,7 @@ ms.topic: concept
 
 ## Durable state
 
-Configuration version 2 stores desired topology and policy. SQLite schema 7 stores stable identities, runs, observations, reporters, status revisions, messages, deliveries, actions, waits, Git identities, extensions, events, audits, and retention metadata.
+Configuration version 2 stores desired topology and policy. SQLite schema 8 stores stable identities, runs, observations, reporters, status revisions, messages, deliveries, actions, waits, Git identities, extensions, checkpoint content identities, HTTP idempotency replays, events, audits, and retention metadata.
 
 Credentials, raw terminal streams, browser grids, clipboard content, and unrestricted provider transcripts are not durable control-plane state.
 

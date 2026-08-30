@@ -21,10 +21,12 @@ import {
   AgentStatusEventInputSchema,
   type AgentStatusSummary,
   AgentStatusSummarySchema,
-  type CompletionAcknowledgement,
-  CompletionAcknowledgementSchema,
+  type Checkout,
+  CheckoutSchema,
   type ClearMessageHistoryResult,
   ClearMessageHistoryResultSchema,
+  type CompletionAcknowledgement,
+  CompletionAcknowledgementSchema,
   type ConfigStatus,
   type CreateGroupCommand,
   CreateGroupCommandSchema,
@@ -34,30 +36,24 @@ import {
   type DeliveryOutcome,
   DeliveryOutcomeSchema,
   type DeliveryStatus,
-  type DurableNativeSession,
-  DurableNativeSessionSchema,
   type DomainEvent,
   DomainEventSchema,
+  type DurableNativeSession,
+  DurableNativeSessionSchema,
+  type GitOperation,
+  GitOperationSchema,
   type Group,
   type GroupMembership,
   GroupMembershipSchema,
   type GroupMessageState,
   GroupMessageStateSchema,
   GroupSchema,
-  type Checkout,
-  CheckoutSchema,
-  type GitOperation,
-  GitOperationSchema,
-  type Repository,
-  RepositorySchema,
-  type Worktree,
-  WorktreeSchema,
   type InternalCreateAgentProfileCommand,
   InternalCreateAgentProfileCommandSchema,
-  MAX_MESSAGE_PAGE_SIZE,
   MAX_AUTOMATED_REPLIES_PER_CONVERSATION,
   MAX_MESSAGE_CAUSAL_DEPTH,
   MAX_MESSAGE_FAN_OUT,
+  MAX_MESSAGE_PAGE_SIZE,
   type Message,
   type MessagePage,
   MessagePageSchema,
@@ -69,13 +65,17 @@ import {
   OpenWaitSchema,
   type PortalSnapshot,
   PortalSnapshotSchema,
-  type RecoveryPhase,
   type ProviderStateBinding,
   ProviderStateBindingSchema,
   REPORTER_LEASE_MS,
+  type RecoveryPhase,
   type ReporterSession,
   ReporterSessionSchema,
+  type Repository,
+  RepositorySchema,
   type RunStatus,
+  type ScreenObservation,
+  ScreenObservationSchema,
   type StartGroupRunsResult,
   StartGroupRunsResultSchema,
   type SubmitMessageCommand,
@@ -83,13 +83,11 @@ import {
   type TerminalBinding,
   type TerminalCheckpoint,
   TerminalCheckpointSchema,
-  type ScreenObservation,
-  ScreenObservationSchema,
   type UpdateGroupCommand,
   UpdateGroupCommandSchema,
+  type Worktree,
+  WorktreeSchema,
 } from "@nanasa/contracts";
-import type { RepositoryTrustReceipt } from "./repository-trust-service.js";
-
 import {
   type AgentStatusReducerState,
   createAgentStatusReducerState,
@@ -99,6 +97,7 @@ import {
 import { dockerMemberName, formatMemberId, type MemberNameGenerator } from "./member-id.js";
 import { orderedAgentEntries } from "./membership-order.js";
 import { openNanasaDatabase } from "./persistence/database.js";
+import type { RepositoryTrustReceipt } from "./repository-trust-service.js";
 
 interface AddMembershipInput {
   memberId?: string;
@@ -120,6 +119,14 @@ interface CommandResult<T> {
   result: T;
   event: DomainEvent;
 }
+
+export type HttpIdempotencyClaim =
+  | { kind: "execute" }
+  | { kind: "replay"; statusCode: number; response: unknown };
+
+export type HttpIdempotencyExecution =
+  | { kind: "executed"; statusCode: number; response: unknown }
+  | { kind: "replay"; statusCode: number; response: unknown };
 
 interface EventRow {
   sequence: number;
@@ -494,6 +501,8 @@ export class NanasaStore {
   #configStatus: ConfigStatus | undefined;
   #messageRetentionPerGroup: number;
   readonly #memberNameGenerator: MemberNameGenerator;
+  #transactionDepth = 0;
+  readonly #pendingEvents: DomainEvent[] = [];
 
   public constructor(path: string, options: NanasaStoreOptions = {}) {
     this.#database = openNanasaDatabase(path);
@@ -3599,8 +3608,8 @@ export class NanasaStore {
         `INSERT INTO terminal_checkpoints
            (id, owner_principal_id, run_id, generation, terminal_binding_json, captured_at,
             line_count, byte_count, truncated, sensitivity_policy, storage_reference,
-            expires_at, deleted_at, deletion_audit_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+            content_digest, expires_at, deleted_at, deletion_audit_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
       )
       .run(
         value.id,
@@ -3614,6 +3623,7 @@ export class NanasaStore {
         value.truncated ? 1 : 0,
         value.sensitivity,
         value.storageReference,
+        value.contentDigest,
         value.expiresAt,
       );
     return value;
@@ -3640,6 +3650,7 @@ export class NanasaStore {
         truncated: row.truncated === 1,
         sensitivity: row.sensitivity_policy,
         storageReference: row.storage_reference,
+        contentDigest: row.content_digest,
         expiresAt: row.expires_at,
       }),
     );
@@ -3658,31 +3669,55 @@ export class NanasaStore {
   }
 
   public deleteTerminalCheckpoint(ownerPrincipalId: string, checkpointId: string): boolean {
+    return this.#finalizeTerminalCheckpointDeletion(ownerPrincipalId, checkpointId, false);
+  }
+
+  public reconcileDestroyedTerminalCheckpoint(
+    ownerPrincipalId: string,
+    checkpointId: string,
+  ): boolean {
+    return this.#finalizeTerminalCheckpointDeletion(ownerPrincipalId, checkpointId, true);
+  }
+
+  #finalizeTerminalCheckpointDeletion(
+    ownerPrincipalId: string,
+    checkpointId: string,
+    reconciled: boolean,
+  ): boolean {
     const occurredAt = new Date().toISOString();
     return this.#transaction(() => {
       const checkpoint = this.#database
         .prepare(
-          `SELECT id FROM terminal_checkpoints
-           WHERE id = ? AND owner_principal_id = ? AND deleted_at IS NULL`,
+          `SELECT id, deleted_at FROM terminal_checkpoints
+           WHERE id = ? AND owner_principal_id = ?`,
         )
-        .get(checkpointId, ownerPrincipalId);
+        .get(checkpointId, ownerPrincipalId) as
+        | { id: string; deleted_at: string | null }
+        | undefined;
       if (checkpoint === undefined) return false;
+      if (checkpoint.deleted_at !== null) return reconciled;
       const auditId = `audit_${randomUUID()}`;
       this.#database
         .prepare(
           `INSERT INTO audits
              (id, principal_id, action, resource_type, resource_id, metadata_json, occurred_at)
-           VALUES (?, ?, 'terminal-checkpoint.delete', 'terminal-checkpoint', ?, '{}', ?)`,
+           VALUES (?, ?, 'terminal-checkpoint.delete', 'terminal-checkpoint', ?, ?, ?)`,
         )
-        .run(auditId, ownerPrincipalId, checkpointId, occurredAt);
-      this.#database
+        .run(
+          auditId,
+          ownerPrincipalId,
+          checkpointId,
+          JSON.stringify({ contentDestroyed: true, reconciled }),
+          occurredAt,
+        );
+      const updated = this.#database
         .prepare(
           `UPDATE terminal_checkpoints
            SET deleted_at = ?, deletion_audit_id = ?
-           WHERE id = ? AND owner_principal_id = ?`,
+           WHERE id = ? AND owner_principal_id = ? AND deleted_at IS NULL`,
         )
         .run(occurredAt, auditId, checkpointId, ownerPrincipalId);
-      return true;
+      return updated.changes === 1;
     });
   }
 
@@ -3697,6 +3732,151 @@ export class NanasaStore {
     );
     this.#publish(event);
     return event;
+  }
+
+  public claimHttpIdempotency(input: {
+    principalId: string;
+    routeId: string;
+    key: string;
+    requestDigest: string;
+    now?: Date;
+    inProgressTtlMs?: number;
+  }): HttpIdempotencyClaim {
+    const now = input.now ?? new Date();
+    const nowText = now.toISOString();
+    return this.#transaction(() => {
+      this.#database
+        .prepare(
+          `DELETE FROM http_idempotency_keys
+           WHERE state = 'completed' AND expires_at <= ?`,
+        )
+        .run(nowText);
+      const existing = this.#database
+        .prepare(
+          `SELECT request_digest, response_json, state, status_code
+           FROM http_idempotency_keys
+           WHERE principal_id = ? AND route_id = ? AND key = ?`,
+        )
+        .get(input.principalId, input.routeId, input.key) as
+        | {
+            request_digest: string | null;
+            response_json: string;
+            state: "in-progress" | "completed";
+            status_code: number | null;
+          }
+        | undefined;
+      if (existing !== undefined) {
+        if (existing.request_digest !== input.requestDigest) {
+          throw new DomainError(
+            "idempotency_request_conflict",
+            "The idempotency key was already used for different request content",
+            409,
+          );
+        }
+        if (existing.state === "in-progress") {
+          throw new DomainError(
+            "idempotency_outcome_uncertain",
+            "The prior request outcome is uncertain and requires domain reconciliation",
+            409,
+          );
+        }
+        if (existing.status_code === null) {
+          throw new DomainError(
+            "idempotency_result_invalid",
+            "The retained idempotency result is incomplete",
+            500,
+          );
+        }
+        return {
+          kind: "replay",
+          statusCode: existing.status_code,
+          response: JSON.parse(existing.response_json),
+        };
+      }
+      this.#database
+        .prepare(
+          `INSERT INTO http_idempotency_keys
+             (principal_id, route_id, key, request_digest, state, status_code,
+              response_json, created_at, updated_at, expires_at)
+           VALUES (?, ?, ?, ?, 'in-progress', NULL, 'null', ?, ?, ?)`,
+        )
+        .run(
+          input.principalId,
+          input.routeId,
+          input.key,
+          input.requestDigest,
+          nowText,
+          nowText,
+          new Date(now.getTime() + (input.inProgressTtlMs ?? 5 * 60_000)).toISOString(),
+        );
+      return { kind: "execute" };
+    });
+  }
+
+  public completeHttpIdempotency(input: {
+    principalId: string;
+    routeId: string;
+    key: string;
+    requestDigest: string;
+    statusCode: number;
+    response: unknown;
+    now?: Date;
+    retentionMs?: number;
+  }): void {
+    if (input.statusCode < 200 || input.statusCode >= 500) {
+      throw new Error("Only completed responses and deterministic 4xx outcomes may be retained");
+    }
+    const now = input.now ?? new Date();
+    const result = this.#database
+      .prepare(
+        `UPDATE http_idempotency_keys
+         SET response_json = ?, state = 'completed', status_code = ?, updated_at = ?, expires_at = ?
+         WHERE principal_id = ? AND route_id = ? AND key = ?
+           AND request_digest = ? AND state = 'in-progress'`,
+      )
+      .run(
+        JSON.stringify(input.response ?? null),
+        input.statusCode,
+        now.toISOString(),
+        new Date(now.getTime() + (input.retentionMs ?? 24 * 60 * 60_000)).toISOString(),
+        input.principalId,
+        input.routeId,
+        input.key,
+        input.requestDigest,
+      );
+    if (result.changes !== 1) {
+      throw new DomainError(
+        "idempotency_completion_conflict",
+        "The in-progress idempotency reservation was lost",
+        409,
+      );
+    }
+  }
+
+  public executeHttpIdempotency(
+    input: {
+      principalId: string;
+      routeId: string;
+      key: string;
+      requestDigest: string;
+    },
+    operation: () => { statusCode: number; response: unknown },
+  ): HttpIdempotencyExecution {
+    return this.#transaction(() => {
+      const claim = this.claimHttpIdempotency(input);
+      if (claim.kind === "replay") return claim;
+      const outcome = operation();
+      if (
+        outcome !== null &&
+        typeof outcome === "object" &&
+        "then" in outcome &&
+        typeof (outcome as { then?: unknown }).then === "function"
+      ) {
+        throw new Error("Transactional HTTP idempotency handlers must be synchronous");
+      }
+      this.completeHttpIdempotency({ ...input, ...outcome });
+      return { kind: "executed", ...outcome };
+    });
   }
 
   public upsertProviderState(binding: ProviderStateBinding): ProviderStateBinding {
@@ -4724,6 +4904,10 @@ export class NanasaStore {
   }
 
   #publish(event: DomainEvent): void {
+    if (this.#transactionDepth > 0) {
+      this.#pendingEvents.push(event);
+      return;
+    }
     for (const listener of this.#listeners) {
       listener(event);
     }
@@ -5150,13 +5334,19 @@ export class NanasaStore {
   }
 
   #transaction<T>(operation: () => T): T {
+    if (this.#transactionDepth > 0) return operation();
     this.#database.exec("BEGIN IMMEDIATE");
+    this.#transactionDepth = 1;
     try {
       const result = operation();
       this.#database.exec("COMMIT");
+      this.#transactionDepth = 0;
+      for (const event of this.#pendingEvents.splice(0)) this.#publish(event);
       return result;
     } catch (error) {
       this.#database.exec("ROLLBACK");
+      this.#transactionDepth = 0;
+      this.#pendingEvents.splice(0);
       throw error;
     }
   }

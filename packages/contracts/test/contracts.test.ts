@@ -450,6 +450,7 @@ describe("terminal checkpoint contracts", () => {
       truncated: false,
       sensitivity: "repository-private",
       storageReference: ".nanasa/state/checkpoints/checkpoint_1.enc",
+      contentDigest: "a".repeat(64),
       expiresAt: "2026-08-30T12:00:00Z",
     });
     expect(checkpoint.ownerPrincipalId).toBe("operator_1");

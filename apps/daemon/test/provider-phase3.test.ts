@@ -76,6 +76,7 @@ describe("closed provider adapter interfaces", () => {
       expect(Object.isFrozen(adapter.reporter)).toBe(true);
       expect(Object.isFrozen(adapter.reporter.coverage)).toBe(true);
       expect(Object.isFrozen(adapter.control)).toBe(true);
+      expect(Object.isFrozen(adapter.semantics)).toBe(true);
       const reference = adapter.normalizeNativeSession(
         { source: adapter.reporter.source, referenceKind: "id", referenceValue: "session-123" },
         "/state",
@@ -90,6 +91,46 @@ describe("closed provider adapter interfaces", () => {
       );
       expect(Object.isFrozen(argv)).toBe(true);
     }
+  });
+
+  it("declares reachable certification claims for every built-in provider", () => {
+    const claims = Object.fromEntries(
+      ProviderAdapterRegistry.builtIn({ piMcpAdapterPath: "/runtime/pi-mcp.mjs" })
+        .list()
+        .map((adapter) => [adapter.id, adapter.semantics]),
+    );
+    expect(claims).toEqual({
+      copilot: {
+        reporterReadiness: true,
+        modelObservation: "desired-launch",
+        waitCoverage: true,
+        waitReplyChannels: ["terminal"],
+        nativeResume: true,
+      },
+      "claude-code": {
+        reporterReadiness: true,
+        modelObservation: "desired-launch",
+        waitCoverage: true,
+        waitReplyChannels: ["terminal"],
+        nativeResume: true,
+      },
+      pi: {
+        reporterReadiness: true,
+        modelObservation: "desired-launch",
+        waitCoverage: false,
+        waitReplyChannels: [],
+        nativeResume: true,
+      },
+      opencode: {
+        reporterReadiness: true,
+        modelObservation: "desired-launch",
+        waitCoverage: true,
+        waitReplyChannels: ["terminal"],
+        nativeResume: true,
+      },
+    });
+    expect(claims.pi.waitCoverage).toBe(false);
+    expect(claims.pi.waitReplyChannels).toEqual([]);
   });
 
   it("validates Pi paths inside state and rejects external or malformed references", () => {

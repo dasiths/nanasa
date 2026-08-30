@@ -48,11 +48,11 @@ export class TopologyResource {
     return request(this.client, path("groups", groupId), GroupSchema);
   }
 
-  public createGroup(command: CreateGroupCommand, key: string): Promise<Group> {
+  public createGroup(command: CreateGroupCommand, key?: string): Promise<Group> {
     return request(this.client, path("groups"), GroupSchema, commandInit("POST", command, key));
   }
 
-  public updateGroup(groupId: string, command: UpdateGroupCommand, key: string): Promise<Group> {
+  public updateGroup(groupId: string, command: UpdateGroupCommand, key?: string): Promise<Group> {
     return request(
       this.client,
       path("groups", groupId),
@@ -61,7 +61,7 @@ export class TopologyResource {
     );
   }
 
-  public deleteGroup(groupId: string, key: string): Promise<unknown> {
+  public deleteGroup(groupId: string, key?: string): Promise<unknown> {
     return this.client.request(
       path("groups", groupId),
       { parse: (value) => value },
@@ -71,7 +71,7 @@ export class TopologyResource {
     );
   }
 
-  public reorderGroups(command: ReorderGroupsCommand, key: string): Promise<ReorderGroupsResult> {
+  public reorderGroups(command: ReorderGroupsCommand, key?: string): Promise<ReorderGroupsResult> {
     return request(
       this.client,
       path("group-order"),
@@ -91,7 +91,7 @@ export class TopologyResource {
   public createAgent(
     groupId: string,
     command: CreateGroupAgentCommand,
-    key: string,
+    key?: string,
   ): Promise<GroupMembership> {
     return request(
       this.client,
@@ -105,7 +105,7 @@ export class TopologyResource {
     groupId: string,
     agentId: string,
     command: UpdateGroupAgentCommand,
-    key: string,
+    key?: string,
   ): Promise<GroupMembership> {
     return request(
       this.client,
@@ -118,7 +118,7 @@ export class TopologyResource {
   public deleteAgent(
     groupId: string,
     agentId: string,
-    key: string,
+    key?: string,
   ): Promise<RemoveGroupAgentResult> {
     return request(
       this.client,
@@ -131,7 +131,7 @@ export class TopologyResource {
   public reorderAgents(
     groupId: string,
     command: ReorderGroupAgentsCommand,
-    key: string,
+    key?: string,
   ): Promise<ReorderGroupAgentsResult> {
     return request(
       this.client,
@@ -145,7 +145,7 @@ export class TopologyResource {
     groupId: string,
     agentId: string,
     command: ReparentGroupAgentCommand,
-    key: string,
+    key?: string,
   ): Promise<ReparentGroupAgentResult> {
     return request(
       this.client,
@@ -159,7 +159,7 @@ export class TopologyResource {
     groupId: string,
     agentId: string,
     command: AssignAgentCheckoutCommand,
-    key: string,
+    key?: string,
   ): Promise<void> {
     return this.client.requestVoid(
       path("groups", groupId, "agents", agentId, "checkout"),
@@ -178,7 +178,7 @@ export class TopologyResource {
   public updateRolePresentation(
     roleId: string,
     command: UpdateRolePresentationCommand,
-    key: string,
+    key?: string,
   ): Promise<RoleDefinition> {
     return request(
       this.client,
