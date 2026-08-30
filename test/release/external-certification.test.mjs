@@ -75,7 +75,9 @@ test("external certification uses closed semantic profiles and real environment 
 
 test("workflows preserve registry authority and release installs runtime prerequisites", () => {
   const registryScript = resolve(root, "scripts", "ci-registry-env.sh");
+  const setupScript = resolve(root, "scripts", "setup-pnpm.sh");
   const registry = readFileSync(registryScript, "utf8");
+  const setup = readFileSync(setupScript, "utf8");
   const workflowSources = ["ci.yml", "certification.yml", "release.yml"].map((name) =>
     readFileSync(resolve(root, ".github", "workflows", name), "utf8"),
   );
@@ -84,7 +86,11 @@ test("workflows preserve registry authority and release installs runtime prerequ
   assert.match(registry, /elif \[\[ -n "\$\{NPM_CONFIG_REGISTRY:-\}"/);
   assert.match(registry, /NANASA_ALLOW_PUBLIC_REGISTRY_FALLBACK/);
   assert.match(registry, /GITHUB_ENV/);
+  assert.match(setup, /source "\$\{SCRIPT_DIRECTORY\}\/ci-registry-env\.sh"/);
+  assert.match(setup, /pnpm@\$\{PNPM_VERSION\}/);
+  assert.match(setup, /--ignore-scripts/);
   assert.doesNotMatch(workflowSources.join("\n"), /source \.devcontainer\/\.env\.example/);
+  assert.doesNotMatch(workflowSources.join("\n"), /corepack prepare/);
   const releaseSteps = release.jobs["exact-commit-release"].steps;
   assert.ok(
     releaseSteps.some((step) => String(step.run ?? "").includes("apt-get install -y tmux")),
@@ -104,11 +110,12 @@ test("workflows preserve registry authority and release installs runtime prerequ
       }
       const setupIndex = job.steps.findIndex((step) => step.uses === "actions/setup-node@v4");
       const pnpmIndex = job.steps.findIndex((step) =>
-        String(step.run ?? "").includes("corepack prepare pnpm@10.34.5 --activate"),
+        String(step.run ?? "").includes("bash scripts/setup-pnpm.sh"),
       );
       const cacheIndex = job.steps.findIndex((step) => step.uses === "actions/cache@v4");
       assert.ok(setupIndex >= 0 && pnpmIndex > setupIndex && cacheIndex > pnpmIndex);
       assert.equal(job.steps[setupIndex].with.cache, undefined);
+      assert.match(String(job.steps[cacheIndex].with.key), /hashFiles\('pnpm-lock\.yaml'\)/);
     }
   }
 

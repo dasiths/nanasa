@@ -32,7 +32,8 @@ jobs:
         with:
           node-version: 22
       - name: Configure registry and pinned pnpm
-        run: source scripts/ci-registry-env.sh && corepack prepare pnpm@10.34.5 --activate
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
       - uses: actions/cache@v4
         with:
           path: ~/.local/share/pnpm/store
@@ -70,7 +71,8 @@ jobs:
         with:
           node-version: 22
       - name: Configure registry and pinned pnpm
-        run: source scripts/ci-registry-env.sh && corepack prepare pnpm@10.34.5 --activate
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
       - uses: actions/cache@v4
         with:
           path: ~/.local/share/pnpm/store
@@ -107,7 +109,8 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - name: Configure registry and pinned pnpm
-        run: source scripts/ci-registry-env.sh && corepack prepare pnpm@10.34.5 --activate
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
       - uses: actions/cache@v4
         with:
           path: ~/.local/share/pnpm/store
@@ -135,7 +138,8 @@ jobs:
         with:
           node-version: 22
       - name: Configure registry and pinned pnpm
-        run: source scripts/ci-registry-env.sh && corepack prepare pnpm@10.34.5 --activate
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
       - uses: actions/cache@v4
         with:
           path: ~/.local/share/pnpm/store
@@ -170,7 +174,8 @@ jobs:
         with:
           node-version: 22
       - name: Configure registry and pinned pnpm
-        run: source scripts/ci-registry-env.sh && corepack prepare pnpm@10.34.5 --activate
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
       - uses: actions/cache@v4
         with:
           path: ~/.local/share/pnpm/store
@@ -196,7 +201,8 @@ jobs:
         with:
           node-version: 22
       - name: Configure registry and pinned pnpm
-        run: source scripts/ci-registry-env.sh && corepack prepare pnpm@10.34.5 --activate
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
       - uses: actions/cache@v4
         with:
           path: ~/.local/share/pnpm/store
@@ -223,7 +229,8 @@ jobs:
         with:
           node-version: 22
       - name: Configure registry and pinned pnpm
-        run: source scripts/ci-registry-env.sh && corepack prepare pnpm@10.34.5 --activate
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
       - uses: actions/cache@v4
         with:
           path: ~/.local/share/pnpm/store
