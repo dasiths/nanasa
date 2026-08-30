@@ -770,6 +770,108 @@ describe("portal static assets", () => {
     await daemon.app.close();
   });
 
+  it("serves complete declarative extension lifecycle and generated references", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const catalog = await daemon.app.inject({ method: "GET", url: "/api/v1/extensions" });
+    expect(catalog.statusCode).toBe(200);
+    expect(catalog.json()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          descriptor: expect.objectContaining({
+            metadata: expect.objectContaining({ id: "nanasa.copilot" }),
+          }),
+          installed: true,
+          enabled: true,
+        }),
+      ]),
+    );
+    const inspect = await daemon.app.inject({
+      method: "GET",
+      url: "/api/v1/extensions/nanasa.copilot",
+    });
+    expect(inspect.statusCode).toBe(200);
+    const details = inspect.json<{
+      plan: {
+        planDigest: string;
+        configRevision: string;
+        lockRevision: number;
+        requiresStoppedRuns: boolean;
+      };
+    }>();
+    expect(details.plan).toMatchObject({ requiresStoppedRuns: false });
+    expect(
+      (
+        await daemon.app.inject({
+          method: "GET",
+          url: "/api/v1/extensions/nanasa.copilot/health",
+        })
+      ).json(),
+    ).toMatchObject({ extensionId: "nanasa.copilot", state: "current" });
+    const reference = (
+      await daemon.app.inject({ method: "GET", url: "/api/v1/schema/extensions.json" })
+    ).json<{ strategies: { adapter: string[] }; permissions: string[]; descriptors: unknown[] }>();
+    expect(reference.strategies.adapter).toContain("copilot-adapter-v1");
+    expect(reference.permissions).toContain("runtime:launch-provider");
+    expect(reference.descriptors).toHaveLength(4);
+
+    const trust = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/extensions/nanasa.copilot/trust",
+      payload: {
+        planDigest: details.plan.planDigest,
+        configRevision: details.plan.configRevision,
+      },
+    });
+    expect(trust.statusCode).toBe(200);
+    expect(trust.json()).not.toHaveProperty("token");
+    const disabled = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/extensions/nanasa.copilot/disable",
+      headers: { "idempotency-key": "extension-disable" },
+      payload: { expectedLockRevision: details.plan.lockRevision },
+    });
+    expect(disabled.statusCode).toBe(200);
+    expect(disabled.json()).toMatchObject({ catalog: { health: { state: "disabled" } } });
+    const afterDisable = disabled.json<{ plan: { lockRevision: number } }>();
+    const repairPlan = (
+      await daemon.app.inject({
+        method: "GET",
+        url: "/api/v1/extensions/nanasa.copilot/plan",
+      })
+    ).json<{ planDigest: string; configRevision: string; lockRevision: number }>();
+    const repairTrust = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/extensions/nanasa.copilot/trust",
+      payload: {
+        planDigest: repairPlan.planDigest,
+        configRevision: repairPlan.configRevision,
+      },
+    });
+    expect(repairTrust.statusCode).toBe(200);
+    const repaired = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/extensions/nanasa.copilot/repair",
+      headers: { "idempotency-key": "extension-repair" },
+      payload: {
+        planDigest: repairPlan.planDigest,
+        configRevision: repairPlan.configRevision,
+        expectedLockRevision: afterDisable.plan.lockRevision,
+      },
+    });
+    expect(repaired.statusCode).toBe(200);
+    const remove = await daemon.app.inject({
+      method: "DELETE",
+      url: "/api/v1/extensions/nanasa.copilot",
+      headers: { "idempotency-key": "extension-remove" },
+      payload: {
+        expectedLockRevision: repaired.json<{ plan: { lockRevision: number } }>().plan.lockRevision,
+      },
+    });
+    expect(remove.statusCode).toBe(409);
+    expect(remove.json()).toMatchObject({ code: "extension_referenced" });
+    await daemon.app.close();
+  });
+
   it("requires a portal asset path when static serving is enabled", async () => {
     await expect(createDaemon({ dataPath: ":memory:", servePortal: true })).rejects.toThrow(
       "portalAssetsPath is required",

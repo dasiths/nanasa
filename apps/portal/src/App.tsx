@@ -622,7 +622,31 @@ export function App({ client = api }: AppProps) {
         </section>
       )}
       <div className="workspace-body">
-        {selectedGroup === undefined ? (
+        {route.kind === "global" ? (
+          <div className="unified-workspace">
+            <Suspense
+              fallback={
+                <div className="loading-state" role="status">
+                  Loading route...
+                </div>
+              }
+            >
+              <PortalRoutePanel
+                route={route}
+                snapshot={snapshot}
+                config={config}
+                members={members}
+                client={client}
+                preferences={preferences}
+                commands={commands}
+                onNavigate={navigate}
+                onOpenCheckouts={() => setCheckoutsOpen(true)}
+                onRefresh={refresh}
+                onPatchPreferences={patchPreferences}
+              />
+            </Suspense>
+          </div>
+        ) : selectedGroup === undefined ? (
           <div className="empty-state workspace-empty">
             <h2>Create a group to begin</h2>
             <p>Groups contain agents, active runs, terminals, and routed messages.</p>

@@ -99,3 +99,22 @@ test("portal has no serious or critical a11y findings at 200 percent zoom", asyn
   await page.getByLabel("Contrast").selectOption("forced");
   await expectNoHighImpactViolations(page);
 });
+
+test("provider extension catalog previews permissions and runs trusted lifecycle workflows", async ({
+  page,
+  nanasa,
+}) => {
+  await page.goto(deepLink(nanasa, "/extensions"));
+  await expect(page.getByRole("heading", { name: "Provider catalog" })).toBeVisible();
+  await page.getByRole("button", { name: /OpenCode/ }).click();
+  await expect(page.getByRole("heading", { name: "Permission preview" })).toBeVisible();
+  await expect(page.getByText("runtime:launch-provider")).toBeVisible();
+  await expect(page.getByText(/environment names/)).toBeVisible();
+  await page.getByRole("button", { name: /Trust exact plan/ }).click();
+  await page.getByRole("button", { name: "Disable" }).click();
+  await expect(page.getByText("disabled", { exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: /Trust exact plan/ }).click();
+  await page.getByRole("button", { name: /Repair owned state/ }).click();
+  await expect(page.getByText("current", { exact: true }).first()).toBeVisible();
+  await expectNoHighImpactViolations(page);
+});

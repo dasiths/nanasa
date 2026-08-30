@@ -51,6 +51,7 @@ export interface AgentRuntimeProvisionerOptions {
   credentialBroker?: UserCredentialBroker;
   trustService?: RepositoryTrustService;
   enforceRepositoryTrust?: boolean;
+  assertProviderExtension?: (kind: AgentProfile["kind"]) => void;
   promptResolver?: (membership: GroupMembership, profile: AgentProfile) => EffectiveAgentPrompt;
   desiredModelResolver?: (membership: GroupMembership, profile: AgentProfile) => string | undefined;
 }
@@ -76,6 +77,7 @@ export class AgentRuntimeProvisioner {
     const policy = this.#options.integrations[profile.agentType];
     if (policy === undefined)
       throw new Error(`Provider integration policy is missing for ${profile.agentType}`);
+    this.#options.assertProviderExtension?.(profile.kind);
     const adapter = this.#adapters.get(profile.kind);
     const configuredCommand = Object.freeze([profile.command, ...profile.args]);
     const acceptsProviderArguments = adapter.recognizeCommand(configuredCommand);

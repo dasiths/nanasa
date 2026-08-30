@@ -6,9 +6,9 @@ import {
   DesiredModelPolicySchema,
   IntegrationIdSchema,
   NativeRecoveryPolicySchema,
-  ProviderExtensionManifestSchema,
   ProviderStatePolicySchema,
 } from "./provider-v1.js";
+import { ExtensionIdSchema, SemanticVersionSchema } from "./extensions-v1.js";
 
 export const CONFIG_VERSION = 2 as const;
 export const DEFAULT_MESSAGE_RETENTION_PER_GROUP = 1_000;
@@ -94,11 +94,15 @@ export const IntegrationConfigSchema = z
       mode: "resume-or-restart",
       confirmationTimeoutSeconds: 30,
     }),
-    extensions: z.array(IntegrationIdSchema).max(32).default([]),
+    extensions: z.array(ExtensionIdSchema).max(32).default([]),
     environment: EnvironmentSchema.default({}),
   })
   .strict();
 export type IntegrationConfig = z.infer<typeof IntegrationConfigSchema>;
+
+export const ConfiguredProviderExtensionSchema = z
+  .object({ version: SemanticVersionSchema })
+  .strict();
 
 export const ConfiguredAgentSchema = z
   .object({
@@ -181,7 +185,7 @@ export const NanasaConfigSchema = z
     }),
     instructions: z.array(InstructionPathSchema).max(32).default([]),
     integrations: z.record(IntegrationIdSchema, IntegrationConfigSchema),
-    extensions: z.record(IntegrationIdSchema, ProviderExtensionManifestSchema).default({}),
+    extensions: z.record(ExtensionIdSchema, ConfiguredProviderExtensionSchema).default({}),
     roles: z.record(RoleIdSchema, RoleDefinitionSchema).default({}),
     groups: z.record(IdentifierSchema, ConfiguredGroupSchema).default({}),
     messages: MessageConfigSchema.default({

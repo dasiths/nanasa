@@ -69,7 +69,7 @@ describe("typed control facade registries", () => {
     );
   });
 
-  it("covers every required CLI family without deferred extension or service placeholders", () => {
+  it("covers every required CLI family without a deferred service placeholder", () => {
     const families = new Set(CLI_COMMAND_REGISTRY.map((command) => command.family));
     expect(families).toEqual(
       new Set([
@@ -84,6 +84,7 @@ describe("typed control facade registries", () => {
         "daemon",
         "doctor",
         "events",
+        "extension",
         "group",
         "message",
         "metadata",
@@ -97,7 +98,22 @@ describe("typed control facade registries", () => {
         "worktree",
       ]),
     );
-    expect(families.has("extension")).toBe(false);
+    expect(
+      CLI_COMMAND_REGISTRY.filter((command) => command.family === "extension").map(
+        (command) => command.command,
+      ),
+    ).toEqual([
+      "list",
+      "inspect",
+      "plan",
+      "health",
+      "trust",
+      "install",
+      "repair",
+      "disable",
+      "rollback",
+      "remove",
+    ]);
     expect(families.has("service")).toBe(false);
     expect(CLI_COMMAND_REGISTRY.every((command) => command.summary.length > 0)).toBe(true);
   });

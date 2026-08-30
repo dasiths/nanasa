@@ -43,6 +43,19 @@ import {
   PortalSnapshotSchema,
   type ProviderStateBinding,
   ProviderStateBindingSchema,
+  type ProviderCatalogItem,
+  ProviderCatalogItemSchema,
+  type ProviderExtensionHealth,
+  ProviderExtensionHealthSchema,
+  type ProviderExtensionInspect,
+  ProviderExtensionInspectSchema,
+  type ProviderExtensionPlan,
+  ProviderExtensionPlanSchema,
+  type ExtensionTrustReceipt,
+  ExtensionTrustReceiptSchema,
+  type ExtensionLifecycleCommand,
+  type InstallProviderExtensionCommand,
+  type TrustProviderExtensionCommand,
   type RemoveGroupAgentResult,
   RemoveGroupAgentResultSchema,
   type ReorderGroupAgentsCommand,
@@ -99,6 +112,34 @@ export interface PortalClient {
   loadConfig(): Promise<NanasaConfig>;
   loadConfigStatus(): Promise<ConfigStatus>;
   listProviderStates(): Promise<ProviderStateBinding[]>;
+  listProviderExtensions(): Promise<ProviderCatalogItem[]>;
+  inspectProviderExtension(extensionId: string): Promise<ProviderExtensionInspect>;
+  planProviderExtension(extensionId: string): Promise<ProviderExtensionPlan>;
+  providerExtensionHealth(extensionId: string): Promise<ProviderExtensionHealth>;
+  trustProviderExtension(
+    extensionId: string,
+    command: TrustProviderExtensionCommand,
+  ): Promise<ExtensionTrustReceipt>;
+  installProviderExtension(
+    extensionId: string,
+    command: InstallProviderExtensionCommand,
+  ): Promise<ProviderExtensionInspect>;
+  repairProviderExtension(
+    extensionId: string,
+    command: InstallProviderExtensionCommand,
+  ): Promise<ProviderExtensionInspect>;
+  disableProviderExtension(
+    extensionId: string,
+    command: ExtensionLifecycleCommand,
+  ): Promise<ProviderExtensionInspect>;
+  rollbackProviderExtension(
+    extensionId: string,
+    command: ExtensionLifecycleCommand,
+  ): Promise<ProviderExtensionInspect>;
+  removeProviderExtension(
+    extensionId: string,
+    command: ExtensionLifecycleCommand,
+  ): Promise<ProviderCatalogItem>;
   retainProviderState(bindingId: string): Promise<ProviderStateBinding>;
   deleteProviderState(bindingId: string): Promise<ProviderStateBinding>;
   createGroup(command: CreateGroupCommand): Promise<Group>;
@@ -204,6 +245,59 @@ export const api: PortalClient = {
   loadConfigStatus: () => request(`${CONTROL_API_PREFIX}/config/status`, ConfigStatusSchema),
   listProviderStates: () =>
     request(`${CONTROL_API_PREFIX}/provider-states`, ProviderStateBindingSchema.array()),
+  listProviderExtensions: () =>
+    request(`${CONTROL_API_PREFIX}/extensions`, ProviderCatalogItemSchema.array()),
+  inspectProviderExtension: (extensionId) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}`,
+      ProviderExtensionInspectSchema,
+    ),
+  planProviderExtension: (extensionId) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}/plan`,
+      ProviderExtensionPlanSchema,
+    ),
+  providerExtensionHealth: (extensionId) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}/health`,
+      ProviderExtensionHealthSchema,
+    ),
+  trustProviderExtension: (extensionId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}/trust`,
+      ExtensionTrustReceiptSchema,
+      commandInit("POST", command),
+    ),
+  installProviderExtension: (extensionId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}/install`,
+      ProviderExtensionInspectSchema,
+      commandInit("POST", command),
+    ),
+  repairProviderExtension: (extensionId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}/repair`,
+      ProviderExtensionInspectSchema,
+      commandInit("POST", command),
+    ),
+  disableProviderExtension: (extensionId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}/disable`,
+      ProviderExtensionInspectSchema,
+      commandInit("POST", command),
+    ),
+  rollbackProviderExtension: (extensionId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}/rollback`,
+      ProviderExtensionInspectSchema,
+      commandInit("POST", command),
+    ),
+  removeProviderExtension: (extensionId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}`,
+      ProviderCatalogItemSchema,
+      commandInit("DELETE", command),
+    ),
   retainProviderState: (bindingId) =>
     request(
       `${CONTROL_API_PREFIX}/provider-states/${encodeURIComponent(bindingId)}/retain`,

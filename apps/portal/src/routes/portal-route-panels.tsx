@@ -10,9 +10,10 @@ import type {
   ProviderStateBinding,
   TerminalCheckpoint,
 } from "@nanasa/contracts";
-import { Bell, CircleAlert, GitBranch, RefreshCw } from "lucide-react";
+import { Bell, GitBranch, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { PortalClient } from "../api.js";
+import { ExtensionsWorkspace } from "../components/extensions-workspace.js";
 import { generatedOfflineHelp } from "../help/generated-offline-help.js";
 import type { PortalPreferences } from "../hooks/use-portal-preferences.js";
 import type { PortalRoute } from "../router/portal-router.js";
@@ -785,12 +786,13 @@ export function PortalRoutePanel(props: PortalRoutePanelProps) {
         <RouteSurface
           title="Extensions"
           eyebrow="Provider capabilities"
-          description="Declarative extension lifecycle services and workflows arrive in implementation phase 10."
+          description="Install and inspect strict data-only provider packages with exact trust, permissions, health, drift, and ownership evidence."
         >
-          <p className="phase-notice">
-            <CircleAlert aria-hidden="true" size={18} /> No executable plugin controls are exposed
-            before extension trust and lock services exist.
-          </p>
+          <ExtensionsWorkspace
+            client={props.client}
+            revision={props.snapshot.sequence}
+            onChanged={props.onRefresh}
+          />
         </RouteSurface>
       );
     case "settings":

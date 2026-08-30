@@ -2,6 +2,7 @@ export * from "./actions-v1.js";
 export * from "./config-v2.js";
 export * from "./control-v1.js";
 export * from "./events-v1.js";
+export * from "./extensions-v1.js";
 export * from "./git-v1.js";
 export * from "./provider-v1.js";
 export * from "./status-v2.js";

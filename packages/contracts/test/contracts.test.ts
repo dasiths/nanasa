@@ -22,6 +22,7 @@ import {
   DeleteGroupResultSchema,
   DeliveryOutcomeSchema,
   EventServerFrameSchema,
+  ExtensionLockSchema,
   InstructionPathSchema,
   InterruptAgentRunCommandSchema,
   MAX_MESSAGE_TEXT_BYTES,
@@ -30,6 +31,8 @@ import {
   NativeRecoveryPolicySchema,
   NativeSessionReferenceSchema,
   PortalSnapshotSchema,
+  ProviderExtensionDescriptorSchema,
+  REQUIRED_PROVIDER_EXTENSION_PERMISSIONS,
   RemoveGroupAgentResultSchema,
   RemoveWorktreeCommandSchema,
   RepositorySchema,
@@ -989,6 +992,99 @@ describe("configuration contracts", () => {
         diagnostics: [],
       }),
     ).toMatchObject({ state: "ready", revision: "a".repeat(64) });
+  });
+});
+
+describe("declarative provider extension contracts", () => {
+  const descriptor = {
+    apiVersion: "nanasa.dev/provider-extension/v1",
+    kind: "ProviderExtension",
+    metadata: {
+      id: "example.copilot",
+      name: "Example Copilot",
+      version: "1.2.3",
+      publisher: "Example",
+      description: "A data-only provider descriptor",
+    },
+    compatibility: { minNanasaVersion: "0.0.0", reporterProtocol: 2 },
+    providers: [
+      {
+        id: "example-copilot",
+        displayName: "Example Copilot",
+        commandNames: ["copilot"],
+        strategies: {
+          adapter: "copilot-adapter-v1",
+          home: "copilot-home-v1",
+          prompt: "copilot-agent-v1",
+          mcp: "copilot-mcp-v1",
+          reporter: "copilot-hooks-v2",
+          control: "copilot-terminal-v1",
+          nativeResume: "copilot-resume-v1",
+          provisioning: ["owned-file-v1", "managed-json-object-v1"],
+        },
+      },
+    ],
+    permissions: [...REQUIRED_PROVIDER_EXTENSION_PERMISSIONS],
+    assets: [
+      {
+        path: "metadata/provider.json",
+        mediaType: "application/json",
+        bytes: 3,
+        sha256: "a".repeat(64),
+      },
+    ],
+  } as const;
+
+  it("accepts strict data-only descriptors and complete reproducible locks", () => {
+    const parsed = ProviderExtensionDescriptorSchema.parse(descriptor);
+    expect(parsed.providers[0]?.strategies.adapter).toBe("copilot-adapter-v1");
+    expect(
+      ExtensionLockSchema.parse({
+        version: 1,
+        revision: 1,
+        extensions: {
+          "example.copilot": {
+            descriptor: parsed,
+            descriptorDigest: "b".repeat(64),
+            packageDigest: "c".repeat(64),
+            source: { kind: "uploaded", label: "reviewed fixture" },
+            signature: {
+              algorithm: "ed25519",
+              keyId: "fixture-key",
+              signature: "A".repeat(86),
+            },
+            grantedPermissions: [...REQUIRED_PROVIDER_EXTENSION_PERMISSIONS],
+            packageReference: ".nanasa/state/extensions/packages/example.copilot/1.2.3/digest",
+            enabled: true,
+            installedAt: "2026-08-30T00:00:00.000Z",
+          },
+        },
+      }).extensions["example.copilot"]?.enabled,
+    ).toBe(true);
+  });
+
+  it.each([
+    [
+      "mixed strategy families",
+      {
+        providers: [
+          {
+            ...descriptor.providers[0],
+            strategies: { ...descriptor.providers[0].strategies, reporter: "pi-events-v2" },
+          },
+        ],
+      },
+    ],
+    ["missing derived permission", { permissions: descriptor.permissions.slice(1) }],
+    ["wildcard permission", { permissions: ["*"] }],
+    ["JavaScript asset", { assets: [{ ...descriptor.assets[0], path: "assets/hook.mjs" }] }],
+    ["traversing asset", { assets: [{ ...descriptor.assets[0], path: "../provider.json" }] }],
+    ["executable declaration", { build: ["node", "build.js"] }],
+    ["portal declaration", { portal: { component: "index.js" } }],
+  ])("rejects %s", (_name, override) => {
+    expect(
+      ProviderExtensionDescriptorSchema.safeParse({ ...descriptor, ...override }).success,
+    ).toBe(false);
   });
 });
 

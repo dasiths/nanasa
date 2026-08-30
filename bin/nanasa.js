@@ -26,7 +26,7 @@ Commands:
   reset              Back up and destructively reset alpha config, state, and owned runtimes
 
 Operational families:
-  metadata config auth state trust group role run status message agent action
+  metadata config auth state trust extension group role run status message agent action
   wait terminal console checkout worktree events api daemon completion
 
 Options:

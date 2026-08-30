@@ -14,10 +14,13 @@ import {
   CreateWorktreeCommandSchema,
   DeleteGroupResultSchema,
   EventServerFrameSchema,
+  ExtensionLifecycleCommandSchema,
   InterruptAgentRunCommandSchema,
+  InstallProviderExtensionCommandSchema,
   OpenCheckoutCommandSchema,
   OpenWaitSchema,
   ProviderStateBindingSchema,
+  RepairProviderExtensionCommandSchema,
   RemoveGroupAgentResultSchema,
   RemoveWorktreeCommandSchema,
   ReorderGroupAgentsCommandSchema,
@@ -40,6 +43,7 @@ import {
   TerminalEndpointStatusSchema,
   TerminalReadRequestSchema,
   TerminalReadResultSchema,
+  TrustProviderExtensionCommandSchema,
   UpdateGroupAgentCommandSchema,
   UpdateGroupCommandSchema,
   UpdateRolePresentationCommandSchema,
@@ -60,6 +64,8 @@ import type { AgentWaitService } from "../actions/agent-wait-service.js";
 import type { ConfigRepository } from "../config-repository.js";
 import type { DeliveryRepository } from "../delivery-repository.js";
 import type { EventLog } from "../event-log.js";
+import type { ProviderExtensionService } from "../extensions/provider-extension-service.js";
+import type { ProviderHealthService } from "../extensions/provider-health-service.js";
 import { EventStreamSession } from "../event-stream-session.js";
 import type { CheckoutService } from "../git/checkout-service.js";
 import type { WorktreeService } from "../git/worktree-service.js";
@@ -88,6 +94,8 @@ export interface ControlRouterServices {
   store: NanasaStore;
   auth: OperatorAuth;
   providerStates: ProviderStateRepository;
+  extensions: ProviderExtensionService;
+  extensionHealth: ProviderHealthService;
   topology: TopologyService;
   topologyOrder: TopologyOrderService;
   coordinator: RunRuntimeCoordinator;
@@ -199,6 +207,7 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
 
   register("meta.get", () => services.metadata());
   register("schema.openapi", () => generateControlOpenApi());
+  register("schema.extensions", () => services.extensions.generatedReference());
   register("auth.bootstrap", (request, reply) => services.auth.bootstrap(request.body, reply));
   register("auth.session", (request) => services.auth.session(request));
   register("auth.revoke", (request, reply) => {
@@ -233,6 +242,63 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     ),
   );
   register("trust.list", () => services.store.listRepositoryTrust());
+  register("extensions.catalog", () => services.extensions.list());
+  register("extensions.list", () => services.extensions.list());
+  register("extensions.inspect", (request) =>
+    services.extensions.inspect(record(request.params).extensionId ?? ""),
+  );
+  register("extensions.plan", (request) =>
+    services.extensions.plan(record(request.params).extensionId ?? ""),
+  );
+  register("extensions.health", (request) =>
+    services.extensionHealth.inspect(record(request.params).extensionId ?? ""),
+  );
+  register("extensions.trust", (request) =>
+    services.extensions.trust(
+      record(request.params).extensionId ?? "",
+      operatorPrincipal(services, request).operatorId,
+      TrustProviderExtensionCommandSchema.parse(
+        routeBody(controlRoute("extensions.trust"), request),
+      ),
+    ),
+  );
+  register("extensions.install", (request) => {
+    idempotencyKey(controlRoute("extensions.install"), request);
+    return services.extensions.install(
+      record(request.params).extensionId ?? "",
+      InstallProviderExtensionCommandSchema.parse(
+        routeBody(controlRoute("extensions.install"), request),
+      ),
+    );
+  });
+  register("extensions.repair", (request) => {
+    idempotencyKey(controlRoute("extensions.repair"), request);
+    return services.extensions.repair(
+      record(request.params).extensionId ?? "",
+      RepairProviderExtensionCommandSchema.parse(
+        routeBody(controlRoute("extensions.repair"), request),
+      ),
+    );
+  });
+  for (const [id, operation] of [
+    ["extensions.disable", "disable"],
+    ["extensions.rollback", "rollback"],
+  ] as const) {
+    register(id, (request) => {
+      idempotencyKey(controlRoute(id), request);
+      return services.extensions[operation](
+        record(request.params).extensionId ?? "",
+        ExtensionLifecycleCommandSchema.parse(routeBody(controlRoute(id), request)),
+      );
+    });
+  }
+  register("extensions.remove", (request) => {
+    idempotencyKey(controlRoute("extensions.remove"), request);
+    return services.extensions.remove(
+      record(request.params).extensionId ?? "",
+      ExtensionLifecycleCommandSchema.parse(routeBody(controlRoute("extensions.remove"), request)),
+    );
+  });
 
   register("groups.list", () => services.store.getSnapshot().groups);
   register("groups.get", (request) =>

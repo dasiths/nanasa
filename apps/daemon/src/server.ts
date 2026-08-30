@@ -27,6 +27,12 @@ import { DeliveryDispatcher } from "./delivery-dispatcher.js";
 import { DeliveryRepository } from "./delivery-repository.js";
 import { EventLog } from "./event-log.js";
 import { EventStreamSession } from "./event-stream-session.js";
+import { ExtensionLockRepository } from "./extensions/extension-lock-repository.js";
+import { ExtensionPackageError } from "./extensions/extension-package-loader.js";
+import { ProviderCatalogService } from "./extensions/provider-catalog-service.js";
+import { ProviderExtensionPlanner } from "./extensions/provider-extension-planner.js";
+import { ProviderExtensionService } from "./extensions/provider-extension-service.js";
+import { ProviderHealthService } from "./extensions/provider-health-service.js";
 import { resolveEffectiveAgentPrompt } from "./instruction-resolver.js";
 import { McpCredentialIssuer } from "./mcp-auth.js";
 import { validateMcpEndpointConfiguration } from "./mcp-config.js";
@@ -41,7 +47,7 @@ import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.j
 import { ReporterRegistry } from "./reporter-registry.js";
 import { RepositoryTrustService } from "./repository-trust-service.js";
 import { UserCredentialBroker } from "./user-credential-broker.js";
-import { controlMetadata, repositoryTmuxNamespace } from "./protocol-metadata.js";
+import { controlMetadata, PRODUCT_VERSION, repositoryTmuxNamespace } from "./protocol-metadata.js";
 import { RunRuntimeCoordinator } from "./run-runtime-coordinator.js";
 import { SnapshotReadModel } from "./snapshot-read-model.js";
 import { DomainError, NanasaStore } from "./store.js";
@@ -119,6 +125,7 @@ export interface DaemonContext {
   providerStates: ProviderStateRepository;
   nativeSessions: NativeSessionService;
   providerAdapters: ProviderAdapterRegistry;
+  extensions: ProviderExtensionService;
 }
 
 interface ErrorWithIssues {
@@ -238,6 +245,35 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         : { operatorToken: options.mcp.operatorToken }),
     });
     const providerAdapters = ProviderAdapterRegistry.builtIn();
+    const extensionLocks = new ExtensionLockRepository(loadedConfig.repoRoot);
+    const providerCatalog = new ProviderCatalogService(providerAdapters);
+    const extensionPlanner = new ProviderExtensionPlanner();
+    const extensionConfig = () => {
+      const current = configRepository.load();
+      if (current.status.revision === undefined) {
+        throw new ExtensionPackageError(
+          "extension_config_unavailable",
+          "A valid configuration revision is required for extension operations",
+        );
+      }
+      return { config: current.config, revision: current.status.revision };
+    };
+    const providerHealth = new ProviderHealthService(
+      extensionLocks,
+      extensionConfig,
+      PRODUCT_VERSION,
+    );
+    const repositoryIdentity = createHash("sha256").update(loadedConfig.repoRoot).digest("hex");
+    const extensions = new ProviderExtensionService(
+      extensionLocks,
+      providerCatalog,
+      extensionPlanner,
+      providerHealth,
+      extensionConfig,
+      store,
+      repositoryIdentity,
+    );
+    extensions.initializeBuiltIns();
     const providerStates = new ProviderStateRepository(loadedConfig.integrationsDirectory, store);
     const generatedOverlays = new GeneratedOverlayTransaction(loadedConfig.integrationsDirectory);
     const credentialBroker = new UserCredentialBroker();
@@ -269,12 +305,13 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       ),
       statusEndpointUrl,
       ...(options.mcp?.enabled === true ? { mcpEndpointUrl } : {}),
-      repositoryIdentity: createHash("sha256").update(loadedConfig.repoRoot).digest("hex"),
+      repositoryIdentity,
       adapterRegistry: providerAdapters,
       stateRepository: providerStates,
       overlayTransaction: generatedOverlays,
       credentialBroker,
       trustService: repositoryTrust,
+      assertProviderExtension: (kind) => extensions.assertProviderKind(kind),
       promptResolver: (membership) => {
         const current = configRepository.load();
         return resolveEffectiveAgentPrompt({
@@ -383,6 +420,19 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     app.setErrorHandler((error, request, reply) => {
       if (error instanceof DomainError) {
         return reply.status(error.statusCode).send({ code: error.code, message: error.message });
+      }
+      if (error instanceof ExtensionPackageError) {
+        const statusCode = error.code.includes("not_found")
+          ? 404
+          : error.code.includes("trust_required") || error.code.includes("signature_untrusted")
+            ? 403
+            : error.code.includes("stale") ||
+                error.code.includes("busy") ||
+                error.code.includes("active_runs") ||
+                error.code.includes("referenced")
+              ? 409
+              : 400;
+        return reply.status(statusCode).send({ code: error.code, message: error.message });
       }
       if (isValidationError(error)) {
         const oversized = error.issues.some(
@@ -522,6 +572,8 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       store,
       auth: operatorAuth,
       providerStates,
+      extensions,
+      extensionHealth: providerHealth,
       topology,
       topologyOrder,
       coordinator,
@@ -600,6 +652,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       providerStates,
       nativeSessions,
       providerAdapters,
+      extensions,
     };
   } catch (error) {
     if (appForCleanup !== undefined) {

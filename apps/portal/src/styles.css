@@ -1885,6 +1885,168 @@ textarea {
   place-content: center;
 }
 
+.extension-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.36fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.extension-list,
+.extension-diagnostics ul,
+.extension-preview-grid ul,
+.extension-command-preview ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.extension-list button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-muted);
+  padding: 9px;
+  text-align: left;
+}
+
+.extension-list button[aria-pressed="true"] {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+
+.extension-list button > span:first-child,
+.extension-command-preview li {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.extension-list small,
+.extension-command-preview small {
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+.extension-health {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.health-current {
+  border-color: var(--green);
+  background: var(--green-soft);
+  color: var(--selected-text);
+}
+
+.health-drifted,
+.health-incompatible,
+.health-untrusted,
+.health-invalid,
+.health-unavailable {
+  border-color: var(--danger-border);
+  background: var(--red-soft);
+  color: var(--danger-text);
+}
+
+.extension-detail > header,
+.extension-preview-grid,
+.extension-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.extension-detail > header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.extension-facts code,
+.extension-command-preview code {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+}
+
+.extension-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.extension-preview-grid > section,
+.extension-command-preview,
+.extension-diagnostics,
+.extension-remove {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 10px;
+}
+
+.extension-preview-grid h4,
+.extension-command-preview h4,
+.extension-diagnostics h4 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.extension-preview-grid li,
+.extension-command-preview li,
+.extension-diagnostics li,
+.extension-remove p {
+  overflow-wrap: anywhere;
+  font-size: 0.76rem;
+}
+
+.extension-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.extension-actions button,
+.extension-remove button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  padding: 5px 10px;
+}
+
+.extension-remove label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+@media (max-width: 760px) {
+  .extension-layout,
+  .extension-preview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .command-dialog {
   width: min(680px, calc(100vw - 24px));
   max-height: min(720px, calc(100dvh - 24px));
