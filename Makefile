@@ -228,6 +228,7 @@ proxy-status:
 claude-copilot:
 	@curl --fail --silent --show-error -H 'Authorization: Bearer $(LITELLM_KEY)' $(LITELLM_URL)/health/liveliness >/dev/null || \
 		{ printf '%s\n' 'LiteLLM is not ready. Run make proxy-start first.' >&2; exit 1; }
+	@node scripts/prepare-claude-gateway-state.mjs
 	ANTHROPIC_BASE_URL=$(LITELLM_URL) \
 	ANTHROPIC_AUTH_TOKEN=$(LITELLM_KEY) \
 	ANTHROPIC_MODEL=$(COPILOT_MODEL) \

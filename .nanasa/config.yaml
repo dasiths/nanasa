@@ -1,12 +1,67 @@
-instructions:
-  - .nanasa/instructions/nanasa-mcp.md
-  - .nanasa/instructions/team.md
+version: 2
+repository:
+  path: .
+  checkout: { kind: current }
+terminal:
+  checkpoints:
+    enabled: false
+    maxLines: 5000
+    maxBytes: 1048576
+    retentionSeconds: 86400
+    sensitivity: repository-private
+instructions: []
+integrations:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+    command: [ copilot ]
+    cwd: .
+    providerState: { scope: membership }
+    credentials: { kind: provider-managed }
+    model: { resumePolicy: preserve-session }
+    nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+  pi:
+    name: Pi
+    kind: pi
+    command: [ pi ]
+    cwd: .
+    providerState: { scope: membership }
+    credentials: { kind: provider-managed }
+    model: { resumePolicy: preserve-session }
+    nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+  opencode:
+    name: OpenCode
+    kind: opencode
+    command: [ opencode ]
+    cwd: .
+    providerState: { scope: membership }
+    credentials: { kind: provider-managed }
+    model: { resumePolicy: preserve-session }
+    nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+  claude-code:
+    name: Claude Code
+    kind: claude-code
+    command: [ claude ]
+    cwd: .
+    providerState: { scope: membership }
+    credentials: { kind: provider-managed }
+    model: { resumePolicy: preserve-session }
+    nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+  claude-copilot:
+    name: Claude Code via GitHub Copilot
+    kind: claude-code
+    command: [ make, claude-copilot ]
+    cwd: .
+    providerState: { scope: membership }
+    credentials: { kind: provider-managed }
+    model: { resumePolicy: preserve-session }
+    nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+extensions: {}
 roles:
   project-manager:
     name: Project Manager
     description: Coordinates assignments, dependencies, decisions, and completion
-    instructions:
-      - .nanasa/instructions/project-manager.md
+    instructions: []
     permissionPolicy: inherit
     presentation:
       icon: clipboard-list
@@ -14,8 +69,7 @@ roles:
   implementor:
     name: Implementor
     description: Implements assigned changes and validates the result
-    instructions:
-      - .nanasa/instructions/implementor.md
+    instructions: []
     permissionPolicy: inherit
     presentation:
       icon: hammer
@@ -23,74 +77,42 @@ roles:
   reviewer:
     name: Reviewer
     description: Reviews changes and reports prioritized findings without modifying files
-    instructions:
-      - .nanasa/instructions/reviewer.md
+    instructions: []
     permissionPolicy: read-only
     presentation:
       icon: shield-check
       color: amber
-integrations:
-  copilot:
-    name: GitHub Copilot
-    kind: copilot
-    command: [ copilot ]
-    cwd: .
-    agentConfigHome: { scope: integration }
-  pi:
-    name: Pi
-    kind: pi
-    command: [ pi ]
-    cwd: .
-    agentConfigHome: { scope: integration }
-  opencode:
-    name: OpenCode
-    kind: opencode
-    command: [ opencode ]
-    cwd: .
-    agentConfigHome: { scope: integration }
-  claude-code:
-    name: Claude Code
-    kind: claude-code
-    command: [ claude ]
-    cwd: .
-    agentConfigHome: { scope: integration }
-  claude-copilot:
-    name: Claude Code via Copilot
-    kind: claude-code
-    command: [ make, claude-copilot ]
-    cwd: .
-    agentConfigHome: { scope: integration }
 groups:
-  grp_2d506f47-630f-449c-bcb8-851f655d3fa8:
-    name: Agent Team
-    instructions:
-      - .nanasa/instructions/groups/agent-team.md
+  grp_852f1819-0614-49b4-b193-71bf5e98becf:
+    name: Backend Team
+    order: 0
+    instructions: []
     agents:
-      membership_888894a6-8b04-45b5-8bdc-615c7924ab53:
-        memberId: claude-copilot.magical-bose
-        name: PM Agent
-        integrationId: claude-copilot
+      agent_318f514e-2347-4d87-8c64-aef0752e7bfb:
+        memberId: nice-dijkstra
+        name: Project Manager
+        integrationId: copilot
         roleId: project-manager
         instructions: []
         order: 0
-      membership_1bb181be-949e-4355-a854-3f36b38861f5:
-        memberId: copilot.silly-brahmagupta
-        name: Builder Agent
-        integrationId: copilot
+      agent_0ae65cd2-985d-498c-9399-0978bae77827:
+        memberId: keen-hawking
+        name: Engineer 1
+        integrationId: pi
         roleId: implementor
         instructions: []
         order: 1
-      membership_2f19022f-7c27-47bb-b0e3-c8c2a95204b1:
-        memberId: opencode.nice-kalam
-        name: Junior Builder Agent
-        integrationId: opencode
+      agent_e0f1b592-5fb2-4fe2-93e4-ac9da40dedf1:
+        memberId: musing-kilby
+        name: Engineer 2
+        integrationId: claude-copilot
         roleId: implementor
         instructions: []
         order: 2
-      membership_df3f1bb8-4484-4a1a-8bc9-94347c0d16c8:
-        memberId: pi.dazzling-northcutt
-        name: Reviewer Agent
-        integrationId: pi
+      agent_9e2cdefb-cc96-4b4e-865f-b4ac17f6c4f9:
+        memberId: vibrant-mirzakhani
+        name: Reviwer
+        integrationId: opencode
         roleId: reviewer
         instructions: []
         order: 3
