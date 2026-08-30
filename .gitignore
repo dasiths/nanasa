@@ -163,6 +163,3 @@ apps/daemon/:memory:*
 
 # GitHub Copilot tracking files
 .copilot-tracking
-
-# Nanasa repository-local configuration and state
-.nanasa

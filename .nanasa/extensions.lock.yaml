@@ -1,0 +1,220 @@
+version: 1
+revision: 1
+extensions:
+  nanasa.copilot:
+    descriptor:
+      apiVersion: nanasa.dev/provider-extension/v1
+      kind: ProviderExtension
+      metadata:
+        id: nanasa.copilot
+        name: GitHub Copilot
+        version: 1.0.0
+        publisher: Nanasa
+        description: Nanasa-maintained declarative provider package for GitHub Copilot
+      compatibility:
+        minNanasaVersion: 0.0.0
+        reporterProtocol: 2
+      providers:
+        - id: copilot
+          displayName: GitHub Copilot
+          commandNames:
+            - copilot
+          strategies:
+            adapter: copilot-adapter-v1
+            home: copilot-home-v1
+            prompt: copilot-agent-v1
+            mcp: copilot-mcp-v1
+            reporter: copilot-hooks-v2
+            control: copilot-terminal-v1
+            nativeResume: copilot-resume-v1
+            provisioning:
+              - owned-file-v1
+              - managed-json-object-v1
+      permissions:
+        - provider-home:read-managed
+        - provider-home:write-owned
+        - runtime:launch-provider
+        - prompt:append
+        - mcp:register-nanasa
+        - reporter:status
+        - native-session:resume
+      assets: []
+    descriptorDigest: 1e79491f7decbb7f1372f2e4a91a555d1c92417dc7ad15a98fc0c9ae9d4aec60
+    packageDigest: 1e79491f7decbb7f1372f2e4a91a555d1c92417dc7ad15a98fc0c9ae9d4aec60
+    source:
+      kind: builtin
+      name: nanasa.copilot
+    grantedPermissions:
+      - provider-home:read-managed
+      - provider-home:write-owned
+      - runtime:launch-provider
+      - prompt:append
+      - mcp:register-nanasa
+      - reporter:status
+      - native-session:resume
+    packageReference: builtin:nanasa.copilot@1.0.0
+    installedAt: 2026-08-30T18:39:38.890Z
+    enabled: true
+  nanasa.claude-code:
+    descriptor:
+      apiVersion: nanasa.dev/provider-extension/v1
+      kind: ProviderExtension
+      metadata:
+        id: nanasa.claude-code
+        name: Claude Code
+        version: 1.0.0
+        publisher: Nanasa
+        description: Nanasa-maintained declarative provider package for Claude Code
+      compatibility:
+        minNanasaVersion: 0.0.0
+        reporterProtocol: 2
+      providers:
+        - id: claude-code
+          displayName: Claude Code
+          commandNames:
+            - claude
+          strategies:
+            adapter: claude-code-adapter-v1
+            home: claude-code-home-v1
+            prompt: claude-settings-v1
+            mcp: claude-mcp-v1
+            reporter: claude-hooks-v2
+            control: claude-terminal-v1
+            nativeResume: claude-resume-v1
+            provisioning:
+              - owned-file-v1
+              - managed-json-object-v1
+              - managed-json-array-v1
+      permissions:
+        - provider-home:read-managed
+        - provider-home:write-owned
+        - runtime:launch-provider
+        - prompt:append
+        - mcp:register-nanasa
+        - reporter:status
+        - native-session:resume
+      assets: []
+    descriptorDigest: 113992554d5f4c6c2a94175f524ef2001c35dc988477a333c3c1f281145abb4b
+    packageDigest: 113992554d5f4c6c2a94175f524ef2001c35dc988477a333c3c1f281145abb4b
+    source:
+      kind: builtin
+      name: nanasa.claude-code
+    grantedPermissions:
+      - provider-home:read-managed
+      - provider-home:write-owned
+      - runtime:launch-provider
+      - prompt:append
+      - mcp:register-nanasa
+      - reporter:status
+      - native-session:resume
+    packageReference: builtin:nanasa.claude-code@1.0.0
+    installedAt: 2026-08-30T18:39:38.890Z
+    enabled: true
+  nanasa.pi:
+    descriptor:
+      apiVersion: nanasa.dev/provider-extension/v1
+      kind: ProviderExtension
+      metadata:
+        id: nanasa.pi
+        name: Pi
+        version: 1.0.0
+        publisher: Nanasa
+        description: Nanasa-maintained declarative provider package for Pi
+      compatibility:
+        minNanasaVersion: 0.0.0
+        reporterProtocol: 2
+      providers:
+        - id: pi
+          displayName: Pi
+          commandNames:
+            - pi
+          strategies:
+            adapter: pi-adapter-v1
+            home: pi-home-v1
+            prompt: pi-prompt-v1
+            mcp: pi-mcp-v1
+            reporter: pi-events-v2
+            control: pi-terminal-v1
+            nativeResume: pi-resume-v1
+            provisioning:
+              - owned-file-v1
+              - managed-json-object-v1
+      permissions:
+        - provider-home:read-managed
+        - provider-home:write-owned
+        - runtime:launch-provider
+        - prompt:append
+        - mcp:register-nanasa
+        - reporter:status
+        - native-session:resume
+      assets: []
+    descriptorDigest: 52ea87fe10ce9d2c8cf47f4788a721d4108b481acaf41477e55ffc431980de3d
+    packageDigest: 52ea87fe10ce9d2c8cf47f4788a721d4108b481acaf41477e55ffc431980de3d
+    source:
+      kind: builtin
+      name: nanasa.pi
+    grantedPermissions:
+      - provider-home:read-managed
+      - provider-home:write-owned
+      - runtime:launch-provider
+      - prompt:append
+      - mcp:register-nanasa
+      - reporter:status
+      - native-session:resume
+    packageReference: builtin:nanasa.pi@1.0.0
+    installedAt: 2026-08-30T18:39:38.890Z
+    enabled: true
+  nanasa.opencode:
+    descriptor:
+      apiVersion: nanasa.dev/provider-extension/v1
+      kind: ProviderExtension
+      metadata:
+        id: nanasa.opencode
+        name: OpenCode
+        version: 1.0.0
+        publisher: Nanasa
+        description: Nanasa-maintained declarative provider package for OpenCode
+      compatibility:
+        minNanasaVersion: 0.0.0
+        reporterProtocol: 2
+      providers:
+        - id: opencode
+          displayName: OpenCode
+          commandNames:
+            - opencode
+          strategies:
+            adapter: opencode-adapter-v1
+            home: opencode-xdg-v1
+            prompt: opencode-primary-agent-v1
+            mcp: opencode-mcp-v1
+            reporter: opencode-events-v2
+            control: opencode-terminal-v1
+            nativeResume: opencode-resume-v1
+            provisioning:
+              - owned-file-v1
+              - managed-json-object-v1
+      permissions:
+        - provider-home:read-managed
+        - provider-home:write-owned
+        - runtime:launch-provider
+        - prompt:append
+        - mcp:register-nanasa
+        - reporter:status
+        - native-session:resume
+      assets: []
+    descriptorDigest: 30448c50d5500d123b575aeac6f92d162f0895e662c6df7aeb3eb589525c1e9b
+    packageDigest: 30448c50d5500d123b575aeac6f92d162f0895e662c6df7aeb3eb589525c1e9b
+    source:
+      kind: builtin
+      name: nanasa.opencode
+    grantedPermissions:
+      - provider-home:read-managed
+      - provider-home:write-owned
+      - runtime:launch-provider
+      - prompt:append
+      - mcp:register-nanasa
+      - reporter:status
+      - native-session:resume
+    packageReference: builtin:nanasa.opencode@1.0.0
+    installedAt: 2026-08-30T18:39:38.890Z
+    enabled: true
