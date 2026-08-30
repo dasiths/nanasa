@@ -3,10 +3,6 @@ import { fileURLToPath } from "node:url";
 import type { NativeSessionReference } from "@nanasa/contracts";
 import { PI_STATUS_REPORTER_SOURCE } from "../status-reporter-assets.js";
 import { json, normalizeSessionReference, unsupportedSessionMutation } from "./adapter-support.js";
-import {
-  closedTerminalWaitReplyInput,
-  freezeControlStrategy,
-} from "./provider-control-strategy.js";
 import type {
   NativeSessionReport,
   ProviderAdapter,
@@ -14,6 +10,10 @@ import type {
   ProviderOverlayPlan,
 } from "./provider-adapter.js";
 import { freezeProviderSemanticClaims } from "./provider-adapter.js";
+import {
+  closedTerminalWaitReplyInput,
+  freezeControlStrategy,
+} from "./provider-control-strategy.js";
 import { freezeReporterDescriptor } from "./provider-reporter-descriptor.js";
 
 const READ_ONLY_SOURCE = `export default function (pi) {\n  const blocked = new Set(["bash", "edit", "write"]);\n  pi.on("tool_call", (event) => {\n    if (blocked.has(event.toolName)) return { block: true, reason: "The active Nanasa role is read-only", terminate: true };\n  });\n}\n`;

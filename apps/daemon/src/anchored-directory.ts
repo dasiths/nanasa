@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import {
   type BigIntStats,
   closeSync,
@@ -12,7 +13,6 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 
 interface DirectoryIdentity {

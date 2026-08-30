@@ -9,8 +9,8 @@ import {
   TerminalReadRequestSchema,
   type TerminalReadResult,
 } from "@nanasa/contracts";
-import { DomainError, type NanasaStore } from "../store.js";
 import { AnchoredDirectory } from "../anchored-directory.js";
+import { DomainError, type NanasaStore } from "../store.js";
 import type { TmuxRuntime } from "../tmux-runtime.js";
 
 export class TerminalReadService {

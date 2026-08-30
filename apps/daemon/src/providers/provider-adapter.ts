@@ -1,7 +1,7 @@
 import type {
-  AgentReplyChannel,
   AgentKind,
   AgentProfile,
+  AgentReplyChannel,
   CredentialProfileReference,
   ModelResumePolicy,
   NativeSessionReference,

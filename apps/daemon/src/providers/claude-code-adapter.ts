@@ -2,10 +2,6 @@ import { join } from "node:path";
 import type { NativeSessionReference } from "@nanasa/contracts";
 import { HOOK_STATUS_REPORTER_SOURCE } from "../status-reporter-assets.js";
 import { json, normalizeSessionReference, unsupportedSessionMutation } from "./adapter-support.js";
-import {
-  closedTerminalWaitReplyInput,
-  freezeControlStrategy,
-} from "./provider-control-strategy.js";
 import type {
   NativeSessionReport,
   ProviderAdapter,
@@ -13,6 +9,10 @@ import type {
   ProviderOverlayPlan,
 } from "./provider-adapter.js";
 import { freezeProviderSemanticClaims } from "./provider-adapter.js";
+import {
+  closedTerminalWaitReplyInput,
+  freezeControlStrategy,
+} from "./provider-control-strategy.js";
 import { freezeReporterDescriptor } from "./provider-reporter-descriptor.js";
 
 export class ClaudeCodeAdapter implements ProviderAdapter {

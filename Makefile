@@ -9,6 +9,30 @@ COMPOSE := docker compose --project-name $(COMPOSE_PROJECT) --file .devcontainer
 LITELLM_URL := http://litellm:4000
 LITELLM_KEY := sk-local-litellm
 COPILOT_MODEL := claude-sonnet-5
+PORTAL_URL ?= http://127.0.0.1:3210
+DEV_PORTAL_URL ?= http://127.0.0.1:5173
+export PORTAL_URL DEV_PORTAL_URL
+
+define run_with_registry_env
+set -a; \
+if [ -f .devcontainer/.env ]; then \
+	. ./.devcontainer/.env || exit $$?; \
+fi; \
+set +a; \
+$(1)
+endef
+
+define open_url
+url="$${$(1)}"; \
+if [ -n "$$BROWSER" ]; then \
+	"$$BROWSER" "$$url"; \
+elif command -v xdg-open >/dev/null 2>&1; then \
+	"$$(command -v xdg-open)" "$$url"; \
+else \
+	printf '%s\n' "Unable to open $$url: set BROWSER to a browser command or install xdg-open." >&2; \
+	exit 1; \
+fi
+endef
 
 # -----------------------------------------------------------------------------
 # Help
@@ -18,6 +42,30 @@ COPILOT_MODEL := claude-sonnet-5
 
 help:
 	@printf '%s\n' \
+		'Application lifecycle:' \
+		'  make install       Install the frozen pnpm dependency graph' \
+		'  make init          Initialize repository configuration when absent' \
+		'  make reset-alpha   Back up and destructively replace stale alpha state' \
+		'  make setup         Prepare repository-local integration homes' \
+		'  make doctor        Check configuration, commands, and integration homes' \
+		'  make build         Build every workspace package' \
+		'  make package       Build the packaged CLI, daemon, and portal assets' \
+		'  make start         Build and run Nanasa in the foreground (Ctrl+C to stop)' \
+		'  make run           Alias for make start' \
+		'  make first-run     Install, initialize, set up, diagnose, and start in order' \
+		'  make dev           Run daemon and portal development watchers (Ctrl+C to stop)' \
+		'  make portal        Open the production base URL for an authenticated session' \
+		'  make portal-dev    Open the development base URL for an authenticated session' \
+		'' \
+		'  First start prints an exact one-use URL containing a #fragment; open it exactly.' \
+		'  The portal targets open only a base URL for an already authenticated browser.' \
+		'' \
+		'Validation:' \
+		'  make test          Run the full local test suite' \
+		'  make check         Run formatting, lint, and type checks' \
+		'  make static        Alias for make check' \
+		'  make validate      Run static checks, tests, and a production build' \
+		'' \
 		'Authentication targets:' \
 		'  make auth          Authenticate every CLI in sequence' \
 		'  make auth-github   Authenticate GitHub CLI' \
@@ -27,12 +75,86 @@ help:
 		'  make auth-litellm  Authenticate the local proxy with GitHub Copilot' \
 		'  make auth-status   Show available authentication statuses' \
 		'' \
-		'Claude Code through GitHub Copilot:' \
+		'LiteLLM proxy through GitHub Copilot:' \
 		'  make proxy-start   Start the local LiteLLM proxy' \
 		'  make proxy-stop    Stop the local LiteLLM proxy' \
 		'  make proxy-logs    Follow proxy logs' \
 		'  make proxy-status  Check proxy health and models' \
-		'  make claude-copilot Start another Claude Code instance through the running proxy'
+		'' \
+		'Claude Code launcher:' \
+		'  make claude-copilot Start another Claude Code instance through the running proxy' \
+		'' \
+		'Variables:' \
+		'  PORTAL_URL=$(PORTAL_URL)' \
+		'  DEV_PORTAL_URL=$(DEV_PORTAL_URL)' \
+		'  BROWSER=<command>  Browser helper used by portal targets before xdg-open' \
+		'  CLAUDE_ARGS=<args> Additional arguments for claude-copilot'
+
+# -----------------------------------------------------------------------------
+# Application lifecycle
+# -----------------------------------------------------------------------------
+
+.PHONY: install init reset-alpha setup doctor build package start run first-run dev portal portal-dev
+
+install:
+	@$(call run_with_registry_env,pnpm install --frozen-lockfile)
+
+init:
+	node bin/nanasa.js init
+
+reset-alpha: package
+	node bin/nanasa.js reset --from-alpha --confirm "$(CURDIR)"
+
+setup: package
+	node bin/nanasa.js setup
+
+doctor: package
+	node bin/nanasa.js doctor
+
+build:
+	@$(call run_with_registry_env,pnpm build)
+
+package:
+	@$(call run_with_registry_env,pnpm package:build)
+
+start:
+	@$(call run_with_registry_env,pnpm start)
+
+run: start
+
+first-run:
+	@$(MAKE) --no-print-directory install
+	@$(MAKE) --no-print-directory init
+	@$(MAKE) --no-print-directory package
+	node bin/nanasa.js setup
+	node bin/nanasa.js doctor
+	@$(MAKE) --no-print-directory start
+
+dev:
+	@$(call run_with_registry_env,pnpm dev)
+
+portal:
+	@$(call open_url,PORTAL_URL)
+
+portal-dev:
+	@$(call open_url,DEV_PORTAL_URL)
+
+# -----------------------------------------------------------------------------
+# Validation
+# -----------------------------------------------------------------------------
+
+.PHONY: test check static validate
+
+test:
+	@$(call run_with_registry_env,pnpm test)
+
+check:
+	@$(call run_with_registry_env,pnpm check:static)
+
+static: check
+
+validate:
+	@$(call run_with_registry_env,pnpm check:static && pnpm test && pnpm build)
 
 # -----------------------------------------------------------------------------
 # Authentication
