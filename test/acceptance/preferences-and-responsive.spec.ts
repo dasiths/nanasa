@@ -64,13 +64,12 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
-  const mobileRail = await page
-    .getByRole("complementary", { name: "Groups and agents" })
-    .boundingBox();
+  const mobileRail = await page.locator(".group-rail").boundingBox();
   const mobileWorkspace = await page.locator(".workspace").boundingBox();
-  expect(mobileRail).not.toBeNull();
+  expect(mobileRail).toBeNull();
   expect(mobileWorkspace).not.toBeNull();
-  expect(mobileWorkspace!.y).toBeGreaterThanOrEqual(mobileRail!.y + mobileRail!.height - 1);
+  expect(mobileWorkspace!.y).toBe(0);
+  await expect(page.getByLabel("Switch group")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await expect(page.getByRole("region", { name: "Messages overlay" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Messages", exact: true })).toBeHidden();
@@ -85,6 +84,7 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
   await page.getByRole("button", { name: "Close messages" }).click();
   await expect(page.getByRole("region", { name: "Messages overlay" })).toHaveCount(0);
 
+  await page.setViewportSize({ width: 721, height: 844 });
   const groupRow = page.locator(".tree-group-row").filter({ hasText: "Responsive team" });
   const groupLabelBounds = await groupRow.locator(".tree-select").boundingBox();
   const groupActionBounds = await groupRow
@@ -113,7 +113,7 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
   const detailsBounds = await details.boundingBox();
   expect(detailsBounds).not.toBeNull();
   expect(detailsBounds!.x).toBeGreaterThanOrEqual(0);
-  expect(detailsBounds!.x + detailsBounds!.width).toBeLessThanOrEqual(390);
+  expect(detailsBounds!.x + detailsBounds!.width).toBeLessThanOrEqual(721);
   expect(
     await details.evaluate((element) => ({
       overflowY: getComputedStyle(element).overflowY,
@@ -127,7 +127,7 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
   const memberMenuBounds = await memberMenu.boundingBox();
   expect(memberMenuBounds).not.toBeNull();
   expect(memberMenuBounds!.x).toBeGreaterThanOrEqual(0);
-  expect(memberMenuBounds!.x + memberMenuBounds!.width).toBeLessThanOrEqual(390);
+  expect(memberMenuBounds!.x + memberMenuBounds!.width).toBeLessThanOrEqual(721);
   await memberMenu.getByRole("menuitem", { name: "Remove agent Narrow" }).click();
   const memberDialog = page.getByRole("dialog", { name: "Remove Narrow?" });
   await expect(memberDialog).toBeVisible();
@@ -137,7 +137,7 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
   expect(memberDialogBounds).not.toBeNull();
   expect(memberDialogBounds!.x).toBeGreaterThanOrEqual(0);
   expect(memberDialogBounds!.y).toBeGreaterThanOrEqual(0);
-  expect(memberDialogBounds!.x + memberDialogBounds!.width).toBeLessThanOrEqual(390);
+  expect(memberDialogBounds!.x + memberDialogBounds!.width).toBeLessThanOrEqual(721);
   expect(memberDialogBounds!.y + memberDialogBounds!.height).toBeLessThanOrEqual(844);
   await memberDialog.getByRole("button", { name: "Cancel" }).click();
 
@@ -146,7 +146,7 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
   const groupMenuBounds = await groupMenu.boundingBox();
   expect(groupMenuBounds).not.toBeNull();
   expect(groupMenuBounds!.x).toBeGreaterThanOrEqual(0);
-  expect(groupMenuBounds!.x + groupMenuBounds!.width).toBeLessThanOrEqual(390);
+  expect(groupMenuBounds!.x + groupMenuBounds!.width).toBeLessThanOrEqual(721);
   await groupMenu.getByRole("menuitem", { name: "Delete group Responsive team" }).click();
   const groupDialog = page.getByRole("dialog", { name: "Delete Responsive team?" });
   await expect(groupDialog).toBeVisible();
@@ -156,7 +156,7 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
   expect(groupDialogBounds).not.toBeNull();
   expect(groupDialogBounds!.x).toBeGreaterThanOrEqual(0);
   expect(groupDialogBounds!.y).toBeGreaterThanOrEqual(0);
-  expect(groupDialogBounds!.x + groupDialogBounds!.width).toBeLessThanOrEqual(390);
+  expect(groupDialogBounds!.x + groupDialogBounds!.width).toBeLessThanOrEqual(721);
   expect(groupDialogBounds!.y + groupDialogBounds!.height).toBeLessThanOrEqual(844);
   await groupDialog.getByRole("button", { name: "Cancel" }).click();
 });

@@ -283,8 +283,9 @@ export class TerminalGateway {
           return;
         }
         if (frame.type === "release") {
-          this.#control.assertController(request.params.runId, viewer.streamId, frame.leaseId);
-          close(1000, "terminal_released");
+          this.#control.release(request.params.runId, viewer.streamId, frame.leaseId);
+          attach(connectedRun as AgentRun, "observer", 120, 40);
+          send({ type: "lease", role: "observer", reason: "released" });
           return;
         }
         if (frame.type !== "ack") {

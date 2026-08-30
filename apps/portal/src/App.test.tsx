@@ -258,6 +258,16 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     }),
     loadSnapshot: vi.fn().mockResolvedValue(snapshot),
     loadConfig: vi.fn().mockResolvedValue(config),
+    loadConfigStatus: vi.fn().mockResolvedValue({
+      state: "ready",
+      repoRoot: "/repo",
+      configPath: "/repo/.nanasa/config.yaml",
+      revision: "a".repeat(64),
+      diagnostics: [],
+    }),
+    listProviderStates: vi.fn().mockResolvedValue([]),
+    retainProviderState: vi.fn(),
+    deleteProviderState: vi.fn(),
     createGroup: vi.fn().mockResolvedValue(snapshot.groups[0]),
     updateGroup: vi.fn().mockResolvedValue(snapshot.groups[0]),
     deleteGroup: vi.fn().mockResolvedValue({
@@ -302,7 +312,9 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
       acknowledgements: [],
       openWaits: [],
     }),
+    cancelAgentAction: vi.fn(),
     replyOpenWait: vi.fn(),
+    acknowledgeCompletion: vi.fn(),
     loadMessages: vi.fn().mockResolvedValue({
       groupId: "group-backend",
       messages: [],
@@ -331,7 +343,9 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     getTerminalEndpointStatus: vi.fn(),
     readTerminal: vi.fn(),
     listTerminalCheckpoints: vi.fn().mockResolvedValue([]),
+    createTerminalCheckpoint: vi.fn(),
     getTerminalCheckpoint: vi.fn(),
+    deleteTerminalCheckpoint: vi.fn().mockResolvedValue(undefined),
     createEventsSocket: vi.fn().mockImplementation(inertSocket),
   };
 }
@@ -380,6 +394,7 @@ async function chooseRowAction(
 
 describe("portal application", () => {
   beforeEach(() => {
+    window.history.replaceState({}, "", "/");
     window.localStorage.clear();
     window.localStorage.setItem(MESSAGE_OVERLAY_OPEN_KEY, "true");
   });

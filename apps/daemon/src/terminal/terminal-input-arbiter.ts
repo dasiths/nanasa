@@ -56,13 +56,6 @@ export class TerminalInputArbiter {
     const queued = previous
       .catch(() => undefined)
       .then(async () => {
-        if (this.control.hasController(runId)) {
-          throw new DomainError(
-            "terminal_writer_conflict",
-            "Automated input is blocked by an active browser controller",
-            409,
-          );
-        }
         this.#automated.add(runId);
         try {
           result = await operation();

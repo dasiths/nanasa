@@ -144,6 +144,16 @@ export class TerminalControlService {
     return viewer;
   }
 
+  public release(runId: string, streamId: string, leaseId: string): Viewer {
+    const { control, viewer } = this.#viewer(runId, streamId);
+    this.assertController(runId, streamId, leaseId);
+    viewer.role = "observer";
+    delete viewer.lease;
+    delete control.controllerStreamId;
+    this.#audit("terminal.lease.released", runId, { viewerId: viewer.viewerId });
+    return viewer;
+  }
+
   public disconnect(runId: string, streamId: string): void {
     const control = this.#runs.get(runId);
     const viewer = control?.viewers.get(streamId);

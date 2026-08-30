@@ -1383,6 +1383,27 @@ textarea {
   background: var(--terminal);
 }
 
+.terminal-pane-slot {
+  display: contents;
+}
+
+.terminal-pane-slot[hidden] {
+  display: none;
+}
+
+.terminal-suspension-overlay {
+  position: absolute;
+  z-index: 80;
+  inset: 27px 0 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  background: rgb(17 22 20 / 72%);
+  color: #e7eee9;
+  pointer-events: none;
+}
+
 .terminal-statusbar {
   display: flex;
   min-width: 0;
@@ -1684,6 +1705,335 @@ textarea {
   border-radius: 7px;
   background: var(--surface);
   box-shadow: 0 18px 48px var(--panel-shadow);
+}
+
+.message-route {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.route-navigation {
+  display: flex;
+  min-height: 38px;
+  align-items: stretch;
+  gap: 2px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  background: var(--header-surface);
+  padding-inline: 10px;
+  white-space: nowrap;
+}
+
+.route-navigation > span {
+  flex: 1;
+}
+
+.route-navigation a {
+  display: inline-flex;
+  align-items: center;
+  border-bottom: 2px solid transparent;
+  padding: 7px 8px 5px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-decoration: none;
+  text-transform: capitalize;
+}
+
+.route-navigation a[aria-current="page"] {
+  border-bottom-color: var(--green);
+  color: var(--selected-text);
+}
+
+.mobile-switcher {
+  display: none;
+  align-items: center;
+  gap: 5px;
+}
+
+.route-surface {
+  height: 100%;
+  overflow: auto;
+  padding: clamp(14px, 2.5vw, 30px);
+}
+
+.route-heading {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 18px;
+}
+
+.route-heading h2 {
+  font-size: 1.45rem;
+}
+
+.route-heading p,
+.workflow-card > p,
+.workflow-row small {
+  color: var(--text-muted);
+}
+
+.workflow-grid,
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  gap: 12px;
+}
+
+.workflow-card,
+.settings-grid fieldset {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  margin: 0 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  padding: 14px;
+}
+
+.workflow-card h3,
+.settings-grid legend {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.workflow-list,
+.definition-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workflow-row,
+.definition-list li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 9px;
+}
+
+.workflow-row > div:first-child,
+.definition-list li {
+  min-width: 0;
+}
+
+.workflow-row > div:first-child,
+.definition-list li,
+.settings-grid label {
+  display: grid;
+  gap: 3px;
+}
+
+.workflow-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.workflow-actions input {
+  min-width: 130px;
+}
+
+.workflow-card dl,
+.route-surface dl {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.workflow-card dl > div,
+.route-surface dl > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.35fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.workflow-card dt,
+.route-surface dt {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.workflow-card dd,
+.route-surface dd {
+  margin: 0;
+}
+
+.route-error,
+.phase-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--danger-border);
+  border-radius: 5px;
+  background: var(--red-soft);
+  padding: 10px;
+  color: var(--danger-text);
+}
+
+.route-empty {
+  min-height: 220px;
+  place-content: center;
+}
+
+.command-dialog {
+  width: min(680px, calc(100vw - 24px));
+  max-height: min(720px, calc(100dvh - 24px));
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 0;
+  color: var(--text);
+  box-shadow: 0 18px 48px var(--panel-shadow);
+}
+
+.command-dialog::backdrop {
+  background: rgb(12 20 17 / 58%);
+}
+
+.command-dialog-body {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.command-dialog-body > header,
+.command-search,
+.command-dialog-body li button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.command-dialog-body > header {
+  justify-content: space-between;
+}
+
+.command-search {
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding-inline: 9px;
+}
+
+.command-search input {
+  border: 0;
+}
+
+.command-dialog-body ul {
+  display: grid;
+  max-height: 55vh;
+  gap: 4px;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.command-dialog-body li button {
+  width: 100%;
+  justify-content: space-between;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  padding: 9px;
+  text-align: left;
+}
+
+.command-dialog-body li button:hover,
+.command-dialog-body li button:focus-visible {
+  background: var(--surface-muted);
+}
+
+.command-dialog-body li span {
+  display: grid;
+  gap: 2px;
+}
+
+.command-dialog-body small {
+  color: var(--text-muted);
+}
+
+kbd {
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface-muted);
+  padding: 2px 5px;
+  font: inherit;
+  font-size: 0.68rem;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  clip-path: inset(50%) !important;
+  white-space: nowrap !important;
+}
+
+.skip-link {
+  position: fixed;
+  z-index: 200;
+  top: 6px;
+  left: 6px;
+  transform: translateY(-150%);
+  border-radius: 5px;
+  background: var(--surface);
+  padding: 8px 12px;
+  color: var(--text);
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
+[data-density="compact"] .workflow-row,
+[data-density="compact"] .member-row {
+  min-height: 40px;
+  padding-block: 4px;
+}
+
+[data-motion="reduce"] *,
+[data-motion="reduce"] *::before,
+[data-motion="reduce"] *::after {
+  scroll-behavior: auto !important;
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-motion="system"] *,
+  [data-motion="system"] *::before,
+  [data-motion="system"] *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  :root,
+  [data-contrast="system"],
+  [data-contrast="forced"] {
+    forced-color-adjust: auto;
+  }
+
+  .status-dot,
+  .connection-dot {
+    border: 1px solid ButtonText;
+  }
 }
 
 .message-panel-header {
@@ -2204,14 +2554,12 @@ textarea {
 
   .portal-shell {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(190px, 35vh) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     min-height: 100dvh;
   }
 
   .group-rail {
-    height: auto;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
+    display: none;
   }
 
   .rail-heading {
@@ -2238,7 +2586,23 @@ textarea {
   }
 
   .workspace {
-    height: 65dvh;
+    height: 100dvh;
+  }
+
+  .mobile-switcher {
+    display: inline-flex;
+  }
+
+  .mobile-switcher select {
+    width: min(38vw, 180px);
+  }
+
+  .route-navigation {
+    padding-inline: 4px;
+  }
+
+  .route-navigation > span {
+    display: none;
   }
 
   .message-launcher {

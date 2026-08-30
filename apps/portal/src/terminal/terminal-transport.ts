@@ -121,6 +121,12 @@ export class TerminalTransport {
     });
   }
 
+  public releaseController(): void {
+    if (this.#lease === undefined) return;
+    this.send({ type: "release", leaseId: this.#lease.id });
+    this.#lease = undefined;
+  }
+
   public dispose(): void {
     this.#closed = true;
     if (this.#reconnect !== undefined) window.clearTimeout(this.#reconnect);

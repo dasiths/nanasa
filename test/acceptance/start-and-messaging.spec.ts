@@ -99,6 +99,8 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
     "nanasa.get_action_result",
     "nanasa.wait_action",
     "nanasa.cancel_action",
+    "nanasa.get_delivery",
+    "nanasa.list_visible_history",
     "nanasa.list_own_waits",
   ]);
   const listedMembers = await nanasa.agentMcpRequest(
@@ -141,7 +143,9 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
     paneByMember.get(members[1]!.memberId)!,
     `[From: Alpha | Member: ${members[0]!.memberId} | Message:`,
   );
-  const agentMessage = page.getByText("acceptance-agent-to-agent").locator("..");
+  const agentMessage = page
+    .locator(".chat-bubble")
+    .filter({ hasText: "acceptance-agent-to-agent" });
   await expect(agentMessage).toContainText("From: Alpha");
   await expect(agentMessage.getByRole("button", { name: /Sent to 1/ })).toContainText(
     "terminal_injected",

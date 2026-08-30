@@ -5,6 +5,8 @@ import {
   AgentActionSchema,
   type AgentActionWorkspace,
   AgentActionWorkspaceSchema,
+  type AgentStatusDetail,
+  AgentStatusDetailSchema,
   type CreateAgentActionCommand,
   CreateAgentActionCommandSchema,
   type OpenWait,
@@ -17,6 +19,8 @@ import {
   AssignAgentCheckoutCommandSchema,
   type ClearMessageHistoryResult,
   ClearMessageHistoryResultSchema,
+  type ConfigStatus,
+  ConfigStatusSchema,
   type CreateGroupAgentCommand,
   CreateGroupAgentCommandSchema,
   type CreateGroupCommand,
@@ -37,6 +41,8 @@ import {
   NanasaConfigSchema,
   type PortalSnapshot,
   PortalSnapshotSchema,
+  type ProviderStateBinding,
+  ProviderStateBindingSchema,
   type RemoveGroupAgentResult,
   RemoveGroupAgentResultSchema,
   type ReorderGroupAgentsCommand,
@@ -62,6 +68,7 @@ import {
   type TerminalEndpointStatus,
   TerminalEndpointStatusSchema,
   type TerminalCheckpoint,
+  type TerminalCheckpointCapture,
   TerminalCheckpointContentSchema,
   TerminalCheckpointSchema,
   type TerminalReadResult,
@@ -90,6 +97,10 @@ export interface PortalClient {
   loadMetadata(): Promise<ControlMetadata>;
   loadSnapshot(): Promise<PortalSnapshot>;
   loadConfig(): Promise<NanasaConfig>;
+  loadConfigStatus(): Promise<ConfigStatus>;
+  listProviderStates(): Promise<ProviderStateBinding[]>;
+  retainProviderState(bindingId: string): Promise<ProviderStateBinding>;
+  deleteProviderState(bindingId: string): Promise<ProviderStateBinding>;
   createGroup(command: CreateGroupCommand): Promise<Group>;
   updateGroup(groupId: string, command: UpdateGroupCommand): Promise<Group>;
   deleteGroup(groupId: string): Promise<DeleteGroupResult>;
@@ -131,7 +142,9 @@ export interface PortalClient {
   submitMessage(groupId: string, command: SubmitMessageCommand): Promise<MessageSubmissionResult>;
   createAgentAction(command: CreateAgentActionCommand): Promise<AgentAction>;
   loadActionWorkspace(groupId: string): Promise<AgentActionWorkspace>;
+  cancelAgentAction(actionId: string): Promise<AgentAction>;
   replyOpenWait(waitId: string, command: ReplyOpenWaitCommand): Promise<OpenWait>;
+  acknowledgeCompletion(groupId: string, memberId: string): Promise<AgentStatusDetail>;
   loadMessages(
     groupId: string,
     options?: { limit?: number; before?: number; after?: number },
@@ -140,9 +153,14 @@ export interface PortalClient {
   getTerminalEndpointStatus(runId: string): Promise<TerminalEndpointStatus>;
   readTerminal(runId: string, generation: number): Promise<TerminalReadResult>;
   listTerminalCheckpoints(): Promise<TerminalCheckpoint[]>;
+  createTerminalCheckpoint(
+    runId: string,
+    command: TerminalCheckpointCapture,
+  ): Promise<TerminalCheckpoint>;
   getTerminalCheckpoint(
     checkpointId: string,
   ): Promise<{ checkpoint: TerminalCheckpoint; text: string }>;
+  deleteTerminalCheckpoint(checkpointId: string): Promise<void>;
   createEventsSocket(afterSequence: number, instanceId: string): WebSocket;
 }
 
@@ -183,6 +201,21 @@ export const api: PortalClient = {
   loadMetadata: () => control.metadata(),
   loadSnapshot: () => request(`${CONTROL_API_PREFIX}/snapshot`, PortalSnapshotSchema),
   loadConfig: () => request(`${CONTROL_API_PREFIX}/config`, NanasaConfigSchema),
+  loadConfigStatus: () => request(`${CONTROL_API_PREFIX}/config/status`, ConfigStatusSchema),
+  listProviderStates: () =>
+    request(`${CONTROL_API_PREFIX}/provider-states`, ProviderStateBindingSchema.array()),
+  retainProviderState: (bindingId) =>
+    request(
+      `${CONTROL_API_PREFIX}/provider-states/${encodeURIComponent(bindingId)}/retain`,
+      ProviderStateBindingSchema,
+      commandInit("POST", {}),
+    ),
+  deleteProviderState: (bindingId) =>
+    request(
+      `${CONTROL_API_PREFIX}/provider-states/${encodeURIComponent(bindingId)}`,
+      ProviderStateBindingSchema,
+      commandInit("DELETE", {}),
+    ),
   createGroup: (command) =>
     request(
       `${CONTROL_API_PREFIX}/groups`,
@@ -298,11 +331,23 @@ export const api: PortalClient = {
       `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/action-workspace`,
       AgentActionWorkspaceSchema,
     ),
+  cancelAgentAction: (actionId) =>
+    request(
+      `${CONTROL_API_PREFIX}/agent-actions/${encodeURIComponent(actionId)}/cancel`,
+      AgentActionSchema,
+      commandInit("POST", {}),
+    ),
   replyOpenWait: (waitId, command) =>
     request(
       `${CONTROL_API_PREFIX}/open-waits/${encodeURIComponent(waitId)}/reply`,
       OpenWaitSchema,
       commandInit("POST", ReplyOpenWaitCommandSchema.parse(command)),
+    ),
+  acknowledgeCompletion: (groupId, memberId) =>
+    request(
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/status/acknowledge`,
+      AgentStatusDetailSchema,
+      commandInit("POST", {}),
     ),
   loadMessages: (groupId, options = {}) => {
     const query = new URLSearchParams();
@@ -335,10 +380,21 @@ export const api: PortalClient = {
     request(`${CONTROL_API_PREFIX}/terminal-checkpoints`, {
       parse: (value: unknown) => TerminalCheckpointSchema.array().parse(value),
     }),
+  createTerminalCheckpoint: (runId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/runs/${encodeURIComponent(runId)}/terminal/checkpoints`,
+      TerminalCheckpointSchema,
+      commandInit("POST", command),
+    ),
   getTerminalCheckpoint: (checkpointId) =>
     request(
       `${CONTROL_API_PREFIX}/terminal-checkpoints/${encodeURIComponent(checkpointId)}`,
       TerminalCheckpointContentSchema,
+    ),
+  deleteTerminalCheckpoint: (checkpointId) =>
+    requestVoid(
+      `${CONTROL_API_PREFIX}/terminal-checkpoints/${encodeURIComponent(checkpointId)}`,
+      commandInit("DELETE", {}),
     ),
   createEventsSocket: (afterSequence, instanceId) => control.openEvents(afterSequence, instanceId),
 };

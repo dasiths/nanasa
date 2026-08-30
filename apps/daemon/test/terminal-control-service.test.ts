@@ -47,6 +47,9 @@ describe("TerminalControlService", () => {
     const lease = service.takeover(run.id, observer.viewer.streamId, first.viewer.lease?.id);
     expect(lease.viewerId).toBe("viewer-two");
     expect(firstClose).toHaveBeenCalledWith(4001, "terminal_controller_taken_over");
+    expect(service.release(run.id, observer.viewer.streamId, lease.id).role).toBe("observer");
+    expect(service.hasController(run.id)).toBe(false);
+    expect(service.takeover(run.id, observer.viewer.streamId).viewerId).toBe("viewer-two");
     expect(() =>
       service.connect({
         runId: run.id,

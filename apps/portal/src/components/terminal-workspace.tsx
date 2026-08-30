@@ -32,6 +32,7 @@ function TerminalPane({
   role,
   connectionRevision,
   suspended,
+  theme,
 }: {
   client: PortalClient;
   run: AgentRun;
@@ -41,6 +42,7 @@ function TerminalPane({
   role: RoleDefinition | undefined;
   connectionRevision: number;
   suspended: boolean;
+  theme: "light" | "dark";
 }) {
   const runRevision = `${run.generation}:${run.status}:${run.terminal?.paneId ?? "pending"}:${connectionRevision}`;
   const { status, loading, error, retry } = useTerminalEndpoint(client, run.id, runRevision);
@@ -93,18 +95,14 @@ function TerminalPane({
           </button>
         </div>
       </div>
-      {suspended ? (
-        <div className="terminal-state" role="status">
-          <LoaderCircle className="spin" aria-hidden="true" size={22} />
-          <strong>Routing message</strong>
-        </div>
-      ) : status?.state === "ready" ? (
+      {status?.state === "ready" ? (
         <TerminalConsole
           client={client}
           endpoint={status}
           runGeneration={run.generation}
-          theme={document.documentElement.dataset.theme === "light" ? "light" : "dark"}
+          theme={theme}
           label={`${alias} (${memberId}) terminal console`}
+          suspended={suspended}
         />
       ) : (
         <div
@@ -126,6 +124,12 @@ function TerminalPane({
           )}
         </div>
       )}
+      {suspended && (
+        <div className="terminal-suspension-overlay" role="status">
+          <LoaderCircle className="spin" aria-hidden="true" size={22} />
+          <strong>Routing message</strong>
+        </div>
+      )}
     </section>
   );
 }
@@ -139,6 +143,9 @@ interface TerminalWorkspaceProps {
   agentStatuses?: AgentStatusSummary[];
   connectionRevision?: number;
   suspended?: boolean;
+  activeRunId?: string;
+  onSelectRun?(runId: string): void;
+  theme?: "light" | "dark";
 }
 
 export function TerminalWorkspace({
@@ -150,6 +157,9 @@ export function TerminalWorkspace({
   agentStatuses = [],
   connectionRevision = 0,
   suspended = false,
+  activeRunId: requestedActiveRunId,
+  onSelectRun,
+  theme = "dark",
 }: TerminalWorkspaceProps) {
   const availableRuns = members
     .map(
@@ -164,9 +174,14 @@ export function TerminalWorkspace({
     setTerminalLayout,
   } = usePortalPreferences();
   const [selectedRunId, setSelectedRunId] = useState<string>();
-  const activeRunId = availableRuns.some((run) => run.id === selectedRunId)
-    ? selectedRunId
+  const selectedCandidate = requestedActiveRunId ?? selectedRunId;
+  const activeRunId = availableRuns.some((run) => run.id === selectedCandidate)
+    ? selectedCandidate
     : availableRuns[0]?.id;
+  const selectRun = (runId: string) => {
+    setSelectedRunId(runId);
+    onSelectRun?.(runId);
+  };
   const memberAlias = (run: AgentRun) =>
     members.find((member) => member.memberId === run.memberId)?.alias ?? run.memberId;
   const memberRole = (run: AgentRun) => {
@@ -207,7 +222,7 @@ export function TerminalWorkspace({
                 className={`terminal-tab-select ${roleColorClass(memberRole(run))}`}
                 role="tab"
                 aria-selected={run.id === activeRunId}
-                onClick={() => setSelectedRunId(run.id)}
+                onClick={() => selectRun(run.id)}
               >
                 <span
                   className={`status-dot status-${displayStatus(run)}`}
@@ -242,11 +257,13 @@ export function TerminalWorkspace({
         </div>
       </div>
       <div className={`terminal-layout terminal-layout-${layout}`}>
-        {availableRuns
-          .filter((run) => layout === "grid" || run.id === activeRunId)
-          .map((run) => (
+        {availableRuns.map((run) => (
+          <div
+            className="terminal-pane-slot"
+            key={run.id}
+            hidden={layout === "tabs" && run.id !== activeRunId}
+          >
             <TerminalPane
-              key={run.id}
               client={client}
               run={run}
               alias={memberAlias(run)}
@@ -255,8 +272,10 @@ export function TerminalWorkspace({
               role={memberRole(run)}
               connectionRevision={connectionRevision}
               suspended={suspended}
+              theme={theme}
             />
-          ))}
+          </div>
+        ))}
       </div>
     </div>
   );

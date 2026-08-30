@@ -245,6 +245,7 @@ interface MessageWorkspaceProps {
   unreadCount?: number;
   activityRevision?: number;
   client?: PortalClient;
+  presentation?: "overlay" | "route";
   onReadThrough?(sequence: number): void;
   onSubmit(command: SubmitMessageCommand): Promise<MessageSubmissionResult>;
 }
@@ -394,10 +395,11 @@ export function MessageWorkspace({
   unreadCount = 0,
   activityRevision = 0,
   client = api,
+  presentation = "overlay",
   onReadThrough,
   onSubmit,
 }: MessageWorkspaceProps) {
-  const [open, setOpen] = useState(loadOverlayOpen);
+  const [open, setOpen] = useState(() => presentation === "route" || loadOverlayOpen());
   const [composing, setComposing] = useState(false);
   const [audienceKind, setAudienceKind] = useState<AudienceKind>("dm");
   const [recipientIds, setRecipientIds] = useState<string[]>(
@@ -533,15 +535,19 @@ export function MessageWorkspace({
   }, [activityRevision, client, group.id]);
 
   useEffect(() => {
+    if (presentation === "route") {
+      setOpen(true);
+      return;
+    }
     try {
       window.localStorage.setItem(MESSAGE_OVERLAY_OPEN_KEY, String(open));
     } catch {
       // The overlay remains usable when browser storage is blocked.
     }
-  }, [open]);
+  }, [open, presentation]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || presentation === "route") return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || composing || confirmingClear) return;
       const overlay = document.getElementById("message-overlay");
@@ -559,7 +565,7 @@ export function MessageWorkspace({
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [composing, confirmingClear, open]);
+  }, [composing, confirmingClear, open, presentation]);
 
   useEffect(() => {
     const dialog = composerDialogRef.current;
@@ -796,25 +802,31 @@ export function MessageWorkspace({
 
   return (
     <>
-      <button
-        ref={launcherRef}
-        type="button"
-        className="message-launcher"
-        aria-label="Messages"
-        aria-expanded={open}
-        aria-controls="message-overlay"
-        title={open ? "Close messages" : "Open messages"}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <MessageCircle aria-hidden="true" size={20} />
-        {unreadCount > 0 && (
-          <span className="message-launcher-badge" aria-label={`${unreadCount} unread messages`}>
-            {unreadCount > 99 ? "99+" : unreadCount}
-          </span>
-        )}
-      </button>
+      {presentation === "overlay" && (
+        <button
+          ref={launcherRef}
+          type="button"
+          className="message-launcher"
+          aria-label="Messages"
+          aria-expanded={open}
+          aria-controls="message-overlay"
+          title={open ? "Close messages" : "Open messages"}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <MessageCircle aria-hidden="true" size={20} />
+          {unreadCount > 0 && (
+            <span className="message-launcher-badge" aria-label={`${unreadCount} unread messages`}>
+              {unreadCount > 99 ? "99+" : unreadCount}
+            </span>
+          )}
+        </button>
+      )}
       {open && (
-        <section id="message-overlay" className="message-overlay" aria-label="Messages overlay">
+        <section
+          id={presentation === "overlay" ? "message-overlay" : undefined}
+          className={presentation === "overlay" ? "message-overlay" : "message-route"}
+          aria-label={presentation === "overlay" ? "Messages overlay" : "Group messages"}
+        >
           <section className="message-panel" aria-label="Messages">
             <header className="message-panel-header">
               <div className="message-toolbar-title">
@@ -827,16 +839,18 @@ export function MessageWorkspace({
                 </span>
               </div>
               <div className="message-toolbar-actions">
-                <button
-                  type="button"
-                  className="icon-button"
-                  aria-label="Clear all message history"
-                  title="Delete stored message history"
-                  disabled={groupHistory.length === 0}
-                  onClick={() => setConfirmingClear(true)}
-                >
-                  <Trash2 aria-hidden="true" size={15} />
-                </button>
+                {presentation === "overlay" && (
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label="Clear all message history"
+                    title="Delete stored message history"
+                    disabled={groupHistory.length === 0}
+                    onClick={() => setConfirmingClear(true)}
+                  >
+                    <Trash2 aria-hidden="true" size={15} />
+                  </button>
+                )}
                 <button
                   type="button"
                   className="icon-button"

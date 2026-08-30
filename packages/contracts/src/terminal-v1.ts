@@ -218,6 +218,7 @@ export const TerminalCheckpointCaptureSchema = z
     source: TerminalReadSourceSchema.default("history"),
   })
   .strict();
+export type TerminalCheckpointCapture = z.input<typeof TerminalCheckpointCaptureSchema>;
 export const TerminalCheckpointContentSchema = z
   .object({ checkpoint: TerminalCheckpointSchema, text: z.string() })
   .strict();

@@ -24,12 +24,14 @@ export function TerminalConsole({
   runGeneration,
   theme,
   label,
+  suspended = false,
 }: {
   client: PortalClient;
   endpoint: Extract<TerminalEndpointStatus, { state: "ready" }>;
   runGeneration: number;
   theme: "light" | "dark";
   label: string;
+  suspended?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XtermController | null>(null);
@@ -51,6 +53,7 @@ export function TerminalConsole({
   const [previous, setPrevious] =
     useState<Awaited<ReturnType<PortalClient["getTerminalCheckpoint"]>>>();
   const viewerId = useRef(sessionStorage.getItem("nanasa-terminal-viewer") ?? crypto.randomUUID());
+  const mountId = useRef(crypto.randomUUID());
   const modifier = selectionModifier();
   const selectionHint = `Mouse input belongs to the terminal app. Hold ${modifier} and drag to select text.`;
 
@@ -118,7 +121,15 @@ export function TerminalConsole({
       transportRef.current = null;
       xtermRef.current = null;
     };
-  }, [endpoint, runGeneration, theme]);
+  }, [endpoint, runGeneration]);
+
+  useEffect(() => {
+    xtermRef.current?.setTheme(theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (suspended) transportRef.current?.releaseController();
+  }, [suspended]);
 
   const openTranscript = useCallback(() => {
     setTranscriptOpen(true);
@@ -135,6 +146,7 @@ export function TerminalConsole({
     <div
       className="terminal-console"
       aria-label={label}
+      data-terminal-mount-id={mountId.current}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenu({ x: event.clientX, y: event.clientY });
