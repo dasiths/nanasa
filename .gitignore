@@ -162,4 +162,4 @@ apps/daemon/:memory:*
 .nanasa/runtime/
 
 # GitHub Copilot tracking files
-.copilot-tracking
+.copilot-tracking/
