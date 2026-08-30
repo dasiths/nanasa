@@ -3,6 +3,8 @@
     "ignoreUnknown": true,
     "includes": [
       "package.json",
+      "README.md",
+      "THIRD_PARTY_NOTICES.md",
       "pnpm-workspace.yaml",
       "pnpm-lock.yaml",
       "tsconfig.base.json",
@@ -10,6 +12,8 @@
       "biome.json",
       "bin/**",
       "scripts/**",
+      "docs/**",
+      "!!docs/next/reference/**",
       "test/**",
       "templates/**",
       "apps/**",

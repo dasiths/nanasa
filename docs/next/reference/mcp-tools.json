@@ -1,0 +1,580 @@
+{
+  "generatorVersion": 1,
+  "packageVersion": "0.1.0-next.11.0",
+  "tools": [
+    {
+      "name": "nanasa.list_members",
+      "description": "List active members visible in the caller's group",
+      "principals": [
+        "agent",
+        "operator"
+      ],
+      "scope": "members:read",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "groupId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.list_agent_statuses",
+      "description": "List semantic status in the caller's group",
+      "principals": [
+        "agent",
+        "operator"
+      ],
+      "scope": "status:read",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "groupId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "attentionOnly": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "attentionOnly"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.get_agent_status",
+      "description": "Read one visible agent status",
+      "principals": [
+        "agent",
+        "operator"
+      ],
+      "scope": "status:read",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "groupId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "memberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "memberId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.report_progress",
+      "description": "Report progress for the authenticated agent runtime",
+      "principals": [
+        "agent"
+      ],
+      "scope": "progress:write:self",
+      "authority": "self-write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "stage": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "nextStep": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "blocker": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "succeeded",
+              "failed"
+            ]
+          }
+        },
+        "required": [
+          "stage",
+          "summary"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.send_dm",
+      "description": "Send a durable direct message",
+      "principals": [
+        "agent",
+        "operator"
+      ],
+      "scope": "messages:send",
+      "authority": "message",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "groupId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "intent": {
+            "default": "request",
+            "type": "string",
+            "enum": [
+              "inform",
+              "request",
+              "response"
+            ]
+          },
+          "contentType": {
+            "default": "text/markdown",
+            "type": "string",
+            "enum": [
+              "text/plain",
+              "text/markdown"
+            ]
+          },
+          "conversationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "replyTo": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "recipientMemberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "text",
+          "intent",
+          "contentType",
+          "recipientMemberId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.send_multicast",
+      "description": "Send a durable multicast message",
+      "principals": [
+        "agent",
+        "operator"
+      ],
+      "scope": "messages:send",
+      "authority": "message",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "groupId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "intent": {
+            "default": "request",
+            "type": "string",
+            "enum": [
+              "inform",
+              "request",
+              "response"
+            ]
+          },
+          "contentType": {
+            "default": "text/markdown",
+            "type": "string",
+            "enum": [
+              "text/plain",
+              "text/markdown"
+            ]
+          },
+          "conversationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "replyTo": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "recipientMemberIds": {
+            "minItems": 2,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        },
+        "required": [
+          "text",
+          "intent",
+          "contentType",
+          "recipientMemberIds"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.broadcast_group",
+      "description": "Broadcast a durable group message",
+      "principals": [
+        "agent",
+        "operator"
+      ],
+      "scope": "messages:send",
+      "authority": "message",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "groupId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "intent": {
+            "default": "request",
+            "type": "string",
+            "enum": [
+              "inform",
+              "request",
+              "response"
+            ]
+          },
+          "contentType": {
+            "default": "text/markdown",
+            "type": "string",
+            "enum": [
+              "text/plain",
+              "text/markdown"
+            ]
+          },
+          "conversationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "replyTo": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "text",
+          "intent",
+          "contentType"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.prompt_peer",
+      "description": "Create a safe exact-target peer prompt action",
+      "principals": [
+        "agent",
+        "operator"
+      ],
+      "scope": "actions:prompt:peer",
+      "authority": "scoped-peer-action",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "groupId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "memberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "expectedRunId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedGeneration": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "expectedStatusRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "memberId",
+          "prompt",
+          "idempotencyKey"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.get_action_result",
+      "description": "Read a caller-owned action result",
+      "principals": [
+        "agent",
+        "operator"
+      ],
+      "scope": "actions:read:own",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "actionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "actionId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.wait_action",
+      "description": "Wait for a caller-owned exact action",
+      "principals": [
+        "agent",
+        "operator"
+      ],
+      "scope": "actions:wait:own",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "actionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "states": {
+            "minItems": 1,
+            "maxItems": 16,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "created",
+                "deferred",
+                "submitted",
+                "accepted",
+                "started",
+                "blocked",
+                "completed",
+                "settled-unverified",
+                "failed",
+                "stalled",
+                "timed-out",
+                "cancelled",
+                "expired",
+                "superseded",
+                "rejected"
+              ]
+            }
+          },
+          "timeoutMs": {
+            "default": 30000,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 300000
+          }
+        },
+        "required": [
+          "actionId",
+          "states",
+          "timeoutMs"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.cancel_action",
+      "description": "Cancel a caller-owned pending action",
+      "principals": [
+        "agent",
+        "operator"
+      ],
+      "scope": "actions:cancel:own",
+      "authority": "scoped-peer-action",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "actionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "actionId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.get_delivery",
+      "description": "Read a visible per-recipient delivery outcome",
+      "principals": [
+        "agent",
+        "operator"
+      ],
+      "scope": "delivery:read:visible",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "recipientMemberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "messageId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.list_visible_history",
+      "description": "Read bounded message history visible to the caller",
+      "principals": [
+        "agent",
+        "operator"
+      ],
+      "scope": "history:read:visible",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "groupId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "limit": {
+            "default": 20,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "before": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "after": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "limit"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.list_own_waits",
+      "description": "List only the authenticated runtime's open waits",
+      "principals": [
+        "agent"
+      ],
+      "scope": "waits:read:self",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "groupId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ]
+}

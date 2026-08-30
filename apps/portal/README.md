@@ -8,7 +8,7 @@ ms.topic: reference
 
 ## Development
 
-The portal uses relative `/api` URLs for application REST, event WebSocket, and
+The portal uses relative `/api/v1` URLs for application REST, event WebSocket, and
 `nanasa-terminal.v1` traffic. The daemon remains at
 `http://127.0.0.1:3210` by default.
 
@@ -57,15 +57,14 @@ narrow screens, the overlay becomes an inset full-screen sheet. Terminal tab and
 grid layout remain independent, with grid rendering up to three agent columns,
 then two and one at smaller breakpoints.
 
-Messages floats over the terminal workspace. Before any portal or agent-originated
-delivery, the portal temporarily suspends terminal controllers so the daemon can
-paste text into each verified recipient pane and
-send Enter separately. A consumed outcome confirms terminal injection, not
-semantic completion by the agent CLI.
+Messages float over the terminal workspace. The daemon serializes every automated
+delivery through the terminal input arbiter and rechecks exact runtime identity
+before pasting text and sending Enter. A `terminal_injected` outcome confirms
+transport, not semantic completion by the agent CLI.
 
 ## Operations and preferences
 
-Agent creation validates `/api/config` with the shared configuration schema and
+Agent creation validates `/api/v1/config` with the shared configuration schema and
 lists every configured integration and role by display name and key. A
 configuration load failure has a dedicated blocking state so the portal cannot
 offer stale or hardcoded launch choices.
@@ -81,7 +80,7 @@ The workspace header reports agent and running counts. The agent-set revision is
 kept internal for safe broadcasts and is not displayed.
 
 Light, dark, and system themes and the terminal tab or grid layout persist in
-`localStorage` under `nanasa.portal.preferences.v1`. Storage events synchronize
+`localStorage` under `nanasa.portal.preferences.v2`. Storage events synchronize
 open tabs. Malformed values and unavailable storage use system theme and tab
 layout while controls remain usable. Browser-local message cache and clear
 markers use separate versioned keys. Preferences are independent of group

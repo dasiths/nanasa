@@ -1,0 +1,18 @@
+{
+  "apiVersion": 1,
+  "eventProtocolVersion": 1,
+  "productVersion": "0.1.0-next.11.0",
+  "buildCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "releaseChannel": "next",
+  "configVersion": 2,
+  "databaseSchemaVersion": 7,
+  "repositoryId": "repo_fixture",
+  "instanceId": "instance_fixture",
+  "daemonEpoch": 1,
+  "lifecycle": "ready",
+  "remoteAccess": "loopback-only",
+  "limits": {
+    "eventReplayPageSize": 256,
+    "eventPendingBytes": 1048576
+  }
+}

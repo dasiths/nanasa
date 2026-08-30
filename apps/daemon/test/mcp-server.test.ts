@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadNanasaConfig } from "../src/config.js";
+import { loadNanasaConfig } from "../src/config-v2.js";
 import { McpCredentialIssuer } from "../src/mcp-auth.js";
 import {
   createDaemon as createDaemonBase,

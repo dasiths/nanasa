@@ -1,5 +1,6 @@
 import type {
   AgentActionWorkspace,
+  BrowserRestartFrame,
   ConfigStatus,
   ControlMetadata,
   Group,
@@ -8,6 +9,8 @@ import type {
   OpenWait,
   PortalSnapshot,
   ProviderStateBinding,
+  RemoteDescriptor,
+  ServiceDescriptor,
   TerminalCheckpoint,
 } from "@nanasa/contracts";
 import { Bell, GitBranch, RefreshCw } from "lucide-react";
@@ -693,6 +696,125 @@ function HelpPanel({ commands }: Pick<PortalRoutePanelProps, "commands">) {
   );
 }
 
+function ServicePanel({ client }: Pick<PortalRoutePanelProps, "client">) {
+  const [service, setService] = useState<ServiceDescriptor>();
+  const [restart, setRestart] = useState<BrowserRestartFrame>();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    void client
+      .loadServiceStatus()
+      .then(setService, (cause: unknown) =>
+        setError(cause instanceof Error ? cause.message : "Unable to load service status"),
+      );
+  }, [client]);
+  return (
+    <RouteSurface
+      title="Service"
+      eyebrow="Project-local systemd user service"
+      description="The daemon restarts independently while tmux-owned agent processes continue running."
+    >
+      {error !== undefined && (
+        <p className="route-error" role="alert">
+          {error}
+        </p>
+      )}
+      <section className="workflow-card">
+        <h3>{service?.state ?? "loading"}</h3>
+        <p>{service?.detail ?? "Reading service health."}</p>
+        <dl>
+          <div>
+            <dt>Unit</dt>
+            <dd>{service?.unitName ?? "loading"}</dd>
+          </div>
+          <div>
+            <dt>Process policy</dt>
+            <dd>KillMode={service?.killMode ?? "process"}</dd>
+          </div>
+          <div>
+            <dt>Continuity</dt>
+            <dd>tmux processes survive; terminal WebSockets reconnect</dd>
+          </div>
+          <div>
+            <dt>Last activation</dt>
+            <dd>
+              {service?.lastActivation === undefined
+                ? "No recorded upgrade or rollback"
+                : `${service.lastActivation.state}: ${service.lastActivation.from.packageVersion} to ${service.lastActivation.to.packageVersion}`}
+            </dd>
+          </div>
+        </dl>
+        <button
+          type="button"
+          onClick={() => void client.planServiceRestart("operator-restart").then(setRestart)}
+        >
+          Preview planned restart
+        </button>
+        {restart !== undefined && (
+          <p role="status">
+            Reconnect in {restart.retryAfterMs} ms, resnapshot required, PTY handoff disabled.
+          </p>
+        )}
+      </section>
+    </RouteSurface>
+  );
+}
+
+function RemotePanel({ client }: Pick<PortalRoutePanelProps, "client">) {
+  const [remote, setRemote] = useState<RemoteDescriptor>();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    void client
+      .loadRemoteStatus()
+      .then(setRemote, (cause: unknown) =>
+        setError(cause instanceof Error ? cause.message : "Unable to load remote status"),
+      );
+  }, [client]);
+  return (
+    <RouteSurface
+      title="Remote access"
+      eyebrow="OpenSSH loopback forwarding"
+      description="Remote operation keeps every daemon and terminal listener on loopback."
+    >
+      {error !== undefined && (
+        <p className="route-error" role="alert">
+          {error}
+        </p>
+      )}
+      <section className="workflow-card">
+        <h3>{remote?.service.state ?? "loading"}</h3>
+        <p>No browser-managed tunnel is active. Start a verified tunnel from the operator CLI.</p>
+        <dl>
+          <div>
+            <dt>Repository</dt>
+            <dd>{remote?.repositoryId ?? "loading"}</dd>
+          </div>
+          <div>
+            <dt>Build</dt>
+            <dd>{remote?.build.packageVersion ?? "loading"}</dd>
+          </div>
+          <div>
+            <dt>Service</dt>
+            <dd>{remote?.service.unitName ?? "loading"}</dd>
+          </div>
+          <div>
+            <dt>Authentication</dt>
+            <dd>OpenSSH configuration and agent</dd>
+          </div>
+          <div>
+            <dt>Forwarding</dt>
+            <dd>Local loopback to remote loopback only</dd>
+          </div>
+          <div>
+            <dt>Reconnect</dt>
+            <dd>Restore the tunnel, then reload and resnapshot</dd>
+          </div>
+        </dl>
+        <p>Direct portal exposure, multi-user tenancy, and distributed runners are unsupported.</p>
+      </section>
+    </RouteSurface>
+  );
+}
+
 function RouteSurface({
   title,
   eyebrow,
@@ -830,5 +952,9 @@ export function PortalRoutePanel(props: PortalRoutePanelProps) {
           </section>
         </RouteSurface>
       );
+    case "service":
+      return <ServicePanel client={props.client} />;
+    case "remote":
+      return <RemotePanel client={props.client} />;
   }
 }

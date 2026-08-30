@@ -1,0 +1,22 @@
+[Unit]
+Description=Nanasa project-local coding-agent control plane
+Documentation=file://{{PACKAGE_ROOT}}/README.md
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory={{REPOSITORY_ROOT}}
+EnvironmentFile={{ENVIRONMENT_FILE}}
+ExecStart={{NODE_PATH}} {{CLI_PATH}} start
+ExecStartPost={{NODE_PATH}} {{CLI_PATH}} service wait-ready
+Restart=on-failure
+RestartSec=2s
+KillMode=process
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier={{INSTANCE_NAME}}
+
+[Install]
+WantedBy=default.target

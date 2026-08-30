@@ -6,8 +6,10 @@ import {
 } from "./use-portal-preferences.js";
 
 describe("portal preferences v2", () => {
-  it("migrates valid v1 fields and rejects malformed values", () => {
-    expect(parsePortalPreferences('{"theme":"dark","terminalLayout":"grid"}')).toMatchObject({
+  it("parses version 2 fields and rejects old or malformed values", () => {
+    expect(
+      parsePortalPreferences('{"version":2,"theme":"dark","terminalLayout":"grid"}'),
+    ).toMatchObject({
       version: 2,
       theme: "dark",
       terminalLayout: "grid",
@@ -18,6 +20,9 @@ describe("portal preferences v2", () => {
       motion: "system",
     });
     expect(parsePortalPreferences("not json")).toEqual(defaultPortalPreferences);
+    expect(parsePortalPreferences('{"version":1,"theme":"dark"}')).toEqual(
+      defaultPortalPreferences,
+    );
   });
 
   it("removes deleted group and run identifiers without changing presentation", () => {

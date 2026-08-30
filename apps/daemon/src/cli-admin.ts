@@ -3,16 +3,46 @@ import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync } fr
 import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { IntegrationConfig } from "@nanasa/contracts";
 import { loadNanasaConfig } from "./config-v2.js";
-import { ProviderStateRepository } from "./provider-state-repository.js";
-import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
-import { UserCredentialBroker } from "./user-credential-broker.js";
 import {
   formatRedactedResetInventory,
   inventoryAlphaResources,
   resetFromAlpha,
 } from "./persistence/reset-service.js";
+import { ProviderStateRepository } from "./provider-state-repository.js";
+import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
+import { UserCredentialBroker } from "./user-credential-broker.js";
 
 const DIRECTORY_MODE = 0o700;
+
+function inspectHostSupport(problems: string[]): void {
+  if (process.platform !== "linux") problems.push(`unsupported host platform: ${process.platform}`);
+  if (!["x64", "arm64"].includes(process.arch)) {
+    problems.push(`unsupported host architecture: ${process.arch}`);
+  }
+  const nodeMajor = Number(process.versions.node.split(".", 1)[0]);
+  if (![22, 24].includes(nodeMajor)) problems.push(`unsupported Node.js major: ${nodeMajor}`);
+  const report = process.report?.getReport() as
+    | { header?: { glibcVersionRuntime?: string } }
+    | undefined;
+  if (process.platform === "linux" && report?.header?.glibcVersionRuntime === undefined) {
+    problems.push("unsupported Linux libc: glibc is required");
+  }
+  const tmux = spawnSync("tmux", ["-V"], { encoding: "utf8" });
+  const tmuxVersion = tmux.stdout.match(/tmux\s+(\d+)\.(\d+)/);
+  if (tmux.status !== 0 || tmuxVersion === null) problems.push("tmux 3.2 or later is required");
+  else if (
+    Number(tmuxVersion[1]) < 3 ||
+    (Number(tmuxVersion[1]) === 3 && Number(tmuxVersion[2]) < 2)
+  ) {
+    problems.push(`unsupported ${tmux.stdout.trim()}; tmux 3.2 or later is required`);
+  }
+  if (spawnSync("git", ["--version"], { encoding: "utf8" }).status !== 0) {
+    problems.push("Git is required");
+  }
+  if (spawnSync("ssh", ["-V"], { encoding: "utf8" }).status !== 0) {
+    problems.push("OpenSSH is required");
+  }
+}
 
 function ensurePrivateDirectory(path: string): void {
   if (!existsSync(path)) mkdirSync(path, { recursive: true, mode: DIRECTORY_MODE });
@@ -127,6 +157,7 @@ export function setupIntegrations(repositoryRoot: string): void {
 export function doctorIntegrations(repositoryRoot: string): void {
   const loaded = loadNanasaConfig(repositoryRoot);
   const problems: string[] = [];
+  inspectHostSupport(problems);
   inspectPrivateDirectory(loaded.integrationsDirectory, problems, true);
   for (const integration of Object.values(loaded.config.integrations)) {
     const command = integration.command[0] as string;

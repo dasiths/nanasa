@@ -39,6 +39,8 @@ export const ControlMetadataSchema = z
     apiVersion: z.literal(1),
     eventProtocolVersion: z.literal(1),
     productVersion: z.string().trim().min(1).max(100),
+    buildCommit: z.string().regex(/^[a-f0-9]{40}$/),
+    releaseChannel: z.enum(["next", "latest"]),
     configVersion: z.literal(2),
     databaseSchemaVersion: z.number().int().positive(),
     repositoryId: IdentifierSchema,

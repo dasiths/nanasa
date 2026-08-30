@@ -1,7 +1,7 @@
 {
   "name": "nanasa",
-  "version": "0.0.0",
-  "description": "Local terminal-only coding-agent pool with tmux, a web portal, and authenticated MCP messaging",
+  "version": "0.1.0-next.11.0",
+  "description": "Linux coding-agent pool with tmux, an accessible web portal, and authenticated coordination",
   "license": "MIT",
   "homepage": "https://github.com/dasiths/nanasa#readme",
   "bugs": {
@@ -26,6 +26,7 @@
     "dist",
     "templates",
     "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
     "README.md"
   ],
   "packageManager": "pnpm@10.34.5",
@@ -35,8 +36,15 @@
     ]
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22 <23 || >=24 <25"
   },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
   "scripts": {
     "dev": "pnpm --parallel --filter @nanasa/daemon --filter @nanasa/portal dev",
     "prestart": "pnpm build",
@@ -51,7 +59,25 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "test": "pnpm -r --if-present test && pnpm package:test",
-    "smoke": "pnpm --filter @nanasa/daemon smoke"
+    "smoke": "pnpm --filter @nanasa/daemon smoke",
+    "docs:generate": "pnpm build && node --import tsx scripts/generate-references.mjs --write",
+    "docs:check": "pnpm build && node --import tsx scripts/generate-references.mjs --check && node scripts/validate-docs.mjs",
+    "test:release": "node --test test/release/*.test.mjs",
+    "test:coverage": "pnpm build && node scripts/coverage-ratchet.mjs",
+    "coverage:ratchet": "node scripts/coverage-ratchet.mjs",
+    "check:static": "pnpm format:check && pnpm lint && pnpm typecheck",
+    "check:architecture": "node scripts/release-gate.mjs architecture",
+    "check:security": "node scripts/release-gate.mjs security",
+    "check:performance": "node scripts/release-gate.mjs performance",
+    "check:provenance": "node scripts/release-gate.mjs provenance",
+    "check:sbom": "node scripts/release-gate.mjs sbom",
+    "check:systemd": "pnpm --filter @nanasa/daemon exec vitest run test/release-phase11.test.ts -t systemd",
+    "check:migration": "pnpm --filter @nanasa/daemon exec vitest run test/release-phase11.test.ts",
+    "check:watchdog": "node --test test/release/process-harness.test.mjs",
+    "check:fixtures": "node --test test/release/fixture-drift.test.mjs",
+    "check:property": "node --test test/release/property-models.test.mjs",
+    "check:fuzz": "node --test test/release/bounded-fuzz.test.mjs",
+    "release:dry-run": "pnpm package:build && node scripts/release-gate.mjs release"
   },
   "dependencies": {
     "@fastify/static": "^10.1.2",

@@ -69,7 +69,7 @@ describe("typed control facade registries", () => {
     );
   });
 
-  it("covers every required CLI family without a deferred service placeholder", () => {
+  it("covers every required CLI family including release lifecycle operations", () => {
     const families = new Set(CLI_COMMAND_REGISTRY.map((command) => command.family));
     expect(families).toEqual(
       new Set([
@@ -88,8 +88,11 @@ describe("typed control facade registries", () => {
         "group",
         "message",
         "metadata",
+        "migration",
+        "remote",
         "role",
         "run",
+        "service",
         "state",
         "status",
         "terminal",
@@ -114,7 +117,22 @@ describe("typed control facade registries", () => {
       "rollback",
       "remove",
     ]);
-    expect(families.has("service")).toBe(false);
+    expect(
+      CLI_COMMAND_REGISTRY.filter((command) => command.family === "service").map(
+        (command) => command.command,
+      ),
+    ).toEqual([
+      "install",
+      "status",
+      "start",
+      "stop",
+      "restart",
+      "remove",
+      "logs",
+      "wait-ready",
+      "upgrade",
+      "rollback",
+    ]);
     expect(CLI_COMMAND_REGISTRY.every((command) => command.summary.length > 0)).toBe(true);
   });
 

@@ -1,0 +1,345 @@
+{
+  "generatorVersion": 1,
+  "packageVersion": "0.1.0-next.11.0",
+  "routeErrors": {
+    "meta.get": [],
+    "schema.openapi": [],
+    "schema.events": [],
+    "schema.extensions": [],
+    "auth.bootstrap": [
+      "operator_bootstrap_invalid"
+    ],
+    "auth.session": [
+      "operator_unauthorized"
+    ],
+    "auth.revoke": [
+      "operator_unauthorized"
+    ],
+    "config.get": [],
+    "config.status": [],
+    "snapshot.get": [],
+    "service.status": [],
+    "service.planRestart": [],
+    "remote.status": [],
+    "state.list": [],
+    "state.get": [
+      "provider_state_not_found"
+    ],
+    "state.retain": [
+      "provider_state_not_found"
+    ],
+    "state.delete": [
+      "provider_state_not_found"
+    ],
+    "trust.list": [],
+    "extensions.catalog": [],
+    "extensions.list": [],
+    "extensions.inspect": [
+      "extension_not_found"
+    ],
+    "extensions.plan": [
+      "extension_not_found"
+    ],
+    "extensions.health": [
+      "extension_not_found"
+    ],
+    "extensions.trust": [
+      "extension_plan_stale"
+    ],
+    "extensions.install": [
+      "extension_trust_required",
+      "extension_plan_stale",
+      "extension_active_runs"
+    ],
+    "extensions.repair": [
+      "extension_not_installed",
+      "extension_active_runs"
+    ],
+    "extensions.disable": [
+      "extension_not_installed",
+      "extension_active_runs"
+    ],
+    "extensions.rollback": [
+      "extension_rollback_unavailable",
+      "extension_active_runs"
+    ],
+    "extensions.remove": [
+      "extension_referenced",
+      "extension_active_runs"
+    ],
+    "groups.list": [],
+    "groups.get": [
+      "group_not_found"
+    ],
+    "groups.create": [
+      "validation_error"
+    ],
+    "groups.update": [
+      "group_not_found",
+      "active_run_group_change_requires_restart"
+    ],
+    "groups.delete": [
+      "group_not_found"
+    ],
+    "groups.reorder": [
+      "topology_order_stale"
+    ],
+    "agents.list": [
+      "group_not_found"
+    ],
+    "agents.get": [
+      "agent_not_found"
+    ],
+    "agents.create": [
+      "group_not_found",
+      "integration_not_found"
+    ],
+    "agents.update": [
+      "agent_not_found",
+      "active_run_agent_change_requires_restart"
+    ],
+    "agents.delete": [
+      "agent_not_found"
+    ],
+    "agents.reorder": [
+      "topology_order_stale"
+    ],
+    "agents.reparent": [
+      "active_run_reparent_forbidden",
+      "topology_order_stale"
+    ],
+    "agents.assignCheckout": [
+      "active_run_checkout_change_forbidden",
+      "checkout_not_found"
+    ],
+    "roles.list": [],
+    "roles.get": [
+      "role_not_found"
+    ],
+    "roles.updatePresentation": [
+      "role_not_found"
+    ],
+    "runs.list": [],
+    "runs.get": [
+      "run_not_found"
+    ],
+    "runs.start": [
+      "run_already_active",
+      "agent_not_found"
+    ],
+    "runs.stop": [
+      "run_not_found"
+    ],
+    "runs.restart": [
+      "run_not_found",
+      "run_replaced"
+    ],
+    "runs.startAll": [
+      "group_not_found"
+    ],
+    "runs.stopAll": [
+      "group_not_found"
+    ],
+    "runs.restartAll": [
+      "group_not_found"
+    ],
+    "runs.interrupt": [
+      "run_not_running",
+      "terminal_unavailable"
+    ],
+    "statuses.list": [],
+    "statuses.get": [
+      "membership_not_found"
+    ],
+    "statuses.acknowledge": [
+      "membership_not_found"
+    ],
+    "messages.submit": [
+      "message_body_too_large",
+      "membership_revision_stale"
+    ],
+    "messages.list": [
+      "invalid_message_cursor"
+    ],
+    "messages.clear": [
+      "delivery_lease_active"
+    ],
+    "messages.deliveries": [
+      "message_not_found"
+    ],
+    "actions.create": [
+      "agent_action_target_offline",
+      "agent_action_reporter_unavailable"
+    ],
+    "actions.get": [
+      "agent_action_not_found"
+    ],
+    "actions.workspace": [],
+    "actions.cancel": [
+      "agent_action_cancel_requires_ack"
+    ],
+    "actions.wait": [
+      "agent_action_not_found"
+    ],
+    "waits.list": [],
+    "waits.reply": [
+      "open_wait_replaced",
+      "open_wait_reply_channel_unsupported"
+    ],
+    "terminal.status": [
+      "run_not_found"
+    ],
+    "terminal.read": [
+      "terminal_unavailable",
+      "run_replaced"
+    ],
+    "terminal.checkpoints.list": [],
+    "terminal.checkpoints.create": [
+      "terminal_checkpoint_disabled"
+    ],
+    "terminal.checkpoints.get": [
+      "terminal_checkpoint_not_found"
+    ],
+    "terminal.checkpoints.delete": [
+      "terminal_checkpoint_not_found"
+    ],
+    "artifact.preview": [
+      "artifact_path_required",
+      "artifact_not_found"
+    ],
+    "terminal.stream": [
+      "terminal_unavailable"
+    ],
+    "consoles.list": [],
+    "consoles.get": [
+      "console_not_found"
+    ],
+    "consoles.create": [],
+    "consoles.delete": [
+      "console_not_found"
+    ],
+    "repositories.list": [],
+    "checkouts.list": [],
+    "checkouts.open": [
+      "checkout_not_found",
+      "worktree_operation_in_progress"
+    ],
+    "worktrees.list": [],
+    "worktrees.create": [
+      "worktree_operation_in_progress",
+      "worktree_path_conflict"
+    ],
+    "worktrees.delete": [
+      "worktree_not_found",
+      "dirty_worktree_requires_force",
+      "worktree_identity_changed"
+    ],
+    "events.subscribe": [
+      "invalid_event_sequence",
+      "event_cursor_expired"
+    ]
+  },
+  "requestBodyLimits": {
+    "meta.get": 65536,
+    "schema.openapi": 65536,
+    "schema.events": 65536,
+    "schema.extensions": 65536,
+    "auth.bootstrap": 65536,
+    "auth.session": 65536,
+    "auth.revoke": 65536,
+    "config.get": 65536,
+    "config.status": 65536,
+    "snapshot.get": 65536,
+    "service.status": 65536,
+    "service.planRestart": 65536,
+    "remote.status": 65536,
+    "state.list": 65536,
+    "state.get": 65536,
+    "state.retain": 65536,
+    "state.delete": 65536,
+    "trust.list": 65536,
+    "extensions.catalog": 65536,
+    "extensions.list": 65536,
+    "extensions.inspect": 65536,
+    "extensions.plan": 65536,
+    "extensions.health": 65536,
+    "extensions.trust": 65536,
+    "extensions.install": 65536,
+    "extensions.repair": 65536,
+    "extensions.disable": 65536,
+    "extensions.rollback": 65536,
+    "extensions.remove": 65536,
+    "groups.list": 65536,
+    "groups.get": 65536,
+    "groups.create": 65536,
+    "groups.update": 65536,
+    "groups.delete": 65536,
+    "groups.reorder": 65536,
+    "agents.list": 65536,
+    "agents.get": 65536,
+    "agents.create": 65536,
+    "agents.update": 65536,
+    "agents.delete": 65536,
+    "agents.reorder": 65536,
+    "agents.reparent": 65536,
+    "agents.assignCheckout": 65536,
+    "roles.list": 65536,
+    "roles.get": 65536,
+    "roles.updatePresentation": 65536,
+    "runs.list": 65536,
+    "runs.get": 65536,
+    "runs.start": 65536,
+    "runs.stop": 65536,
+    "runs.restart": 65536,
+    "runs.startAll": 65536,
+    "runs.stopAll": 65536,
+    "runs.restartAll": 65536,
+    "runs.interrupt": 65536,
+    "statuses.list": 65536,
+    "statuses.get": 65536,
+    "statuses.acknowledge": 65536,
+    "messages.submit": 6356992,
+    "messages.list": 65536,
+    "messages.clear": 65536,
+    "messages.deliveries": 65536,
+    "actions.create": 65536,
+    "actions.get": 65536,
+    "actions.workspace": 65536,
+    "actions.cancel": 65536,
+    "actions.wait": 65536,
+    "waits.list": 65536,
+    "waits.reply": 65536,
+    "terminal.status": 65536,
+    "terminal.read": 65536,
+    "terminal.checkpoints.list": 65536,
+    "terminal.checkpoints.create": 65536,
+    "terminal.checkpoints.get": 65536,
+    "terminal.checkpoints.delete": 65536,
+    "artifact.preview": 65536,
+    "terminal.stream": 65536,
+    "consoles.list": 65536,
+    "consoles.get": 65536,
+    "consoles.create": 65536,
+    "consoles.delete": 65536,
+    "repositories.list": 65536,
+    "checkouts.list": 65536,
+    "checkouts.open": 65536,
+    "worktrees.list": 65536,
+    "worktrees.create": 65536,
+    "worktrees.delete": 65536,
+    "events.subscribe": 65536
+  },
+  "terminal": {
+    "maxFrameBytes": 262144,
+    "maxInputBytes": 65536,
+    "maxPasteBytes": 196608,
+    "maxOutputQueueBytes": 1048576,
+    "maxViewers": 4,
+    "maxObservers": 3,
+    "maxReadLines": 5000,
+    "maxReadBytes": 1048576,
+    "heartbeatMs": 5000,
+    "leaseMs": 15000,
+    "reconnectHistoryFrames": 256
+  }
+}

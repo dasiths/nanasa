@@ -5,5 +5,6 @@ export * from "./events-v1.js";
 export * from "./extensions-v1.js";
 export * from "./git-v1.js";
 export * from "./provider-v1.js";
+export * from "./release-v1.js";
 export * from "./status-v2.js";
 export * from "./terminal-v1.js";

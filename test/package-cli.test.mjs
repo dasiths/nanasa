@@ -223,7 +223,7 @@ integrations:
   assert.match(result.stderr, /requires --agent <agent-id>/);
 });
 
-test("package build contains one terminal-only daemon entry", () => {
+test("package build contains one fenced daemon entry and release metadata", () => {
   const daemonDirectory = join(root, "dist", "daemon");
   assert.deepEqual(listFiles(daemonDirectory), ["index.js"]);
   const daemonBundle = readFileSync(join(daemonDirectory, "index.js"), "utf8");
@@ -233,6 +233,17 @@ test("package build contains one terminal-only daemon entry", () => {
   );
   assert.equal(existsSync(join(root, "dist", "cli", "admin.js")), true);
   assert.equal(existsSync(join(root, "dist", "cli", "control.js")), true);
+  const metadata = JSON.parse(readFileSync(join(root, "dist", "meta", "build.json"), "utf8"));
+  const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  assert.equal(metadata.packageVersion, packageJson.version);
+  assert.equal(metadata.channel, "next");
+  assert.deepEqual(metadata.hosts, ["linux-x64", "linux-arm64"]);
+  assert.equal(metadata.node, ">=22 <23 || >=24 <25");
+  assert.deepEqual(metadata.terminalHelper, { name: "node-pty", version: "1.1.0" });
+  assert.deepEqual(metadata.browsers, ["chromium", "firefox", "webkit"]);
+  assert.match(metadata.commit, /^[a-f0-9]{40}$/);
+  assert.equal(existsSync(join(root, "dist", "meta", "sbom.spdx.json")), true);
+  assert.equal(existsSync(join(root, "dist", "help", "index.md")), true);
 });
 
 test("completion is daemon-free and grammar failures use exit 2", () => {
@@ -251,7 +262,7 @@ test("completion is daemon-free and grammar failures use exit 2", () => {
   assert.match(usage.stderr, /Unknown command/);
 });
 
-test("packed package installs cleanly and initializes terminal-only config", () => {
+test("packed package installs cleanly and initializes config version 2", () => {
   const archiveDirectory = mkdtempSync(join(tmpdir(), "nanasa-pack-"));
   const installDirectory = mkdtempSync(join(tmpdir(), "nanasa-install-"));
   temporaryDirectories.push(archiveDirectory, installDirectory);
@@ -267,11 +278,22 @@ test("packed package installs cleanly and initializes terminal-only config", () 
   assert.ok(publishedFiles.includes("dist/daemon/index.js"));
   assert.ok(publishedFiles.includes("dist/cli/admin.js"));
   assert.ok(publishedFiles.includes("dist/cli/control.js"));
+  assert.ok(publishedFiles.includes("dist/meta/build.json"));
+  assert.ok(publishedFiles.includes("dist/meta/sbom.spdx.json"));
+  assert.ok(publishedFiles.includes("dist/help/index.md"));
   assert.ok(publishedFiles.includes("templates/config.yaml"));
+  assert.ok(publishedFiles.includes("templates/systemd/nanasa.service"));
+  assert.ok(publishedFiles.includes("THIRD_PARTY_NOTICES.md"));
   assert.equal(
-    publishedFiles.some((path) => /worker|\.map$|^test\//.test(path)),
+    publishedFiles.some((path) =>
+      /worker|\.map$|^test\/|(?:^|\/)\.env|\.sqlite(?:-wal|-shm)?$|mcp-secret|terminal-checkpoints|provider-state/.test(
+        path,
+      ),
+    ),
     false,
   );
+  const buildEntry = manifest.files.find((file) => file.path === "dist/meta/build.json");
+  assert.ok(buildEntry?.size > 0);
 
   writeFileSync(join(installDirectory, "package.json"), '{"private":true}\n');
   const installed = spawnSync(

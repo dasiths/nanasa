@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import type { ControlMetadata } from "@nanasa/contracts";
-import { DATABASE_SCHEMA_VERSION } from "./persistence/database.js";
 import type { DaemonInstanceGuard } from "./daemon-instance-guard.js";
 import type { DaemonLifecycle } from "./daemon-lifecycle.js";
+import { DATABASE_SCHEMA_VERSION } from "./persistence/database.js";
 
 export const CONTROL_API_VERSION = 1 as const;
 export const EVENT_STREAM_VERSION = 1 as const;
-export const PRODUCT_VERSION = "0.0.0";
+export const PRODUCT_VERSION = process.env.NANASA_PRODUCT_VERSION ?? "0.1.0-next.11.0";
+export const BUILD_COMMIT =
+  process.env.NANASA_BUILD_COMMIT ?? "0000000000000000000000000000000000000000";
 export const EVENT_REPLAY_PAGE_SIZE = 256;
 export const EVENT_PENDING_BYTE_LIMIT = 1_048_576;
 
@@ -31,6 +33,8 @@ export function controlMetadata(options: {
     apiVersion: CONTROL_API_VERSION,
     eventProtocolVersion: EVENT_STREAM_VERSION,
     productVersion: PRODUCT_VERSION,
+    buildCommit: BUILD_COMMIT,
+    releaseChannel: PRODUCT_VERSION.includes("-") ? "next" : "latest",
     configVersion: 2,
     databaseSchemaVersion: DATABASE_SCHEMA_VERSION,
     repositoryId: options.repositoryId ?? repositoryIdentity(options.repositoryRoot),

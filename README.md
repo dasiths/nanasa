@@ -45,8 +45,9 @@ editable.
 
 ## Requirements
 
-* Node.js 22 or later
-* tmux
+* Node.js 22 LTS or 24 LTS
+* tmux 3.2 or later
+* Linux glibc on x86_64 or arm64
 * An installed and authenticated agent CLI for each enabled integration
 
 The pinned `node-pty` dependency builds the Linux attachment boundary from
@@ -82,7 +83,7 @@ doctor` checks configured commands and integration directory ownership
 and permissions. Authenticate a configured CLI inside its isolated home with:
 
 ```bash
-npx nanasa auth copilot
+npx nanasa auth login copilot
 ```
 
 The command launches the configured provider command and leaves its native
@@ -91,13 +92,13 @@ inherited without being copied into Nanasa files. An agent-scoped home requires
 the stable configured agent ID:
 
 ```bash
-npx nanasa auth copilot --agent agent_example
+npx nanasa auth login copilot --agent agent_example
 ```
 
 ### Agent configuration homes
 
-Each integration can select how provider configuration, authentication, and
-session state are shared. Omitting `agentConfigHome` uses `integration` scope.
+Each integration selects how provider configuration, authentication, and
+session state are shared. New configuration defaults to membership scope.
 
 ```yaml
 integrations:
@@ -106,27 +107,27 @@ integrations:
     kind: copilot
     command: [copilot]
     cwd: .
-    agentConfigHome: { scope: integration }
+    providerState: { scope: integration }
 
   isolated-reviewer:
     name: Isolated reviewer
     kind: copilot
     command: [copilot]
     cwd: .
-    agentConfigHome: { scope: agent }
+    providerState: { scope: membership }
 
   custom-home:
     name: Custom home
     kind: pi
     command: [pi]
     cwd: .
-    agentConfigHome:
+    providerState:
       scope: custom
       path: homes/{integrationId}/{agentId}
 ```
 
-`integration` shares one home between agents using that integration. `agent`
-uses a stable home for one configured agent across run restarts. `custom` paths
+`integration` shares one home between agents using that integration. `membership`
+uses a stable home for one configured member across run restarts. `custom` paths
 are relative to `.nanasa/integrations` and may use `{integrationId}` and
 `{agentId}`. Absolute paths, traversal, unknown placeholders, and symlinked
 integration directories are rejected.
@@ -146,7 +147,7 @@ integrations:
     kind: copilot
     command: [copilot]
     cwd: .
-    agentConfigHome: { scope: integration }
+    providerState: { scope: integration }
 
 roles:
   implementor:
@@ -557,7 +558,7 @@ descriptions, and the full message body. On narrow screens, Messages becomes an
 inset full-screen sheet and hides the launcher until closed from the header.
 Terminal grid mode renders up to three agent columns, stepping down to two and
 one at narrower widths.
-Terminal tabs, status bars, iframe titles, and accessible names show both the
+Terminal tabs, status bars, document titles, and accessible names show both the
 editable name and stable member ID. The agent-set revision remains an internal
 broadcast concurrency token and is not shown in the workspace header.
 
@@ -570,7 +571,7 @@ shell scrollback while that mode is active.
 
 The header theme selector supports light, dark, and system modes. Theme and
 terminal tab or grid layout are stored under the versioned
-`nanasa.portal.preferences.v1` browser key and synchronize through storage
+`nanasa.portal.preferences.v2` browser key and synchronize through storage
 events. Invalid or unavailable browser storage falls back to system theme and
 tab layout without blocking portal controls.
 
@@ -591,17 +592,21 @@ tab layout without blocking portal controls.
 * [x] Direct terminal execution for configured coding-agent CLIs
 * [x] Authenticated MCP direct, multicast, and group messaging
 * [x] Group and member rename and removal operations
-* [ ] Per-agent worktrees and artifact handoff
-* [ ] Authentication, authorization, and remote runner isolation
-* [ ] Delivery retries, dead letters, and cost controls
+* [x] Managed worktrees, authenticated operator control, and durable actions
+* [x] Project-local systemd service, verified rollback, and SSH forwarding
+* [ ] Distributed runners and hostile-agent operating-system isolation
 
 ## Known limitations
 
-* Linux x86_64 and arm64 are the validated native PTY host architectures
+* Linux glibc x86_64 and arm64 are the supported native PTY host architectures
 * Terminal delivery confirms guarded paste and Enter injection, not semantic
   model processing
-* Remote MCP access requires operator-managed TLS termination and network access
-  controls
+* Supported remote portal access uses OpenSSH forwarding between loopback listeners
+
+## Documentation
+
+See [docs/next/index.md](docs/next/index.md) for installation, continuity,
+provider, API, service, remote, security, testing, and release guidance.
 
 ## Contributing
 

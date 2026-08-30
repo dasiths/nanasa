@@ -124,6 +124,7 @@ async function start(): Promise<void> {
   const portalAssetsPath =
     process.env.NANASA_PORTAL_PATH ??
     resolve(dirname(fileURLToPath(import.meta.url)), "../../portal/dist");
+  const packageRoot = configuredPath("NANASA_PACKAGE_ROOT", process.env.NANASA_PACKAGE_ROOT);
   const daemon = await createDaemon({
     ...(dataPath === undefined ? {} : { dataPath }),
     runtimePath,
@@ -133,6 +134,7 @@ async function start(): Promise<void> {
     statusEndpointUrl,
     servePortal,
     portalAssetsPath,
+    ...(packageRoot === undefined ? {} : { packageRoot }),
     mcp: {
       enabled: mcpEnabled,
       path: mcpPath,

@@ -1,12 +1,22 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { ControlClientError } from "@nanasa/control-client";
 import WebSocket from "ws";
 import { authenticateAgent, doctorIntegrations } from "../cli-admin.js";
+import { DATABASE_SCHEMA_VERSION } from "../persistence/database.js";
+import { repositoryIdentity } from "../protocol-metadata.js";
+import { loadBuildIdentity } from "../release/build-identity.js";
+import { MigrationRunner } from "../release/migration-runner.js";
+import { ReleaseManager } from "../release/release-manager.js";
+import { createRemoteDescriptor } from "../remote/remote-descriptor.js";
+import { buildRemoteSshPlan, RemoteSshSession } from "../remote/remote-ssh.js";
+import { SystemdUserService } from "../service/systemd-user-service.js";
 import {
   CLI_COMMAND_REGISTRY,
+  type CliCommandDeclaration,
   commandRegistryHelp,
   findCliCommand,
-  type CliCommandDeclaration,
 } from "./command-registry.js";
 import { loadControlClient } from "./control-client-loader.js";
 
@@ -14,6 +24,20 @@ export class CliUsageError extends Error {
   public constructor(message: string) {
     super(message);
     this.name = "CliUsageError";
+  }
+}
+
+function publicPackageRoot(start: string): string {
+  let current = resolve(start);
+  while (true) {
+    const manifest = join(current, "package.json");
+    if (existsSync(manifest)) {
+      const value = JSON.parse(readFileSync(manifest, "utf8")) as { name?: string };
+      if (value.name === "nanasa") return current;
+    }
+    const parent = resolve(current, "..");
+    if (parent === current) throw new Error("Unable to discover the Nanasa package root");
+    current = parent;
   }
 }
 
@@ -27,6 +51,7 @@ interface ParsedOptions {
   output: "json" | "text";
   timeoutMs: number;
   agentId?: string;
+  remoteRepo?: string;
 }
 
 function optionValue(args: readonly string[], index: number, option: string): string {
@@ -76,6 +101,7 @@ function parseOptions(args: readonly string[]): ParsedOptions {
         throw new CliUsageError("--timeout must be an integer from 1 to 300000 milliseconds");
       }
     } else if (argument === "--agent") options.agentId = value;
+    else if (argument === "--repo") options.remoteRepo = value;
     else throw new CliUsageError(`Unknown option: ${argument}`);
   }
   return options;
@@ -221,6 +247,78 @@ export async function runControlCli(
     }
     if (declaration.id === "auth.login") {
       authenticateAgent(repositoryRoot, options.positionals[0] as string, options.agentId);
+      return 0;
+    }
+    const packageRoot = publicPackageRoot(import.meta.dirname);
+    const service = new SystemdUserService({ repositoryRoot, packageRoot });
+    if (declaration.family === "service") {
+      let value: unknown;
+      if (declaration.command === "install") value = service.install();
+      else if (declaration.command === "status") value = service.status();
+      else if (declaration.command === "start") value = service.start();
+      else if (declaration.command === "stop") value = service.stop();
+      else if (declaration.command === "restart") value = service.restart();
+      else if (declaration.command === "remove") value = service.remove();
+      else if (declaration.command === "logs") value = { text: service.logs() };
+      else if (declaration.command === "wait-ready")
+        value = await service.waitReady(options.timeoutMs);
+      else if (declaration.command === "upgrade") {
+        value = await new ReleaseManager(repositoryRoot, packageRoot).upgrade(
+          options.positionals[0] as string,
+        );
+      } else if (declaration.command === "rollback") {
+        await new ReleaseManager(repositoryRoot, packageRoot).restoreBackup(
+          options.positionals[0] as string,
+        );
+        value = { restored: options.positionals[0] };
+      }
+      outputSuccess(value, declaration.command === "logs" ? "text" : "json", stdout);
+      return 0;
+    }
+    if (declaration.family === "migration") {
+      const runner = new MigrationRunner(
+        join(repositoryRoot, ".nanasa", "state", "nanasa.sqlite"),
+        DATABASE_SCHEMA_VERSION,
+      );
+      outputSuccess(
+        declaration.command === "probe" ? runner.preflight() : runner.apply(),
+        "json",
+        stdout,
+      );
+      return 0;
+    }
+    if (declaration.id === "remote.describe") {
+      const build = loadBuildIdentity(packageRoot);
+      const descriptor = createRemoteDescriptor({
+        repositoryId: repositoryIdentity(repositoryRoot),
+        instanceId: service.name,
+        build,
+        service: service.status(),
+      });
+      outputSuccess(descriptor, "json", stdout);
+      return 0;
+    }
+    if (declaration.id.startsWith("remote.") && declaration.id !== "remote.describe") {
+      if (options.remoteRepo === undefined) {
+        throw new CliUsageError(`remote ${declaration.command} requires --repo <absolute-path>`);
+      }
+      const build = loadBuildIdentity(packageRoot);
+      const session = new RemoteSshSession(
+        buildRemoteSshPlan(options.positionals[0] as string, options.remoteRepo),
+        build,
+      );
+      if (declaration.command === "start" || declaration.command === "restart") {
+        outputSuccess(await session.service(declaration.command), "json", stdout);
+        return 0;
+      }
+      const descriptor = await session.discover();
+      const connection = await session.connect(descriptor);
+      outputSuccess(connection, "json", stdout);
+      const browser = process.env.BROWSER;
+      if (browser !== undefined && browser.length > 0) {
+        const { spawn } = await import("node:child_process");
+        spawn(browser, [connection.localUrl], { detached: true, stdio: "ignore" }).unref();
+      }
       return 0;
     }
 

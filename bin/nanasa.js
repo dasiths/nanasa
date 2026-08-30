@@ -27,7 +27,7 @@ Commands:
 
 Operational families:
   metadata config auth state trust extension group role run status message agent action
-  wait terminal console checkout worktree events api daemon completion
+  wait terminal console checkout worktree events api daemon service migration remote completion
 
 Options:
   --host <host>       Listen host; MCP requires loopback (default: 127.0.0.1)
@@ -150,6 +150,11 @@ function packageVersion() {
   return packageJson.version;
 }
 
+function packageBuild() {
+  const path = join(packageRoot, "dist", "meta", "build.json");
+  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : undefined;
+}
+
 async function start(startPath, args) {
   const repositoryRoot = findConfigRoot(startPath);
   if (repositoryRoot === undefined) {
@@ -158,6 +163,7 @@ async function start(startPath, args) {
     );
   }
   const options = parseStartOptions(args);
+  const build = packageBuild();
 
   const child = spawn(process.execPath, [join(packageRoot, "dist", "daemon", "index.js")], {
     cwd: repositoryRoot,
@@ -167,6 +173,9 @@ async function start(startPath, args) {
       ...options,
       NODE_ENV: "production",
       NANASA_REPO_ROOT: repositoryRoot,
+      NANASA_PACKAGE_ROOT: packageRoot,
+      NANASA_PRODUCT_VERSION: packageVersion(),
+      ...(build?.commit === undefined ? {} : { NANASA_BUILD_COMMIT: build.commit }),
       NANASA_SERVE_PORTAL: "true",
       NANASA_PORTAL_PATH: join(packageRoot, "dist", "portal"),
     },
@@ -224,10 +233,15 @@ export async function main(args = process.argv.slice(2), startPath = process.cwd
     return;
   }
   if (command !== "start" && !command.startsWith("--")) {
+    const remoteRepoIndex = command === "remote" ? rest.indexOf("--repo") : -1;
+    const requestedRemoteRoot =
+      remoteRepoIndex >= 0 && rest[remoteRepoIndex + 1] !== undefined
+        ? resolve(rest[remoteRepoIndex + 1])
+        : undefined;
     const repositoryRoot =
       command === "completion"
         ? (findConfigRoot(startPath) ?? resolve(startPath))
-        : findConfigRoot(startPath);
+        : (requestedRemoteRoot ?? findConfigRoot(startPath));
     if (repositoryRoot === undefined) {
       throw new Error(
         `No .nanasa/config.yaml found from ${resolve(startPath)}. Run nanasa init first.`,

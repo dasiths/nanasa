@@ -265,6 +265,9 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
       revision: "a".repeat(64),
       diagnostics: [],
     }),
+    loadServiceStatus: vi.fn(),
+    loadRemoteStatus: vi.fn(),
+    planServiceRestart: vi.fn(),
     listProviderStates: vi.fn().mockResolvedValue([]),
     listProviderExtensions: vi.fn().mockResolvedValue([]),
     inspectProviderExtension: vi.fn(),
@@ -446,6 +449,7 @@ describe("portal application", () => {
     const client = createClient();
     render(<App client={client} />);
     await screen.findByRole("heading", { name: "Backend" });
+    await waitFor(() => expect(client.createEventsSocket).toHaveBeenCalledTimes(1));
     const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
     await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
 
@@ -1285,7 +1289,7 @@ describe("portal application", () => {
     window.dispatchEvent(
       new StorageEvent("storage", {
         key: PORTAL_PREFERENCES_KEY,
-        newValue: JSON.stringify({ theme: "light", terminalLayout: "grid" }),
+        newValue: JSON.stringify({ version: 2, theme: "light", terminalLayout: "grid" }),
       }),
     );
     await waitFor(() =>

@@ -6,6 +6,7 @@ import {
   AgentRunSchema,
   AgentStatusDetailSchema,
   AgentStatusSummarySchema,
+  BrowserRestartFrameSchema,
   AssignAgentCheckoutCommandSchema,
   CheckoutSchema,
   CreateAgentActionCommandSchema,
@@ -22,6 +23,7 @@ import {
   ProviderStateBindingSchema,
   RepairProviderExtensionCommandSchema,
   RemoveGroupAgentResultSchema,
+  RemoteDescriptorSchema,
   RemoveWorktreeCommandSchema,
   ReorderGroupAgentsCommandSchema,
   ReorderGroupAgentsResultSchema,
@@ -52,21 +54,23 @@ import {
   WorktreeSchema,
   type AgentActionPrincipal,
   type ControlMetadata,
+  type ServiceDescriptor,
+  type RemoteDescriptor,
 } from "@nanasa/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import type { AdHocConsoleManager } from "../ad-hoc-console-manager.js";
-import type { AgentStatusQueryService } from "../agent-status-query-service.js";
 import type { AgentActionScheduler } from "../actions/agent-action-scheduler.js";
 import type { AgentActionService } from "../actions/agent-action-service.js";
 import type { AgentOpenWaitService } from "../actions/agent-open-wait-service.js";
 import type { AgentWaitService } from "../actions/agent-wait-service.js";
+import type { AdHocConsoleManager } from "../ad-hoc-console-manager.js";
+import type { AgentStatusQueryService } from "../agent-status-query-service.js";
 import type { ConfigRepository } from "../config-repository.js";
 import type { DeliveryRepository } from "../delivery-repository.js";
 import type { EventLog } from "../event-log.js";
+import { EventStreamSession } from "../event-stream-session.js";
 import type { ProviderExtensionService } from "../extensions/provider-extension-service.js";
 import type { ProviderHealthService } from "../extensions/provider-health-service.js";
-import { EventStreamSession } from "../event-stream-session.js";
 import type { CheckoutService } from "../git/checkout-service.js";
 import type { WorktreeService } from "../git/worktree-service.js";
 import type { MessageCommandService } from "../message-command-service.js";
@@ -82,13 +86,15 @@ import type { TerminalReadService } from "../terminal/terminal-read-service.js";
 import type { TopologyOrderService } from "../topology-order-service.js";
 import type { TopologyService } from "../topology-service.js";
 import {
+  type ControlRouteDeclaration,
   controlRoute,
   generateControlOpenApi,
-  type ControlRouteDeclaration,
 } from "./route-registry.js";
 
 export interface ControlRouterServices {
   metadata(): ControlMetadata;
+  service(): ServiceDescriptor;
+  remote(): RemoteDescriptor;
   config: ConfigRepository;
   snapshot: SnapshotReadModel;
   store: NanasaStore;
@@ -221,6 +227,24 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     messages: [],
     deliveryOutcomes: [],
   }));
+  register("service.status", () => services.service());
+  register("service.planRestart", (request) => {
+    idempotencyKey(controlRoute("service.planRestart"), request);
+    const reason = z
+      .object({ reason: z.enum(["upgrade", "rollback", "operator-restart"]) })
+      .strict()
+      .parse(routeBody(controlRoute("service.planRestart"), request)).reason;
+    return BrowserRestartFrameSchema.parse({
+      version: 1,
+      type: "service.restart",
+      reason,
+      instanceId: services.instanceId,
+      retryAfterMs: 1_000,
+      resnapshotRequired: true,
+      terminalHandoff: false,
+    });
+  });
+  register("remote.status", () => RemoteDescriptorSchema.parse(services.remote()));
 
   register("state.list", () =>
     services.providerStates.list().map((item) => ProviderStateBindingSchema.parse(item)),

@@ -1,0 +1,191 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, feat/herdr-web-parity-redesign]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  static-unit-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          set -a
+          if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi
+          set +a
+          corepack enable
+      - name: Install frozen dependencies
+        shell: bash
+        run: |
+          set -a
+          if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi
+          set +a
+          pnpm install --frozen-lockfile
+      - name: Static, unit, package, docs, and release infrastructure
+        shell: bash
+        run: |
+          set -a
+          if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi
+          set +a
+          pnpm check:static
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm test
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm docs:check
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm test:coverage
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm release:dry-run
+
+  runtime-linux:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Enable and install
+        shell: bash
+        run: |
+          set -a
+          if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi
+          set +a
+          corepack enable
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm install --frozen-lockfile
+      - name: Runtime, systemd contract, migration, and watchdog
+        shell: bash
+        run: |
+          set -a
+          if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi
+          set +a
+          pnpm smoke
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm check:systemd
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm check:migration
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm check:watchdog
+
+  node-compat:
+    strategy:
+      matrix:
+        node: [22, 24]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - name: Build and package on supported Node
+        shell: bash
+        run: |
+          set -a
+          if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi
+          set +a
+          corepack enable
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm install --frozen-lockfile
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm package:test
+
+  browser-matrix:
+    strategy:
+      matrix:
+        browser: [chromium, firefox, webkit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install browser and run acceptance
+        shell: bash
+        env:
+          NANASA_BROWSER: ${{ matrix.browser }}
+        run: |
+          set -a
+          if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi
+          set +a
+          corepack enable
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm install --frozen-lockfile
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm exec playwright install --with-deps "${NANASA_BROWSER}"
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm acceptance
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-${{ matrix.browser }}-failure
+          path: |
+            test-results/
+            playwright-report/
+
+  architecture-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Native arm64 build and package verification
+        shell: bash
+        run: |
+          set -a
+          if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi
+          set +a
+          corepack enable
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm install --frozen-lockfile
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm package:test
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm check:architecture
+
+  security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Audit production dependencies and artifacts
+        shell: bash
+        run: |
+          set -a
+          if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi
+          set +a
+          corepack enable
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm install --frozen-lockfile
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm package:build
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm audit --prod
+          set -a; if [[ -f .devcontainer/.env ]]; then source .devcontainer/.env; else source .devcontainer/.env.example; fi; set +a; pnpm check:security
+
+  quality-gate:
+    if: always()
+    needs: [static-unit-package, runtime-linux, node-compat, browser-matrix, architecture-arm64, security]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every Phase 11 lane
+        run: |
+          test "${{ needs.static-unit-package.result }}" = success
+          test "${{ needs.runtime-linux.result }}" = success
+          test "${{ needs.node-compat.result }}" = success
+          test "${{ needs.browser-matrix.result }}" = success
+          test "${{ needs.architecture-arm64.result }}" = success
+          test "${{ needs.security.result }}" = success

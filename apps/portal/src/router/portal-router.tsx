@@ -10,6 +10,8 @@ export const globalDestinations = [
   "diagnostics",
   "help",
   "release",
+  "service",
+  "remote",
 ] as const;
 export type GlobalDestination = (typeof globalDestinations)[number];
 

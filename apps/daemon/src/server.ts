@@ -7,20 +7,20 @@ import {
   MAX_MESSAGE_TEXT_BYTES,
   OVERSIZED_MESSAGE_GUIDANCE,
 } from "@nanasa/contracts";
+import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 import { AgentActionAckService } from "./actions/agent-action-ack-service.js";
 import { AgentActionScheduler } from "./actions/agent-action-scheduler.js";
 import { AgentActionService } from "./actions/agent-action-service.js";
 import { AgentOpenWaitService } from "./actions/agent-open-wait-service.js";
 import { AgentWaitService } from "./actions/agent-wait-service.js";
-import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 import { AdHocConsoleManager } from "./ad-hoc-console-manager.js";
 import { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
+import { AgentStatusQueryService } from "./agent-status-query-service.js";
 import { registerAgentStatusRoutes } from "./agent-status-routes.js";
 import { AgentStatusService } from "./agent-status-service.js";
-import { AgentStatusQueryService } from "./agent-status-query-service.js";
 import { AuthorityPolicy } from "./authority-policy.js";
-import { discoverAndLoadNanasaConfig, type LoadedNanasaConfig } from "./config-v2.js";
 import { ConfigRepository } from "./config-repository.js";
+import { discoverAndLoadNanasaConfig, type LoadedNanasaConfig } from "./config-v2.js";
 import { DaemonInstanceGuard } from "./daemon-instance-guard.js";
 import { DaemonLifecycle } from "./daemon-lifecycle.js";
 import { DeliveryDispatcher } from "./delivery-dispatcher.js";
@@ -33,6 +33,14 @@ import { ProviderCatalogService } from "./extensions/provider-catalog-service.js
 import { ProviderExtensionPlanner } from "./extensions/provider-extension-planner.js";
 import { ProviderExtensionService } from "./extensions/provider-extension-service.js";
 import { ProviderHealthService } from "./extensions/provider-health-service.js";
+import { GeneratedOverlayTransaction } from "./generated-overlay-transaction.js";
+import { CheckoutService } from "./git/checkout-service.js";
+import { GitCommandAdapter } from "./git/git-command-adapter.js";
+import { GitStatusService } from "./git/git-status-service.js";
+import { RepositoryDiscoveryService } from "./git/repository-discovery-service.js";
+import { WorktreeService } from "./git/worktree-service.js";
+import { registerControlRouter } from "./http/control-router.js";
+import { matchControlRoute } from "./http/route-registry.js";
 import { resolveEffectiveAgentPrompt } from "./instruction-resolver.js";
 import { McpCredentialIssuer } from "./mcp-auth.js";
 import { validateMcpEndpointConfiguration } from "./mcp-config.js";
@@ -41,33 +49,27 @@ import { MessageCommandService } from "./message-command-service.js";
 import { MessageRepository } from "./message-repository.js";
 import { NativeSessionService } from "./native-session-service.js";
 import { OperatorAuth } from "./operator-auth.js";
-import { GeneratedOverlayTransaction } from "./generated-overlay-transaction.js";
+import { controlMetadata, PRODUCT_VERSION, repositoryTmuxNamespace } from "./protocol-metadata.js";
 import { ProviderStateRepository } from "./provider-state-repository.js";
 import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
+import { createRemoteDescriptorFromMetadata } from "./remote/remote-descriptor.js";
 import { ReporterRegistry } from "./reporter-registry.js";
 import { RepositoryTrustService } from "./repository-trust-service.js";
-import { UserCredentialBroker } from "./user-credential-broker.js";
-import { controlMetadata, PRODUCT_VERSION, repositoryTmuxNamespace } from "./protocol-metadata.js";
 import { RunRuntimeCoordinator } from "./run-runtime-coordinator.js";
+import { SystemdUserService } from "./service/systemd-user-service.js";
 import { SnapshotReadModel } from "./snapshot-read-model.js";
 import { DomainError, NanasaStore } from "./store.js";
-import { TmuxTerminalDelivery } from "./terminal-delivery.js";
 import { ArtifactPreviewService } from "./terminal/artifact-preview-service.js";
 import { TerminalControlService } from "./terminal/terminal-control-service.js";
 import { TerminalGateway } from "./terminal/terminal-gateway.js";
 import { TerminalInputArbiter } from "./terminal/terminal-input-arbiter.js";
 import { TerminalReadService } from "./terminal/terminal-read-service.js";
-import { TmuxRuntime } from "./tmux-runtime.js";
-import { TopologyService } from "./topology-service.js";
-import { TopologyOrderService } from "./topology-order-service.js";
+import { TmuxTerminalDelivery } from "./terminal-delivery.js";
 import { TmuxEventObserver, type TmuxInvalidationKind } from "./tmux-event-observer.js";
-import { CheckoutService } from "./git/checkout-service.js";
-import { GitCommandAdapter } from "./git/git-command-adapter.js";
-import { GitStatusService } from "./git/git-status-service.js";
-import { RepositoryDiscoveryService } from "./git/repository-discovery-service.js";
-import { WorktreeService } from "./git/worktree-service.js";
-import { registerControlRouter } from "./http/control-router.js";
-import { matchControlRoute } from "./http/route-registry.js";
+import { TmuxRuntime } from "./tmux-runtime.js";
+import { TopologyOrderService } from "./topology-order-service.js";
+import { TopologyService } from "./topology-service.js";
+import { UserCredentialBroker } from "./user-credential-broker.js";
 
 export interface DaemonOptions {
   dataPath?: string;
@@ -82,6 +84,7 @@ export interface DaemonOptions {
   statusEndpointUrl?: string;
   servePortal?: boolean;
   portalAssetsPath?: string;
+  packageRoot?: string;
   authority?: {
     allowedHostnames?: string[];
     trustedProxyAddresses?: string[];
@@ -201,6 +204,10 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         daemonEpoch,
         lifecycle,
       });
+    const systemdService = new SystemdUserService({
+      repositoryRoot: loadedConfig.repoRoot,
+      packageRoot: options.packageRoot ?? process.env.NANASA_PACKAGE_ROOT ?? loadedConfig.repoRoot,
+    });
     const snapshotReadModel = new SnapshotReadModel(store, {
       instanceId: guard.instanceId,
       daemonEpoch,
@@ -488,6 +495,18 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     });
 
     app.get("/health", async () => ({ status: "ok" }));
+    app.get("/health/live", async () => ({ status: "live" }));
+    app.get("/health/ready", async (_request, reply) => {
+      if (lifecycle.state !== "ready") return reply.status(503).send({ status: lifecycle.state });
+      return {
+        status: "ready",
+        repositoryId: metadata().repositoryId,
+        instanceId: guard.instanceId,
+        daemonEpoch,
+        databaseSchemaVersion: metadata().databaseSchemaVersion,
+        productVersion: PRODUCT_VERSION,
+      };
+    });
     app.post(
       "/api/v1/internal/tmux-invalidation",
       { bodyLimit: 2 * 1024 },
@@ -566,6 +585,8 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       });
     }
     registerControlRouter(app, {
+      service: () => systemdService.status(),
+      remote: () => createRemoteDescriptorFromMetadata(metadata(), systemdService.status()),
       metadata,
       config: configRepository,
       snapshot: snapshotReadModel,

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "scope": "release-critical JavaScript and compiled modules exercised by test/release",
+  "thresholds": {
+    "statements": 86,
+    "branches": 72,
+    "functions": 58,
+    "lines": 86
+  }
+}

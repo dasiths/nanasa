@@ -189,6 +189,8 @@ export function App({ client = api }: AppProps) {
       ["settings", "Open settings", "Change browser presentation and notifications", "Ctrl+,"],
       ["diagnostics", "Open diagnostics", "Inspect configuration and provider state", "Alt+d"],
       ["help", "Open help", "Read keyboard and workflow help", "Alt+h"],
+      ["service", "Open service", "Inspect lifecycle and planned reconnect behavior", undefined],
+      ["remote", "Open remote access", "Review loopback SSH tunnel status and guidance", undefined],
     ].map(([id, label, description, shortcut]) => ({
       id: `route:${id}`,
       label: label!,
