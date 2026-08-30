@@ -142,7 +142,7 @@ describe("Streamable HTTP MCP", () => {
   });
 
   it("initializes, lists tools, and rejects invalid Host, Origin, and bearer credentials", async () => {
-    const { daemon } = await createFixture();
+    const { daemon, agentToken } = await createFixture();
     const initialized = await mcpRequest(daemon, operatorToken, "initialize", {
       protocolVersion: "2026-07-28",
       capabilities: {},
@@ -158,7 +158,6 @@ describe("Streamable HTTP MCP", () => {
       "nanasa.list_members",
       "nanasa.list_agent_statuses",
       "nanasa.get_agent_status",
-      "nanasa.report_progress",
       "nanasa.send_dm",
       "nanasa.send_multicast",
       "nanasa.broadcast_group",
@@ -166,8 +165,13 @@ describe("Streamable HTTP MCP", () => {
       "nanasa.get_action_result",
       "nanasa.wait_action",
       "nanasa.cancel_action",
-      "nanasa.list_own_waits",
+      "nanasa.get_delivery",
+      "nanasa.list_visible_history",
     ]);
+    const agentTools = await mcpRequest(daemon, agentToken, "tools/list", {});
+    expect(agentTools.json().result.tools.map((tool: { name: string }) => tool.name)).toEqual(
+      expect.arrayContaining(["nanasa.report_progress", "nanasa.list_own_waits"]),
+    );
 
     expect((await mcpRequest(daemon, undefined, "tools/list", {})).statusCode).toBe(401);
     expect((await mcpRequest(daemon, "wrong-token", "tools/list", {})).statusCode).toBe(401);
@@ -227,6 +231,38 @@ describe("Streamable HTTP MCP", () => {
         { recipientMemberId: "beta", status: "queued" },
       ],
     });
+    await daemon.app.close();
+  });
+
+  it("limits delivery and history reads to messages visible to the authenticated group member", async () => {
+    const { daemon, group, run, agentToken } = await createFixture();
+    const sent = await callTool(daemon, agentToken, "nanasa.send_dm", {
+      recipientMemberId: "alpha",
+      text: "Visible outbound request",
+    });
+    const messageId = sent.json().result.structuredContent.message.id as string;
+
+    const history = await callTool(daemon, agentToken, "nanasa.list_visible_history", {
+      limit: 10,
+    });
+    expect(history.json().result.structuredContent.result).toMatchObject({
+      groupId: group.id,
+      messages: [
+        {
+          id: messageId,
+          sender: { kind: "agent", memberId: run.memberId },
+        },
+      ],
+    });
+
+    const delivery = await callTool(daemon, agentToken, "nanasa.get_delivery", {
+      messageId,
+      recipientMemberId: "alpha",
+    });
+    expect(delivery.json().result.structuredContent.result).toEqual([
+      expect.objectContaining({ messageId, recipientMemberId: "alpha" }),
+    ]);
+
     await daemon.app.close();
   });
 
@@ -354,7 +390,9 @@ describe("Streamable HTTP MCP", () => {
       stage: "forged",
       summary: "Operator cannot impersonate an agent",
     });
-    expect(rejected.json()).toMatchObject({ result: { isError: true } });
+    expect(rejected.json()).toMatchObject({
+      error: { code: -32602, message: "Tool nanasa.report_progress not found" },
+    });
     await daemon.app.close();
   });
 

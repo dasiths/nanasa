@@ -172,6 +172,41 @@ export class RunRuntimeCoordinator {
     return this.#serialize(() => this.#stopRun(groupId, memberId));
   }
 
+  public restartRun(runId: string, size: { cols: number; rows: number }): Promise<AgentRun> {
+    return this.#serialize(async () => {
+      const current = this.#store.getRun(runId);
+      const active = this.#store.getActiveRun(current.groupId, current.memberId);
+      if (active?.id !== current.id) {
+        throw new DomainError("run_replaced", "The run was replaced", 409);
+      }
+      await this.#stopRun(current.groupId, current.memberId);
+      return this.#startRun(current.groupId, current.memberId, size);
+    });
+  }
+
+  public stopAll(groupId: string): Promise<AgentRun[]> {
+    return this.#serialize(async () => {
+      this.#store.getGroup(groupId);
+      const stopped: AgentRun[] = [];
+      for (const run of this.#store.listGroupRunsRequiringStop(groupId)) {
+        stopped.push(await this.#stopRun(groupId, run.memberId));
+      }
+      return stopped;
+    });
+  }
+
+  public restartAll(groupId: string, size: { cols: number; rows: number }): Promise<AgentRun[]> {
+    return this.#serialize(async () => {
+      this.#store.getGroup(groupId);
+      const restarted: AgentRun[] = [];
+      for (const run of this.#store.listGroupRunsRequiringStop(groupId)) {
+        await this.#stopRun(groupId, run.memberId);
+        restarted.push(await this.#startRun(groupId, run.memberId, size));
+      }
+      return restarted;
+    });
+  }
+
   public interrupt(runId: string): Promise<void> {
     return this.#serialize(async () => {
       const run = this.#store.getRun(runId);

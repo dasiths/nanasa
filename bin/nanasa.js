@@ -12,17 +12,22 @@ function usage() {
   return `Usage: nanasa [start] [options]
        nanasa init
        nanasa setup
-       nanasa doctor
-      nanasa auth <integration> [--agent <agent-id>]
+  nanasa doctor
+  nanasa auth login <integration> [--agent <agent-id>]
       nanasa reset --from-alpha --confirm <repository-root>
+  nanasa <family> <command> [arguments] [--body <json>]
 
 Commands:
   start              Start the daemon and portal (default)
   init               Create .nanasa/config.yaml when absent
   setup              Prepare repository-local integration configuration homes
   doctor             Validate configuration, commands, and integration homes
-  auth               Launch an integration CLI in its isolated home
+  auth               Authenticate locally or inspect daemon auth state
   reset              Back up and destructively reset alpha config, state, and owned runtimes
+
+Operational families:
+  metadata config auth state trust group role run status message agent action
+  wait terminal console checkout worktree events api daemon completion
 
 Options:
   --host <host>       Listen host; MCP requires loopback (default: 127.0.0.1)
@@ -31,6 +36,8 @@ Options:
   -h, --help          Show this help
   -v, --version       Show the installed version`;
 }
+
+class UsageError extends Error {}
 
 function ensureNanasaIgnore(root) {
   const path = join(root, ".nanasa", ".gitignore");
@@ -97,27 +104,16 @@ async function loadAdmin() {
   return import(join(packageRoot, "dist", "cli", "admin.js"));
 }
 
-function parseAuthOptions(args) {
-  const [integrationId, ...options] = args;
-  if (integrationId === undefined || integrationId.startsWith("-")) {
-    throw new Error("nanasa auth requires an integration");
-  }
-  let agentId;
-  for (let index = 0; index < options.length; index += 1) {
-    const option = options[index];
-    if (option !== "--agent") throw new Error(`Unknown auth option: ${option}`);
-    agentId = optionValue(options, index, option);
-    index += 1;
-  }
-  return { integrationId, agentId };
+async function loadControl() {
+  return import(join(packageRoot, "dist", "cli", "control.js"));
 }
 
 function parseResetOptions(args) {
   if (args[0] !== "--from-alpha") {
-    throw new Error("nanasa reset requires --from-alpha");
+    throw new UsageError("nanasa reset requires --from-alpha");
   }
   if (args[1] !== "--confirm" || args[2] === undefined || args.length !== 3) {
-    throw new Error("nanasa reset --from-alpha requires --confirm <repository-root>");
+    throw new UsageError("nanasa reset --from-alpha requires --confirm <repository-root>");
   }
   return { confirmation: resolve(args[2]) };
 }
@@ -125,7 +121,7 @@ function parseResetOptions(args) {
 function optionValue(args, index, option) {
   const value = args[index + 1];
   if (value === undefined || value.startsWith("-")) {
-    throw new Error(`${option} requires a value`);
+    throw new UsageError(`${option} requires a value`);
   }
   return value;
 }
@@ -143,7 +139,7 @@ function parseStartOptions(args) {
     } else if (argument === "--mcp") {
       environment.NANASA_MCP_ENABLED = "true";
     } else {
-      throw new Error(`Unknown option: ${argument}`);
+      throw new UsageError(`Unknown option: ${argument}`);
     }
   }
   return environment;
@@ -203,11 +199,11 @@ export async function main(args = process.argv.slice(2), startPath = process.cwd
     return;
   }
   if (command === "init") {
-    if (rest.length > 0) throw new Error("nanasa init does not accept options");
+    if (rest.length > 0) throw new UsageError("nanasa init does not accept options");
     initialize(startPath);
     return;
   }
-  if (["setup", "doctor", "auth", "reset"].includes(command)) {
+  if (["setup", "reset"].includes(command)) {
     const repositoryRoot = findConfigRoot(startPath);
     if (repositoryRoot === undefined) {
       throw new Error(
@@ -217,14 +213,8 @@ export async function main(args = process.argv.slice(2), startPath = process.cwd
     ensureNanasaIgnore(repositoryRoot);
     const admin = await loadAdmin();
     if (command === "setup") {
-      if (rest.length > 0) throw new Error("nanasa setup does not accept options");
+      if (rest.length > 0) throw new UsageError("nanasa setup does not accept options");
       admin.setupIntegrations(repositoryRoot);
-    } else if (command === "doctor") {
-      if (rest.length > 0) throw new Error("nanasa doctor does not accept options");
-      admin.doctorIntegrations(repositoryRoot);
-    } else if (command === "auth") {
-      const options = parseAuthOptions(rest);
-      admin.authenticateAgent(repositoryRoot, options.integrationId, options.agentId);
     } else {
       const options = parseResetOptions(rest);
       const template = readFileSync(join(packageRoot, "templates", "config.yaml"), "utf8");
@@ -233,11 +223,24 @@ export async function main(args = process.argv.slice(2), startPath = process.cwd
     }
     return;
   }
+  if (command !== "start" && !command.startsWith("--")) {
+    const repositoryRoot =
+      command === "completion"
+        ? (findConfigRoot(startPath) ?? resolve(startPath))
+        : findConfigRoot(startPath);
+    if (repositoryRoot === undefined) {
+      throw new Error(
+        `No .nanasa/config.yaml found from ${resolve(startPath)}. Run nanasa init first.`,
+      );
+    }
+    const control = await loadControl();
+    process.exitCode = await control.runControlCli(args, repositoryRoot);
+    return;
+  }
   if (command.startsWith("--")) {
     await start(startPath, args);
     return;
   }
-  if (command !== "start") throw new Error(`Unknown command: ${command}`);
   await start(startPath, rest);
 }
 
@@ -247,6 +250,6 @@ if (
 ) {
   main().catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
+    process.exitCode = error instanceof UsageError ? 2 : 1;
   });
 }

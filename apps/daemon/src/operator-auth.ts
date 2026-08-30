@@ -18,7 +18,7 @@ import {
   OperatorSessionSchema,
   type OperatorSession,
 } from "@nanasa/contracts";
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { DomainError } from "./store.js";
 
 const COOKIE_NAME = "nanasa_operator";
@@ -125,30 +125,29 @@ export class OperatorAuth {
     return token;
   }
 
-  public registerRoutes(app: FastifyInstance): void {
-    app.post("/api/v1/auth/bootstrap", async (request, reply) => {
-      const { token } = OperatorBootstrapCommandSchema.parse(request.body);
-      const expiresAt = this.#bootstrapTokens.get(token);
-      this.#bootstrapTokens.delete(token);
-      if (expiresAt === undefined || expiresAt < this.#now().getTime()) {
-        throw new DomainError(
-          "operator_bootstrap_invalid",
-          "The operator bootstrap token is invalid or already used",
-          401,
-        );
-      }
-      return this.#issueSession(reply);
-    });
-    app.get("/api/v1/auth/session", async (request) =>
-      this.#publicSession(this.authenticate(request)),
-    );
-    app.post("/api/v1/auth/revoke", async (request, reply) => {
-      const session = this.authenticate(request);
-      session.revoked = true;
-      this.#sessions.delete(session.id);
-      this.#clearCookie(reply);
-      return reply.status(204).send();
-    });
+  public bootstrap(command: unknown, reply: FastifyReply): OperatorSession {
+    const { token } = OperatorBootstrapCommandSchema.parse(command);
+    const expiresAt = this.#bootstrapTokens.get(token);
+    this.#bootstrapTokens.delete(token);
+    if (expiresAt === undefined || expiresAt < this.#now().getTime()) {
+      throw new DomainError(
+        "operator_bootstrap_invalid",
+        "The operator bootstrap token is invalid or already used",
+        401,
+      );
+    }
+    return this.#issueSession(reply);
+  }
+
+  public session(request: FastifyRequest): OperatorSession {
+    return this.#publicSession(this.authenticate(request));
+  }
+
+  public revoke(request: FastifyRequest, reply: FastifyReply): void {
+    const session = this.authenticate(request);
+    session.revoked = true;
+    this.#sessions.delete(session.id);
+    this.#clearCookie(reply);
   }
 
   public authenticate(request: FastifyRequest): SessionRecord {

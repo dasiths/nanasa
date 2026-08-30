@@ -32,6 +32,7 @@ await build({
   entryPoints: {
     "daemon/index": "apps/daemon/src/index.ts",
     "cli/admin": "apps/daemon/src/cli-admin.ts",
+    "cli/control": "apps/daemon/src/cli/control.ts",
   },
   external: ["@fastify/*", "@modelcontextprotocol/*", "fastify", "node-pty", "ws", "yaml", "zod"],
   format: "esm",

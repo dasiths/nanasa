@@ -32,6 +32,18 @@ export class AdHocConsoleManager {
     }
   }
 
+  public list(): AdHocConsoleSession[] {
+    return [...this.#sessions.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([id, run]) => ({ id, runId: run.id, generation: run.generation }));
+  }
+
+  public get(id: string): AdHocConsoleSession {
+    const run = this.#sessions.get(id);
+    if (run === undefined) throw new DomainError("console_not_found", "Console not found", 404);
+    return { id, runId: run.id, generation: run.generation };
+  }
+
   public async remove(id: string): Promise<void> {
     const run = this.#sessions.get(id);
     if (run === undefined) {

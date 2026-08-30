@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { NanasaControlClient } from "../src/index.js";
+import { NanasaControlClient, NanasaControlResources } from "../src/index.js";
 
 function response(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -45,5 +45,46 @@ describe("NanasaControlClient", () => {
     );
     const requestInit = fetch.mock.calls[1]?.[1];
     expect(new Headers(requestInit?.headers).get("x-nanasa-csrf")).toBe("c".repeat(32));
+  });
+
+  it("uses bearer authority and typed resource modules for worktree operations", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+      response({
+        operation: {
+          id: "git-operation-1",
+          repositoryId: "repository-1",
+          kind: "create-worktree",
+          generation: 1,
+          state: "succeeded",
+          startedAt: "2026-08-29T12:00:00.000Z",
+          completedAt: "2026-08-29T12:00:01.000Z",
+        },
+      }),
+    );
+    const resources = new NanasaControlResources(
+      new NanasaControlClient({
+        fetch,
+        baseUrl: "http://127.0.0.1:3210",
+        operatorToken: "operator-token",
+      }),
+    );
+
+    await resources.workspace.createWorktree(
+      {
+        sourceCheckoutId: "checkout-1",
+        branch: "feature/typed-client",
+        base: "HEAD",
+        assignAgentIds: [],
+      },
+      "worktree-key",
+    );
+
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0]?.[0]).toBe("http://127.0.0.1:3210/api/v1/worktrees");
+    const init = fetch.mock.calls[0]?.[1];
+    expect(init?.method).toBe("POST");
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer operator-token");
+    expect(new Headers(init?.headers).get("idempotency-key")).toBe("worktree-key");
+    expect(JSON.parse(String(init?.body))).toMatchObject({ branch: "feature/typed-client" });
   });
 });

@@ -6,6 +6,15 @@ import {
   type EventServerFrame,
   type OperatorSession,
 } from "@nanasa/contracts";
+import { MetadataResource } from "./resources/metadata.js";
+import { OperationsResource } from "./resources/operations.js";
+import { TopologyResource } from "./resources/topology.js";
+import { WorkspaceResource } from "./resources/workspace.js";
+
+export * from "./resources/metadata.js";
+export * from "./resources/operations.js";
+export * from "./resources/topology.js";
+export * from "./resources/workspace.js";
 
 export const CONTROL_API_PREFIX = "/api/v1";
 export const CSRF_HEADER = "x-nanasa-csrf";
@@ -20,6 +29,7 @@ export class ControlClientError extends Error {
     message: string,
     public readonly status: number,
     public readonly code?: string,
+    public readonly payload?: unknown,
   ) {
     super(message);
     this.name = "ControlClientError";
@@ -31,6 +41,8 @@ export interface ControlClientOptions {
   websocket?: (url: string) => WebSocket;
   location?: Pick<Location, "href" | "hash">;
   replaceLocation?: (url: string) => void;
+  baseUrl?: string;
+  operatorToken?: string;
 }
 
 function errorFields(payload: unknown): { code?: string; message?: string } {
@@ -54,6 +66,8 @@ export class NanasaControlClient {
   readonly #websocket: (url: string) => WebSocket;
   readonly #location: Pick<Location, "href" | "hash"> | undefined;
   readonly #replaceLocation: ((url: string) => void) | undefined;
+  readonly #baseUrl: string | undefined;
+  readonly #operatorToken: string | undefined;
   #csrfToken: string | undefined;
   #bootstrapPromise: Promise<OperatorSession> | undefined;
 
@@ -66,6 +80,8 @@ export class NanasaControlClient {
       (globalThis.history === undefined
         ? undefined
         : (url) => globalThis.history.replaceState(null, "", url));
+    this.#baseUrl = options.baseUrl?.replace(/\/$/, "");
+    this.#operatorToken = options.operatorToken;
   }
 
   public metadata(): Promise<ControlMetadata> {
@@ -75,6 +91,13 @@ export class NanasaControlClient {
   }
 
   public ensureSession(): Promise<OperatorSession> {
+    if (this.#operatorToken !== undefined) {
+      return Promise.resolve({
+        operatorId: "operator-local-cli",
+        csrfToken: "bearer-authority-does-not-use-csrf",
+        expiresAt: new Date(8_640_000_000_000_000).toISOString(),
+      });
+    }
     this.#bootstrapPromise ??= this.#establishSession().catch((error: unknown) => {
       this.#bootstrapPromise = undefined;
       throw error;
@@ -90,14 +113,15 @@ export class NanasaControlClient {
     const authenticate = options.authenticate ?? true;
     if (authenticate) await this.ensureSession();
     const init = this.#authorizedInit(options.init, authenticate);
-    const response = await this.#fetch(path, init);
-    const payload: unknown = await response.json();
+    const response = await this.#fetch(this.#url(path), init);
+    const payload: unknown = response.status === 204 ? undefined : await response.json();
     if (!response.ok) {
       const fields = errorFields(payload);
       throw new ControlClientError(
         fields.message ?? `Request failed with status ${response.status}`,
         response.status,
         fields.code,
+        payload,
       );
     }
     return schema.parse(payload);
@@ -105,7 +129,7 @@ export class NanasaControlClient {
 
   public async requestVoid(path: string, init: RequestInit): Promise<void> {
     await this.ensureSession();
-    const response = await this.#fetch(path, this.#authorizedInit(init, true));
+    const response = await this.#fetch(this.#url(path), this.#authorizedInit(init, true));
     if (response.ok) return;
     const payload: unknown = await response.json();
     const fields = errorFields(payload);
@@ -113,6 +137,7 @@ export class NanasaControlClient {
       fields.message ?? `Request failed with status ${response.status}`,
       response.status,
       fields.code,
+      payload,
     );
   }
 
@@ -175,6 +200,10 @@ export class NanasaControlClient {
     return token;
   }
 
+  #url(path: string): string {
+    return this.#baseUrl === undefined ? path : new URL(path, `${this.#baseUrl}/`).toString();
+  }
+
   #authorizedInit(init: RequestInit | undefined, authenticate: boolean): RequestInit | undefined {
     if (init === undefined) return undefined;
     const headers =
@@ -185,10 +214,35 @@ export class NanasaControlClient {
         ? { ...init.headers }
         : Object.fromEntries(new Headers(init.headers).entries());
     const method = (init?.method ?? "GET").toUpperCase();
-    if (authenticate && !["GET", "HEAD", "OPTIONS"].includes(method)) {
+    if (authenticate && this.#operatorToken !== undefined) {
+      headers.Authorization = `Bearer ${this.#operatorToken}`;
+    }
+    if (
+      authenticate &&
+      this.#operatorToken === undefined &&
+      !["GET", "HEAD", "OPTIONS"].includes(method)
+    ) {
       if (this.#csrfToken === undefined) throw new Error("Operator CSRF token is unavailable");
       headers[CSRF_HEADER] = this.#csrfToken;
     }
     return { ...init, credentials: "same-origin", headers };
   }
+}
+
+export class NanasaControlResources {
+  public readonly metadata: MetadataResource;
+  public readonly topology: TopologyResource;
+  public readonly operations: OperationsResource;
+  public readonly workspace: WorkspaceResource;
+
+  public constructor(public readonly transport: NanasaControlClient) {
+    this.metadata = new MetadataResource(transport);
+    this.topology = new TopologyResource(transport);
+    this.operations = new OperationsResource(transport);
+    this.workspace = new WorkspaceResource(transport);
+  }
+}
+
+export function createControlResources(options: ControlClientOptions = {}): NanasaControlResources {
+  return new NanasaControlResources(new NanasaControlClient(options));
 }

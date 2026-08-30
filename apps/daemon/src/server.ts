@@ -1,51 +1,11 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { dirname, join } from "node:path";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import {
-  AdHocConsoleSessionSchema,
-  AgentActionSchema,
-  AgentActionWorkspaceSchema,
-  CreateAgentActionCommandSchema,
-  ReplyOpenWaitCommandSchema,
-  WaitForAgentActionCommandSchema,
-  CreateGroupAgentCommandSchema,
-  CreateGroupCommandSchema,
-  AssignAgentCheckoutCommandSchema,
-  CheckoutSchema,
-  CreateWorktreeCommandSchema,
-  DeleteGroupResultSchema,
-  InterruptAgentRunCommandSchema,
   MAX_MESSAGE_REQUEST_BYTES,
   MAX_MESSAGE_TEXT_BYTES,
   OVERSIZED_MESSAGE_GUIDANCE,
-  RemoveGroupAgentResultSchema,
-  RemoveWorktreeCommandSchema,
-  ReorderGroupsCommandSchema,
-  ReorderGroupsResultSchema,
-  ReorderGroupAgentsCommandSchema,
-  ReorderGroupAgentsResultSchema,
-  RoleDefinitionSchema,
-  OpenCheckoutCommandSchema,
-  ReparentGroupAgentCommandSchema,
-  ReparentGroupAgentResultSchema,
-  RepositorySchema,
-  StartAgentRunCommandSchema,
-  StartGroupRunsCommandSchema,
-  StartGroupRunsResultSchema,
-  StopAgentRunCommandSchema,
-  TerminalEndpointStatusSchema,
-  TerminalCheckpointCaptureSchema,
-  TerminalCheckpointContentSchema,
-  TerminalCheckpointSchema,
-  TerminalReadRequestSchema,
-  TerminalReadResultSchema,
-  UpdateGroupAgentCommandSchema,
-  UpdateGroupCommandSchema,
-  UpdateRolePresentationCommandSchema,
-  WorktreeOperationResultSchema,
-  WorktreeSchema,
 } from "@nanasa/contracts";
 import { AgentActionAckService } from "./actions/agent-action-ack-service.js";
 import { AgentActionScheduler } from "./actions/agent-action-scheduler.js";
@@ -57,6 +17,7 @@ import { AdHocConsoleManager } from "./ad-hoc-console-manager.js";
 import { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
 import { registerAgentStatusRoutes } from "./agent-status-routes.js";
 import { AgentStatusService } from "./agent-status-service.js";
+import { AgentStatusQueryService } from "./agent-status-query-service.js";
 import { AuthorityPolicy } from "./authority-policy.js";
 import { discoverAndLoadNanasaConfig, type LoadedNanasaConfig } from "./config-v2.js";
 import { ConfigRepository } from "./config-repository.js";
@@ -99,6 +60,8 @@ import { GitCommandAdapter } from "./git/git-command-adapter.js";
 import { GitStatusService } from "./git/git-status-service.js";
 import { RepositoryDiscoveryService } from "./git/repository-discovery-service.js";
 import { WorktreeService } from "./git/worktree-service.js";
+import { registerControlRouter } from "./http/control-router.js";
+import { matchControlRoute } from "./http/route-registry.js";
 
 export interface DaemonOptions {
   dataPath?: string;
@@ -170,33 +133,6 @@ function isValidationError(error: unknown): error is ErrorWithIssues {
 
 function hasErrorCode(error: unknown, code: string): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === code;
-}
-
-function idempotencyKey(
-  headers: Record<string, string | string[] | undefined>,
-): string | undefined {
-  const value = headers["idempotency-key"];
-  if (value === undefined) {
-    return undefined;
-  }
-  if (Array.isArray(value) || value.trim().length === 0 || value.length > 128) {
-    throw new DomainError(
-      "invalid_idempotency_key",
-      "Idempotency-Key must contain between 1 and 128 characters",
-      400,
-    );
-  }
-  return value;
-}
-
-function parseAfterSequence(value: unknown): number {
-  if (value === undefined) {
-    return 0;
-  }
-  if (typeof value !== "string" || !/^\d+$/.test(value)) {
-    throw new DomainError("invalid_event_sequence", "after must be a nonnegative integer", 400);
-  }
-  return Number(value);
 }
 
 function requestPath(url: string): string {
@@ -312,6 +248,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       adapters: providerAdapters,
     });
     const statusService = new AgentStatusService(store, reporterRegistry);
+    const statusQueries = new AgentStatusQueryService(store);
     const coordinatorReference: { current?: RunRuntimeCoordinator } = {};
     const tmuxServerName = options.tmuxServerName ?? repositoryTmuxNamespace(loadedConfig.repoRoot);
     const tmuxEvents = new TmuxEventObserver(tmuxServerName, () => {
@@ -435,16 +372,8 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
 
     app.addHook("preHandler", async (request) => {
       const path = requestPath(request.url);
-      if (
-        !path.startsWith("/api/v1/") ||
-        path === "/api/v1/meta" ||
-        path === "/api/v1/auth/bootstrap" ||
-        path === "/api/v1/agent-status/events" ||
-        path.startsWith("/api/v1/agent-status/action-acks/") ||
-        path === "/api/v1/internal/tmux-invalidation"
-      ) {
-        return;
-      }
+      const declaration = matchControlRoute(request.method, path);
+      if (declaration === undefined || declaration.principal === "public") return;
       operatorAuth.authorize(request);
       if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
         lifecycle.assertMutationAllowed();
@@ -509,8 +438,6 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     });
 
     app.get("/health", async () => ({ status: "ok" }));
-    app.get("/api/v1/meta", async () => metadata());
-    operatorAuth.registerRoutes(app);
     app.post(
       "/api/v1/internal/tmux-invalidation",
       { bodyLimit: 2 * 1024 },
@@ -581,450 +508,42 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         credentials: mcpCredentials,
         store,
         messages: messageCommands,
+        messageHistory: messages,
+        deliveries,
         actions,
         actionWaits,
         openWaits,
       });
     }
-    app.get("/api/v1/config", async () => configRepository.load().config);
-    app.get("/api/v1/config/status", async () => configRepository.load().status);
-    app.get("/api/v1/repositories", async () =>
-      store.listRepositories().map((repository) => RepositorySchema.parse(repository)),
-    );
-    app.get<{ Params: { repositoryId: string } }>(
-      "/api/v1/repositories/:repositoryId/checkouts",
-      async (request) =>
-        checkouts
-          .list(request.params.repositoryId)
-          .map((checkout) => CheckoutSchema.parse(checkout)),
-    );
-    app.get<{ Params: { repositoryId: string } }>(
-      "/api/v1/repositories/:repositoryId/worktrees",
-      async (request) =>
-        worktrees
-          .list(request.params.repositoryId)
-          .map((worktree) => WorktreeSchema.parse(worktree)),
-    );
-    app.post("/api/v1/checkouts/open", async (request) =>
-      WorktreeOperationResultSchema.parse(
-        await worktrees.open(OpenCheckoutCommandSchema.parse(request.body)),
-      ),
-    );
-    app.post("/api/v1/worktrees", async (request, reply) => {
-      const command = CreateWorktreeCommandSchema.parse(request.body);
-      const assignments = topologyOrder.assertAgentsStopped(command.assignAgentIds);
-      const result = await worktrees.create(command);
-      if (result.checkout !== undefined && assignments.length > 0) {
-        await topologyOrder.assignCheckoutToAgents(assignments, result.checkout.id);
-      }
-      return reply.status(201).send(WorktreeOperationResultSchema.parse(result));
+    registerControlRouter(app, {
+      metadata,
+      config: configRepository,
+      snapshot: snapshotReadModel,
+      store,
+      auth: operatorAuth,
+      providerStates,
+      topology,
+      topologyOrder,
+      coordinator,
+      statuses: statusQueries,
+      messages,
+      messageCommands,
+      deliveries,
+      actions,
+      actionScheduler,
+      actionWaits,
+      openWaits,
+      terminalGateway,
+      terminalReads,
+      consoles,
+      checkouts,
+      worktrees,
+      artifactPreviews,
+      eventLog,
+      eventSessions,
+      instanceId: guard.instanceId,
+      daemonEpoch,
     });
-    app.delete<{ Params: { worktreeId: string } }>(
-      "/api/v1/worktrees/:worktreeId",
-      async (request) => {
-        const command = RemoveWorktreeCommandSchema.parse(request.body ?? {});
-        return WorktreeOperationResultSchema.parse(
-          await worktrees.remove(request.params.worktreeId, command),
-        );
-      },
-    );
-    app.get("/api/v1/snapshot", async () => ({
-      ...snapshotReadModel.read(),
-      messages: [],
-      deliveryOutcomes: [],
-    }));
-    app.get<{ Params: { runId: string } }>("/api/v1/runs/:runId/terminal", async (request) =>
-      TerminalEndpointStatusSchema.parse(terminalGateway.status(request.params.runId)),
-    );
-    app.get<{
-      Params: { runId: string };
-      Querystring: { generation?: string; source?: string; maxLines?: string; maxBytes?: string };
-    }>("/api/v1/runs/:runId/terminal/read", async (request) =>
-      TerminalReadResultSchema.parse(
-        await terminalReads.read(
-          TerminalReadRequestSchema.parse({
-            runId: request.params.runId,
-            generation: Number(request.query.generation),
-            source: request.query.source ?? "history",
-            maxLines: request.query.maxLines === undefined ? 200 : Number(request.query.maxLines),
-            maxBytes:
-              request.query.maxBytes === undefined ? 65_536 : Number(request.query.maxBytes),
-          }),
-        ),
-      ),
-    );
-    app.get("/api/v1/terminal-checkpoints", async (request) => {
-      const principal = operatorAuth.authenticate(request).operatorId;
-      return terminalReads
-        .list(principal)
-        .map((checkpoint) => TerminalCheckpointSchema.parse(checkpoint));
-    });
-    app.post<{ Params: { runId: string } }>(
-      "/api/v1/runs/:runId/terminal/checkpoints",
-      async (request, reply) => {
-        const principal = operatorAuth.authenticate(request).operatorId;
-        const command = TerminalCheckpointCaptureSchema.parse(request.body);
-        return reply
-          .status(201)
-          .send(
-            TerminalCheckpointSchema.parse(
-              await terminalReads.captureCheckpoint(
-                principal,
-                request.params.runId,
-                command.generation,
-                command.source,
-              ),
-            ),
-          );
-      },
-    );
-    app.get<{ Params: { checkpointId: string } }>(
-      "/api/v1/terminal-checkpoints/:checkpointId",
-      async (request) =>
-        TerminalCheckpointContentSchema.parse(
-          terminalReads.retrieve(
-            operatorAuth.authenticate(request).operatorId,
-            request.params.checkpointId,
-          ),
-        ),
-    );
-    app.delete<{ Params: { checkpointId: string } }>(
-      "/api/v1/terminal-checkpoints/:checkpointId",
-      async (request, reply) => {
-        const deleted = terminalReads.delete(
-          operatorAuth.authenticate(request).operatorId,
-          request.params.checkpointId,
-        );
-        if (!deleted)
-          throw new DomainError(
-            "terminal_checkpoint_not_found",
-            "Terminal checkpoint not found",
-            404,
-          );
-        return reply.status(204).send();
-      },
-    );
-    app.get<{ Querystring: { path?: string } }>(
-      "/api/v1/artifact-preview",
-      async (request, reply) => {
-        if (request.query.path === undefined)
-          throw new DomainError("artifact_path_required", "Artifact path is required", 400);
-        const preview = artifactPreviews.inspect(request.query.path);
-        reply.header("Content-Disposition", "inline");
-        reply.header("X-Content-Type-Options", "nosniff");
-        return reply.type(preview.mediaType).send(createReadStream(preview.absolutePath));
-      },
-    );
-    app.post("/api/v1/consoles", async (_request, reply) =>
-      reply.status(201).send(AdHocConsoleSessionSchema.parse(await consoles.create())),
-    );
-    app.delete<{ Params: { consoleId: string } }>(
-      "/api/v1/consoles/:consoleId",
-      async (request, reply) => {
-        await consoles.remove(request.params.consoleId);
-        return reply.status(204).send();
-      },
-    );
-    app.post<{ Params: { runId: string } }>(
-      "/api/v1/runs/:runId/interrupt",
-      async (request, reply) => {
-        InterruptAgentRunCommandSchema.parse(request.body);
-        await coordinator.interrupt(request.params.runId);
-        return reply.status(204).send();
-      },
-    );
-
-    app.post("/api/v1/agent-actions", async (request, reply) => {
-      const key = idempotencyKey(request.headers);
-      if (key === undefined) {
-        throw new DomainError(
-          "action_idempotency_key_required",
-          "Agent actions require an Idempotency-Key",
-          400,
-        );
-      }
-      const principal = operatorAuth.authenticate(request);
-      const action = actions.create(
-        { kind: "operator", operatorId: principal.operatorId },
-        CreateAgentActionCommandSchema.parse(request.body),
-        key,
-      );
-      void actionScheduler.tick();
-      return reply.status(201).send(AgentActionSchema.parse(action));
-    });
-
-    app.get<{ Params: { actionId: string } }>(
-      "/api/v1/agent-actions/:actionId",
-      async (request) => {
-        const principal = operatorAuth.authenticate(request);
-        return AgentActionSchema.parse(
-          actions.get(
-            { kind: "operator", operatorId: principal.operatorId },
-            request.params.actionId,
-          ),
-        );
-      },
-    );
-
-    app.post<{ Params: { actionId: string } }>(
-      "/api/v1/agent-actions/:actionId/cancel",
-      async (request) => {
-        const principal = operatorAuth.authenticate(request);
-        return AgentActionSchema.parse(
-          actions.cancel(
-            { kind: "operator", operatorId: principal.operatorId },
-            request.params.actionId,
-          ),
-        );
-      },
-    );
-
-    app.post<{ Params: { actionId: string } }>(
-      "/api/v1/agent-actions/:actionId/wait",
-      async (request) => {
-        const principal = operatorAuth.authenticate(request);
-        return actionWaits.wait(
-          { kind: "operator", operatorId: principal.operatorId },
-          request.params.actionId,
-          WaitForAgentActionCommandSchema.parse(request.body),
-        );
-      },
-    );
-
-    app.get<{ Params: { groupId: string } }>(
-      "/api/v1/groups/:groupId/action-workspace",
-      async (request) =>
-        AgentActionWorkspaceSchema.parse(actions.listWorkspace(request.params.groupId)),
-    );
-
-    app.post<{ Params: { waitId: string } }>(
-      "/api/v1/open-waits/:waitId/reply",
-      async (request) => {
-        const principal = operatorAuth.authenticate(request);
-        return openWaits.reply(
-          { kind: "operator", operatorId: principal.operatorId },
-          request.params.waitId,
-          ReplyOpenWaitCommandSchema.parse(request.body),
-        );
-      },
-    );
-
-    app.post("/api/v1/groups", async (request, reply) => {
-      const group = await topology.createGroup(
-        CreateGroupCommandSchema.parse(request.body),
-        idempotencyKey(request.headers),
-      );
-      return reply.status(201).send(group);
-    });
-
-    app.patch<{ Params: { groupId: string } }>("/api/v1/groups/:groupId", async (request) =>
-      topology.updateGroup(request.params.groupId, UpdateGroupCommandSchema.parse(request.body)),
-    );
-
-    app.delete<{ Params: { groupId: string } }>("/api/v1/groups/:groupId", async (request) =>
-      DeleteGroupResultSchema.parse(
-        await topology.deleteGroup(request.params.groupId, idempotencyKey(request.headers)),
-      ),
-    );
-
-    app.patch<{ Params: { roleId: string } }>(
-      "/api/v1/roles/:roleId/presentation",
-      async (request) =>
-        RoleDefinitionSchema.parse(
-          await topology.updateRolePresentation(
-            request.params.roleId,
-            UpdateRolePresentationCommandSchema.parse(request.body),
-          ),
-        ),
-    );
-
-    app.post<{ Params: { groupId: string } }>(
-      "/api/v1/groups/:groupId/agents",
-      async (request, reply) => {
-        const membership = await topology.createAgent(
-          request.params.groupId,
-          CreateGroupAgentCommandSchema.parse(request.body),
-          idempotencyKey(request.headers),
-        );
-        return reply.status(201).send(membership);
-      },
-    );
-
-    app.delete<{ Params: { groupId: string; agentId: string } }>(
-      "/api/v1/groups/:groupId/agents/:agentId",
-      async (request) =>
-        RemoveGroupAgentResultSchema.parse(
-          await topology.removeAgent(
-            request.params.groupId,
-            request.params.agentId,
-            idempotencyKey(request.headers),
-          ),
-        ),
-    );
-
-    app.patch<{ Params: { groupId: string; agentId: string } }>(
-      "/api/v1/groups/:groupId/agents/:agentId",
-      async (request) =>
-        topology.updateAgent(
-          request.params.groupId,
-          request.params.agentId,
-          UpdateGroupAgentCommandSchema.parse(request.body),
-        ),
-    );
-
-    app.put<{ Params: { groupId: string } }>(
-      "/api/v1/groups/:groupId/agent-order",
-      async (request) =>
-        ReorderGroupAgentsResultSchema.parse(
-          await topologyOrder.reorderAgents(
-            request.params.groupId,
-            ReorderGroupAgentsCommandSchema.parse(request.body),
-          ),
-        ),
-    );
-
-    app.put("/api/v1/group-order", async (request) =>
-      ReorderGroupsResultSchema.parse(
-        await topologyOrder.reorderGroups(ReorderGroupsCommandSchema.parse(request.body)),
-      ),
-    );
-
-    app.post<{ Params: { groupId: string; agentId: string } }>(
-      "/api/v1/groups/:groupId/agents/:agentId/reparent",
-      async (request) =>
-        ReparentGroupAgentResultSchema.parse(
-          await topologyOrder.reparentAgent(
-            request.params.groupId,
-            request.params.agentId,
-            ReparentGroupAgentCommandSchema.parse(request.body),
-          ),
-        ),
-    );
-
-    app.put<{ Params: { groupId: string; agentId: string } }>(
-      "/api/v1/groups/:groupId/agents/:agentId/checkout",
-      async (request, reply) => {
-        const command = AssignAgentCheckoutCommandSchema.parse(request.body);
-        await topologyOrder.assignCheckout(
-          request.params.groupId,
-          request.params.agentId,
-          command.checkoutId,
-        );
-        return reply.status(204).send();
-      },
-    );
-
-    app.post<{ Params: { groupId: string; agentId: string } }>(
-      "/api/v1/groups/:groupId/agents/:agentId/run",
-      async (request, reply) => {
-        const command = StartAgentRunCommandSchema.parse(request.body ?? {});
-        const membership = topology.getAgentMembership(
-          request.params.groupId,
-          request.params.agentId,
-        );
-        const run = await coordinator.startRun(
-          request.params.groupId,
-          membership.memberId,
-          command,
-        );
-        return reply.status(201).send(run);
-      },
-    );
-
-    app.post<{ Params: { groupId: string } }>(
-      "/api/v1/groups/:groupId/runs/start-all",
-      async (request) => {
-        const command = StartGroupRunsCommandSchema.parse(request.body ?? {});
-        return StartGroupRunsResultSchema.parse(
-          await coordinator.startAll(
-            request.params.groupId,
-            command,
-            idempotencyKey(request.headers),
-          ),
-        );
-      },
-    );
-
-    app.delete<{ Params: { groupId: string; agentId: string } }>(
-      "/api/v1/groups/:groupId/agents/:agentId/run",
-      async (request) => {
-        StopAgentRunCommandSchema.parse(request.body ?? {});
-        const membership = topology.getAgentMembership(
-          request.params.groupId,
-          request.params.agentId,
-        );
-        return coordinator.stopRun(request.params.groupId, membership.memberId);
-      },
-    );
-
-    app.post<{ Params: { groupId: string } }>(
-      "/api/v1/groups/:groupId/messages",
-      { bodyLimit: MAX_MESSAGE_REQUEST_BYTES },
-      async (request, reply) => {
-        const result = messageCommands.submit(
-          request.params.groupId,
-          request.body as never,
-          idempotencyKey(request.headers),
-        );
-        return reply.status(201).send(result);
-      },
-    );
-
-    app.get<{
-      Params: { groupId: string };
-      Querystring: { limit?: string; before?: string; after?: string };
-    }>("/api/v1/groups/:groupId/messages", async (request) => {
-      const parsePositive = (value: string, name: string): number => {
-        if (!/^\d+$/.test(value) || Number(value) < 1) {
-          throw new DomainError(
-            `invalid_message_${name}`,
-            `${name} must be a positive integer`,
-            400,
-          );
-        }
-        return Number(value);
-      };
-      return messages.page(request.params.groupId, {
-        ...(request.query.limit === undefined
-          ? {}
-          : { limit: parsePositive(request.query.limit, "limit") }),
-        ...(request.query.before === undefined
-          ? {}
-          : { before: parsePositive(request.query.before, "cursor") }),
-        ...(request.query.after === undefined
-          ? {}
-          : { after: parsePositive(request.query.after, "cursor") }),
-      });
-    });
-
-    app.delete<{ Params: { groupId: string } }>(
-      "/api/v1/groups/:groupId/messages",
-      async (request) => messages.clear(request.params.groupId, idempotencyKey(request.headers)),
-    );
-
-    app.get<{ Params: { messageId: string } }>(
-      "/api/v1/messages/:messageId/deliveries",
-      async (request) => deliveries.list(request.params.messageId),
-    );
-
-    app.get<{ Querystring: { after?: string; instance?: string } }>(
-      "/api/v1/events",
-      { websocket: true },
-      (socket, request) => {
-        const afterSequence = parseAfterSequence(request.query.after);
-        const session = new EventStreamSession(socket, eventLog, {
-          afterSequence,
-          ...(request.query.instance === undefined
-            ? {}
-            : { requestedInstanceId: request.query.instance }),
-          instanceId: guard.instanceId,
-          daemonEpoch,
-        });
-        eventSessions.add(session);
-        socket.once("close", () => eventSessions.delete(session));
-        session.start();
-      },
-    );
 
     terminalGateway.register(app);
 

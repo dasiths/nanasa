@@ -108,7 +108,7 @@ test("start rejects retired terminal-provider options", () => {
   assert.equal(mkdir.status, 0);
 
   const result = runCli(nested, ["start", "--legacy-terminal-path", "/missing"]);
-  assert.equal(result.status, 1);
+  assert.equal(result.status, 2);
   assert.match(result.stderr, /Unknown option: --legacy-terminal-path/);
   assert.equal(existsSync(join(repository, ".nanasa", "state")), false);
   assert.equal(existsSync(join(nested, ".nanasa")), false);
@@ -119,9 +119,9 @@ test("help documents authenticated MCP enablement", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /--host <host>\s+Listen host; MCP requires loopback/);
   assert.match(result.stdout, /--mcp\s+Enable authenticated MCP \(default path: \/mcp\)/);
-  assert.match(result.stdout, /nanasa auth <integration> \[--agent <agent-id>\]/);
+  assert.match(result.stdout, /nanasa auth login <integration> \[--agent <agent-id>\]/);
   assert.match(result.stdout, /setup\s+Prepare repository-local integration configuration homes/);
-  assert.match(result.stdout, /auth\s+Launch an integration CLI in its isolated home/);
+  assert.match(result.stdout, /auth\s+Authenticate locally or inspect daemon auth state/);
   assert.match(result.stdout, /doctor\s+Validate configuration, commands, and integration homes/);
 });
 
@@ -187,7 +187,7 @@ integrations:
 `,
   );
 
-  const authenticated = runCli(repository, ["auth", "fixture"], {
+  const authenticated = runCli(repository, ["auth", "login", "fixture"], {
     AUTH_CAPTURE: capturePath,
     HOME: externalHome,
   });
@@ -218,7 +218,7 @@ integrations:
 `,
   );
 
-  const result = runCli(repository, ["auth", "fixture"]);
+  const result = runCli(repository, ["auth", "login", "fixture"]);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /requires --agent <agent-id>/);
 });
@@ -232,6 +232,23 @@ test("package build contains one terminal-only daemon entry", () => {
     /copilot-cli-worker|copilot-acp-process|pi-rpc-worker|pi-rpc-process/,
   );
   assert.equal(existsSync(join(root, "dist", "cli", "admin.js")), true);
+  assert.equal(existsSync(join(root, "dist", "cli", "control.js")), true);
+});
+
+test("completion is daemon-free and grammar failures use exit 2", () => {
+  const repository = temporaryRepository();
+  const completion = runCli(repository, ["completion", "bash"]);
+  assert.equal(completion.status, 0, completion.stderr);
+  assert.match(completion.stdout, /complete -W/);
+
+  const invalid = runCli(repository, ["group", "unknown"]);
+  assert.equal(invalid.status, 1);
+  assert.match(invalid.stderr, /Run nanasa init first/);
+
+  assert.equal(runCli(repository, ["init"]).status, 0);
+  const usage = runCli(repository, ["group", "unknown"]);
+  assert.equal(usage.status, 2);
+  assert.match(usage.stderr, /Unknown command/);
 });
 
 test("packed package installs cleanly and initializes terminal-only config", () => {
@@ -249,6 +266,7 @@ test("packed package installs cleanly and initializes terminal-only config", () 
   const publishedFiles = manifest.files.map((file) => file.path);
   assert.ok(publishedFiles.includes("dist/daemon/index.js"));
   assert.ok(publishedFiles.includes("dist/cli/admin.js"));
+  assert.ok(publishedFiles.includes("dist/cli/control.js"));
   assert.ok(publishedFiles.includes("templates/config.yaml"));
   assert.equal(
     publishedFiles.some((path) => /worker|\.map$|^test\//.test(path)),

@@ -42,15 +42,12 @@ import {
   type ReorderGroupAgentsCommand,
   ReorderGroupAgentsCommandSchema,
   type ReorderGroupAgentsResult,
-  ReorderGroupAgentsResultSchema,
   type ReorderGroupsCommand,
   type ReorderGroupsResult,
   ReorderGroupsCommandSchema,
-  ReorderGroupsResultSchema,
   type ReparentGroupAgentCommand,
   type ReparentGroupAgentResult,
   ReparentGroupAgentCommandSchema,
-  ReparentGroupAgentResultSchema,
   type RoleDefinition,
   RoleDefinitionSchema,
   type OpenCheckoutCommand,
@@ -58,7 +55,6 @@ import {
   type RemoveWorktreeCommand,
   RemoveWorktreeCommandSchema,
   type WorktreeOperationResult,
-  WorktreeOperationResultSchema,
   type StartGroupRunsResult,
   StartGroupRunsResultSchema,
   type SubmitMessageCommand,
@@ -82,6 +78,7 @@ import {
   CONTROL_API_PREFIX,
   ControlClientError,
   NanasaControlClient,
+  NanasaControlResources,
   type Schema,
 } from "@nanasa/control-client";
 
@@ -150,6 +147,7 @@ export interface PortalClient {
 }
 
 const control = new NanasaControlClient();
+const resources = new NanasaControlResources(control);
 
 async function request<T>(path: string, schema: Schema<T>, init?: RequestInit): Promise<T> {
   return control.request(path, schema, { ...(init === undefined ? {} : { init }) });
@@ -222,45 +220,42 @@ export const api: PortalClient = {
       commandInit("DELETE", {}),
     ),
   reorderAgents: (groupId, command) =>
-    request(
-      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agent-order`,
-      ReorderGroupAgentsResultSchema,
-      commandInit("PUT", ReorderGroupAgentsCommandSchema.parse(command)),
+    resources.topology.reorderAgents(
+      groupId,
+      ReorderGroupAgentsCommandSchema.parse(command),
+      crypto.randomUUID(),
     ),
   reorderGroups: (command) =>
-    request(
-      `${CONTROL_API_PREFIX}/group-order`,
-      ReorderGroupsResultSchema,
-      commandInit("PUT", ReorderGroupsCommandSchema.parse(command)),
+    resources.topology.reorderGroups(
+      ReorderGroupsCommandSchema.parse(command),
+      crypto.randomUUID(),
     ),
   reparentAgent: (groupId, agentId, command) =>
-    request(
-      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}/reparent`,
-      ReparentGroupAgentResultSchema,
-      commandInit("POST", ReparentGroupAgentCommandSchema.parse(command)),
+    resources.topology.reparentAgent(
+      groupId,
+      agentId,
+      ReparentGroupAgentCommandSchema.parse(command),
+      crypto.randomUUID(),
     ),
   assignCheckout: (groupId, agentId, command) =>
-    requestVoid(
-      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}/checkout`,
-      commandInit("PUT", AssignAgentCheckoutCommandSchema.parse(command)),
+    resources.workspace.assignCheckout(
+      groupId,
+      agentId,
+      AssignAgentCheckoutCommandSchema.parse(command),
+      crypto.randomUUID(),
     ),
   createWorktree: (command) =>
-    request(
-      `${CONTROL_API_PREFIX}/worktrees`,
-      WorktreeOperationResultSchema,
-      commandInit("POST", CreateWorktreeCommandSchema.parse(command)),
+    resources.workspace.createWorktree(
+      CreateWorktreeCommandSchema.parse(command),
+      crypto.randomUUID(),
     ),
   openCheckout: (command) =>
-    request(
-      `${CONTROL_API_PREFIX}/checkouts/open`,
-      WorktreeOperationResultSchema,
-      commandInit("POST", OpenCheckoutCommandSchema.parse(command)),
-    ),
+    resources.workspace.openCheckout(OpenCheckoutCommandSchema.parse(command), crypto.randomUUID()),
   removeWorktree: (worktreeId, command) =>
-    request(
-      `${CONTROL_API_PREFIX}/worktrees/${encodeURIComponent(worktreeId)}`,
-      WorktreeOperationResultSchema,
-      commandInit("DELETE", RemoveWorktreeCommandSchema.parse(command)),
+    resources.workspace.removeWorktree(
+      worktreeId,
+      RemoveWorktreeCommandSchema.parse(command),
+      crypto.randomUUID(),
     ),
   updateRolePresentation: (roleId, command) =>
     request(

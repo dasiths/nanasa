@@ -3885,6 +3885,25 @@ export class NanasaStore {
         };
   }
 
+  public listRepositoryTrust(): RepositoryTrustReceipt[] {
+    return (
+      this.#database
+        .prepare(
+          `SELECT * FROM trust
+           ORDER BY decided_at DESC, rowid DESC`,
+        )
+        .all() as Record<string, unknown>[]
+    ).map((row) => ({
+      id: String(row.id),
+      repositoryIdentity: String(row.repository_identity),
+      subjectDigest: String(row.subject_digest),
+      principalId: String(row.principal_id),
+      decision: row.decision as RepositoryTrustReceipt["decision"],
+      decidedAt: String(row.decided_at),
+      ...(row.revoked_at === null ? {} : { revokedAt: String(row.revoked_at) }),
+    }));
+  }
+
   public saveRepositoryTrust(receipt: RepositoryTrustReceipt): RepositoryTrustReceipt {
     this.#database
       .prepare(

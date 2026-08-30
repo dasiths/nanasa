@@ -522,9 +522,13 @@ describe("daemon REST API", () => {
     });
     expect(messageResponse.statusCode).toBe(201);
     const submission = messageResponse.json<{
-      message: { id: string };
+      message: { id: string; sender: { kind: string; operatorId: string } };
       deliveryOutcomes: unknown[];
     }>();
+    expect(submission.message.sender).toEqual({
+      kind: "operator",
+      operatorId: "operator-local-portal",
+    });
     expect(submission.deliveryOutcomes).toHaveLength(2);
 
     const deliveriesResponse = await first.app.inject({
