@@ -16,11 +16,15 @@
       "items": [
         {
           "term": "Selection",
-          "description": "Hold Shift and drag on Linux or Windows; hold Option and drag on macOS."
+          "description": "Hold Shift and drag to select and copy on Linux or Windows; hold Option and drag on macOS. Ctrl+C or Command+C copies an existing selection."
         },
         {
           "term": "Controller",
           "description": "One controller sends input. Observers can select and copy without changing the PTY."
+        },
+        {
+          "term": "TUI clipboard",
+          "description": "Approve a terminal clipboard request to copy a TUI-owned selection. Denied writes remain available until expiry."
         },
         {
           "term": "Transcript",

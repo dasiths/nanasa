@@ -60,28 +60,85 @@ export class AgentOpenWaitService {
         409,
       );
     }
-    const replying = this.store.beginOpenWaitReply(wait.id, {
+    this.store.beginOpenWaitReply(wait.id, {
       runId: input.expectedRunId,
       generation: input.expectedGeneration,
       reporterEpoch: input.expectedReporterEpoch,
       statusRevision: input.expectedStatusRevision,
     });
     try {
-      const observation = await this.runtime.observeRun(run);
-      if (observation.state !== "present") {
+      const terminalInput = strategy.waitReplyInput(wait.kind, input.reply);
+      await this.arbiter.dispatchAutomated(run.id, async () => {
+        const currentWait = this.store.getOpenWait(wait.id);
+        const currentRun = this.store.getActiveRun(wait.groupId, wait.memberId);
+        const status = this.store.getAgentStatus(wait.groupId, wait.memberId);
+        const reporter = this.store.getCurrentReporterSession(run.id, run.generation);
+        const now = Date.now();
+        if (
+          currentWait.state !== "replying" ||
+          currentRun?.id !== wait.runId ||
+          currentRun.generation !== wait.generation ||
+          reporter?.id !== wait.reporterSessionId ||
+          reporter.reporterEpoch !== wait.reporterEpoch ||
+          status.authorityKind !== "reporter" ||
+          status.staleAuthority ||
+          status.reporterEpoch !== wait.reporterEpoch ||
+          status.reporterLeaseExpiresAt === undefined ||
+          Date.parse(status.reporterLeaseExpiresAt) <= now ||
+          status.transportLeaseExpiresAt === undefined ||
+          Date.parse(status.transportLeaseExpiresAt) <= now
+        ) {
+          throw new DomainError("open_wait_replaced", "The exact wait target was replaced", 409);
+        }
+        const observation = await this.runtime.observeRun(run);
+        if (
+          observation.state !== "present" ||
+          observation.process?.expectedProviderMatch !== "match" ||
+          observation.process.processFingerprint !== status.processFingerprint ||
+          observation.process.processFingerprint !== reporter.processFingerprint
+        ) {
+          throw new DomainError(
+            observation.state === "indeterminate"
+              ? "open_wait_process_indeterminate"
+              : "open_wait_replaced",
+            "The exact wait target process is not current",
+            409,
+          );
+        }
+        const finalWait = this.store.getOpenWait(wait.id);
+        const finalStatus = this.store.getAgentStatus(wait.groupId, wait.memberId);
+        const finalReporter = this.store.getCurrentReporterSession(run.id, run.generation);
+        const finalNow = Date.now();
+        if (
+          finalWait.state !== "replying" ||
+          finalReporter?.id !== wait.reporterSessionId ||
+          finalReporter.reporterEpoch !== wait.reporterEpoch ||
+          finalReporter.processFingerprint !== observation.process.processFingerprint ||
+          finalStatus.authorityKind !== "reporter" ||
+          finalStatus.staleAuthority ||
+          finalStatus.reporterEpoch !== wait.reporterEpoch ||
+          finalStatus.reporterLeaseExpiresAt === undefined ||
+          Date.parse(finalStatus.reporterLeaseExpiresAt) <= finalNow ||
+          finalStatus.transportLeaseExpiresAt === undefined ||
+          Date.parse(finalStatus.transportLeaseExpiresAt) <= finalNow
+        ) {
+          throw new DomainError(
+            "open_wait_replaced",
+            "The exact wait target changed during process verification",
+            409,
+          );
+        }
+        await this.runtime.pasteToRun(run, terminalInput);
+      });
+      const completed = this.store.getOpenWait(wait.id);
+      if (completed.state !== "replying") {
         throw new DomainError(
-          observation.state === "indeterminate"
-            ? "open_wait_process_indeterminate"
-            : "open_wait_replaced",
-          "The exact wait target process is not current",
+          "open_wait_replaced",
+          "The exact wait changed after terminal input began",
           409,
         );
       }
-      const terminalInput = strategy.waitReplyInput(wait.kind, input.reply);
-      await this.arbiter.dispatchAutomated(run.id, () =>
-        this.runtime.pasteToRun(run, terminalInput),
-      );
-      return replying;
+      return completed;
     } catch (error) {
       this.store.resetOpenWaitReply(wait.id);
       throw error;

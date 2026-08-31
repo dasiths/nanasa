@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadNanasaConfig } from "../src/config-v2.js";
+import { OperatorAuth } from "../src/operator-auth.js";
 import { createDaemon } from "../src/server.js";
 
 const temporaryDirectories: string[] = [];
@@ -15,6 +16,19 @@ afterEach(() => {
 });
 
 describe("operator authority", () => {
+  it("bounds abandoned one-use portal grants", () => {
+    const repository = mkdtempSync(join(tmpdir(), "nanasa-portal-grants-"));
+    temporaryDirectories.push(repository);
+    const auth = new OperatorAuth({ secretPath: join(repository, "runtime", "operator-secret") });
+    const tokens = Array.from({ length: 33 }, () => auth.createBootstrapToken());
+    const reply = { header: () => reply } as never;
+
+    expect(() => auth.bootstrap({ token: tokens[0] }, reply)).toThrow("invalid or already used");
+    expect(auth.bootstrap({ token: tokens.at(-1) }, reply)).toMatchObject({
+      operatorId: "operator-local-portal",
+    });
+  });
+
   it("persists a strictly increasing daemon epoch across replacement", async () => {
     const repository = mkdtempSync(join(tmpdir(), "nanasa-epoch-"));
     temporaryDirectories.push(repository);
@@ -73,6 +87,43 @@ describe("operator authority", () => {
       });
       expect(hostileOrigin.statusCode).toBe(403);
 
+      expect(
+        (await daemon.app.inject({ method: "POST", url: "/api/v1/auth/portal", payload: {} }))
+          .statusCode,
+      ).toBe(401);
+      const credential = readFileSync(join(daemon.runtimePath, "operator-secret")).toString(
+        "base64url",
+      );
+      const portalGrant = await daemon.app.inject({
+        method: "POST",
+        url: "/api/v1/auth/portal",
+        headers: { authorization: `Bearer ${credential}` },
+        payload: {},
+      });
+      expect(portalGrant.statusCode).toBe(200);
+      const mintedToken = portalGrant
+        .json<{ fragment: string; expiresAt: string }>()
+        .fragment.slice("nanasa-bootstrap=".length);
+      expect(Date.parse(portalGrant.json<{ expiresAt: string }>().expiresAt)).toBeGreaterThan(
+        Date.now(),
+      );
+      const mintedExchange = await daemon.app.inject({
+        method: "POST",
+        url: "/api/v1/auth/bootstrap",
+        headers: { host: "127.0.0.1:3210", origin: "http://127.0.0.1:3210" },
+        payload: { token: mintedToken },
+      });
+      expect(mintedExchange.statusCode).toBe(200);
+      expect(
+        (
+          await daemon.app.inject({
+            method: "POST",
+            url: "/api/v1/auth/bootstrap",
+            payload: { token: mintedToken },
+          })
+        ).statusCode,
+      ).toBe(401);
+
       const exchange = await daemon.app.inject({
         method: "POST",
         url: "/api/v1/auth/bootstrap",
@@ -123,6 +174,20 @@ describe("operator authority", () => {
           })
         ).statusCode,
       ).toBe(404);
+      const snapshotSpy = vi.spyOn(daemon.store, "getSnapshot");
+      expect(
+        (
+          await daemon.app.inject({
+            method: "GET",
+            url: "/api/v1/snapshot",
+            headers: { cookie },
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(snapshotSpy).toHaveBeenLastCalledWith(
+        { instanceId: daemon.guard.instanceId, daemonEpoch: daemon.daemonEpoch },
+        "operator-local-portal",
+      );
 
       expect(
         (

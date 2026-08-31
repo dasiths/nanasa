@@ -65,6 +65,7 @@ import {
   OpenWaitSchema,
   type PortalSnapshot,
   PortalSnapshotSchema,
+  type ProcessIdentityObservation,
   type ProviderStateBinding,
   ProviderStateBindingSchema,
   REPORTER_LEASE_MS,
@@ -1975,19 +1976,51 @@ export class NanasaStore {
     });
   }
 
-  public bindReporterProcess(runId: string, generation: number, processFingerprint: string): void {
+  public bindReporterProcess(
+    runId: string,
+    generation: number,
+    process: string | ProcessIdentityObservation,
+  ): void {
     const session = this.getCurrentReporterSession(runId, generation);
     if (session === undefined) return;
+    const processFingerprint = typeof process === "string" ? process : process.processFingerprint;
     if (
       session.processFingerprint !== undefined &&
       session.processFingerprint !== processFingerprint
     ) {
-      this.revokeReporterAuthority(runId, generation, "process_replaced");
-      throw new DomainError(
-        "status_process_fingerprint_changed",
-        "Reporter authority was revoked because the foreground process changed",
-        409,
-      );
+      const previous = this.#database
+        .prepare(
+          `SELECT payload_json FROM runtime_observations
+           WHERE run_id = ? AND generation = ? AND source = 'process' AND kind = 'process.alive'
+             AND json_extract(payload_json, '$.process.pidStartIdentity') IS NOT NULL
+           ORDER BY sequence DESC LIMIT 1`,
+        )
+        .get(runId, generation) as { payload_json: string } | undefined;
+      const previousProcess =
+        previous === undefined
+          ? undefined
+          : (
+              JSON.parse(previous.payload_json) as {
+                process?: Pick<
+                  ProcessIdentityObservation,
+                  "foregroundPgid" | "leaderPid" | "pidStartIdentity"
+                >;
+              }
+            ).process;
+      const sameKernelProcess =
+        typeof process !== "string" &&
+        previousProcess !== undefined &&
+        previousProcess.foregroundPgid === process.foregroundPgid &&
+        previousProcess.leaderPid === process.leaderPid &&
+        previousProcess.pidStartIdentity === process.pidStartIdentity;
+      if (!sameKernelProcess) {
+        this.revokeReporterAuthority(runId, generation, "process_replaced");
+        throw new DomainError(
+          "status_process_fingerprint_changed",
+          "Reporter authority was revoked because the foreground process changed",
+          409,
+        );
+      }
     }
     this.#database
       .prepare(
@@ -1997,15 +2030,48 @@ export class NanasaStore {
       .run(processFingerprint, session.id);
   }
 
+  public refreshReporterLease(runId: string, generation: number, leaseExpiresAt: string): void {
+    const session = this.getCurrentReporterSession(runId, generation);
+    if (session === undefined) return;
+    this.#database
+      .prepare(
+        `UPDATE reporter_sessions SET lease_expires_at = ?
+         WHERE id = ? AND revoked_at IS NULL AND closed_at IS NULL`,
+      )
+      .run(leaseExpiresAt, session.id);
+    const run = this.getRun(runId);
+    const state = this.#agentStatusState(run);
+    if (state.reporterEpoch === session.reporterEpoch) {
+      this.#upsertAgentStatusState(run, { ...state, reporterLeaseExpiresAt: leaseExpiresAt });
+    }
+  }
+
   public revokeReporterAuthority(runId: string, generation: number, reason: string): void {
     void reason;
     const timestamp = new Date().toISOString();
-    this.#database
-      .prepare(
-        `UPDATE reporter_sessions SET revoked_at = COALESCE(revoked_at, ?), closed_at = COALESCE(closed_at, ?)
-         WHERE run_id = ? AND generation = ? AND closed_at IS NULL`,
-      )
-      .run(timestamp, timestamp, runId, generation);
+    const events = this.#transaction(() => {
+      this.#database
+        .prepare(
+          `UPDATE reporter_sessions SET revoked_at = COALESCE(revoked_at, ?), closed_at = COALESCE(closed_at, ?)
+           WHERE run_id = ? AND generation = ? AND closed_at IS NULL`,
+        )
+        .run(timestamp, timestamp, runId, generation);
+      const waits = this.#database
+        .prepare(
+          `SELECT id FROM open_waits
+           WHERE run_id = ? AND generation = ? AND state IN ('open', 'replying')
+           ORDER BY id`,
+        )
+        .all(runId, generation) as Array<{ id: string }>;
+      this.#database
+        .prepare(
+          `UPDATE open_waits SET state = 'superseded', updated_at = ?
+           WHERE run_id = ? AND generation = ? AND state IN ('open', 'replying')`,
+        )
+        .run(timestamp, runId, generation);
+      return waits.map(({ id }) => this.#appendOpenWaitChangedEvent(id));
+    });
+    for (const event of events) this.#publish(event);
   }
 
   public recordReporterRejection(event: Partial<AgentStatusEventInput>, code: string): void {
@@ -2068,10 +2134,16 @@ export class NanasaStore {
           409,
         );
       }
-      if (Date.parse(observedAt) > Date.parse(session.leaseExpiresAt)) {
+      const processState = this.#agentStatusState(run);
+      if (
+        processState.processState !== "present" ||
+        processState.processFingerprint !== session.processFingerprint ||
+        processState.transportLeaseExpiresAt === undefined ||
+        Date.parse(observedAt) > Date.parse(processState.transportLeaseExpiresAt)
+      ) {
         throw new DomainError(
-          "status_reporter_lease_expired",
-          "Reporter authority lease expired",
+          "status_process_unverified",
+          "Reporter process identity is not currently verified",
           409,
         );
       }
@@ -2131,13 +2203,16 @@ export class NanasaStore {
         observedAt,
         input,
       );
-      this.#applyOpenWaitReporterEvent(run, session, input, next);
+      const openWaitEvents = this.#applyOpenWaitReporterEvent(run, session, input, next);
       this.#upsertAgentStatusState(run, next);
       this.#trimAgentStatusEvents(run.id, run.generation);
       return {
         status: this.#getAgentStatusDetail(run.groupId, run.memberId),
         duplicate: false as const,
-        domainEvents: this.#appendAgentStatusDomainEvents(run, previous, next),
+        domainEvents: [
+          ...openWaitEvents,
+          ...this.#appendAgentStatusDomainEvents(run, previous, next),
+        ],
       };
     });
     for (const domainEvent of completed.domainEvents) this.#publish(domainEvent);
@@ -2190,32 +2265,42 @@ export class NanasaStore {
   }
 
   public acknowledgeCompletion(operatorId: string, runId: string): CompletionAcknowledgement {
-    const run = this.getRun(runId);
-    const state = this.#agentStatusState(run);
-    const acknowledgement = CompletionAcknowledgementSchema.parse({
-      operatorId,
-      runId,
-      generation: run.generation,
-      completionRevision: state.completionRevision,
-      acknowledgedAt: new Date().toISOString(),
+    const completed = this.#transaction(() => {
+      const run = this.getRun(runId);
+      const state = this.#agentStatusState(run);
+      const acknowledgement = CompletionAcknowledgementSchema.parse({
+        operatorId,
+        runId,
+        generation: run.generation,
+        completionRevision: state.completionRevision,
+        acknowledgedAt: new Date().toISOString(),
+      });
+      this.#database
+        .prepare(
+          `INSERT INTO completion_acknowledgements
+             (operator_id, run_id, generation, completion_revision, acknowledged_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(operator_id, run_id, generation) DO UPDATE SET
+             completion_revision = MAX(completion_acknowledgements.completion_revision, excluded.completion_revision),
+             acknowledged_at = excluded.acknowledged_at`,
+        )
+        .run(
+          acknowledgement.operatorId,
+          acknowledgement.runId,
+          acknowledgement.generation,
+          acknowledgement.completionRevision,
+          acknowledgement.acknowledgedAt,
+        );
+      return {
+        acknowledgement,
+        event: this.#appendEvent("agent-status.completion-acknowledged", "run", run.id, {
+          generation: acknowledgement.generation,
+          completionRevision: acknowledgement.completionRevision,
+        }),
+      };
     });
-    this.#database
-      .prepare(
-        `INSERT INTO completion_acknowledgements
-           (operator_id, run_id, generation, completion_revision, acknowledged_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(operator_id, run_id, generation) DO UPDATE SET
-           completion_revision = MAX(completion_acknowledgements.completion_revision, excluded.completion_revision),
-           acknowledged_at = excluded.acknowledged_at`,
-      )
-      .run(
-        acknowledgement.operatorId,
-        acknowledgement.runId,
-        acknowledgement.generation,
-        acknowledgement.completionRevision,
-        acknowledgement.acknowledgedAt,
-      );
-    return acknowledgement;
+    this.#publish(completed.event);
+    return completed.acknowledgement;
   }
 
   public reportAgentProgress(
@@ -3168,6 +3253,13 @@ export class NanasaStore {
         );
       }
       const action = this.getAgentAction(actionId);
+      if (!["created", "deferred"].includes(action.state)) {
+        throw new DomainError(
+          "agent_action_state_changed",
+          "The action state changed during submission",
+          409,
+        );
+      }
       const run = this.getActiveRun(action.target.groupId, action.target.memberId);
       if (
         run?.id !== attempt.run_id ||
@@ -3245,6 +3337,22 @@ export class NanasaStore {
     });
     this.#publish(completed.event);
     return completed.result;
+  }
+
+  public abandonAgentActionAttempt(
+    actionId: string,
+    attemptId: string,
+    leaseOwner: string,
+    code: string,
+  ): AgentAction {
+    const timestamp = new Date().toISOString();
+    this.#database
+      .prepare(
+        `UPDATE action_attempts SET state = 'superseded', failure_code = ?, updated_at = ?
+         WHERE id = ? AND action_id = ? AND state = 'submitting' AND lease_owner = ?`,
+      )
+      .run(code, timestamp, attemptId, actionId, leaseOwner);
+    return this.getAgentAction(actionId);
   }
 
   public transitionAgentAction(
@@ -3473,45 +3581,67 @@ export class NanasaStore {
     waitId: string,
     expected: { runId: string; generation: number; reporterEpoch: string; statusRevision: number },
   ): OpenWait {
-    const wait = this.getOpenWait(waitId);
-    const status = this.getAgentStatus(wait.groupId, wait.memberId);
-    const reporter = this.getCurrentReporterSession(wait.runId, wait.generation);
-    if (
-      wait.state !== "open" ||
-      wait.runId !== expected.runId ||
-      wait.generation !== expected.generation ||
-      wait.reporterEpoch !== expected.reporterEpoch ||
-      status.runId !== wait.runId ||
-      status.generation !== wait.generation ||
-      expected.statusRevision !== wait.openedStatusRevision ||
-      status.statusRevision < wait.openedStatusRevision ||
-      status.openWait?.requestId !== wait.providerRequestId ||
-      reporter?.id !== wait.reporterSessionId ||
-      reporter.reporterEpoch !== wait.reporterEpoch
-    ) {
-      throw new DomainError(
-        "open_wait_replaced",
-        "The exact provider wait is closed, stale, or replaced",
-        409,
-      );
-    }
-    const timestamp = new Date().toISOString();
-    this.#database
-      .prepare(
-        "UPDATE open_waits SET state = 'replying', updated_at = ? WHERE id = ? AND state = 'open'",
-      )
-      .run(timestamp, waitId);
-    return this.getOpenWait(waitId);
+    const completed = this.#transaction(() => {
+      const wait = this.getOpenWait(waitId);
+      const status = this.getAgentStatus(wait.groupId, wait.memberId);
+      const reporter = this.getCurrentReporterSession(wait.runId, wait.generation);
+      if (
+        wait.state !== "open" ||
+        wait.runId !== expected.runId ||
+        wait.generation !== expected.generation ||
+        wait.reporterEpoch !== expected.reporterEpoch ||
+        status.runId !== wait.runId ||
+        status.generation !== wait.generation ||
+        expected.statusRevision !== wait.openedStatusRevision ||
+        status.statusRevision < wait.openedStatusRevision ||
+        status.openWait?.requestId !== wait.providerRequestId ||
+        reporter?.id !== wait.reporterSessionId ||
+        reporter.reporterEpoch !== wait.reporterEpoch
+      ) {
+        throw new DomainError(
+          "open_wait_replaced",
+          "The exact provider wait is closed, stale, or replaced",
+          409,
+        );
+      }
+      const timestamp = new Date().toISOString();
+      const update = this.#database
+        .prepare(
+          "UPDATE open_waits SET state = 'replying', updated_at = ? WHERE id = ? AND state = 'open'",
+        )
+        .run(timestamp, waitId);
+      if (update.changes !== 1) {
+        throw new DomainError(
+          "open_wait_replaced",
+          "The exact provider wait is closed, stale, or replaced",
+          409,
+        );
+      }
+      return {
+        wait: this.getOpenWait(waitId),
+        event: this.#appendOpenWaitChangedEvent(waitId),
+      };
+    });
+    this.#publish(completed.event);
+    return completed.wait;
   }
 
   public resetOpenWaitReply(waitId: string): OpenWait {
-    const timestamp = new Date().toISOString();
-    this.#database
-      .prepare(
-        "UPDATE open_waits SET state = 'open', updated_at = ? WHERE id = ? AND state = 'replying'",
-      )
-      .run(timestamp, waitId);
-    return this.getOpenWait(waitId);
+    const completed = this.#transaction(() => {
+      const timestamp = new Date().toISOString();
+      const update = this.#database
+        .prepare(
+          "UPDATE open_waits SET state = 'open', updated_at = ? WHERE id = ? AND state = 'replying'",
+        )
+        .run(timestamp, waitId);
+      const wait = this.getOpenWait(waitId);
+      return {
+        wait,
+        event: update.changes === 1 ? this.#appendOpenWaitChangedEvent(waitId) : undefined,
+      };
+    });
+    if (completed.event !== undefined) this.#publish(completed.event);
+    return completed.wait;
   }
 
   public pruneAgentActions(groupId: string, retain: number): number {
@@ -4154,6 +4284,7 @@ export class NanasaStore {
       instanceId: this.#instanceId,
       daemonEpoch: this.#daemonEpoch,
     },
+    operatorId?: string,
   ): PortalSnapshot {
     return this.#readTransaction(() => {
       const groups = (
@@ -4219,7 +4350,7 @@ export class NanasaStore {
       ).map((row) => this.#hydrateMessage(row));
       const deliveryOutcomes = this.listDeliveries();
       const messageGroups = groups.map((group) => this.getGroupMessageState(group.id));
-      const agentStatuses = groups.flatMap((group) => this.listAgentStatuses(group.id));
+      const agentStatuses = groups.flatMap((group) => this.listAgentStatuses(group.id, operatorId));
       const sequenceRow = this.#database
         .prepare("SELECT COALESCE(MAX(sequence), 0) AS sequence FROM domain_events")
         .get() as unknown as { sequence: number };
@@ -4608,7 +4739,7 @@ export class NanasaStore {
     session: ReporterSession,
     input: AgentStatusEventInput,
     state: AgentStatusReducerState,
-  ): void {
+  ): DomainEvent[] {
     if (input.event === "wait.opened") {
       if (
         input.requestId === undefined ||
@@ -4638,6 +4769,7 @@ export class NanasaStore {
         }
       }
       const timestamp = new Date().toISOString();
+      const waitId = `wait_${randomUUID()}`;
       this.#database
         .prepare(
           `INSERT INTO open_waits
@@ -4648,7 +4780,7 @@ export class NanasaStore {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, ?, NULL)`,
         )
         .run(
-          `wait_${randomUUID()}`,
+          waitId,
           input.actionId ?? null,
           run.groupId,
           run.memberId,
@@ -4666,7 +4798,7 @@ export class NanasaStore {
           timestamp,
           timestamp,
         );
-      return;
+      return [this.#appendOpenWaitChangedEvent(waitId)];
     }
     if (input.event === "wait.closed") {
       if (input.requestId === undefined) {
@@ -4677,14 +4809,32 @@ export class NanasaStore {
         );
       }
       const timestamp = new Date().toISOString();
-      this.#database
+      const row = this.#database
+        .prepare(
+          `SELECT id FROM open_waits
+           WHERE run_id = ? AND generation = ? AND reporter_epoch = ?
+             AND provider_request_id = ? AND state IN ('open', 'replying')`,
+        )
+        .get(run.id, run.generation, session.reporterEpoch, input.requestId) as
+        | { id: string }
+        | undefined;
+      const update = this.#database
         .prepare(
           `UPDATE open_waits SET state = 'answered', answered_at = ?, updated_at = ?
            WHERE run_id = ? AND generation = ? AND reporter_epoch = ?
              AND provider_request_id = ? AND state IN ('open', 'replying')`,
         )
         .run(timestamp, timestamp, run.id, run.generation, session.reporterEpoch, input.requestId);
+      return update.changes === 1 && row !== undefined
+        ? [this.#appendOpenWaitChangedEvent(row.id)]
+        : [];
     }
+    return [];
+  }
+
+  #appendOpenWaitChangedEvent(waitId: string): DomainEvent {
+    const wait = this.getOpenWait(waitId);
+    return this.#appendEvent("open-wait.changed", "open-wait", wait.id, { wait });
   }
 
   #trimAgentStatusEvents(runId: string, generation: number): void {
@@ -4710,6 +4860,11 @@ export class NanasaStore {
       previous.phase !== next.phase ||
       previous.attention !== next.attention ||
       previous.outcome !== next.outcome ||
+      previous.confidence !== next.confidence ||
+      previous.authorityKind !== next.authorityKind ||
+      previous.authorityId !== next.authorityId ||
+      previous.staleAuthority !== next.staleAuthority ||
+      previous.interactiveReady !== next.interactiveReady ||
       previous.lastProgressSummary !== next.lastProgressSummary ||
       previous.blocker !== next.blocker;
     if (!material) return [];

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { AgentRun, AgentStatusEventInput } from "@nanasa/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentActionAckService } from "../src/actions/agent-action-ack-service.js";
-import { actionReadiness, AgentActionScheduler } from "../src/actions/agent-action-scheduler.js";
+import { AgentActionScheduler, actionReadiness } from "../src/actions/agent-action-scheduler.js";
 import { AgentActionService } from "../src/actions/agent-action-service.js";
 import { AgentOpenWaitService } from "../src/actions/agent-open-wait-service.js";
 import { AgentWaitService } from "../src/actions/agent-wait-service.js";
@@ -107,7 +107,7 @@ function fixture(path = ":memory:") {
   store.recordProcessStatus(run.id, {
     event: "process.alive",
     eventId: "process_alive_1",
-    observedAt: "2026-08-29T12:00:00.000Z",
+    observedAt: new Date().toISOString(),
     process: {
       foregroundPgid: 10,
       leaderPid: 10,
@@ -313,6 +313,13 @@ describe("durable exact-runtime actions", () => {
       kind: "reject",
       code: "target_reporter_stale",
     });
+    expect(
+      actionReadiness(
+        { ...action },
+        { ...idle, reporterLeaseExpiresAt: "2020-01-01T00:00:00.000Z" },
+        new Date(),
+      ),
+    ).toEqual({ kind: "reject", code: "target_reporter_stale" });
     expect(actionReadiness(action, { ...idle, state: "working" }, new Date())).toMatchObject({
       kind: "reject",
       code: "target_working_override_required",
@@ -327,6 +334,126 @@ describe("durable exact-runtime actions", () => {
         new Date(),
       ),
     ).toMatchObject({ kind: "reject", code: "target_identity_mismatch" });
+  });
+
+  it("supersedes an action when the exact reporter-bound process is replaced", async () => {
+    const context = fixture();
+    const action = createAction(context, "process-replaced");
+    context.runtime.observeRun.mockResolvedValueOnce({
+      id: "replacement_observation",
+      runId: context.run.id,
+      generation: context.run.generation,
+      state: "present",
+      observedAt: "2026-08-29T12:00:02.000Z",
+      evidenceCode: "exact_owned_pane_and_process",
+      process: {
+        foregroundPgid: 20,
+        leaderPid: 20,
+        pidStartIdentity: "20:200",
+        executableFingerprint: "d".repeat(64),
+        argvFingerprint: "e".repeat(64),
+        processFingerprint: "f".repeat(64),
+        expectedProviderMatch: "match",
+        wrapperChain: ["claude"],
+      },
+    });
+
+    await context.scheduler.tick();
+
+    expect(context.store.getAgentAction(action.id).state).toBe("superseded");
+    expect(context.runtime.pasteToRun).not.toHaveBeenCalled();
+  });
+
+  it("revalidates process identity after waiting for terminal input arbitration", async () => {
+    const context = fixture();
+    const action = createAction(context, "queued-process-replaced");
+    let releaseBlocker: (() => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const blocker = context.arbiter.dispatchAutomated(
+      context.run.id,
+      () =>
+        new Promise<void>((resolve) => {
+          releaseBlocker = resolve;
+          markStarted?.();
+        }),
+    );
+    await started;
+
+    context.runtime.observeRun.mockResolvedValueOnce({
+      id: "queued_replacement_observation",
+      runId: context.run.id,
+      generation: context.run.generation,
+      state: "present",
+      observedAt: "2026-08-29T12:00:03.000Z",
+      evidenceCode: "exact_owned_pane_and_process",
+      process: {
+        foregroundPgid: 20,
+        leaderPid: 20,
+        pidStartIdentity: "20:200",
+        executableFingerprint: "d".repeat(64),
+        argvFingerprint: "e".repeat(64),
+        processFingerprint: "f".repeat(64),
+        expectedProviderMatch: "match",
+        wrapperChain: ["claude"],
+      },
+    });
+    const tick = context.scheduler.tick();
+    await Promise.resolve();
+    releaseBlocker?.();
+    await blocker;
+    await tick;
+
+    expect(context.store.getAgentAction(action.id).state).toBe("superseded");
+    expect(context.runtime.pasteToRun).not.toHaveBeenCalled();
+  });
+
+  it("rejects cancellation after the terminal-input attempt begins", async () => {
+    const context = fixture();
+    const action = createAction(context, "cancel-during-process-probe");
+    let resolveObservation:
+      | ((value: Awaited<ReturnType<typeof context.runtime.observeRun>>) => void)
+      | undefined;
+    let markObserved: (() => void) | undefined;
+    const observed = new Promise<void>((resolve) => {
+      markObserved = resolve;
+    });
+    context.runtime.observeRun.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveObservation = resolve;
+          markObserved?.();
+        }),
+    );
+    const tick = context.scheduler.tick();
+    await observed;
+    expect(() => context.actions.cancel(context.principal, action.id)).toThrowError(
+      expect.objectContaining({ code: "agent_action_submission_in_progress" }),
+    );
+    resolveObservation?.({
+      id: "cancelled_observation",
+      runId: context.run.id,
+      generation: context.run.generation,
+      state: "present",
+      observedAt: "2026-08-29T12:00:03.000Z",
+      evidenceCode: "exact_owned_pane_and_process",
+      process: {
+        foregroundPgid: 10,
+        leaderPid: 10,
+        pidStartIdentity: "10:100",
+        executableFingerprint: "b".repeat(64),
+        argvFingerprint: "c".repeat(64),
+        processFingerprint: "a".repeat(64),
+        expectedProviderMatch: "match",
+        wrapperChain: ["claude"],
+      },
+    });
+    await tick;
+
+    expect(context.store.getAgentAction(action.id).state).toBe("submitted");
+    expect(context.runtime.pasteToRun).toHaveBeenCalledOnce();
   });
 
   it("waits for exact action states without treating unrelated events as completion", async () => {
@@ -364,6 +491,16 @@ describe("exact provider waits and authority", () => {
       }),
     );
     const wait = context.store.listOpenWaits(context.group.id)[0]!;
+    expect(
+      context.store
+        .listEvents()
+        .filter((event) => event.type === "open-wait.changed")
+        .at(-1),
+    ).toMatchObject({
+      aggregateType: "open-wait",
+      aggregateId: wait.id,
+      payload: { wait: { id: wait.id, state: "open" } },
+    });
     const service = new AgentOpenWaitService(
       context.store,
       context.runtime,
@@ -380,11 +517,275 @@ describe("exact provider waits and authority", () => {
       }),
     ).resolves.toMatchObject({ state: "replying" });
     expect(context.store.getOpenWait(wait.id).state).toBe("replying");
+    expect(
+      context.store
+        .listEvents()
+        .filter((event) => event.type === "open-wait.changed")
+        .at(-1),
+    ).toMatchObject({ payload: { wait: { id: wait.id, state: "replying" } } });
+    expect(context.store.resetOpenWaitReply(wait.id)).toMatchObject({ state: "open" });
+    expect(
+      context.store
+        .listEvents()
+        .filter((event) => event.type === "open-wait.changed")
+        .at(-1),
+    ).toMatchObject({ payload: { wait: { id: wait.id, state: "open" } } });
+    const rollbackSequence = context.store.listEvents().at(-1)!.sequence;
+    expect(context.store.resetOpenWaitReply(wait.id)).toMatchObject({ state: "open" });
+    expect(context.store.listEvents(rollbackSequence)).toEqual([]);
     context.store.ingestAgentStatusEvent(
       identity,
       reporterEvent(context.run, 3, "wait.closed", { requestId: "permission_1" }),
     );
     expect(context.store.getOpenWait(wait.id).state).toBe("answered");
+    expect(
+      context.store
+        .listEvents()
+        .filter((event) => event.type === "open-wait.changed")
+        .at(-1),
+    ).toMatchObject({ payload: { wait: { id: wait.id, state: "answered" } } });
+  });
+
+  it("invalidates a non-leading exact wait transition without a semantic status change", () => {
+    const context = fixture();
+    const identity = {
+      groupId: context.group.id,
+      memberId: "worker",
+      runId: context.run.id,
+      generation: 1,
+    };
+    for (const [sourceSequence, requestId] of [
+      [2, "permission_leading"],
+      [3, "permission_secondary"],
+    ] as const) {
+      context.store.ingestAgentStatusEvent(
+        identity,
+        reporterEvent(context.run, sourceSequence, "wait.opened", {
+          requestId,
+          data: {
+            waitKind: "permission",
+            summary: "Allow one tool?",
+            replyChannel: "terminal",
+          },
+        }),
+      );
+    }
+    const eventSequence = context.store.listEvents().at(-1)!.sequence;
+
+    context.store.ingestAgentStatusEvent(
+      identity,
+      reporterEvent(context.run, 4, "wait.closed", { requestId: "permission_secondary" }),
+    );
+
+    const transitionEvents = context.store.listEvents(eventSequence);
+    expect(transitionEvents).toHaveLength(1);
+    expect(transitionEvents[0]).toMatchObject({
+      type: "open-wait.changed",
+      payload: {
+        wait: { providerRequestId: "permission_secondary", state: "answered" },
+      },
+    });
+    expect(context.store.getAgentStatus(context.group.id, "worker").openWait).toMatchObject({
+      requestId: "permission_leading",
+    });
+  });
+
+  it("revalidates an exact wait after queued terminal arbitration", async () => {
+    const context = fixture();
+    const identity = {
+      groupId: context.group.id,
+      memberId: "worker",
+      runId: context.run.id,
+      generation: 1,
+    };
+    context.store.ingestAgentStatusEvent(
+      identity,
+      reporterEvent(context.run, 2, "wait.opened", {
+        requestId: "permission_queued",
+        data: {
+          waitKind: "permission",
+          summary: "Allow queued tool?",
+          replyChannel: "terminal",
+        },
+      }),
+    );
+    const wait = context.store.listOpenWaits(context.group.id)[0]!;
+    const service = new AgentOpenWaitService(
+      context.store,
+      context.runtime,
+      context.arbiter,
+      ProviderAdapterRegistry.builtIn(),
+    );
+    let releaseBlocker: (() => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const blocker = context.arbiter.dispatchAutomated(
+      context.run.id,
+      () =>
+        new Promise<void>((resolve) => {
+          releaseBlocker = resolve;
+          markStarted?.();
+        }),
+    );
+    await started;
+    const reply = service.reply(context.principal, wait.id, {
+      expectedRunId: wait.runId,
+      expectedGeneration: wait.generation,
+      expectedReporterEpoch: wait.reporterEpoch,
+      expectedStatusRevision: wait.openedStatusRevision,
+      reply: { kind: "allow-once" },
+    });
+    await Promise.resolve();
+    context.store.revokeReporterAuthority(context.run.id, context.run.generation, "replaced");
+    expect(
+      context.store
+        .listEvents()
+        .filter((event) => event.type === "open-wait.changed")
+        .at(-1),
+    ).toMatchObject({
+      aggregateId: wait.id,
+      payload: { wait: { id: wait.id, state: "superseded" } },
+    });
+    releaseBlocker?.();
+    await blocker;
+
+    await expect(reply).rejects.toThrowError(
+      expect.objectContaining({ code: "open_wait_replaced" }),
+    );
+    expect(context.runtime.pasteToRun).not.toHaveBeenCalled();
+    expect(context.store.getOpenWait(wait.id).state).toBe("superseded");
+  });
+
+  it("does not reply to a wait superseded during process verification", async () => {
+    const context = fixture();
+    const identity = {
+      groupId: context.group.id,
+      memberId: "worker",
+      runId: context.run.id,
+      generation: 1,
+    };
+    context.store.ingestAgentStatusEvent(
+      identity,
+      reporterEvent(context.run, 2, "wait.opened", {
+        requestId: "permission_probe",
+        data: {
+          waitKind: "permission",
+          summary: "Allow probed tool?",
+          replyChannel: "terminal",
+        },
+      }),
+    );
+    const wait = context.store.listOpenWaits(context.group.id)[0]!;
+    const service = new AgentOpenWaitService(
+      context.store,
+      context.runtime,
+      context.arbiter,
+      ProviderAdapterRegistry.builtIn(),
+    );
+    let resolveObservation:
+      | ((value: Awaited<ReturnType<typeof context.runtime.observeRun>>) => void)
+      | undefined;
+    let markObserved: (() => void) | undefined;
+    const observed = new Promise<void>((resolve) => {
+      markObserved = resolve;
+    });
+    context.runtime.observeRun.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveObservation = resolve;
+          markObserved?.();
+        }),
+    );
+    const reply = service.reply(context.principal, wait.id, {
+      expectedRunId: wait.runId,
+      expectedGeneration: wait.generation,
+      expectedReporterEpoch: wait.reporterEpoch,
+      expectedStatusRevision: wait.openedStatusRevision,
+      reply: { kind: "allow-once" },
+    });
+    await observed;
+    context.store.revokeReporterAuthority(context.run.id, context.run.generation, "replaced");
+    resolveObservation?.({
+      id: "superseded_wait_observation",
+      runId: context.run.id,
+      generation: context.run.generation,
+      state: "present",
+      observedAt: "2026-08-29T12:00:03.000Z",
+      evidenceCode: "exact_owned_pane_and_process",
+      process: {
+        foregroundPgid: 10,
+        leaderPid: 10,
+        pidStartIdentity: "10:100",
+        executableFingerprint: "b".repeat(64),
+        argvFingerprint: "c".repeat(64),
+        processFingerprint: "a".repeat(64),
+        expectedProviderMatch: "match",
+        wrapperChain: ["claude"],
+      },
+    });
+
+    await expect(reply).rejects.toThrowError(
+      expect.objectContaining({ code: "open_wait_replaced" }),
+    );
+    expect(context.runtime.pasteToRun).not.toHaveBeenCalled();
+    expect(context.store.getOpenWait(wait.id).state).toBe("superseded");
+  });
+
+  it("reports wait replacement when authority is revoked during terminal input", async () => {
+    const context = fixture();
+    const identity = {
+      groupId: context.group.id,
+      memberId: "worker",
+      runId: context.run.id,
+      generation: 1,
+    };
+    context.store.ingestAgentStatusEvent(
+      identity,
+      reporterEvent(context.run, 2, "wait.opened", {
+        requestId: "permission_during_input",
+        data: {
+          waitKind: "permission",
+          summary: "Allow active tool?",
+          replyChannel: "terminal",
+        },
+      }),
+    );
+    const wait = context.store.listOpenWaits(context.group.id)[0]!;
+    const service = new AgentOpenWaitService(
+      context.store,
+      context.runtime,
+      context.arbiter,
+      ProviderAdapterRegistry.builtIn(),
+    );
+    let releasePaste: (() => void) | undefined;
+    let markPasting: (() => void) | undefined;
+    const pasting = new Promise<void>((resolve) => {
+      markPasting = resolve;
+    });
+    context.runtime.pasteToRun.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releasePaste = resolve;
+          markPasting?.();
+        }),
+    );
+    const reply = service.reply(context.principal, wait.id, {
+      expectedRunId: wait.runId,
+      expectedGeneration: wait.generation,
+      expectedReporterEpoch: wait.reporterEpoch,
+      expectedStatusRevision: wait.openedStatusRevision,
+      reply: { kind: "allow-once" },
+    });
+    await pasting;
+    context.store.revokeReporterAuthority(context.run.id, context.run.generation, "replaced");
+    releasePaste?.();
+
+    await expect(reply).rejects.toThrowError(
+      expect.objectContaining({ code: "open_wait_replaced" }),
+    );
+    expect(context.store.getOpenWait(wait.id).state).toBe("superseded");
   });
 
   it("denies peer permission approval, arbitrary keys, peer stops, and unrestricted reads", () => {

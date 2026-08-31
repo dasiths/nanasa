@@ -15,8 +15,10 @@ import {
 import { dirname, resolve } from "node:path";
 import {
   OperatorBootstrapCommandSchema,
-  OperatorSessionSchema,
+  type OperatorBootstrapGrant,
+  OperatorBootstrapGrantSchema,
   type OperatorSession,
+  OperatorSessionSchema,
 } from "@nanasa/contracts";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { DomainError } from "./store.js";
@@ -24,6 +26,7 @@ import { DomainError } from "./store.js";
 const COOKIE_NAME = "nanasa_operator";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
 const BOOTSTRAP_TTL_MS = 5 * 60 * 1_000;
+const MAX_BOOTSTRAP_TOKENS = 32;
 
 interface SessionRecord extends OperatorSession {
   id: string;
@@ -120,9 +123,26 @@ export class OperatorAuth {
   }
 
   public createBootstrapToken(): string {
+    const now = this.#now().getTime();
+    for (const [token, expiresAt] of this.#bootstrapTokens) {
+      if (expiresAt < now) this.#bootstrapTokens.delete(token);
+    }
+    while (this.#bootstrapTokens.size >= MAX_BOOTSTRAP_TOKENS) {
+      const oldest = this.#bootstrapTokens.keys().next().value;
+      if (oldest === undefined) break;
+      this.#bootstrapTokens.delete(oldest);
+    }
     const token = opaqueToken();
-    this.#bootstrapTokens.set(token, this.#now().getTime() + BOOTSTRAP_TTL_MS);
+    this.#bootstrapTokens.set(token, now + BOOTSTRAP_TTL_MS);
     return token;
+  }
+
+  public createBootstrapGrant(): OperatorBootstrapGrant {
+    const token = this.createBootstrapToken();
+    return OperatorBootstrapGrantSchema.parse({
+      fragment: `nanasa-bootstrap=${token}`,
+      expiresAt: new Date(this.#now().getTime() + BOOTSTRAP_TTL_MS).toISOString(),
+    });
   }
 
   public bootstrap(command: unknown, reply: FastifyReply): OperatorSession {

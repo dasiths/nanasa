@@ -145,12 +145,46 @@ describe("agent status reducer", () => {
     });
   });
 
-  it("treats a long-lived process without reporter events as unknown", () => {
+  it("does not let heartbeats suppress progress-stuck detection", () => {
+    let state = reporterEvent(createAgentStatusReducerState("run_1", 1, startedAt), "turn.started");
+    state = reduceAgentStatus(state, {
+      event: "lease.probed",
+      eventId: "probe_1",
+      observedAt: "2026-08-11T12:01:00.000Z",
+    });
+    state = reporterEvent(state, "heartbeat", {
+      observedAt: "2026-08-11T12:01:15.000Z",
+    });
+    expect(state.staleProbeCount).toBe(1);
+    state = reduceAgentStatus(state, {
+      event: "lease.probed",
+      eventId: "probe_2",
+      observedAt: "2026-08-11T12:02:00.000Z",
+    });
+
+    expect(state).toMatchObject({
+      state: "suspected_stuck",
+      attention: "progress_stale",
+      confidence: "low",
+    });
+  });
+
+  it("uses a recognized live process as a low-confidence idle fallback", () => {
     let state = createAgentStatusReducerState("run_1", 1, startedAt);
     state = reduceAgentStatus(state, {
       event: "process.alive",
       eventId: "alive_1",
       observedAt: startedAt,
+      process: {
+        foregroundPgid: 100,
+        leaderPid: 100,
+        pidStartIdentity: "100:50",
+        executableFingerprint: "a".repeat(64),
+        argvFingerprint: "b".repeat(64),
+        processFingerprint: "c".repeat(64),
+        expectedProviderMatch: "match",
+        wrapperChain: ["claude"],
+      },
     });
     state = reduceAgentStatus(state, {
       event: "lease.probed",
@@ -158,10 +192,123 @@ describe("agent status reducer", () => {
       observedAt: "2026-08-11T12:01:00.000Z",
     });
     expect(state).toMatchObject({
+      state: "idle",
+      phase: "settled",
+      confidence: "low",
+      attention: "none",
+      authorityKind: "process",
+      processState: "present",
+      interactiveReady: true,
+    });
+  });
+
+  it("does not treat a mismatched foreground process as an idle provider", () => {
+    const state = reduceAgentStatus(createAgentStatusReducerState("run_1", 1, startedAt), {
+      event: "process.alive",
+      eventId: "alive_mismatch",
+      observedAt: startedAt,
+      process: {
+        foregroundPgid: 100,
+        leaderPid: 100,
+        pidStartIdentity: "100:50",
+        executableFingerprint: "a".repeat(64),
+        argvFingerprint: "b".repeat(64),
+        processFingerprint: "c".repeat(64),
+        expectedProviderMatch: "mismatch",
+        wrapperChain: ["bash"],
+      },
+    });
+
+    expect(state).toMatchObject({
+      state: "starting",
+      phase: "startup",
+      processState: "present",
+      interactiveReady: false,
+      staleAuthority: true,
+    });
+  });
+
+  it("clears reporter semantics when process authority is invalidated", () => {
+    let reporterState = reporterEvent(
+      createAgentStatusReducerState("run_1", 1, startedAt),
+      "turn.started",
+    );
+    reporterState = reporterEvent(reporterState, "tool.started", {
+      operationId: "tool-before-replacement",
+    });
+    reporterState = reporterEvent(reporterState, "wait.opened", {
+      requestId: "wait-before-replacement",
+      data: {
+        waitKind: "permission",
+        summary: "Old process permission",
+        replyChannel: "terminal",
+      },
+    });
+    reporterState = {
+      ...reporterState,
+      outcome: "failed",
+      cleanEndSeen: true,
+      lastProgressSummary: "Old process progress",
+      progressStage: "implementation",
+      nextStep: "Old process next step",
+      blocker: "Old process blocker",
+    };
+    const invalidated = reduceAgentStatus(reporterState, {
+      event: "process.alive",
+      eventId: "replacement",
+      observedAt: "2026-08-11T12:00:15.000Z",
+      reporterAuthorityInvalid: true,
+      process: {
+        foregroundPgid: 200,
+        leaderPid: 200,
+        pidStartIdentity: "200:75",
+        executableFingerprint: "d".repeat(64),
+        argvFingerprint: "e".repeat(64),
+        processFingerprint: "f".repeat(64),
+        expectedProviderMatch: "match",
+        wrapperChain: ["claude"],
+      },
+    });
+
+    expect(invalidated).toMatchObject({
       state: "unknown",
       phase: "startup",
-      confidence: "low",
       attention: "reporter_stale",
+      confidence: "low",
+      authorityKind: "none",
+      staleAuthority: true,
+      interactiveReady: false,
+      processState: "present",
+      outcome: "unknown",
+      cleanEndSeen: false,
+      openTools: [],
+      openWaits: [],
+      staleProbeCount: 0,
+    });
+    expect(invalidated.reporterEpoch).toBeUndefined();
+    expect(invalidated.reporterLeaseExpiresAt).toBeUndefined();
+    expect(invalidated.readinessCoverage).toBeUndefined();
+    expect(invalidated.lastProgressSummary).toBeUndefined();
+    expect(invalidated.blocker).toBeUndefined();
+  });
+
+  it("does not erase healthy idle reporter authority because time passes", () => {
+    let state = reporterEvent(
+      createAgentStatusReducerState("run_1", 1, startedAt),
+      "session.ready",
+    );
+    state = reduceAgentStatus(state, {
+      event: "lease.probed",
+      eventId: "probe_after_reporter_lease",
+      observedAt: "2026-08-11T13:01:00.000Z",
+    });
+
+    expect(state).toMatchObject({
+      state: "idle",
+      attention: "none",
+      confidence: "high",
+      authorityKind: "reporter",
+      staleAuthority: false,
     });
   });
 

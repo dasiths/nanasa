@@ -21,10 +21,10 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  CircleAlert,
   CircleStop,
   Copy,
   EllipsisVertical,
+  MailWarning,
   MoveRight,
   Palette,
   Pencil,
@@ -63,10 +63,13 @@ export interface AddAgentInput {
 interface GroupTreeProps {
   snapshot: PortalSnapshot;
   config: NanasaConfig;
+  repositoryNavigation?: ReactNode;
+  utilities?: ReactNode;
   selectedGroupId?: string;
   unreadCounts: ReadonlyMap<string, number>;
   busyAction?: string;
   onSelectGroup(groupId: string): void;
+  onOpenMessages?(groupId: string): void;
   onCreateGroup(name: string, instructions: string[]): Promise<void>;
   onRenameGroup(groupId: string, name: string): Promise<void>;
   onUpdateGroup?(groupId: string, command: UpdateGroupCommand): Promise<void>;
@@ -1052,10 +1055,12 @@ function AddAgentDialog({
 export function GroupTree({
   snapshot,
   config,
+  repositoryNavigation,
+  utilities,
   selectedGroupId,
-  unreadCounts,
   busyAction,
   onSelectGroup,
+  onOpenMessages,
   onCreateGroup,
   onRenameGroup,
   onUpdateGroup,
@@ -1095,8 +1100,10 @@ export function GroupTree({
     left: number;
     top: number;
   }>();
-  const failedMemberIds = new Set(
-    snapshot.messageGroups?.flatMap((state) => state.failedRecipientMemberIds) ?? [],
+  const failedRecipientsByGroup = new Map(
+    (snapshot.messageGroups ?? []).map(
+      (state) => [state.groupId, new Set(state.failedRecipientMemberIds)] as const,
+    ),
   );
   const settingsAgent =
     settingsTarget === undefined
@@ -1183,6 +1190,7 @@ export function GroupTree({
         </div>
       </div>
       {showCreateGroup && <CreateGroupForm onCreate={onCreateGroup} />}
+      {repositoryNavigation}
       <nav className="group-tree" aria-label="Group tree">
         {snapshot.groups.length === 0 && (
           <div className="empty-state compact-empty">
@@ -1209,7 +1217,6 @@ export function GroupTree({
               return member === undefined ? [] : [{ agentId, agent, member }];
             });
           const expanded = expandedGroups.has(group.id);
-          const unread = unreadCounts.get(group.id) ?? 0;
           return (
             <div className="tree-group" key={group.id}>
               <div className={`tree-group-row ${selectedGroupId === group.id ? "selected" : ""}`}>
@@ -1248,11 +1255,6 @@ export function GroupTree({
                   >
                     <span>{group.name}</span>
                     <span className="tree-count">{agents.length}</span>
-                    {unread > 0 && (
-                      <span className="unread-badge" aria-label={`${unread} unread`}>
-                        {unread}
-                      </span>
-                    )}
                   </button>
                 )}
                 {editTarget?.groupId !== group.id && (
@@ -1370,8 +1372,11 @@ export function GroupTree({
                     const {
                       run,
                       status: agentStatus,
-                      label: semanticLabel,
+                      key: statusKey,
+                      label: statusLabel,
                     } = memberStatusView(snapshot.agentStatuses, snapshot.runs, member);
+                    const deliveryFailed =
+                      failedRecipientsByGroup.get(group.id)?.has(member.memberId) === true;
                     const action = runAction(run);
                     const actionKey = `${group.id}:${agentId}`;
                     const integration = config.integrations[agent.integrationId];
@@ -1381,15 +1386,6 @@ export function GroupTree({
                     const role =
                       agent.roleId === undefined ? undefined : config.roles[agent.roleId];
                     const recoveryDetail = run?.recoveryReason;
-                    const semanticDetail = [
-                      agentStatus?.phase,
-                      agentStatus?.attention === "none"
-                        ? undefined
-                        : agentStatus?.attention.replaceAll("_", " "),
-                      agentStatus?.progressStage,
-                    ]
-                      .filter((value): value is string => value !== undefined)
-                      .join(" · ");
                     const statusTitle = [
                       recoveryDetail,
                       agentStatus?.blocker,
@@ -1401,7 +1397,7 @@ export function GroupTree({
                     const popoverVisible = statusPopover?.membershipId === member.id;
                     return (
                       <div className="member-row" key={agentId}>
-                        <span className={`status-dot status-${semanticLabel}`} aria-hidden="true" />
+                        <span className={`status-dot status-${statusKey}`} aria-hidden="true" />
                         {editTarget?.kind === "agent" &&
                         editTarget.groupId === group.id &&
                         editTarget.agentId === agentId ? (
@@ -1421,7 +1417,7 @@ export function GroupTree({
                             id={`member-status-trigger-${member.id}`}
                             type="button"
                             className="member-select"
-                            aria-label={`View details for ${agent.name}`}
+                            aria-label={`View details for ${agent.name}, status ${statusLabel}`}
                             aria-haspopup="dialog"
                             aria-expanded={popoverVisible}
                             aria-controls={popoverVisible ? popoverId : undefined}
@@ -1433,8 +1429,7 @@ export function GroupTree({
                             <span>{agent.name}</span>
                             <RoleIdentity role={role} />
                             <small title={statusTitle || undefined}>
-                              {semanticLabel}
-                              {semanticDetail.length > 0 && ` · ${semanticDetail}`}
+                              {statusLabel}
                               {run?.recoveryNotBefore !== undefined &&
                                 ` · retry ${new Date(run.recoveryNotBefore).toLocaleTimeString()}`}
                             </small>
@@ -1452,11 +1447,11 @@ export function GroupTree({
                             >
                               <div className="member-status-popover-heading">
                                 <span
-                                  className={`status-dot status-${semanticLabel}`}
+                                  className={`status-dot status-${statusKey}`}
                                   aria-hidden="true"
                                 />
                                 <strong>{agent.name}</strong>
-                                <span>{semanticLabel.replaceAll("_", " ")}</span>
+                                <span>{statusLabel}</span>
                                 <button
                                   type="button"
                                   className="icon-button status-popover-close"
@@ -1503,37 +1498,59 @@ export function GroupTree({
                                   </dd>
                                 </div>
                                 <div>
-                                  <dt>Semantic status</dt>
-                                  <dd>
-                                    {semanticLabel.replaceAll("_", " ")}
-                                    {agentStatus === undefined
-                                      ? ""
-                                      : ` / ${agentStatus.phase.replaceAll("_", " ")}`}
-                                  </dd>
-                                </div>
-                                <div>
-                                  <dt>Terminal</dt>
-                                  <dd>
-                                    {run === undefined
-                                      ? "Not started"
-                                      : `${run.status} / ${run.recoveryPhase}`}
-                                  </dd>
+                                  <dt>User-facing status</dt>
+                                  <dd>{statusLabel}</dd>
                                 </div>
                                 {agentStatus !== undefined && (
                                   <>
                                     <div>
-                                      <dt>Confidence</dt>
-                                      <dd>{agentStatus.confidence}</dd>
+                                      <dt>Backend state</dt>
+                                      <dd>{agentStatus.state.replaceAll("_", " ")}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Phase</dt>
+                                      <dd>{agentStatus.phase.replaceAll("_", " ")}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Outcome</dt>
+                                      <dd>{agentStatus.outcome.replaceAll("_", " ")}</dd>
                                     </div>
                                     <div>
                                       <dt>Attention</dt>
                                       <dd>{agentStatus.attention.replaceAll("_", " ")}</dd>
                                     </div>
+                                    {agentStatus.progressStage !== undefined && (
+                                      <div>
+                                        <dt>Progress stage</dt>
+                                        <dd>{agentStatus.progressStage}</dd>
+                                      </div>
+                                    )}
+                                    <div>
+                                      <dt>Confidence</dt>
+                                      <dd>{agentStatus.confidence}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Authority</dt>
+                                      <dd>
+                                        {agentStatus.authorityKind.replaceAll("_", " ")}
+                                        {agentStatus.authorityId === undefined
+                                          ? ""
+                                          : ` (${agentStatus.authorityId})`}
+                                      </dd>
+                                    </div>
+                                    <div>
+                                      <dt>Stale authority</dt>
+                                      <dd>{agentStatus.staleAuthority ? "Yes" : "No"}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Process state</dt>
+                                      <dd>{agentStatus.processState.replaceAll("_", " ")}</dd>
+                                    </div>
                                   </>
                                 )}
                                 {agentStatus?.lastProgressSummary !== undefined && (
                                   <div>
-                                    <dt>Progress</dt>
+                                    <dt>Progress summary</dt>
                                     <dd>{agentStatus.lastProgressSummary}</dd>
                                   </div>
                                 )}
@@ -1549,27 +1566,58 @@ export function GroupTree({
                                     <dd>{agentStatus.nextStep}</dd>
                                   </div>
                                 )}
-                                {agentStatus?.lastActivityKind !== undefined && (
+                                {(agentStatus?.lastActivityKind !== undefined ||
+                                  agentStatus?.lastActivityAt !== undefined) && (
                                   <div>
                                     <dt>Last activity</dt>
-                                    <dd>{agentStatus.lastActivityKind.replaceAll("_", " ")}</dd>
+                                    <dd>
+                                      {[
+                                        agentStatus.lastActivityKind?.replaceAll("_", " "),
+                                        agentStatus.lastActivityAt === undefined
+                                          ? undefined
+                                          : new Date(agentStatus.lastActivityAt).toLocaleString(),
+                                      ]
+                                        .filter((value): value is string => value !== undefined)
+                                        .join(" · ")}
+                                    </dd>
                                   </div>
+                                )}
+                                {run !== undefined && (
+                                  <>
+                                    <div>
+                                      <dt>Terminal status</dt>
+                                      <dd>{run.status}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Recovery phase</dt>
+                                      <dd>{run.recoveryPhase}</dd>
+                                    </div>
+                                    {run.recoveryReason !== undefined && (
+                                      <div>
+                                        <dt>Recovery reason</dt>
+                                        <dd>{run.recoveryReason}</dd>
+                                      </div>
+                                    )}
+                                  </>
                                 )}
                               </dl>
                             </div>,
                             document.body,
                           )}
-                        {(failedMemberIds.has(member.memberId) ||
-                          (agentStatus !== undefined && agentStatus.attention !== "none")) && (
-                          <CircleAlert
-                            className="attention-icon"
-                            aria-label={
-                              agentStatus !== undefined && agentStatus.attention !== "none"
-                                ? `${agent.name} needs ${agentStatus.attention.replaceAll("_", " ")}`
-                                : "Delivery needs attention"
+                        {deliveryFailed && (
+                          <button
+                            type="button"
+                            className="delivery-warning-button"
+                            aria-label={`Open failed delivery for ${agent.name} in ${group.name}`}
+                            title={`Open ${group.name} Messages for failed delivery to ${agent.name}`}
+                            onClick={() =>
+                              onOpenMessages === undefined
+                                ? onSelectGroup(group.id)
+                                : onOpenMessages(group.id)
                             }
-                            size={15}
-                          />
+                          >
+                            <MailWarning aria-hidden="true" size={15} />
+                          </button>
                         )}
                         {editTarget?.kind !== "agent" && (
                           <ActionMenu
@@ -1756,6 +1804,7 @@ export function GroupTree({
           <SquareTerminal aria-hidden="true" size={15} />
           Console
         </button>
+        {utilities}
       </div>
       {destructiveTarget !== undefined && (
         <ConfirmRemovalDialog

@@ -4,15 +4,26 @@ import type {
   TerminalRole,
   TerminalServerFrame,
 } from "@nanasa/contracts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ClipboardPaste,
+  Copy,
+  EllipsisVertical,
+  Eraser,
+  Info,
+  ScrollText,
+  Search,
+  TextSelect,
+} from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import type { PortalClient } from "../api.js";
 import {
   copyTerminalSelection,
+  installCopyOnSelect,
   installTrustedClipboardEvents,
   readClipboardText,
   selectionModifier,
+  writeClipboardText,
 } from "./terminal-clipboard.js";
-import { TerminalContextMenu } from "./terminal-context-menu.js";
 import { TerminalLeaseBanner } from "./terminal-lease-banner.js";
 import { TerminalTranscriptDialog } from "./terminal-transcript-dialog.js";
 import { TerminalTransport } from "./terminal-transport.js";
@@ -24,18 +35,30 @@ export function TerminalConsole({
   runGeneration,
   theme,
   label,
+  headerIdentity = null,
+  memberIdentity = null,
+  paneActions = null,
   suspended = false,
+  visible = true,
 }: {
   client: PortalClient;
   endpoint: Extract<TerminalEndpointStatus, { state: "ready" }>;
   runGeneration: number;
   theme: "light" | "dark";
   label: string;
+  headerIdentity?: ReactNode;
+  memberIdentity?: ReactNode;
+  paneActions?: ReactNode;
   suspended?: boolean;
+  visible?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const actionMenuRef = useRef<HTMLDivElement>(null);
+  const actionMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const xtermRef = useRef<XtermController | null>(null);
   const transportRef = useRef<TerminalTransport | null>(null);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const [role, setRole] = useState<TerminalRole>("observer");
   const [state, setState] = useState<"connecting" | "connected" | "reconnecting" | "closed">(
     "connecting",
@@ -44,7 +67,7 @@ export function TerminalConsole({
   const [feedback, setFeedback] = useState("");
   const [title, setTitle] = useState("");
   const [effect, setEffect] = useState<Extract<TerminalServerFrame, { type: "effect" }>>();
-  const [menu, setMenu] = useState<{ x: number; y: number }>();
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [searching, setSearching] = useState(false);
   const [search, setSearch] = useState("");
   const [transcriptOpen, setTranscriptOpen] = useState(false);
@@ -55,7 +78,8 @@ export function TerminalConsole({
   const viewerId = useRef(sessionStorage.getItem("nanasa-terminal-viewer") ?? crypto.randomUUID());
   const mountId = useRef(crypto.randomUUID());
   const modifier = selectionModifier();
-  const selectionHint = `Mouse input belongs to the terminal app. Hold ${modifier} and drag to select text.`;
+  const copyShortcut = modifier === "Option" ? "Command+C" : "Ctrl+C";
+  const selectionHint = `Hold ${modifier} and drag to select and copy text, or press ${copyShortcut} with a selection.`;
 
   const copy = useCallback(async () => {
     if (xtermRef.current === null) return;
@@ -81,55 +105,114 @@ export function TerminalConsole({
     const host = hostRef.current;
     if (host === null) return;
     const onFrame = (frame: TerminalServerFrame) => {
-      if (frame.type === "welcome" || frame.type === "lease") setRole(frame.role);
-      if (frame.type === "baseline" || frame.type === "output") xtermRef.current?.write(frame.data);
+      if (frame.type === "welcome" || frame.type === "lease") {
+        setRole(frame.role);
+        if (frame.role !== "controller") setEffect(undefined);
+        xtermRef.current?.setFitEnabled(frame.role === "controller");
+      }
+      if (
+        (frame.type === "welcome" || frame.type === "lease") &&
+        frame.role === "controller" &&
+        visibleRef.current
+      ) {
+        const terminal = xtermRef.current?.terminal;
+        if (terminal !== undefined) transportRef.current?.resize(terminal.cols, terminal.rows);
+      }
+      if (frame.type === "baseline") xtermRef.current?.replace(frame.data);
+      if (frame.type === "output") xtermRef.current?.write(frame.data);
       if (frame.type === "reset") {
         xtermRef.current?.reset();
         setFeedback(`Terminal reset: ${frame.reason.replaceAll("_", " ")}.`);
       }
-      if (frame.type === "effect") setEffect(frame);
+      if (frame.type === "effect" && Date.parse(frame.expiresAt) > Date.now()) setEffect(frame);
     };
-    const transport = new TerminalTransport({
-      endpoint,
-      runGeneration,
-      viewerId: viewerId.current,
-      requestedRole: "controller",
-      cols: 120,
-      rows: 40,
-      onFrame,
-      onState: setState,
-    });
-    transportRef.current = transport;
     const xterm = new XtermController(host, {
       theme,
-      onData: (data) => transport.input(data),
-      onResize: (cols, rows) => transport.resize(cols, rows),
-      onFocus: (focused) => transport.focus(focused),
+      visible: visibleRef.current,
+      onData: (data) => transportRef.current?.input(data),
+      onResize: (cols, rows) => transportRef.current?.resize(cols, rows),
+      onFocus: (focused) => transportRef.current?.focus(focused),
+      onCopyShortcut: () => void copy(),
       onSelectionChange: setSelected,
       onTitle: setTitle,
       onBell: () => setFeedback("Terminal bell."),
     });
     xtermRef.current = xterm;
+    const transport = new TerminalTransport({
+      endpoint,
+      runGeneration,
+      viewerId: viewerId.current,
+      requestedRole: "controller",
+      cols: xterm.terminal.cols,
+      rows: xterm.terminal.rows,
+      onFrame,
+      onState: setState,
+    });
+    transportRef.current = transport;
     const removeClipboardEvents = installTrustedClipboardEvents(host, xterm.terminal, (text) =>
       transport.paste(text),
     );
+    const removeCopyOnSelect = installCopyOnSelect(host, xterm.terminal, () => void copy());
     transport.connect();
     return () => {
+      removeCopyOnSelect();
       removeClipboardEvents();
       transport.dispose();
       xterm.dispose();
       transportRef.current = null;
       xtermRef.current = null;
     };
-  }, [endpoint, runGeneration]);
+  }, [copy, endpoint, runGeneration]);
 
   useEffect(() => {
     xtermRef.current?.setTheme(theme);
   }, [theme]);
 
   useEffect(() => {
-    if (suspended) transportRef.current?.releaseController();
+    xtermRef.current?.setVisible(visible);
+  }, [visible]);
+
+  useEffect(() => {
+    if (suspended) {
+      setEffect(undefined);
+      transportRef.current?.releaseController();
+    }
   }, [suspended]);
+
+  useEffect(() => setEffect(undefined), [endpoint.runId, runGeneration]);
+
+  useEffect(() => {
+    if (effect === undefined) return;
+    const remaining = Date.parse(effect.expiresAt) - Date.now();
+    if (remaining <= 0) {
+      setEffect(undefined);
+      return;
+    }
+    const timeout = window.setTimeout(
+      () => setEffect((current) => (current?.effectId === effect.effectId ? undefined : current)),
+      remaining,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [effect]);
+
+  useEffect(() => {
+    if (!actionMenuOpen) return;
+    actionMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!actionMenuRef.current?.contains(event.target as Node)) setActionMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setActionMenuOpen(false);
+      actionMenuTriggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [actionMenuOpen]);
 
   const openTranscript = useCallback(() => {
     setTranscriptOpen(true);
@@ -147,53 +230,141 @@ export function TerminalConsole({
       className="terminal-console"
       aria-label={label}
       data-terminal-mount-id={mountId.current}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        setMenu({ x: event.clientX, y: event.clientY });
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "F10" && event.shiftKey) {
-          event.preventDefault();
-          setMenu({ x: 24, y: 80 });
-        }
-      }}
+      data-terminal-visible={visible}
     >
       <TerminalLeaseBanner
         role={role}
         state={state}
+        title={title}
+        identity={headerIdentity}
+        memberIdentity={memberIdentity}
+        paneActions={paneActions}
         onTakeover={() => transportRef.current?.takeover()}
+        onRelease={() => transportRef.current?.releaseController()}
+        actions={
+          <div className="terminal-actions" role="toolbar" aria-label="Terminal actions">
+            <div className="terminal-info">
+              <span
+                className="terminal-info-trigger"
+                tabIndex={0}
+                aria-label="Terminal selection help"
+                aria-describedby={`${mountId.current}-selection-help`}
+              >
+                <Info aria-hidden="true" size={15} />
+              </span>
+              <span
+                id={`${mountId.current}-selection-help`}
+                className="terminal-info-tooltip"
+                role="tooltip"
+              >
+                {selectionHint}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Copy"
+              title="Copy terminal selection"
+              disabled={!selected}
+              onClick={() => void copy()}
+            >
+              <Copy aria-hidden="true" size={15} />
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Paste"
+              title="Paste clipboard text"
+              disabled={role !== "controller" || state !== "connected"}
+              onClick={() => void paste()}
+            >
+              <ClipboardPaste aria-hidden="true" size={15} />
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Search"
+              title="Search terminal"
+              aria-pressed={searching}
+              onClick={() => setSearching((value) => !value)}
+            >
+              <Search aria-hidden="true" size={15} />
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Transcript"
+              title="Open terminal transcript"
+              onClick={openTranscript}
+            >
+              <ScrollText aria-hidden="true" size={15} />
+            </button>
+            <div ref={actionMenuRef} className="terminal-action-menu-anchor">
+              <button
+                ref={actionMenuTriggerRef}
+                type="button"
+                className="icon-button"
+                aria-label="More terminal actions"
+                title="More terminal actions"
+                aria-haspopup="menu"
+                aria-expanded={actionMenuOpen}
+                onClick={() => setActionMenuOpen((open) => !open)}
+              >
+                <EllipsisVertical aria-hidden="true" size={15} />
+              </button>
+              {actionMenuOpen && (
+                <div
+                  className="terminal-action-menu"
+                  role="menu"
+                  aria-label="More terminal actions"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      xtermRef.current?.selectAll();
+                      setActionMenuOpen(false);
+                    }}
+                  >
+                    <TextSelect aria-hidden="true" size={14} />
+                    <span>Select all scrollback</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={!selected}
+                    onClick={() => {
+                      xtermRef.current?.clearSelection();
+                      setActionMenuOpen(false);
+                    }}
+                  >
+                    <Eraser aria-hidden="true" size={14} />
+                    <span>Clear selection</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        }
       />
-      <div className="terminal-actions" role="toolbar" aria-label="Terminal actions">
-        <button type="button" disabled={!selected} onClick={() => void copy()}>
-          Copy
-        </button>
-        <button type="button" disabled={role !== "controller"} onClick={() => void paste()}>
-          Paste
-        </button>
-        <button type="button" onClick={() => setSearching((value) => !value)}>
-          Search
-        </button>
-        <button type="button" onClick={openTranscript}>
-          Transcript
-        </button>
-        <span title={title}>{title}</span>
+      <div className="terminal-prelude">
+        {searching && (
+          <form
+            className="terminal-search"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const found = xtermRef.current?.search(search) ?? false;
+              setFeedback(found ? "Terminal match found." : "No terminal match found.");
+            }}
+          >
+            <label>
+              Search terminal{" "}
+              <input value={search} onChange={(event) => setSearch(event.target.value)} />
+            </label>
+            <button type="submit">Find next</button>
+          </form>
+        )}
       </div>
-      {searching && (
-        <form
-          className="terminal-search"
-          onSubmit={(event) => {
-            event.preventDefault();
-            xtermRef.current?.search(search);
-          }}
-        >
-          <label>
-            Search terminal{" "}
-            <input value={search} onChange={(event) => setSearch(event.target.value)} />
-          </label>
-          <button type="submit">Find next</button>
-        </form>
-      )}
-      <p className="terminal-selection-hint">{selectionHint}</p>
       <div ref={hostRef} className="xterm-host" />
       <p className="terminal-feedback" role="status" aria-live="polite">
         {feedback}
@@ -205,15 +376,25 @@ export function TerminalConsole({
           aria-label="Terminal clipboard request"
         >
           <p>This terminal requests a clipboard write of {effect.byteCount} bytes.</p>
-          <pre>{effect.preview}</pre>
           <button
             type="button"
             onClick={() => {
-              void navigator.clipboard.writeText(effect.data).then(
-                () => setFeedback("Terminal clipboard request copied."),
-                () => setFeedback("Clipboard permission was denied."),
-              );
-              setEffect(undefined);
+              const pending = effect;
+              if (Date.parse(pending.expiresAt) <= Date.now()) {
+                setEffect(undefined);
+                setFeedback("Terminal clipboard request expired.");
+                return;
+              }
+              void writeClipboardText(pending.data).then((outcome) => {
+                if ("message" in outcome) {
+                  setFeedback(outcome.message);
+                  return;
+                }
+                setEffect((current) =>
+                  current?.effectId === pending.effectId ? undefined : current,
+                );
+                setFeedback("Terminal clipboard request copied.");
+              });
             }}
           >
             Copy
@@ -222,38 +403,6 @@ export function TerminalConsole({
             Deny
           </button>
         </div>
-      )}
-      {menu !== undefined && (
-        <TerminalContextMenu
-          position={menu}
-          hasSelection={selected}
-          selectionHint={selectionHint}
-          onCopy={() => {
-            void copy();
-            setMenu(undefined);
-          }}
-          onPaste={() => {
-            void paste();
-            setMenu(undefined);
-          }}
-          onSelectAll={() => {
-            xtermRef.current?.selectAll();
-            setMenu(undefined);
-          }}
-          onClear={() => {
-            xtermRef.current?.clearSelection();
-            setMenu(undefined);
-          }}
-          onSearch={() => {
-            setSearching(true);
-            setMenu(undefined);
-          }}
-          onTranscript={() => {
-            openTranscript();
-            setMenu(undefined);
-          }}
-          onClose={() => setMenu(undefined)}
-        />
       )}
       {transcriptOpen && (
         <TerminalTranscriptDialog

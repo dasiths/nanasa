@@ -83,6 +83,14 @@
       "summary": "Read operator authentication status"
     },
     {
+      "id": "auth.portal",
+      "family": "auth",
+      "command": "portal",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Create a one-use portal login URL"
+    },
+    {
       "id": "auth.revoke",
       "family": "auth",
       "command": "revoke",

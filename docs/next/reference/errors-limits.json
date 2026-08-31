@@ -12,6 +12,9 @@
     "auth.session": [
       "operator_unauthorized"
     ],
+    "auth.portal": [
+      "operator_unauthorized"
+    ],
     "auth.revoke": [
       "operator_unauthorized"
     ],
@@ -246,6 +249,7 @@
     "schema.extensions": 65536,
     "auth.bootstrap": 65536,
     "auth.session": 65536,
+    "auth.portal": 65536,
     "auth.revoke": 65536,
     "config.get": 65536,
     "config.status": 65536,

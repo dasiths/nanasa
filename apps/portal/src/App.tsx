@@ -6,32 +6,37 @@ import type {
   UpdateGroupCommand,
   UpdateRolePresentationCommand,
 } from "@nanasa/contracts";
-import {
-  Cable,
-  CircleAlert,
-  Command,
-  Laptop,
-  Menu,
-  Moon,
-  Play,
-  RefreshCw,
-  Sun,
-  X,
-} from "lucide-react";
+import { Bell, Cable, CircleAlert, Command, Menu, Play, RefreshCw, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, type PortalClient } from "./api.js";
+import {
+  attentionReviewCount,
+  attentionReviewCountsByGroup,
+  deriveAttentionItems,
+} from "./attention-items.js";
+import { useAttentionNotifications } from "./attention-notifications.js";
 import { AdHocConsoleDialog } from "./components/ad-hoc-console-dialog.js";
-import { CheckoutWorktreeDialog } from "./components/checkout-worktree-dialog.js";
 import { type AddAgentInput, GroupTree } from "./components/group-tree.js";
 import { MessageWorkspace } from "./components/message-workspace.js";
+import { useAttentionWorkspaces } from "./hooks/use-attention-workspaces.js";
 import { useMessageReadCursors } from "./hooks/use-message-read-cursors.js";
 import { useAppliedTheme, usePortalPreferences } from "./hooks/use-portal-preferences.js";
 import { useDomainEvents, usePortalSnapshot } from "./hooks/use-portal-snapshot.js";
 import { memberStatusView } from "./member-status.js";
-import { playAttentionSound } from "./notification-sound.js";
+import {
+  globalDestinationDefinition,
+  globalDestinationDefinitions,
+  groupDestinations,
+} from "./router/portal-destinations.js";
 import { groupRoute, usePortalRouter } from "./router/portal-router.js";
 import { CommandPalette, type PortalCommand, useScopedShortcuts } from "./shell/command-palette.js";
+import {
+  GroupNavigation,
+  MobileNavigationDialog,
+  PortalUtilities,
+  RepositoryNavigation,
+} from "./shell/portal-navigation.js";
 import { PortalShell } from "./shell/portal-shell.js";
 
 const TerminalWorkspace = lazy(() =>
@@ -71,7 +76,7 @@ export function App({ client = api }: AppProps) {
   const [terminalConnectionRevision, setTerminalConnectionRevision] = useState(0);
   const [portalSubmissionSuspended, setPortalSubmissionSuspended] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false);
-  const [checkoutsOpen, setCheckoutsOpen] = useState(false);
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const startAllInFlight = useRef(new Map<string, Promise<void>>());
   const previousEventStatus = useRef(eventStatus);
   const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -89,18 +94,21 @@ export function App({ client = api }: AppProps) {
   const members = groupMemberships.filter((member) => member.state === "active");
   const runs = snapshot?.runs.filter((run) => run.groupId === selectedGroupId) ?? [];
   const runningCount = runs.filter((run) => run.status === "running").length;
-  const memberStatusViews = members.map((member) =>
-    memberStatusView(snapshot?.agentStatuses, runs, member),
+  const globalMemberStatusViews = useMemo(
+    () =>
+      (snapshot?.memberships ?? [])
+        .filter((member) => member.state === "active")
+        .map((member) => ({
+          member,
+          ...memberStatusView(snapshot?.agentStatuses, snapshot?.runs ?? [], member),
+        })),
+    [snapshot],
   );
-  const workingCount = memberStatusViews.filter(({ label }) => label === "working").length;
-  const waitingCount = memberStatusViews.filter(({ label }) => label === "waiting").length;
-  const attentionStatuses = memberStatusViews.flatMap(({ status: memberStatus }) =>
-    memberStatus !== undefined && memberStatus.attention !== "none" ? [memberStatus] : [],
+  const memberStatusViews = useMemo(
+    () => globalMemberStatusViews.filter(({ member }) => member.groupId === selectedGroupId),
+    [globalMemberStatusViews, selectedGroupId],
   );
-  const attentionCount = attentionStatuses.length;
-  const attentionSummary = attentionStatuses
-    .map((memberStatus) => `${memberStatus.alias}: ${memberStatus.attention.replaceAll("_", " ")}`)
-    .join("; ");
+  const workingCount = memberStatusViews.filter(({ key }) => key === "working").length;
   const selectedMessageState = snapshot?.messageGroups?.find(
     (state) => state.groupId === selectedGroupId,
   );
@@ -111,11 +119,52 @@ export function App({ client = api }: AppProps) {
     snapshot?.groups ?? [],
     snapshot?.messageGroups ?? [],
   );
+  const attentionWorkspaceGroupIds = useMemo(
+    () => (snapshot?.groups ?? []).map((group) => group.id),
+    [snapshot?.groups],
+  );
+  const attentionWorkspaces = useAttentionWorkspaces(
+    client,
+    attentionWorkspaceGroupIds,
+    snapshot?.instanceId,
+    snapshot?.daemonEpoch,
+    snapshot?.sequence,
+  );
+  const attentionItems = useMemo(
+    () =>
+      snapshot === undefined
+        ? []
+        : deriveAttentionItems(snapshot, {
+            workspaces: attentionWorkspaces.workspaces,
+            unreadCounts,
+          }),
+    [attentionWorkspaces.workspaces, snapshot, unreadCounts],
+  );
+  const attentionCountsByGroup = useMemo(
+    () => attentionReviewCountsByGroup(attentionItems),
+    [attentionItems],
+  );
+  const groupAttentionCount =
+    selectedGroupId === undefined ? 0 : (attentionCountsByGroup.get(selectedGroupId) ?? 0);
+  const globalAttentionCount = attentionReviewCount(attentionItems);
   const routeSection = route.kind === "group" ? route.section : undefined;
   const routeLabel =
     route.kind === "global"
-      ? route.destination[0]!.toUpperCase() + route.destination.slice(1)
-      : `${selectedGroup?.name ?? "Workspace"} ${routeSection ?? "terminals"}`;
+      ? globalDestinationDefinition(route.destination).heading
+      : `${selectedGroup?.name ?? "Workspace"} ${groupDestinations.find(({ id }) => id === routeSection)?.label ?? "Terminals"}`;
+  const attentionNotifications = useAttentionNotifications({
+    items: attentionItems,
+    ready:
+      snapshot !== undefined && attentionWorkspaces.ready && attentionWorkspaces.errors.size === 0,
+    hydrationKey:
+      snapshot === undefined ? undefined : `${snapshot.instanceId}:${snapshot.daemonEpoch}`,
+    route,
+    preferences: {
+      ...preferences.notifications,
+      completionNotificationMemberIdsByGroup: preferences.completionNotificationMemberIdsByGroup,
+    },
+    navigate,
+  });
 
   useEffect(() => {
     if (snapshot === undefined) return;
@@ -126,7 +175,18 @@ export function App({ client = api }: AppProps) {
         new Set(snapshot.runs.filter((run) => run.groupId === group.id).map((run) => run.id)),
       );
     }
-    reconcileResources(resources);
+    const memberResources = new Map<string, ReadonlySet<string>>();
+    for (const group of snapshot.groups) {
+      memberResources.set(
+        group.id,
+        new Set(
+          snapshot.memberships
+            .filter((member) => member.groupId === group.id && member.state === "active")
+            .map((member) => member.memberId),
+        ),
+      );
+    }
+    reconcileResources(resources, memberResources);
   }, [reconcileResources, snapshot]);
 
   useEffect(() => {
@@ -152,75 +212,32 @@ export function App({ client = api }: AppProps) {
   }, [navigate, route, snapshot]);
 
   useEffect(() => {
-    document.title = `${attentionCount > 0 ? `(${attentionCount}) ` : ""}${routeLabel} · Nanasa`;
-  }, [attentionCount, routeLabel]);
-
-  const previousAttention = useRef(new Set<string>());
-  useEffect(() => {
-    const current = new Set(
-      attentionStatuses.map((status) =>
-        [status.groupId, status.memberId, status.attention, status.completionRevision].join(":"),
-      ),
-    );
-    const fresh = [...current].filter((id) => !previousAttention.current.has(id));
-    previousAttention.current = current;
-    if (fresh.length === 0 || document.visibilityState === "visible") return;
-    void playAttentionSound({
-      enabled: preferences.notifications.sound,
-      eventId: fresh.sort().join("|"),
-    });
-    if (
-      preferences.notifications.desktop &&
-      "Notification" in window &&
-      Notification.permission === "granted"
-    ) {
-      const notification = new Notification("Nanasa attention required", {
-        body: attentionSummary || `${fresh.length} agent updates require attention`,
-        tag: "nanasa-attention",
-      });
-      notification.onclick = () => {
-        window.focus();
-        navigate("/attention");
-        notification.close();
-      };
-    }
-  }, [
-    attentionStatuses,
-    attentionSummary,
-    navigate,
-    preferences.notifications.desktop,
-    preferences.notifications.sound,
-  ]);
+    document.title = `${globalAttentionCount > 0 ? `(${globalAttentionCount}) ` : ""}${routeLabel} · Nanasa`;
+  }, [globalAttentionCount, routeLabel]);
 
   const commands = useMemo<PortalCommand[]>(() => {
-    const global: PortalCommand[] = [
-      ["attention", "Open attention", "Review waits, blockers, and completion", "Alt+a"],
-      ["agents", "Open all agents", "Browse agents across every group", "Alt+g"],
-      ["checkouts", "Open checkouts", "Manage Git checkouts and worktrees", "Alt+c"],
-      ["settings", "Open settings", "Change browser presentation and notifications", "Ctrl+,"],
-      ["diagnostics", "Open diagnostics", "Inspect configuration and provider state", "Alt+d"],
-      ["help", "Open help", "Read keyboard and workflow help", "Alt+h"],
-      ["service", "Open service", "Inspect lifecycle and planned reconnect behavior", undefined],
-      ["remote", "Open remote access", "Review loopback SSH tunnel status and guidance", undefined],
-    ].map(([id, label, description, shortcut]) => ({
-      id: `route:${id}`,
-      label: label!,
-      description: description!,
-      ...(shortcut === undefined ? {} : { shortcut }),
-      run: () => navigate(`/${id}`),
+    const global: PortalCommand[] = globalDestinationDefinitions.map((destination) => ({
+      id: `route:${destination.id}`,
+      label: destination.commandLabel,
+      description: destination.commandDescription,
+      keywords: [...destination.keywords, destination.label],
+      ...("shortcut" in destination ? { shortcut: destination.shortcut } : {}),
+      run: () => navigate(`/${destination.id}`),
     }));
-    const groups = (snapshot?.groups ?? []).map(
-      (group, index): PortalCommand => ({
-        id: `group:${group.id}`,
-        label: `Open ${group.name}`,
-        description: "Open group terminals",
-        ...(index < 9 ? { shortcut: `Alt+${index + 1}` } : {}),
-        keywords: [group.id, "group", "terminal"],
-        run: () => {
-          setSelectedGroup(group.id, "terminals");
-          navigate(groupRoute(group.id));
-        },
-      }),
+    const groups = (snapshot?.groups ?? []).flatMap((group, index) =>
+      groupDestinations.map(
+        (destination): PortalCommand => ({
+          id: `group:${group.id}:${destination.id}`,
+          label: `${destination.label} · ${group.name}`,
+          description: destination.commandDescription,
+          ...(destination.id === "terminals" && index < 9 ? { shortcut: `Alt+${index + 1}` } : {}),
+          keywords: [group.id, group.name, ...destination.keywords],
+          run: () => {
+            setSelectedGroup(group.id, destination.id);
+            navigate(groupRoute(group.id, destination.id));
+          },
+        }),
+      ),
     );
     return [...global, ...groups];
   }, [navigate, setSelectedGroup, snapshot?.groups]);
@@ -393,11 +410,29 @@ export function App({ client = api }: AppProps) {
       density={preferences.density}
       motion={preferences.motion}
       contrast={preferences.contrast}
+      notifications={attentionNotifications.toasts}
+      onOpenNotification={attentionNotifications.openToast}
+      onDismissNotification={attentionNotifications.dismissToast}
       rail={
         <aside className="group-rail" aria-label="Groups and agents">
           <GroupTree
             snapshot={snapshot}
             config={config}
+            repositoryNavigation={
+              <RepositoryNavigation
+                currentDestination={route.kind === "global" ? route.destination : undefined}
+                attentionCount={globalAttentionCount}
+                onLink={link}
+              />
+            }
+            utilities={
+              <PortalUtilities
+                currentDestination={route.kind === "global" ? route.destination : undefined}
+                theme={preferences.theme}
+                onSetTheme={setTheme}
+                onLink={link}
+              />
+            }
             unreadCounts={unreadCounts}
             {...(selectedGroupId === undefined ? {} : { selectedGroupId })}
             {...(busyAction === undefined ? {} : { busyAction })}
@@ -405,6 +440,10 @@ export function App({ client = api }: AppProps) {
               const section = preferences.lastSectionByGroup[groupId] ?? "terminals";
               setSelectedGroup(groupId, section);
               navigate(groupRoute(groupId, section));
+            }}
+            onOpenMessages={(groupId) => {
+              setSelectedGroup(groupId, "messages");
+              navigate(groupRoute(groupId, "messages"));
             }}
             onCreateGroup={createGroup}
             onRenameGroup={renameGroup}
@@ -432,50 +471,46 @@ export function App({ client = api }: AppProps) {
           </span>
           <h1 ref={workspaceHeadingRef} tabIndex={-1} data-route-heading>
             {route.kind === "global"
-              ? route.destination[0]!.toUpperCase() + route.destination.slice(1)
+              ? globalDestinationDefinition(route.destination).heading
               : (selectedGroup?.name ?? "No group selected")}
           </h1>
           {selectedGroup !== undefined && (
             <p className="group-status-summary">
               <span>{members.length} agents</span>
               <span>{runningCount} terminals</span>
-              {memberStatusViews.length > 0 && (
-                <>
-                  <span>{workingCount} working</span>
-                  <span>{waitingCount} waiting</span>
-                  <span
-                    className={attentionCount > 0 ? "needs-attention" : undefined}
-                    title={attentionSummary || undefined}
-                  >
-                    {attentionCount} {attentionCount === 1 ? "needs" : "need"} attention
-                  </span>
-                </>
-              )}
+              {memberStatusViews.length > 0 && <span>{workingCount} working</span>}
             </p>
           )}
         </div>
         <div className="header-actions">
-          <label className="mobile-switcher">
-            <span className="visually-hidden">Switch group</span>
-            <Menu aria-hidden="true" size={15} />
-            <select
-              aria-label="Switch group"
-              value={selectedGroupId ?? ""}
-              onChange={(event) => {
-                setSelectedGroup(event.target.value, "terminals");
-                navigate(groupRoute(event.target.value));
-              }}
-            >
-              {snapshot.groups.map((group) => (
-                <option key={group.id} value={group.id}>
-                  {group.name}
-                </option>
-              ))}
-            </select>
-          </label>
           <button
             type="button"
-            className="compact-button"
+            className="icon-button mobile-navigation-trigger"
+            aria-label="Open application menu"
+            onClick={() => setMobileNavigationOpen(true)}
+          >
+            <Menu aria-hidden="true" size={15} />
+          </button>
+          <a
+            className="compact-button header-attention-link"
+            href="/attention"
+            aria-label={
+              globalAttentionCount === 0
+                ? "Open Attention"
+                : `Open Attention, ${globalAttentionCount} ${globalAttentionCount === 1 ? "review item" : "review items"} across all groups`
+            }
+            onClick={link("/attention")}
+          >
+            <Bell aria-hidden="true" size={15} />
+            {globalAttentionCount > 0 && (
+              <span className="navigation-badge attention-navigation-badge">
+                {globalAttentionCount > 99 ? "99+" : globalAttentionCount}
+              </span>
+            )}
+          </a>
+          <button
+            type="button"
+            className="compact-button command-palette-button"
             aria-label="Open command palette"
             onClick={() => setPaletteOpen(true)}
           >
@@ -503,85 +538,17 @@ export function App({ client = api }: AppProps) {
             <Cable aria-hidden="true" size={14} />
             {eventStatus}
           </span>
-          <div className="theme-switch" role="group" aria-label="Color theme">
-            <button
-              type="button"
-              aria-label="Use light theme"
-              title="Light theme"
-              aria-pressed={preferences.theme === "light"}
-              onClick={() => setTheme("light")}
-            >
-              <Sun aria-hidden="true" size={15} />
-              <span>Light</span>
-            </button>
-            <button
-              type="button"
-              aria-label="Use system theme"
-              title="System theme"
-              aria-pressed={preferences.theme === "system"}
-              onClick={() => setTheme("system")}
-            >
-              <Laptop aria-hidden="true" size={15} />
-              <span>System</span>
-            </button>
-            <button
-              type="button"
-              aria-label="Use dark theme"
-              title="Dark theme"
-              aria-pressed={preferences.theme === "dark"}
-              onClick={() => setTheme("dark")}
-            >
-              <Moon aria-hidden="true" size={15} />
-              <span>Dark</span>
-            </button>
-          </div>
         </div>
       </header>
-      <nav className="route-navigation" aria-label="Portal destinations">
-        {selectedGroup !== undefined &&
-          ["terminals", "messages", "activity", "settings"].map((section) => (
-            <a
-              key={section}
-              href={groupRoute(
-                selectedGroup.id,
-                section as "terminals" | "messages" | "activity" | "settings",
-              )}
-              aria-current={
-                route.kind === "group" && route.section === section ? "page" : undefined
-              }
-              onClick={link(
-                groupRoute(
-                  selectedGroup.id,
-                  section as "terminals" | "messages" | "activity" | "settings",
-                ),
-              )}
-            >
-              {section}
-            </a>
-          ))}
-        <span aria-hidden="true" />
-        {[
-          "attention",
-          "agents",
-          "checkouts",
-          "extensions",
-          "settings",
-          "diagnostics",
-          "help",
-          "release",
-        ].map((destination) => (
-          <a
-            key={destination}
-            href={`/${destination}`}
-            aria-current={
-              route.kind === "global" && route.destination === destination ? "page" : undefined
-            }
-            onClick={link(`/${destination}`)}
-          >
-            {destination}
-          </a>
-        ))}
-      </nav>
+      {selectedGroup !== undefined && (
+        <GroupNavigation
+          group={selectedGroup}
+          route={route}
+          unreadCount={unreadCounts.get(selectedGroup.id) ?? 0}
+          attentionCount={groupAttentionCount}
+          onLink={link}
+        />
+      )}
       {actionError !== undefined && (
         <div className="action-banner" role="alert">
           <CircleAlert aria-hidden="true" size={16} />
@@ -652,9 +619,12 @@ export function App({ client = api }: AppProps) {
                 client={client}
                 preferences={preferences}
                 commands={commands}
+                attentionItems={attentionItems}
+                attentionWorkspaceLoading={attentionWorkspaces.loadingGroupIds}
+                attentionWorkspaceErrors={attentionWorkspaces.errors}
                 onNavigate={navigate}
-                onOpenCheckouts={() => setCheckoutsOpen(true)}
                 onRefresh={refresh}
+                onReloadAttentionWorkspace={attentionWorkspaces.reloadGroup}
                 onPatchPreferences={patchPreferences}
               />
             </Suspense>
@@ -702,14 +672,12 @@ export function App({ client = api }: AppProps) {
                 />
               </Suspense>
             </section>
-            {route.kind === "group" && route.section === "messages" ? (
+            {route.kind === "group" && route.section === "messages" && (
               <MessageWorkspace
                 presentation="route"
                 group={selectedGroup}
                 members={members}
                 historyMembers={groupMemberships}
-                unreadCount={unreadCounts.get(selectedGroup.id) ?? 0}
-                activityRevision={snapshot.sequence}
                 onReadThrough={(sequence) => markReadThrough(selectedGroup.id, sequence)}
                 {...(selectedMessageState === undefined
                   ? {}
@@ -717,14 +685,13 @@ export function App({ client = api }: AppProps) {
                 client={client}
                 onSubmit={submitMessage}
               />
-            ) : (
+            )}
+            {route.kind === "group" && route.section === "terminals" && (
               <MessageWorkspace
+                presentation="quick"
                 group={selectedGroup}
                 members={members}
                 historyMembers={groupMemberships}
-                unreadCount={unreadCounts.get(selectedGroup.id) ?? 0}
-                activityRevision={snapshot.sequence}
-                onReadThrough={(sequence) => markReadThrough(selectedGroup.id, sequence)}
                 {...(selectedMessageState === undefined
                   ? {}
                   : { messageState: selectedMessageState })}
@@ -749,9 +716,12 @@ export function App({ client = api }: AppProps) {
                   client={client}
                   preferences={preferences}
                   commands={commands}
+                  attentionItems={attentionItems}
+                  attentionWorkspaceLoading={attentionWorkspaces.loadingGroupIds}
+                  attentionWorkspaceErrors={attentionWorkspaces.errors}
                   onNavigate={navigate}
-                  onOpenCheckouts={() => setCheckoutsOpen(true)}
                   onRefresh={refresh}
+                  onReloadAttentionWorkspace={attentionWorkspaces.reloadGroup}
                   onPatchPreferences={patchPreferences}
                 />
               </Suspense>
@@ -760,15 +730,22 @@ export function App({ client = api }: AppProps) {
         )}
       </div>
       {consoleOpen && <AdHocConsoleDialog client={client} onClose={() => setConsoleOpen(false)} />}
-      {checkoutsOpen && (
-        <CheckoutWorktreeDialog
-          client={client}
-          snapshot={snapshot}
-          config={config}
-          onChanged={refresh}
-          onClose={() => setCheckoutsOpen(false)}
-        />
-      )}
+      <MobileNavigationDialog
+        open={mobileNavigationOpen}
+        route={route}
+        groups={snapshot.groups}
+        {...(selectedGroupId === undefined ? {} : { selectedGroupId })}
+        lastSectionByGroup={preferences.lastSectionByGroup}
+        attentionCount={globalAttentionCount}
+        theme={preferences.theme}
+        onSetTheme={setTheme}
+        onLink={link}
+        onSelectGroup={(groupId, section) => {
+          setSelectedGroup(groupId, section);
+          navigate(groupRoute(groupId, section));
+        }}
+        onClose={() => setMobileNavigationOpen(false)}
+      />
       <CommandPalette
         open={paletteOpen}
         commands={commands}

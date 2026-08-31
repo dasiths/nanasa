@@ -169,6 +169,12 @@ function outputSuccess(value: unknown, mode: "json" | "text", output: NodeJS.Wri
   output.write(`${JSON.stringify(value ?? null)}\n`);
 }
 
+export function portalBootstrapUrl(apiUrl: string, fragment: string): string {
+  const url = new URL("/", apiUrl);
+  url.hash = fragment;
+  return url.toString();
+}
+
 function failurePayload(error: unknown): unknown {
   if (error instanceof ControlClientError && error.payload !== undefined) return error.payload;
   if (error instanceof Error && "cause" in error && error.cause !== undefined) {
@@ -364,7 +370,13 @@ export async function runControlCli(
           ...(declaration.body === "none" ? {} : { body: JSON.stringify(options.body ?? {}) }),
         },
       });
-      outputSuccess(value, options.output === "text" ? "text" : declaration.output, stdout);
+      const outputValue =
+        declaration.id === "auth.portal"
+          ? {
+              text: portalBootstrapUrl(loaded.apiUrl, (value as { fragment: string }).fragment),
+            }
+          : value;
+      outputSuccess(outputValue, options.output === "text" ? "text" : declaration.output, stdout);
       return 0;
     } finally {
       clearTimeout(timer);

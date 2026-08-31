@@ -1,24 +1,36 @@
 import type {
-  AgentActionWorkspace,
   BrowserRestartFrame,
   ConfigStatus,
   ControlMetadata,
   Group,
   GroupMembership,
   NanasaConfig,
-  OpenWait,
   PortalSnapshot,
   ProviderStateBinding,
   RemoteDescriptor,
   ServiceDescriptor,
   TerminalCheckpoint,
 } from "@nanasa/contracts";
-import { Bell, GitBranch, RefreshCw } from "lucide-react";
+import { Bell, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { PortalClient } from "../api.js";
+import {
+  ATTENTION_CATEGORY_LABELS,
+  attentionCategoryCount,
+  attentionItemsForScope,
+  attentionReviewCount,
+  deriveAttentionItems,
+  type ActionAttentionItem,
+  type AttentionItem,
+  type AttentionReviewCategory,
+  type CompletionAttentionItem,
+  type WaitAttentionItem,
+} from "../attention-items.js";
+import { CheckoutWorkspace } from "../components/checkout-workspace.js";
 import { ExtensionsWorkspace } from "../components/extensions-workspace.js";
 import { generatedOfflineHelp } from "../help/generated-offline-help.js";
 import type { PortalPreferences } from "../hooks/use-portal-preferences.js";
+import { memberStatusView } from "../member-status.js";
 import type { PortalRoute } from "../router/portal-router.js";
 import type { PortalCommand } from "../shell/command-palette.js";
 
@@ -31,27 +43,34 @@ interface PortalRoutePanelProps {
   client: PortalClient;
   preferences: PortalPreferences;
   commands: PortalCommand[];
+  attentionItems?: readonly AttentionItem[];
+  attentionWorkspaceLoading?: ReadonlySet<string>;
+  attentionWorkspaceErrors?: ReadonlyMap<string, string>;
   onNavigate(path: string): void;
-  onOpenCheckouts(): void;
   onRefresh(): Promise<void>;
+  onReloadAttentionWorkspace?(groupId: string): Promise<void>;
   onPatchPreferences(next: Partial<PortalPreferences>): void;
 }
 
 const cancellableStates = new Set(["created", "deferred"]);
 
 function WaitReply({
-  wait,
+  item,
   client,
   onChanged,
 }: {
-  wait: OpenWait;
+  item: WaitAttentionItem;
   client: PortalClient;
-  onChanged(): void;
+  onChanged(): Promise<void>;
 }) {
+  const { wait } = item;
   const [answer, setAnswer] = useState("");
   const [busy, setBusy] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState<string>();
   const submit = async (reply: Parameters<PortalClient["replyOpenWait"]>[1]["reply"]) => {
     setBusy(true);
+    setError(undefined);
     try {
       await client.replyOpenWait(wait.id, {
         expectedRunId: wait.runId,
@@ -60,25 +79,27 @@ function WaitReply({
         expectedStatusRevision: wait.openedStatusRevision,
         reply,
       });
-      onChanged();
+      setSubmitted(true);
+      await onChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to send the exact wait reply");
     } finally {
       setBusy(false);
     }
   };
+  const disabled = busy || submitted || wait.state === "replying";
   return (
-    <li className="workflow-row">
-      <div>
-        <strong>{wait.summary}</strong>
-        <small>
-          {wait.kind.replaceAll("_", " ")} · {wait.memberId}
-        </small>
-      </div>
+    <div className="attention-control-stack">
       {wait.kind === "permission" ? (
         <div className="workflow-actions">
-          <button type="button" disabled={busy} onClick={() => void submit({ kind: "deny" })}>
+          <button type="button" disabled={disabled} onClick={() => void submit({ kind: "deny" })}>
             Deny
           </button>
-          <button type="button" disabled={busy} onClick={() => void submit({ kind: "allow-once" })}>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => void submit({ kind: "allow-once" })}
+          >
             Allow once
           </button>
         </div>
@@ -86,14 +107,14 @@ function WaitReply({
         <div className="workflow-actions">
           <button
             type="button"
-            disabled={busy}
+            disabled={disabled}
             onClick={() => void submit({ kind: "reject-plan" })}
           >
             Reject
           </button>
           <button
             type="button"
-            disabled={busy}
+            disabled={disabled}
             onClick={() => void submit({ kind: "approve-plan" })}
           >
             Approve
@@ -111,101 +132,100 @@ function WaitReply({
             aria-label={`Answer ${wait.summary}`}
             value={answer}
             onChange={(event) => setAnswer(event.target.value)}
+            disabled={disabled}
             required
           />
-          <button type="submit" disabled={busy || answer.trim().length === 0}>
+          <button type="submit" disabled={disabled || answer.trim().length === 0}>
             Reply
           </button>
         </form>
       )}
-    </li>
+      {(submitted || wait.state === "replying") && (
+        <small role="status">Reply submitted. Waiting for the reporter to close this wait.</small>
+      )}
+      {error !== undefined && <small role="alert">{error}</small>}
+    </div>
   );
 }
 
-function ActivityPanel({
-  group,
+function CompletionControls({
+  item,
   client,
-  revision,
+  onNavigate,
+  onRefresh,
+  onAcknowledged,
 }: {
-  group: Group;
+  item: CompletionAttentionItem;
   client: PortalClient;
-  revision: number;
+  onNavigate(path: string): void;
+  onRefresh(): Promise<void>;
+  onAcknowledged(item: CompletionAttentionItem): void;
 }) {
-  const [workspace, setWorkspace] = useState<AgentActionWorkspace>();
+  const [busy, setBusy] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string>();
-  const refresh = () =>
-    void client
-      .loadActionWorkspace(group.id)
-      .then(setWorkspace, (cause: unknown) =>
-        setError(cause instanceof Error ? cause.message : "Unable to load activity"),
-      );
-  useEffect(refresh, [client, group.id, revision]);
+  const acknowledge = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await client.acknowledgeCompletion(item.groupId, item.memberId);
+      setSubmitted(true);
+      onAcknowledged(item);
+      await onRefresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to acknowledge completion");
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <RouteSurface
-      title="Activity"
-      eyebrow={group.name}
-      description="Durable work control is shown separately from message delivery and browser unread state."
-    >
-      {error !== undefined && (
-        <p className="route-error" role="alert">
-          {error}
-        </p>
-      )}
-      <section className="workflow-card">
-        <h3>Open exact waits</h3>
-        {(workspace?.openWaits.filter((wait) => ["open", "replying"].includes(wait.state)).length ??
-          0) === 0 ? (
-          <p>No provider waits require input.</p>
-        ) : (
-          <ul className="workflow-list">
-            {workspace?.openWaits
-              .filter((wait) => ["open", "replying"].includes(wait.state))
-              .map((wait) => (
-                <WaitReply key={wait.id} wait={wait} client={client} onChanged={refresh} />
-              ))}
-          </ul>
-        )}
-      </section>
-      <section className="workflow-card">
-        <h3>Action progress</h3>
-        {(workspace?.actions.length ?? 0) === 0 ? (
-          <p>No exact actions have been created.</p>
-        ) : (
-          <ul className="workflow-list">
-            {workspace?.actions
-              .slice()
-              .reverse()
-              .map((action) => {
-                const attempts =
-                  workspace?.attempts.filter((attempt) => attempt.actionId === action.id) ?? [];
-                const acknowledgements =
-                  workspace?.acknowledgements.filter((item) => item.actionId === action.id) ?? [];
-                return (
-                  <li key={action.id} className="workflow-row">
-                    <div>
-                      <strong>
-                        {action.target.memberId} · {action.state}
-                      </strong>
-                      <small>
-                        {attempts.length} attempts · {acknowledgements.length} acknowledgements ·{" "}
-                        {action.id}
-                      </small>
-                    </div>
-                    {cancellableStates.has(action.state) && (
-                      <button
-                        type="button"
-                        onClick={() => void client.cancelAgentAction(action.id).then(refresh)}
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </li>
-                );
-              })}
-          </ul>
-        )}
-      </section>
-    </RouteSurface>
+    <div className="attention-control-stack">
+      <div className="workflow-actions">
+        <button type="button" disabled={busy || submitted} onClick={() => void acknowledge()}>
+          {submitted ? "Acknowledged" : "Acknowledge"}
+        </button>
+        <button type="button" onClick={() => onNavigate(item.targetPath)}>
+          Open agent
+        </button>
+      </div>
+      {error !== undefined && <small role="alert">{error}</small>}
+    </div>
+  );
+}
+
+function ActionControls({
+  item,
+  client,
+  onChanged,
+}: {
+  item: ActionAttentionItem;
+  client: PortalClient;
+  onChanged(): Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState<string>();
+  const cancel = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await client.cancelAgentAction(item.action.id);
+      setSubmitted(true);
+      await onChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to cancel this action");
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!cancellableStates.has(item.action.state)) return null;
+  return (
+    <div className="attention-control-stack">
+      <button type="button" disabled={busy || submitted} onClick={() => void cancel()}>
+        {submitted ? "Cancellation requested" : "Cancel"}
+      </button>
+      {error !== undefined && <small role="alert">{error}</small>}
+    </div>
   );
 }
 
@@ -218,9 +238,9 @@ function GroupSettingsPanel({
   const configured = config.groups[group.id];
   return (
     <RouteSurface
-      title="Group settings"
+      title="Overview"
       eyebrow={group.name}
-      description="Repository-owned execution policy and browser-owned presentation remain separate."
+      description="Models, recovery state, and retention policy for this group."
     >
       <div className="workflow-grid">
         <section className="workflow-card">
@@ -300,60 +320,225 @@ function GroupSettingsPanel({
 }
 
 function AttentionPanel({
+  route,
   snapshot,
+  group,
   client,
+  attentionItems,
+  attentionWorkspaceLoading,
+  attentionWorkspaceErrors,
   onNavigate,
   onRefresh,
-}: Pick<PortalRoutePanelProps, "snapshot" | "client" | "onNavigate" | "onRefresh">) {
-  const items = (snapshot.agentStatuses ?? []).filter(
-    (status) => status.attention !== "none" || status.completionPending,
+  onReloadAttentionWorkspace,
+}: Pick<
+  PortalRoutePanelProps,
+  | "route"
+  | "snapshot"
+  | "group"
+  | "client"
+  | "attentionItems"
+  | "attentionWorkspaceLoading"
+  | "attentionWorkspaceErrors"
+  | "onNavigate"
+  | "onRefresh"
+  | "onReloadAttentionWorkspace"
+>) {
+  const [filter, setFilter] = useState<"all" | AttentionReviewCategory>("all");
+  const [suppressedCompletionIds, setSuppressedCompletionIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
   );
+  const [completionAnnouncement, setCompletionAnnouncement] = useState<{
+    itemId: string;
+    message: string;
+  }>();
+  const allItems = attentionItems ?? deriveAttentionItems(snapshot);
+  const scope =
+    route.kind === "group"
+      ? ({ kind: "group", groupId: route.groupId } as const)
+      : ({ kind: "repository" } as const);
+  const scopedItems = attentionItemsForScope(allItems, scope).filter(
+    (item) => item.kind !== "completion" || !suppressedCompletionIds.has(item.id),
+  );
+  const reviewItems = scopedItems.filter(
+    (item) => item.counted && (filter === "all" || item.category === filter),
+  );
+  const progressItems = scopedItems.filter(
+    (item): item is ActionAttentionItem => item.kind === "action",
+  );
+  const activeProgressCount = progressItems.filter((item) => item.active).length;
+  const relevantGroupIds =
+    scope.kind === "group" ? [scope.groupId] : snapshot.groups.map((item) => item.id);
+  const loading = relevantGroupIds.filter((groupId) => attentionWorkspaceLoading?.has(groupId));
+  const failures = relevantGroupIds.flatMap((groupId) => {
+    const error = attentionWorkspaceErrors?.get(groupId);
+    return error === undefined ? [] : [{ groupId, error }];
+  });
+  const filters: Array<{ id: "all" | AttentionReviewCategory; label: string; count: number }> = [
+    { id: "all", label: "All", count: attentionReviewCount(scopedItems) },
+    ...(["response", "health", "completion", "delivery"] as const).map((category) => ({
+      id: category,
+      label: ATTENTION_CATEGORY_LABELS[category],
+      count: attentionCategoryCount(scopedItems, category),
+    })),
+  ];
+
+  useEffect(() => {
+    const fragment = window.location.hash.slice(1);
+    if (!fragment.startsWith("wait-") && !fragment.startsWith("action-")) return;
+    const target = scopedItems.find((item) => item.targetPath.split("#")[1] === fragment);
+    if (target === undefined) return;
+    if (target.kind !== "wait" && target.kind !== "action") return;
+    if (target.kind === "wait" && filter !== target.category) {
+      setFilter(target.category);
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const element = document.getElementById(fragment);
+      element?.focus({ preventScroll: true });
+      element?.scrollIntoView?.({ block: "center" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [filter, scopedItems]);
+
+  const reload = (groupId: string) => onReloadAttentionWorkspace?.(groupId) ?? Promise.resolve();
   return (
     <RouteSurface
       title="Attention"
-      eyebrow="Global operations"
-      description="Input requests, blockers, failures, and unacknowledged completion revisions."
+      eyebrow={group?.name ?? "Global operations"}
+      description="Review responses, agent health, completed work, and failed deliveries. Durable action progress remains visible without inflating the review count."
     >
-      {items.length === 0 ? (
-        <Empty text="No agents currently need attention." />
-      ) : (
-        <ul className="workflow-list">
-          {items.map((status) => (
-            <li className="workflow-row" key={`${status.groupId}:${status.memberId}`}>
-              <div>
-                <strong>
-                  {status.alias} · {status.attention.replaceAll("_", " ")}
-                </strong>
-                <small>
-                  {status.state} · {status.phase} · completion revision {status.completionRevision}
-                </small>
-              </div>
-              <div className="workflow-actions">
-                <button
-                  type="button"
-                  onClick={() =>
-                    onNavigate(`/groups/${encodeURIComponent(status.groupId)}/activity`)
-                  }
-                >
-                  Open
-                </button>
-                {status.completionPending && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void client
-                        .acknowledgeCompletion(status.groupId, status.memberId)
-                        .then(onRefresh)
-                    }
-                  >
-                    Acknowledge completion
-                  </button>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
+      <p
+        key={completionAnnouncement?.itemId}
+        className="visually-hidden"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {completionAnnouncement?.message ?? ""}
+      </p>
+      <div className="attention-filters" role="group" aria-label="Attention category filters">
+        {filters.map((item) => (
+          <button
+            type="button"
+            key={item.id}
+            aria-pressed={filter === item.id}
+            onClick={() => setFilter(item.id)}
+          >
+            {item.label} <span>{item.count}</span>
+          </button>
+        ))}
+      </div>
+      {loading.length > 0 && (
+        <p className="attention-loading" role="status">
+          Loading exact waits and action progress for {loading.length}{" "}
+          {loading.length === 1 ? "group" : "groups"}...
+        </p>
       )}
+      {failures.length > 0 && (
+        <section className="attention-partial-error" aria-label="Unavailable Attention details">
+          <strong>Some exact waits and progress could not be loaded.</strong>
+          {failures.map(({ groupId, error }) => (
+            <div key={groupId}>
+              <span>
+                {snapshot.groups.find((candidate) => candidate.id === groupId)?.name ?? groupId}:{" "}
+                {error}
+              </span>
+              <button type="button" onClick={() => void reload(groupId)}>
+                Retry
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
+      <section className="attention-review-section" aria-labelledby="attention-review-heading">
+        <h3 id="attention-review-heading">Review items</h3>
+        {reviewItems.length === 0 ? (
+          <Empty text="No review items match this category." />
+        ) : (
+          <ul className="workflow-list attention-list">
+            {reviewItems.map((item) => {
+              const fragment = item.targetPath.split("#")[1];
+              return (
+                <li
+                  className={`workflow-row attention-item attention-${item.category}`}
+                  id={fragment}
+                  key={item.id}
+                  tabIndex={fragment === undefined ? undefined : -1}
+                >
+                  <div className="attention-item-main">
+                    <strong>{item.title}</strong>
+                    <small>
+                      {item.group.name} · {ATTENTION_CATEGORY_LABELS[item.category]}
+                    </small>
+                    <p>{item.summary}</p>
+                  </div>
+                  {item.kind === "wait" ? (
+                    <WaitReply item={item} client={client} onChanged={() => reload(item.groupId)} />
+                  ) : item.kind === "completion" ? (
+                    <CompletionControls
+                      item={item}
+                      client={client}
+                      onNavigate={onNavigate}
+                      onRefresh={onRefresh}
+                      onAcknowledged={(completion) => {
+                        setSuppressedCompletionIds(
+                          (current) => new Set([...current, completion.id]),
+                        );
+                        setCompletionAnnouncement({
+                          itemId: completion.id,
+                          message: `Completion acknowledged for ${completion.label}.`,
+                        });
+                      }}
+                    />
+                  ) : (
+                    <button type="button" onClick={() => onNavigate(item.targetPath)}>
+                      {item.kind === "delivery" ? "Open Messages" : "Open terminal"}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+      <section
+        className="workflow-card attention-progress"
+        aria-labelledby="attention-progress-heading"
+      >
+        <div className="attention-section-heading">
+          <h3 id="attention-progress-heading">Progress</h3>
+          {activeProgressCount > 0 && (
+            <span className="progress-count">
+              {activeProgressCount} active {activeProgressCount === 1 ? "action" : "actions"}
+            </span>
+          )}
+        </div>
+        {progressItems.length === 0 ? (
+          <p>No durable actions have been created in this scope.</p>
+        ) : (
+          <ul className="workflow-list">
+            {progressItems.map((item) => {
+              const fragment = item.targetPath.split("#")[1];
+              return (
+                <li className="workflow-row progress-row" id={fragment} key={item.id} tabIndex={-1}>
+                  <div>
+                    <strong>{item.title}</strong>
+                    <small>
+                      {item.group.name} · {item.attempts.length} attempts ·{" "}
+                      {item.acknowledgements.length} acknowledgements · {item.action.id}
+                    </small>
+                  </div>
+                  <ActionControls
+                    item={item}
+                    client={client}
+                    onChanged={() => reload(item.groupId)}
+                  />
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
     </RouteSurface>
   );
 }
@@ -362,34 +547,24 @@ function AgentDirectory({
   snapshot,
   onNavigate,
 }: Pick<PortalRoutePanelProps, "snapshot" | "onNavigate">) {
-  const statuses = new Map(
-    (snapshot.agentStatuses ?? []).map((status) => [
-      `${status.groupId}:${status.memberId}`,
-      status,
-    ]),
-  );
   return (
     <RouteSurface
-      title="Agents"
+      title="All agents"
       eyebrow="Global directory"
-      description="All configured agents, provider models, recovery state, and attention across groups."
+      description="All configured agents, provider models, and projected status across groups."
     >
       <ul className="workflow-list">
         {snapshot.memberships
           .filter((member) => member.state === "active")
           .map((member) => {
-            const status = statuses.get(`${member.groupId}:${member.memberId}`);
-            const run = snapshot.runs
-              .filter((item) => item.memberId === member.memberId)
-              .sort((a, b) => b.generation - a.generation)[0];
+            const status = memberStatusView(snapshot.agentStatuses, snapshot.runs, member);
+            const { run } = status;
             return (
               <li className="workflow-row" key={member.id}>
                 <div>
                   <strong>{member.alias}</strong>
                   <small>
-                    {status?.state ?? run?.status ?? "not started"} ·{" "}
-                    {run?.effectiveModel ?? "provider model pending"} ·{" "}
-                    {run?.recoveryPhase ?? "no run"}
+                    {status.label} · {run?.effectiveModel ?? "provider model pending"}
                   </small>
                 </div>
                 <button
@@ -573,13 +748,17 @@ function SettingsPanel({
   const setNotification = (key: keyof PortalPreferences["notifications"], value: boolean) =>
     onPatchPreferences({ notifications: { ...preferences.notifications, [key]: value } });
   const requestNotifications = async () => {
+    if (preferences.notifications.desktop) {
+      setNotification("desktop", false);
+      return;
+    }
     if (!("Notification" in window)) return;
     const permission = await Notification.requestPermission();
     setNotification("desktop", permission === "granted");
   };
   return (
     <RouteSurface
-      title="Settings"
+      title="Preferences"
       eyebrow="Browser-owned presentation"
       description="Validated preferences v2 synchronize across same-origin tabs and never alter daemon runtime truth."
     >
@@ -663,7 +842,7 @@ function SettingsPanel({
           </label>
           <button type="button" onClick={() => void requestNotifications()}>
             {preferences.notifications.desktop
-              ? "Desktop notifications enabled"
+              ? "Disable desktop notifications"
               : "Request desktop notifications"}
           </button>
         </fieldset>
@@ -852,10 +1031,7 @@ function Empty({ text }: { text: string }) {
 export function PortalRoutePanel(props: PortalRoutePanelProps) {
   const { route, group } = props;
   if (route.kind === "group" && group !== undefined) {
-    if (route.section === "activity")
-      return (
-        <ActivityPanel group={group} client={props.client} revision={props.snapshot.sequence} />
-      );
+    if (route.section === "activity") return <AttentionPanel {...props} group={group} />;
     if (route.section === "settings")
       return (
         <GroupSettingsPanel
@@ -869,14 +1045,7 @@ export function PortalRoutePanel(props: PortalRoutePanelProps) {
   if (route.kind !== "global") return null;
   switch (route.destination) {
     case "attention":
-      return (
-        <AttentionPanel
-          snapshot={props.snapshot}
-          client={props.client}
-          onNavigate={props.onNavigate}
-          onRefresh={props.onRefresh}
-        />
-      );
+      return <AttentionPanel {...props} />;
     case "agents":
       return <AgentDirectory snapshot={props.snapshot} onNavigate={props.onNavigate} />;
     case "checkouts":
@@ -886,21 +1055,12 @@ export function PortalRoutePanel(props: PortalRoutePanelProps) {
           eyebrow="Git workspaces"
           description="Create, open, assign, inspect, and provenance-check managed worktrees."
         >
-          <button type="button" className="primary-button" onClick={props.onOpenCheckouts}>
-            <GitBranch aria-hidden="true" size={16} /> Manage checkouts and worktrees
-          </button>
-          <ul className="workflow-list">
-            {props.snapshot.checkouts.map((checkout) => (
-              <li className="workflow-row" key={checkout.id}>
-                <div>
-                  <strong>{checkout.branch ?? "detached checkout"}</strong>
-                  <small>
-                    {checkout.path} · {checkout.dirty ? "dirty" : "clean"}
-                  </small>
-                </div>
-              </li>
-            ))}
-          </ul>
+          <CheckoutWorkspace
+            client={props.client}
+            snapshot={props.snapshot}
+            config={props.config}
+            onChanged={props.onRefresh}
+          />
         </RouteSurface>
       );
     case "extensions":
@@ -937,7 +1097,7 @@ export function PortalRoutePanel(props: PortalRoutePanelProps) {
     case "release":
       return (
         <RouteSurface
-          title="Release"
+          title="About Nanasa"
           eyebrow="Installed product"
           description="Local release identity and compatibility metadata."
         >

@@ -120,6 +120,7 @@ test("help documents authenticated MCP enablement", () => {
   assert.match(result.stdout, /--host <host>\s+Listen host; MCP requires loopback/);
   assert.match(result.stdout, /--mcp\s+Enable authenticated MCP \(default path: \/mcp\)/);
   assert.match(result.stdout, /nanasa auth login <integration> \[--agent <agent-id>\]/);
+  assert.match(result.stdout, /nanasa auth portal/);
   assert.match(result.stdout, /setup\s+Prepare repository-local integration configuration homes/);
   assert.match(result.stdout, /auth\s+Authenticate locally or inspect daemon auth state/);
   assert.match(result.stdout, /doctor\s+Validate configuration, commands, and integration homes/);

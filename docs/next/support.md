@@ -1,13 +1,18 @@
 ---
 title: Support policy
 description: Supported hosts, browsers, services, remote access, and excluded deployment models
-ms.date: 2026-08-30
+ms.date: 2026-08-31
 ms.topic: reference
 ---
 
 ## Supported
 
 Nanasa supports Linux glibc x64 and arm64 hosts on Ubuntu 22.04, Ubuntu 24.04, and Debian 12, with Node.js 22 or 24 and tmux 3.2 or later. Foreground startup and project-local systemd user services are supported. Chromium, Firefox, and WebKit are supported portal engines after their required matrix jobs pass.
+
+tmux-wrapped OSC 52 clipboard requests require a runtime that supports
+`allow-passthrough` (tmux 3.3 or later). On tmux 3.2, terminal display, input,
+paste, and native portal selection continue to work, but TUI-owned clipboard
+requests are unavailable.
 
 ## Preview and unsupported
 

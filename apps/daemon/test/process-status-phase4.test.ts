@@ -4,11 +4,12 @@ import { join } from "node:path";
 import type { AgentRun } from "@nanasa/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentStatusQueryService } from "../src/agent-status-query-service.js";
+import { AgentStatusService } from "../src/agent-status-service.js";
 import { ProcessIdentityObserver } from "../src/process-identity-observer.js";
 import { ReporterRegistry } from "../src/reporter-registry.js";
 import { ScreenStatusClassifier } from "../src/screen-status-classifier.js";
+import { DomainError, NanasaStore } from "../src/store.js";
 import { TmuxEventObserver } from "../src/tmux-event-observer.js";
-import { NanasaStore } from "../src/store.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -38,7 +39,7 @@ function fixture(): { store: NanasaStore; run: AgentRun; registry: ReporterRegis
   store.recordProcessStatus(run.id, {
     event: "process.alive",
     eventId: "alive",
-    observedAt: "2026-08-29T12:00:00.000Z",
+    observedAt: new Date().toISOString(),
     process: {
       foregroundPgid: 10,
       leaderPid: 10,
@@ -150,12 +151,30 @@ describe("Phase 4 reporter authority", () => {
       revokedAt: undefined,
       closedAt: undefined,
     });
-    expect(() =>
+    store.recordProcessStatus(run.id, {
+      event: "process.alive",
+      eventId: "expired-reporter-process-refresh",
+      observedAt: new Date().toISOString(),
+      process: {
+        foregroundPgid: 10,
+        leaderPid: 10,
+        pidStartIdentity: "10:100",
+        executableFingerprint: "b".repeat(64),
+        argvFingerprint: "c".repeat(64),
+        processFingerprint: "a".repeat(64),
+        expectedProviderMatch: "match",
+        wrapperChain: ["claude"],
+      },
+    });
+    expect(
       store.ingestAgentStatusEvent(identity, {
         ...report(run, 2, "turn.started"),
         reporterEpoch: "epoch-expired",
       }),
-    ).toThrowError(expect.objectContaining({ code: "status_reporter_lease_expired" }));
+    ).toMatchObject({ accepted: true, status: { state: "working" } });
+    expect(
+      Date.parse(store.getCurrentReporterSession(run.id, run.generation)!.leaseExpiresAt),
+    ).toBeGreaterThan(Date.parse("2020-01-01T00:00:01.000Z"));
     store.updateRunStatus(run.id, "failed");
     expect(() =>
       store.ingestAgentStatusEvent(identity, report(run, 3, "turn.started")),
@@ -182,7 +201,11 @@ describe("Phase 4 reporter authority", () => {
       runId: run.id,
       generation: run.generation,
     };
-    expect(store.getAgentStatus(run.groupId, run.memberId).state).toBe("starting");
+    expect(store.getAgentStatus(run.groupId, run.memberId)).toMatchObject({
+      state: "idle",
+      confidence: "low",
+      authorityKind: "process",
+    });
     store.ingestAgentStatusEvent(identity, report(run, 1, "session.ready"));
     expect(store.getAgentStatus(run.groupId, run.memberId).state).toBe("idle");
     store.ingestAgentStatusEvent(identity, report(run, 2, "turn.started"));
@@ -207,12 +230,40 @@ describe("Phase 4 reporter authority", () => {
       completionPending: false,
     });
     expect(queries.get(run.groupId, run.memberId, "operator-two").completionPending).toBe(true);
+    const authority = { instanceId: "instance_status_test", daemonEpoch: 1 };
+    expect(
+      store
+        .getSnapshot(authority, "operator-one")
+        .agentStatuses.find((status) => status.runId === run.id),
+    ).toMatchObject({
+      operatorAcknowledgedCompletionRevision: 1,
+      completionPending: false,
+    });
+    expect(
+      store
+        .getSnapshot(authority, "operator-two")
+        .agentStatuses.find((status) => status.runId === run.id),
+    ).toMatchObject({
+      operatorAcknowledgedCompletionRevision: 0,
+      completionPending: true,
+    });
+    expect(store.listEvents().at(-1)).toMatchObject({
+      type: "agent-status.completion-acknowledged",
+      aggregateType: "run",
+      aggregateId: run.id,
+      payload: { generation: run.generation, completionRevision: 1 },
+    });
+    expect(store.listEvents().at(-1)?.payload).not.toHaveProperty("operatorId");
     store.recordProcessStatus(run.id, {
       event: "lease.probed",
       eventId: "stale-one",
       observedAt: "2099-08-29T12:00:00.000Z",
     });
-    expect(store.getAgentStatus(run.groupId, run.memberId).state).toBe("unknown");
+    expect(store.getAgentStatus(run.groupId, run.memberId)).toMatchObject({
+      state: "idle",
+      authorityKind: "reporter",
+      attention: "none",
+    });
     store.recordProcessStatus(run.id, {
       event: "process.exited",
       eventId: "exit",
@@ -222,10 +273,55 @@ describe("Phase 4 reporter authority", () => {
     expect(store.getAgentStatus(run.groupId, run.memberId).state).toBe("failed");
     store.close();
   });
+
+  it("rejects reporter renewal when process-source evidence is stale", () => {
+    const { store, run } = fixture();
+    const session = store.getCurrentReporterSession(run.id, run.generation)!;
+    store.revokeReporterAuthority(run.id, run.generation, "replace deterministic fixture");
+    store.registerReporterSession({
+      ...session,
+      id: "reporter-stale-process",
+      reporterEpoch: "epoch-fixed",
+      sourceSequence: 0,
+      openedAt: "2020-01-01T00:00:00.000Z",
+      leaseExpiresAt: "2020-01-01T00:00:01.000Z",
+      revokedAt: undefined,
+      closedAt: undefined,
+    });
+    store.bindReporterProcess(run.id, run.generation, "a".repeat(64));
+    store.recordProcessStatus(run.id, {
+      event: "process.alive",
+      eventId: "stale-process-evidence",
+      observedAt: "2020-01-01T00:00:00.000Z",
+      process: {
+        foregroundPgid: 10,
+        leaderPid: 10,
+        pidStartIdentity: "10:100",
+        executableFingerprint: "b".repeat(64),
+        argvFingerprint: "c".repeat(64),
+        processFingerprint: "a".repeat(64),
+        expectedProviderMatch: "match",
+        wrapperChain: ["claude"],
+      },
+    });
+
+    expect(() =>
+      store.ingestAgentStatusEvent(
+        {
+          groupId: run.groupId,
+          memberId: run.memberId,
+          runId: run.id,
+          generation: run.generation,
+        },
+        { ...report(run, 1, "session.ready"), reporterEpoch: "epoch-fixed" },
+      ),
+    ).toThrowError(expect.objectContaining({ code: "status_process_unverified" }));
+    store.close();
+  });
 });
 
 describe("Phase 4 process, hook, screen, privacy, and scale behavior", () => {
-  it("binds PID start identity through wrappers and changes fingerprints on PID reuse", async () => {
+  it("includes process evidence in fingerprints and detects PID reuse", async () => {
     const root = mkdtempSync(join(tmpdir(), "nanasa-proc-"));
     roots.push(root);
     const writeProcess = (
@@ -263,9 +359,279 @@ describe("Phase 4 process, hook, screen, privacy, and scale behavior", () => {
       pidStartIdentity: "100:50",
       expectedProviderMatch: "match",
     });
+    writeProcess(100, 100, 100, 50, ["env", "claude", "--resume", "two"]);
+    const retitled = await observer.observe(100, adapter);
+    expect(retitled.processFingerprint).not.toBe(first.processFingerprint);
+    expect(retitled.argvFingerprint).not.toBe(first.argvFingerprint);
     writeProcess(100, 100, 100, 51, ["env", "claude", "--resume", "one"]);
     expect((await observer.observe(100, adapter)).processFingerprint).not.toBe(
       first.processFingerprint,
+    );
+  });
+
+  it("retains reporter authority when mutable evidence changes for the same kernel process", () => {
+    const { store, run, registry } = fixture();
+    const changedEvidence = {
+      foregroundPgid: 10,
+      leaderPid: 10,
+      pidStartIdentity: "10:100",
+      executableFingerprint: "d".repeat(64),
+      argvFingerprint: "e".repeat(64),
+      processFingerprint: "f".repeat(64),
+      expectedProviderMatch: "match" as const,
+      wrapperChain: ["claude"],
+    };
+
+    expect(() => registry.observeProcess(run, changedEvidence)).not.toThrow();
+    expect(store.getCurrentReporterSession(run.id, run.generation)?.processFingerprint).toBe(
+      changedEvidence.processFingerprint,
+    );
+    store.recordProcessStatus(run.id, {
+      event: "process.alive",
+      eventId: "legacy-alive-without-process",
+      observedAt: "2026-08-29T12:00:01.000Z",
+    });
+    expect(() =>
+      registry.observeProcess(run, {
+        ...changedEvidence,
+        executableFingerprint: "8".repeat(64),
+        processFingerprint: "7".repeat(64),
+      }),
+    ).not.toThrow();
+    expect(() =>
+      registry.observeProcess(run, {
+        ...changedEvidence,
+        pidStartIdentity: "10:101",
+        processFingerprint: "9".repeat(64),
+      }),
+    ).toThrowError(expect.objectContaining({ code: "status_process_fingerprint_changed" }));
+    store.close();
+  });
+
+  it("renews no-heartbeat reporter freshness from matching process evidence", () => {
+    let now = new Date("2026-08-29T12:10:00.000Z");
+    const store = new NanasaStore(":memory:");
+    const group = store.createGroup({ name: "Status" });
+    const profile = store.createInternalAgentProfile({
+      name: "Claude",
+      agentType: "claude-code",
+      kind: "claude-code",
+      command: "claude",
+      args: [],
+      environment: {},
+    });
+    store.addMembership(group.id, {
+      memberId: "worker",
+      agentProfileId: profile.id,
+      alias: "Worker",
+    });
+    const run = store.createRunForMembership(group.id, "worker").run;
+    const registry = new ReporterRegistry(store, {
+      runtimeDirectory: "/runtime",
+      now: () => now,
+    });
+    const opened = registry.open(run);
+    now = new Date("2026-08-29T12:11:00.000Z");
+    const process = {
+      foregroundPgid: 10,
+      leaderPid: 10,
+      pidStartIdentity: "10:100",
+      executableFingerprint: "b".repeat(64),
+      argvFingerprint: "c".repeat(64),
+      processFingerprint: "a".repeat(64),
+      expectedProviderMatch: "match" as const,
+      wrapperChain: ["claude"],
+    };
+
+    registry.observeProcess(run, process);
+
+    expect(store.getCurrentReporterSession(run.id, run.generation)?.leaseExpiresAt).toBe(
+      new Date(now.getTime() + 45_000).toISOString(),
+    );
+    expect(Date.parse(opened.leaseExpiresAt)).toBeLessThan(
+      Date.parse(store.getCurrentReporterSession(run.id, run.generation)!.leaseExpiresAt),
+    );
+    store.close();
+  });
+
+  it("supersedes persisted waits when reporter authority is revoked", () => {
+    const { store, run } = fixture();
+    const session = store.getCurrentReporterSession(run.id, run.generation)!;
+    store.revokeReporterAuthority(run.id, run.generation, "replace deterministic fixture");
+    store.registerReporterSession({
+      ...session,
+      id: "reporter-wait",
+      reporterEpoch: "epoch-fixed",
+      sourceSequence: 0,
+      revokedAt: undefined,
+      closedAt: undefined,
+    });
+    store.bindReporterProcess(run.id, run.generation, "a".repeat(64));
+    const identity = {
+      groupId: run.groupId,
+      memberId: run.memberId,
+      runId: run.id,
+      generation: run.generation,
+    };
+    store.ingestAgentStatusEvent(identity, {
+      ...report(run, 1, "turn.started"),
+      reporterEpoch: "epoch-fixed",
+      event: "wait.opened",
+      requestId: "permission-one",
+      data: {
+        waitKind: "permission",
+        summary: "Old process permission",
+        replyChannel: "terminal",
+      },
+    });
+    expect(store.listOpenWaits(run.groupId, run.memberId)).toHaveLength(1);
+
+    store.revokeReporterAuthority(run.id, run.generation, "process_replaced");
+
+    expect(store.listOpenWaits(run.groupId, run.memberId)).toEqual([
+      expect.objectContaining({ providerRequestId: "permission-one", state: "superseded" }),
+    ]);
+    store.close();
+  });
+
+  it("records every verified present observation while deduplicating unchanged failures", () => {
+    const store = {
+      getRun: vi.fn(() => ({ id: "run", generation: 1 })),
+      recordProcessStatus: vi.fn(),
+    };
+    const reporters = { observeProcess: vi.fn(), revoke: vi.fn() };
+    const service = new AgentStatusService(store as never, reporters as never);
+    const process = {
+      foregroundPgid: 10,
+      leaderPid: 10,
+      pidStartIdentity: "10:100",
+      executableFingerprint: "a".repeat(64),
+      argvFingerprint: "b".repeat(64),
+      processFingerprint: "c".repeat(64),
+      expectedProviderMatch: "match" as const,
+      wrapperChain: ["claude"],
+    };
+
+    service.observeRuntime({
+      id: "present-one",
+      runId: "run",
+      generation: 1,
+      state: "present",
+      observedAt: "2026-08-29T12:00:00.000Z",
+      trigger: "poll",
+      evidenceCode: "exact_owned_pane_and_process",
+      process,
+    });
+    service.observeRuntime({
+      id: "present-two",
+      runId: "run",
+      generation: 1,
+      state: "present",
+      observedAt: "2026-08-29T12:00:15.000Z",
+      trigger: "poll",
+      evidenceCode: "exact_owned_pane_and_process",
+      process,
+    });
+
+    expect(store.recordProcessStatus).toHaveBeenCalledTimes(2);
+    expect(reporters.observeProcess).toHaveBeenCalledTimes(2);
+  });
+
+  it("records a same-provider process replacement after reporter revocation", () => {
+    const store = {
+      getRun: vi.fn(() => ({ id: "run", generation: 1 })),
+      recordProcessStatus: vi.fn(),
+    };
+    const reporters = {
+      observeProcess: vi.fn(() => {
+        throw new DomainError(
+          "status_process_fingerprint_changed",
+          "Foreground process changed",
+          409,
+        );
+      }),
+      revoke: vi.fn(),
+    };
+    const service = new AgentStatusService(store as never, reporters as never);
+    const process = {
+      foregroundPgid: 20,
+      leaderPid: 20,
+      pidStartIdentity: "20:200",
+      executableFingerprint: "d".repeat(64),
+      argvFingerprint: "e".repeat(64),
+      processFingerprint: "f".repeat(64),
+      expectedProviderMatch: "match" as const,
+      wrapperChain: ["claude"],
+    };
+
+    expect(() =>
+      service.observeRuntime({
+        id: "replacement",
+        runId: "run",
+        generation: 1,
+        state: "present",
+        observedAt: "2026-08-29T12:00:15.000Z",
+        trigger: "poll",
+        evidenceCode: "exact_owned_pane_and_process",
+        process,
+      }),
+    ).not.toThrow();
+    expect(store.recordProcessStatus).toHaveBeenCalledWith(
+      "run",
+      expect.objectContaining({
+        event: "process.alive",
+        process,
+        reporterAuthorityInvalid: true,
+      }),
+    );
+  });
+
+  it("records provider mismatches without aborting reconciliation", () => {
+    const store = {
+      getRun: vi.fn(() => ({ id: "run", generation: 1 })),
+      recordProcessStatus: vi.fn(),
+    };
+    const reporters = {
+      observeProcess: vi.fn(() => {
+        throw new DomainError(
+          "status_process_provider_mismatch",
+          "Foreground process does not match provider",
+          409,
+        );
+      }),
+      revoke: vi.fn(),
+    };
+    const service = new AgentStatusService(store as never, reporters as never);
+    const process = {
+      foregroundPgid: 30,
+      leaderPid: 30,
+      pidStartIdentity: "30:300",
+      executableFingerprint: "1".repeat(64),
+      argvFingerprint: "2".repeat(64),
+      processFingerprint: "3".repeat(64),
+      expectedProviderMatch: "mismatch" as const,
+      wrapperChain: ["bash"],
+    };
+
+    expect(() =>
+      service.observeRuntime({
+        id: "provider-mismatch",
+        runId: "run",
+        generation: 1,
+        state: "present",
+        observedAt: "2026-08-29T12:00:15.000Z",
+        trigger: "poll",
+        evidenceCode: "provider_process_mismatch",
+        process,
+      }),
+    ).not.toThrow();
+    expect(store.recordProcessStatus).toHaveBeenCalledWith(
+      "run",
+      expect.objectContaining({
+        event: "process.alive",
+        process,
+        reporterAuthorityInvalid: true,
+      }),
     );
   });
 

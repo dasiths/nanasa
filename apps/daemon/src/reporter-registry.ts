@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
-  REPORTER_LEASE_MS,
-  STATUS_PROTOCOL_VERSION,
   type AgentRun,
   type ProcessIdentityObservation,
+  REPORTER_LEASE_MS,
   type ReporterReadinessCoverage,
   type ReporterSession,
+  STATUS_PROTOCOL_VERSION,
 } from "@nanasa/contracts";
 import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
 import { DomainError, NanasaStore } from "./store.js";
@@ -95,7 +95,16 @@ export class ReporterRegistry {
         409,
       );
     }
-    this.#store.bindReporterProcess(run.id, run.generation, process.processFingerprint);
+    this.#store.bindReporterProcess(run.id, run.generation, process);
+    const profile = this.#store.getAgentProfile(run.agentProfileId);
+    const adapter = this.#adapters.get(profile.kind);
+    if (!adapter.reporter.coverage.heartbeat) {
+      this.#store.refreshReporterLease(
+        run.id,
+        run.generation,
+        new Date(this.#now().getTime() + REPORTER_LEASE_MS).toISOString(),
+      );
+    }
   }
 
   public revoke(run: AgentRun, reason: string): void {

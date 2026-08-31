@@ -415,6 +415,21 @@ describe("Streamable HTTP MCP", () => {
       leaseExpiresAt: "2099-08-29T12:00:00.000Z",
     });
     daemon.store.bindReporterProcess(run.id, run.generation, "a".repeat(64));
+    daemon.store.recordProcessStatus(run.id, {
+      event: "process.alive",
+      eventId: "reporter-mcp-process",
+      observedAt: new Date().toISOString(),
+      process: {
+        foregroundPgid: 10,
+        leaderPid: 10,
+        pidStartIdentity: "10:100",
+        executableFingerprint: "b".repeat(64),
+        argvFingerprint: "c".repeat(64),
+        processFingerprint: "a".repeat(64),
+        expectedProviderMatch: "match",
+        wrapperChain: ["opencode"],
+      },
+    });
     const payload = {
       version: 2,
       eventId: "session-ready-1",

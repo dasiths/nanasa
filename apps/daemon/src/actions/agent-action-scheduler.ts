@@ -44,7 +44,9 @@ export function actionReadiness(
     status.reporterEpoch !== action.target.reporterEpoch ||
     status.authorityKind !== "reporter" ||
     status.reporterLeaseExpiresAt === undefined ||
-    Date.parse(status.reporterLeaseExpiresAt) <= now.getTime()
+    Date.parse(status.reporterLeaseExpiresAt) <= now.getTime() ||
+    status.transportLeaseExpiresAt === undefined ||
+    Date.parse(status.transportLeaseExpiresAt) <= now.getTime()
   ) {
     return { kind: "reject", code: "target_reporter_stale" };
   }
@@ -248,26 +250,77 @@ export class AgentActionScheduler {
           409,
         );
       }
-      const observation = await this.runtime.observeRun(run);
-      if (
-        observation.state !== "present" ||
-        observation.process?.expectedProviderMatch !== "match"
-      ) {
-        throw new DomainError(
-          observation.state === "indeterminate"
-            ? "target_process_indeterminate"
-            : "target_identity_mismatch",
-          "The exact target process is not current",
-          409,
+      await this.arbiter.dispatchAutomated(run.id, async () => {
+        const currentStatus = this.store.getAgentStatus(
+          action.target.groupId,
+          action.target.memberId,
         );
-      }
-      await this.arbiter.dispatchAutomated(run.id, () =>
-        this.runtime.pasteToRun(run, actionPrompt(action)),
-      );
+        const currentDecision = actionReadiness(action, currentStatus, this.now());
+        if (currentDecision.kind !== "dispatch") {
+          throw new DomainError(
+            "agent_action_readiness_changed",
+            "The exact target readiness changed before terminal input",
+            409,
+          );
+        }
+        const observation = await this.runtime.observeRun(run);
+        if (
+          observation.state !== "present" ||
+          observation.process?.expectedProviderMatch !== "match" ||
+          observation.process.processFingerprint !== currentStatus.processFingerprint ||
+          observation.process.processFingerprint !==
+            this.store.getCurrentReporterSession(run.id, run.generation)?.processFingerprint
+        ) {
+          throw new DomainError(
+            observation.state === "indeterminate"
+              ? "target_process_indeterminate"
+              : "target_identity_mismatch",
+            "The exact target process is not current",
+            409,
+          );
+        }
+        const finalAction = this.store.getAgentAction(action.id);
+        const finalStatus = this.store.getAgentStatus(
+          action.target.groupId,
+          action.target.memberId,
+        );
+        const finalReporter = this.store.getCurrentReporterSession(run.id, run.generation);
+        if (
+          !["created", "deferred"].includes(finalAction.state) ||
+          actionReadiness(action, finalStatus, this.now()).kind !== "dispatch" ||
+          finalReporter?.id !== action.target.reporterSessionId ||
+          finalReporter.reporterEpoch !== action.target.reporterEpoch ||
+          finalReporter.processFingerprint !== observation.process.processFingerprint
+        ) {
+          throw new DomainError(
+            "agent_action_readiness_changed",
+            "The exact target readiness changed during process verification",
+            409,
+          );
+        }
+        await this.runtime.pasteToRun(run, actionPrompt(action));
+      });
       writeCompleted = true;
       this.store.markAgentActionSubmitted(action.id, attempt.id, this.#owner);
     } catch (error) {
       const code = error instanceof DomainError ? error.code : "agent_action_submission_failed";
+      const currentAction = this.store.getAgentAction(action.id);
+      if (
+        [
+          "completed",
+          "settled-unverified",
+          "failed",
+          "stalled",
+          "timed-out",
+          "cancelled",
+          "expired",
+          "superseded",
+          "rejected",
+        ].includes(currentAction.state)
+      ) {
+        this.store.abandonAgentActionAttempt(action.id, attempt.id, this.#owner, code);
+        return;
+      }
       if (writeCompleted) {
         this.store.failAgentActionAttempt(action.id, attempt.id, this.#owner, "stalled", {
           code: "submission_commit_indeterminate",

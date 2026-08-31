@@ -14,6 +14,7 @@ function usage() {
        nanasa setup
   nanasa doctor
   nanasa auth login <integration> [--agent <agent-id>]
+  nanasa auth portal
       nanasa reset --from-alpha --confirm <repository-root>
   nanasa <family> <command> [arguments] [--body <json>]
 

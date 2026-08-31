@@ -17,7 +17,7 @@ import type {
 } from "./agent-runtime-provisioner.js";
 import { ProcessIdentityObserver } from "./process-identity-observer.js";
 import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
-import { runtimeObservation, type RuntimeObservation } from "./runtime-observation.js";
+import { type RuntimeObservation, runtimeObservation } from "./runtime-observation.js";
 import { DomainError, NanasaStore } from "./store.js";
 import { terminalViewSessionName } from "./terminal/terminal-input-arbiter.js";
 
@@ -104,6 +104,7 @@ export class TmuxRuntime {
   readonly #detachedRunIds = new Set<string>();
   readonly #provisionedRuns = new Map<string, AgentRuntimeConfiguration>();
   #serverConfiguration: Promise<void> | undefined;
+  #passthroughSupported = false;
   #closing = false;
 
   public constructor(store: NanasaStore, options: TmuxRuntimeOptions = {}) {
@@ -315,6 +316,7 @@ export class TmuxRuntime {
     if (!(await this.#viewMatches(viewSession, binding))) {
       throw new Error(`tmux view session ${viewSession} does not match its owner pane`);
     }
+    await this.#enableOwnedPassthrough(run);
     return viewSession;
   }
 
@@ -753,6 +755,17 @@ export class TmuxRuntime {
       await this.#tmux(["set-option", "-g", "mouse", "on"]);
       await this.#tmux(["set-option", "-g", "extended-keys", "on"]);
       await this.#tmux(["set-option", "-g", "set-clipboard", "external"]);
+      const passthrough = await this.#tmux(
+        ["set-option", "-w", "-g", "allow-passthrough", "off"],
+        true,
+      );
+      if (passthrough.exitCode === 0) this.#passthroughSupported = true;
+      else if (!/(?:unknown|invalid) option/i.test(passthrough.stderr)) {
+        throw new Error(
+          passthrough.stderr.trim() ||
+            `tmux allow-passthrough probe exited with code ${passthrough.exitCode}`,
+        );
+      }
       for (const [hook, command] of Object.entries(this.#invalidationHooks)) {
         await this.#tmux(["set-hook", "-g", hook, `run-shell -b ${shellQuote(command)}`]);
       }
@@ -768,6 +781,13 @@ export class TmuxRuntime {
       throw error;
     });
     return this.#serverConfiguration;
+  }
+
+  async #enableOwnedPassthrough(run: AgentRun): Promise<void> {
+    await this.#configureServer();
+    if (!this.#passthroughSupported) return;
+    await this.#ownedPaneStatus(run, true, true);
+    await this.#tmux(["set-option", "-w", "-t", run.terminal!.windowId, "allow-passthrough", "on"]);
   }
 
   async #tmux(args: string[], allowFailure = false, stdin?: string): Promise<CommandOutput> {

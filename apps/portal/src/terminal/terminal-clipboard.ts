@@ -6,26 +6,37 @@ export function selectionModifier(platform = navigator.platform): "Option" | "Sh
   return /Mac|iPhone|iPad/.test(platform) ? "Option" : "Shift";
 }
 
+export async function writeClipboardText(value: string): Promise<ClipboardOutcome> {
+  try {
+    if (navigator.clipboard?.writeText !== undefined) {
+      await navigator.clipboard.writeText(value);
+      return { ok: true };
+    }
+  } catch {
+    // Fall back to a temporary selection within the same trusted user action.
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("aria-hidden", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  try {
+    textarea.select();
+    return document.execCommand?.("copy") === true
+      ? { ok: true }
+      : { ok: false, message: "Use your browser or operating system Copy command." };
+  } catch {
+    return { ok: false, message: "Use your browser or operating system Copy command." };
+  } finally {
+    textarea.remove();
+  }
+}
+
 export async function copyTerminalSelection(terminal: Terminal): Promise<ClipboardOutcome> {
   const text = terminal.getSelection();
   if (text.length === 0) return { ok: false, message: "Select terminal text before copying." };
-  try {
-    await navigator.clipboard.writeText(text);
-    return { ok: true };
-  } catch {
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.setAttribute("aria-hidden", "true");
-    textarea.style.position = "fixed";
-    textarea.style.opacity = "0";
-    document.body.append(textarea);
-    textarea.select();
-    const copied = document.execCommand("copy");
-    textarea.remove();
-    return copied
-      ? { ok: true }
-      : { ok: false, message: "Use your browser or operating system Copy command." };
-  }
+  return writeClipboardText(text);
 }
 
 export async function readClipboardText(): Promise<string | { ok: false; message: string }> {
@@ -34,6 +45,28 @@ export async function readClipboardText(): Promise<string | { ok: false; message
   } catch {
     return { ok: false, message: "Use your browser or operating system Paste command." };
   }
+}
+
+export function installCopyOnSelect(
+  element: HTMLElement,
+  terminal: Terminal,
+  copy: () => void,
+): () => void {
+  let selecting = false;
+  const onMouseDown = (event: MouseEvent) => {
+    selecting = event.button === 0;
+  };
+  const onMouseUp = () => {
+    if (!selecting) return;
+    selecting = false;
+    if (terminal.hasSelection()) copy();
+  };
+  element.addEventListener("mousedown", onMouseDown);
+  element.ownerDocument.addEventListener("mouseup", onMouseUp);
+  return () => {
+    element.removeEventListener("mousedown", onMouseDown);
+    element.ownerDocument.removeEventListener("mouseup", onMouseUp);
+  };
 }
 
 export function installTrustedClipboardEvents(

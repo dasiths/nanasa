@@ -55,6 +55,21 @@ function createFixture(path = ":memory:") {
     leaseExpiresAt: "2099-08-11T12:00:00.000Z",
   });
   store.bindReporterProcess(run.id, run.generation, "a".repeat(64));
+  store.recordProcessStatus(run.id, {
+    event: "process.alive",
+    eventId: "process_alive_status",
+    observedAt: new Date().toISOString(),
+    process: {
+      foregroundPgid: 10,
+      leaderPid: 10,
+      pidStartIdentity: "10:100",
+      executableFingerprint: "b".repeat(64),
+      argvFingerprint: "c".repeat(64),
+      processFingerprint: "a".repeat(64),
+      expectedProviderMatch: "match",
+      wrapperChain: ["claude"],
+    },
+  });
   return {
     store,
     group,

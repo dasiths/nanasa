@@ -15,6 +15,7 @@ export interface PortalPreferences {
   lastSectionByGroup: Record<string, WorkspaceSection>;
   activeRunByGroup: Record<string, string>;
   pinnedRunIdsByGroup: Record<string, string[]>;
+  completionNotificationMemberIdsByGroup: Record<string, string[]>;
   maximizedRunByGroup: Record<string, string>;
   terminalSplitRatioByGroup: Record<string, number>;
   railCollapsed: boolean;
@@ -37,6 +38,7 @@ export const defaultPortalPreferences: PortalPreferences = {
   lastSectionByGroup: {},
   activeRunByGroup: {},
   pinnedRunIdsByGroup: {},
+  completionNotificationMemberIdsByGroup: {},
   maximizedRunByGroup: {},
   terminalSplitRatioByGroup: {},
   railCollapsed: false,
@@ -134,6 +136,9 @@ export function parsePortalPreferences(value: string | null): PortalPreferences 
       ]),
       activeRunByGroup: stringRecord(parsed.activeRunByGroup),
       pinnedRunIdsByGroup: stringArrayRecord(parsed.pinnedRunIdsByGroup),
+      completionNotificationMemberIdsByGroup: stringArrayRecord(
+        parsed.completionNotificationMemberIdsByGroup,
+      ),
       maximizedRunByGroup: stringRecord(parsed.maximizedRunByGroup),
       terminalSplitRatioByGroup: splitRatioRecord(parsed.terminalSplitRatioByGroup),
       railCollapsed: parsed.railCollapsed === true,
@@ -203,6 +208,7 @@ const RESOURCE_RECORD_FIELDS = [
   "lastSectionByGroup",
   "activeRunByGroup",
   "pinnedRunIdsByGroup",
+  "completionNotificationMemberIdsByGroup",
   "maximizedRunByGroup",
   "terminalSplitRatioByGroup",
 ] as const;
@@ -239,7 +245,7 @@ export function mergePortalPreferenceUpdate(
       ...Object.keys(updatedRecord),
     ])) {
       if (equal(currentRecord[resourceId], updatedRecord[resourceId])) continue;
-      if (field === "pinnedRunIdsByGroup") {
+      if (field === "pinnedRunIdsByGroup" || field === "completionNotificationMemberIdsByGroup") {
         const before = (currentRecord[resourceId] ?? []) as string[];
         const after = (updatedRecord[resourceId] ?? []) as string[];
         const latest = (mergedRecord[resourceId] ?? []) as string[];
@@ -275,6 +281,7 @@ export function mergePortalPreferenceUpdate(
 export function cleanStalePortalPreferences(
   preferences: PortalPreferences,
   groups: ReadonlyMap<string, ReadonlySet<string>>,
+  membersByGroup?: ReadonlyMap<string, ReadonlySet<string>>,
 ): PortalPreferences {
   const groupIds = new Set(groups.keys());
   const selectedGroupId =
@@ -298,6 +305,16 @@ export function cleanStalePortalPreferences(
         .map(([groupId, runIds]) => [
           groupId,
           runIds.filter((runId) => groups.get(groupId)?.has(runId) === true),
+        ]),
+    ),
+    completionNotificationMemberIdsByGroup: Object.fromEntries(
+      Object.entries(preferences.completionNotificationMemberIdsByGroup)
+        .filter(([groupId]) => groupIds.has(groupId))
+        .map(([groupId, memberIds]) => [
+          groupId,
+          membersByGroup === undefined
+            ? memberIds
+            : memberIds.filter((memberId) => membersByGroup.get(groupId)?.has(memberId) === true),
         ]),
     ),
     maximizedRunByGroup: Object.fromEntries(
@@ -364,9 +381,12 @@ export function usePortalPreferences() {
     [updatePreferences],
   );
   const reconcileResources = useCallback(
-    (groups: ReadonlyMap<string, ReadonlySet<string>>) => {
+    (
+      groups: ReadonlyMap<string, ReadonlySet<string>>,
+      membersByGroup?: ReadonlyMap<string, ReadonlySet<string>>,
+    ) => {
       const observed = preferences;
-      const cleaned = cleanStalePortalPreferences(observed, groups);
+      const cleaned = cleanStalePortalPreferences(observed, groups, membersByGroup);
       if (cleaned === observed) return;
       void commitPortalPreferenceUpdate((stored) =>
         mergePortalPreferenceUpdate(observed, cleaned, stored),

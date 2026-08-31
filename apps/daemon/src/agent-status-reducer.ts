@@ -26,6 +26,7 @@ export type ProcessStatusObservation =
       eventId: string;
       observedAt: string;
       process?: ProcessIdentityObservation;
+      reporterAuthorityInvalid?: boolean;
     }
   | { event: "process.missing"; eventId: string; observedAt: string }
   | { event: "process.indeterminate"; eventId: string; observedAt: string }
@@ -230,12 +231,57 @@ export function reduceAgentStatus(
   let next: AgentStatusReducerState = { ...current, observedAt };
 
   if (observation.event === "process.alive") {
+    const processFallback =
+      observation.process?.expectedProviderMatch === "match" &&
+      observation.reporterAuthorityInvalid !== true &&
+      current.openWaits.length === 0 &&
+      (current.state === "starting" || current.state === "unknown");
+    const invalidateReporter = observation.reporterAuthorityInvalid === true;
     next = withEvidence(
       {
         ...next,
         processState: "present",
         processFingerprint: observation.process?.processFingerprint,
         transportLeaseExpiresAt: addMilliseconds(observedAt, TRANSPORT_LEASE_MS),
+        ...(processFallback
+          ? {
+              state: "idle" as const,
+              phase: "settled" as const,
+              confidence: "low" as const,
+              attention: "none" as const,
+              authorityKind: "process" as const,
+              authorityId: observation.eventId,
+              staleAuthority: false,
+              interactiveReady: true,
+            }
+          : {}),
+        ...(invalidateReporter
+          ? {
+              state: "unknown" as const,
+              phase: "startup" as const,
+              outcome: "unknown" as const,
+              confidence: "low" as const,
+              attention: "reporter_stale" as const,
+              authorityKind: "none" as const,
+              authorityId: undefined,
+              staleAuthority: true,
+              interactiveReady: false,
+              reporterEpoch: undefined,
+              reporterLeaseExpiresAt: undefined,
+              readinessCoverage: undefined,
+              semanticLeaseExpiresAt: undefined,
+              lastActivityAt: undefined,
+              lastActivityKind: undefined,
+              lastProgressSummary: undefined,
+              progressStage: undefined,
+              nextStep: undefined,
+              blocker: undefined,
+              cleanEndSeen: false,
+              openTools: [],
+              openWaits: [],
+              staleProbeCount: 0,
+            }
+          : {}),
       },
       { source: "process", kind: observation.event, observedAt, confidence: "high" },
     );
@@ -325,20 +371,8 @@ export function reduceAgentStatus(
     const semanticExpired =
       current.semanticLeaseExpiresAt !== undefined &&
       Date.parse(observedAt) > Date.parse(current.semanticLeaseExpiresAt);
-    const transportExpired =
-      current.transportLeaseExpiresAt !== undefined &&
-      Date.parse(observedAt) > Date.parse(current.transportLeaseExpiresAt);
     if (current.openWaits.length > 0) return transition(current, next);
-    if (current.state === "starting" && transportExpired) {
-      next = {
-        ...next,
-        state: "unknown",
-        attention: "reporter_stale",
-        confidence: "low",
-        authorityKind: "none",
-        staleAuthority: true,
-      };
-    } else if (current.state === "working" && semanticExpired) {
+    if (current.state === "working" && semanticExpired) {
       const staleProbeCount = current.staleProbeCount + 1;
       next = {
         ...next,
@@ -350,20 +384,6 @@ export function reduceAgentStatus(
               confidence: "low" as const,
             }
           : {}),
-      };
-    } else if (
-      semanticExpired ||
-      (current.reporterLeaseExpiresAt !== undefined &&
-        Date.parse(observedAt) > Date.parse(current.reporterLeaseExpiresAt))
-    ) {
-      next = {
-        ...next,
-        state: "unknown",
-        attention: "reporter_stale",
-        confidence: "low",
-        authorityKind: "none",
-        staleAuthority: true,
-        interactiveReady: false,
       };
     }
     return transition(current, next);
@@ -442,6 +462,7 @@ export function reduceAgentStatus(
   }
 
   const input = observation.input;
+  const heartbeat = input.event === "heartbeat";
   const eventEvidence: AgentStatusEvidence = {
     source: evidenceSource(input.source),
     kind: input.event,
@@ -458,10 +479,13 @@ export function reduceAgentStatus(
       reporterLeaseExpiresAt: observation.authority.leaseExpiresAt,
       readinessCoverage: observation.authority.readinessCoverage,
       staleAuthority: false,
-      lastActivityAt: observedAt,
-      lastActivityKind: input.event,
-      transportLeaseExpiresAt: addMilliseconds(observedAt, TRANSPORT_LEASE_MS),
-      staleProbeCount: 0,
+      ...(heartbeat
+        ? {}
+        : {
+            lastActivityAt: observedAt,
+            lastActivityKind: input.event,
+            staleProbeCount: 0,
+          }),
     },
     eventEvidence,
   );

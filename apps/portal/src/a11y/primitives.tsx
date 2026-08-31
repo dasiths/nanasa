@@ -110,11 +110,13 @@ export function Dialog({
   onClose,
   children,
   className = "confirmation-dialog",
+  closeOnBackdrop = false,
 }: PropsWithChildren<{
   open: boolean;
   labelledBy: string;
   onClose(): void;
   className?: string;
+  closeOnBackdrop?: boolean;
 }>) {
   const ref = useRef<HTMLDialogElement>(null);
   useFocusReturn(open);
@@ -133,6 +135,9 @@ export function Dialog({
       ref={ref}
       className={className}
       aria-labelledby={labelledBy}
+      onClick={(event) => {
+        if (closeOnBackdrop && event.target === event.currentTarget) onClose();
+      }}
       onCancel={(event) => {
         event.preventDefault();
         onClose();

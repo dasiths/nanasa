@@ -20,6 +20,10 @@ import {
 } from "./provider-control-strategy.js";
 import { freezeReporterDescriptor } from "./provider-reporter-descriptor.js";
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
 export class CopilotAdapter implements ProviderAdapter {
   public readonly id = "copilot" as const;
   public readonly version = "1.0.0";
@@ -70,17 +74,27 @@ export class CopilotAdapter implements ProviderAdapter {
   }
 
   public planOverlay(context: ProviderOverlayContext): ProviderOverlayPlan {
-    const reporterPath = join(context.overlayRoot, "reporters", "status-hook.mjs");
-    const hookConfigPath = join(context.overlayRoot, "reporters", "hooks.json");
-    const commandArguments: string[] = [];
+    const pluginRoot = join(context.overlayRoot, "copilot-status-plugin");
+    const reporterPath = join(pluginRoot, "status-hook.mjs");
+    const commandArguments: string[] = ["--plugin-dir", pluginRoot];
     const files: ProviderOverlayPlan["files"][number][] = [
       {
-        relativePath: "reporters/status-hook.mjs",
+        relativePath: "copilot-status-plugin/status-hook.mjs",
         content: HOOK_STATUS_REPORTER_SOURCE,
         ownerKind: "reporter",
       },
       {
-        relativePath: "reporters/hooks.json",
+        relativePath: "copilot-status-plugin/plugin.json",
+        content: json({
+          name: "nanasa-status-reporter",
+          description: "Nanasa lifecycle status reporter",
+          version: this.version,
+          hooks: "com.github.copilot/hooks/hooks.json",
+        }),
+        ownerKind: "reporter",
+      },
+      {
+        relativePath: "copilot-status-plugin/com.github.copilot/hooks/hooks.json",
         content: json({
           version: 1,
           hooks: {
@@ -130,7 +144,7 @@ export class CopilotAdapter implements ProviderAdapter {
     return Object.freeze({
       files: Object.freeze(files),
       commandArguments: Object.freeze(commandArguments),
-      environment: Object.freeze({ NANASA_COPILOT_HOOKS_CONFIG: hookConfigPath }),
+      environment: Object.freeze({}),
       generatedIdentities: Object.freeze(files.map((file) => file.relativePath)),
     });
   }
@@ -168,7 +182,7 @@ export class CopilotAdapter implements ProviderAdapter {
     return {
       type: "command",
       ...(matcher === undefined ? {} : { matcher }),
-      bash: `${JSON.stringify(process.execPath)} ${JSON.stringify(reporterPath)} copilot ${JSON.stringify(eventName)}`,
+      bash: `${shellQuote(process.execPath)} ${shellQuote(reporterPath)} copilot ${shellQuote(eventName)}`,
       timeoutSec: 2,
     };
   }

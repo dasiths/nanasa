@@ -1,5 +1,4 @@
 import {
-  type AgentActionWorkspace,
   type Audience,
   DEFAULT_MESSAGE_PAGE_SIZE,
   type DeliveryOutcome,
@@ -10,7 +9,6 @@ import {
   type Message,
   type MessageIntent,
   type MessageSubmissionResult,
-  type OpenWait,
   OVERSIZED_MESSAGE_GUIDANCE,
   type SubmitMessageCommand,
   SubmitMessageCommandSchema,
@@ -33,7 +31,6 @@ type AudienceKind = Audience["kind"];
 
 export const MESSAGE_HISTORY_KEY = "nanasa.message-history.v1";
 export const MESSAGE_HISTORY_CLEARED_KEY = "nanasa.message-history-cleared.v1";
-export const MESSAGE_OVERLAY_OPEN_KEY = "nanasa.message-overlay-open.v1";
 const MAX_MESSAGE_HISTORY = 100;
 const intentDescriptions: Record<MessageIntent, string> = {
   inform: "Share context or a status update. No response is required.",
@@ -45,14 +42,6 @@ const intentDescriptions: Record<MessageIntent, string> = {
 interface MessageHistoryEntry {
   storedAt: string;
   submission: MessageSubmissionResult;
-}
-
-function loadOverlayOpen(): boolean {
-  try {
-    return window.localStorage.getItem(MESSAGE_OVERLAY_OPEN_KEY) === "true";
-  } catch {
-    return false;
-  }
 }
 
 export interface MessageDraft {
@@ -242,92 +231,10 @@ interface MessageWorkspaceProps {
   members: GroupMembership[];
   historyMembers?: GroupMembership[];
   messageState?: GroupMessageState;
-  unreadCount?: number;
-  activityRevision?: number;
   client?: PortalClient;
-  presentation?: "overlay" | "route";
+  presentation?: "quick" | "route";
   onReadThrough?(sequence: number): void;
   onSubmit(command: SubmitMessageCommand): Promise<MessageSubmissionResult>;
-}
-
-function ExactWaitReply({
-  wait,
-  client,
-  onReplied,
-}: {
-  wait: OpenWait;
-  client: PortalClient;
-  onReplied(): void;
-}) {
-  const [answer, setAnswer] = useState("");
-  const [busy, setBusy] = useState(false);
-  const reply = async (value: Parameters<PortalClient["replyOpenWait"]>[1]["reply"]) => {
-    setBusy(true);
-    try {
-      await client.replyOpenWait(wait.id, {
-        expectedRunId: wait.runId,
-        expectedGeneration: wait.generation,
-        expectedReporterEpoch: wait.reporterEpoch,
-        expectedStatusRevision: wait.openedStatusRevision,
-        reply: value,
-      });
-      onReplied();
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <li className="action-progress-row">
-      <div>
-        <strong>{wait.kind.replaceAll("_", " ")}</strong>
-        <span>{wait.summary}</span>
-        <small>
-          {wait.memberId} · exact request {wait.providerRequestId}
-        </small>
-      </div>
-      {wait.kind === "permission" ? (
-        <div className="exact-wait-actions">
-          <button type="button" disabled={busy} onClick={() => void reply({ kind: "deny" })}>
-            Deny
-          </button>
-          <button type="button" disabled={busy} onClick={() => void reply({ kind: "allow-once" })}>
-            Allow once
-          </button>
-        </div>
-      ) : wait.kind === "plan_approval" ? (
-        <div className="exact-wait-actions">
-          <button type="button" disabled={busy} onClick={() => void reply({ kind: "reject-plan" })}>
-            Reject plan
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void reply({ kind: "approve-plan" })}
-          >
-            Approve plan
-          </button>
-        </div>
-      ) : (
-        <form
-          className="exact-wait-actions"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void reply({ kind: "answer", text: answer });
-          }}
-        >
-          <input
-            aria-label={`Reply to ${wait.kind} from ${wait.memberId}`}
-            value={answer}
-            onChange={(event) => setAnswer(event.target.value)}
-            required
-          />
-          <button type="submit" disabled={busy || answer.trim().length === 0}>
-            Reply
-          </button>
-        </form>
-      )}
-    </li>
-  );
 }
 
 function ConfirmClearHistoryDialog({
@@ -392,14 +299,11 @@ export function MessageWorkspace({
   members,
   historyMembers = members,
   messageState,
-  unreadCount = 0,
-  activityRevision = 0,
   client = api,
-  presentation = "overlay",
+  presentation = "quick",
   onReadThrough,
   onSubmit,
 }: MessageWorkspaceProps) {
-  const [open, setOpen] = useState(() => presentation === "route" || loadOverlayOpen());
   const [composing, setComposing] = useState(false);
   const [audienceKind, setAudienceKind] = useState<AudienceKind>("dm");
   const [recipientIds, setRecipientIds] = useState<string[]>(
@@ -414,7 +318,6 @@ export function MessageWorkspace({
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
   const [promptWhenReady, setPromptWhenReady] = useState(false);
-  const [actionWorkspace, setActionWorkspace] = useState<AgentActionWorkspace>();
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const contextKey = `${group.id}:${members.map((member) => member.memberId).join(",")}`;
@@ -460,7 +363,7 @@ export function MessageWorkspace({
   }, []);
 
   useEffect(() => {
-    if (messageState === undefined) return;
+    if (messageState === undefined || presentation !== "route") return;
     let cancelled = false;
     void client
       .loadMessages(group.id, { limit: DEFAULT_MESSAGE_PAGE_SIZE })
@@ -507,65 +410,8 @@ export function MessageWorkspace({
     messageState?.latestGroupSeq,
     messageState?.activeDeliveryCount,
     messageState?.failedRecipientMemberIds.join(","),
+    presentation,
   ]);
-
-  const refreshActions = () => {
-    void client
-      .loadActionWorkspace(group.id)
-      .then(setActionWorkspace)
-      .catch((cause: unknown) =>
-        setError(cause instanceof Error ? cause.message : "Unable to load action progress"),
-      );
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    void client
-      .loadActionWorkspace(group.id)
-      .then((workspace) => {
-        if (!cancelled) setActionWorkspace(workspace);
-      })
-      .catch((cause: unknown) => {
-        if (!cancelled)
-          setError(cause instanceof Error ? cause.message : "Unable to load action progress");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activityRevision, client, group.id]);
-
-  useEffect(() => {
-    if (presentation === "route") {
-      setOpen(true);
-      return;
-    }
-    try {
-      window.localStorage.setItem(MESSAGE_OVERLAY_OPEN_KEY, String(open));
-    } catch {
-      // The overlay remains usable when browser storage is blocked.
-    }
-  }, [open, presentation]);
-
-  useEffect(() => {
-    if (!open || presentation === "route") return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || composing || confirmingClear) return;
-      const overlay = document.getElementById("message-overlay");
-      const target = event.target;
-      if (
-        target instanceof Node &&
-        target !== launcherRef.current &&
-        overlay?.contains(target) !== true
-      ) {
-        return;
-      }
-      event.preventDefault();
-      setOpen(false);
-      requestAnimationFrame(() => launcherRef.current?.focus());
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [composing, confirmingClear, open, presentation]);
 
   useEffect(() => {
     const dialog = composerDialogRef.current;
@@ -612,8 +458,10 @@ export function MessageWorkspace({
   const latestMessageId = groupHistory.at(-1)?.submission.message.id;
 
   useEffect(() => {
-    if (open && messageState !== undefined) onReadThrough?.(messageState.latestGroupSeq);
-  }, [messageState?.latestGroupSeq, onReadThrough, open]);
+    if (presentation === "route" && messageState !== undefined) {
+      onReadThrough?.(messageState.latestGroupSeq);
+    }
+  }, [messageState?.latestGroupSeq, onReadThrough, presentation]);
 
   const scrollToLatest = () => {
     const viewport = historyRef.current;
@@ -623,10 +471,10 @@ export function MessageWorkspace({
   };
 
   useEffect(() => {
-    if (!open) return;
+    if (presentation !== "route") return;
     const frame = requestAnimationFrame(scrollToLatest);
     return () => cancelAnimationFrame(frame);
-  }, [group.id, open]);
+  }, [group.id, presentation]);
 
   useEffect(() => {
     const previous = previousTimelineRef.current;
@@ -771,7 +619,6 @@ export function MessageWorkspace({
         } else {
           setError(undefined);
         }
-        refreshActions();
       } else {
         setError(undefined);
       }
@@ -802,31 +649,21 @@ export function MessageWorkspace({
 
   return (
     <>
-      {presentation === "overlay" && (
+      {presentation === "quick" && (
         <button
           ref={launcherRef}
           type="button"
-          className="message-launcher"
-          aria-label="Messages"
-          aria-expanded={open}
-          aria-controls="message-overlay"
-          title={open ? "Close messages" : "Open messages"}
-          onClick={() => setOpen((current) => !current)}
+          className="message-launcher quick-message-launcher"
+          aria-label={`Compose message to ${group.name}`}
+          title={`Compose message to ${group.name}`}
+          disabled={members.length === 0}
+          onClick={() => setComposing(true)}
         >
           <MessageCircle aria-hidden="true" size={20} />
-          {unreadCount > 0 && (
-            <span className="message-launcher-badge" aria-label={`${unreadCount} unread messages`}>
-              {unreadCount > 99 ? "99+" : unreadCount}
-            </span>
-          )}
         </button>
       )}
-      {open && (
-        <section
-          id={presentation === "overlay" ? "message-overlay" : undefined}
-          className={presentation === "overlay" ? "message-overlay" : "message-route"}
-          aria-label={presentation === "overlay" ? "Messages overlay" : "Group messages"}
-        >
+      {presentation === "route" && (
+        <section className="message-route" aria-label="Group messages">
           <section className="message-panel" aria-label="Messages">
             <header className="message-panel-header">
               <div className="message-toolbar-title">
@@ -839,29 +676,15 @@ export function MessageWorkspace({
                 </span>
               </div>
               <div className="message-toolbar-actions">
-                {presentation === "overlay" && (
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label="Clear all message history"
-                    title="Delete stored message history"
-                    disabled={groupHistory.length === 0}
-                    onClick={() => setConfirmingClear(true)}
-                  >
-                    <Trash2 aria-hidden="true" size={15} />
-                  </button>
-                )}
                 <button
                   type="button"
                   className="icon-button"
-                  aria-label="Close messages"
-                  title="Close messages"
-                  onClick={() => {
-                    setOpen(false);
-                    requestAnimationFrame(() => launcherRef.current?.focus());
-                  }}
+                  aria-label="Clear all message history"
+                  title="Delete stored message history"
+                  disabled={groupHistory.length === 0}
+                  onClick={() => setConfirmingClear(true)}
                 >
-                  <X aria-hidden="true" size={15} />
+                  <Trash2 aria-hidden="true" size={15} />
                 </button>
               </div>
             </header>
@@ -892,44 +715,6 @@ export function MessageWorkspace({
                   <CircleArrowDown aria-hidden="true" size={15} />
                   New messages
                 </button>
-              )}
-            </section>
-            <section className="action-progress" aria-label="Action progress and exact waits">
-              <header>
-                <strong>Action progress &amp; exact waits</strong>
-                <span>Separate from communication delivery and browser unread</span>
-              </header>
-              {(actionWorkspace?.openWaits.filter((wait) =>
-                ["open", "replying"].includes(wait.state),
-              ).length ?? 0) > 0 && (
-                <ul>
-                  {actionWorkspace?.openWaits
-                    .filter((wait) => ["open", "replying"].includes(wait.state))
-                    .map((wait) => (
-                      <ExactWaitReply
-                        key={wait.id}
-                        wait={wait}
-                        client={client}
-                        onReplied={refreshActions}
-                      />
-                    ))}
-                </ul>
-              )}
-              {(actionWorkspace?.actions.length ?? 0) === 0 ? (
-                <p>No durable prompt actions.</p>
-              ) : (
-                <ul>
-                  {actionWorkspace?.actions
-                    .slice(-10)
-                    .reverse()
-                    .map((action) => (
-                      <li key={action.id} className="action-progress-row">
-                        <span>{action.target.memberId}</span>
-                        <strong>{action.state}</strong>
-                        <small>{action.id}</small>
-                      </li>
-                    ))}
-                </ul>
               )}
             </section>
             <div className="message-prompt">

@@ -26,11 +26,21 @@ export class TerminalTransport {
   #attempt = 0;
   #heartbeat: number | undefined;
   #reconnect: number | undefined;
+  #takeoverOnReconnect = false;
+  #requestedRole: TerminalRole;
+  #cols: number;
+  #rows: number;
+  #initialized = false;
 
-  public constructor(private readonly options: TerminalTransportOptions) {}
+  public constructor(private readonly options: TerminalTransportOptions) {
+    this.#requestedRole = options.requestedRole;
+    this.#cols = options.cols;
+    this.#rows = options.rows;
+  }
 
-  public connect(takeover = false): void {
+  public connect(takeover = this.#takeoverOnReconnect): void {
     this.disposeSocket();
+    this.#initialized = false;
     this.options.onState(this.#attempt === 0 ? "connecting" : "reconnecting");
     const url = new URL(this.options.endpoint.streamUrl, window.location.href);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -45,10 +55,10 @@ export class TerminalTransport {
           runId: this.options.endpoint.runId,
           runGeneration: this.options.runGeneration,
           viewerId: this.options.viewerId,
-          requestedRole: this.options.requestedRole,
+          requestedRole: this.#requestedRole,
           takeover,
-          cols: this.options.cols,
-          rows: this.options.rows,
+          cols: this.#cols,
+          rows: this.#rows,
         }),
       );
     });
@@ -65,7 +75,6 @@ export class TerminalTransport {
         else this.#lease = frame.lease;
       }
       if (frame.type === "welcome") {
-        this.options.onState("connected");
         this.#heartbeat = window.setInterval(
           () =>
             this.send({
@@ -75,10 +84,18 @@ export class TerminalTransport {
           Math.max(1_000, Math.floor(frame.limits.heartbeatMs / 2)),
         );
       }
+      if (frame.type === "baseline" || frame.type === "reset") {
+        this.#initialized = true;
+        this.options.onState("connected");
+      }
       this.options.onFrame(frame);
     });
     socket.addEventListener("close", (event) => {
       this.disposeSocket();
+      if (event.code === 4001) {
+        this.#takeoverOnReconnect = false;
+        this.#requestedRole = "observer";
+      }
       if (this.#closed || event.code === 1000) {
         this.options.onState("closed");
         return;
@@ -95,26 +112,30 @@ export class TerminalTransport {
   }
 
   public input(data: string): void {
-    if (this.#lease === undefined) return;
+    if (!this.#initialized || this.#lease === undefined) return;
     this.send({ type: "input", leaseId: this.#lease.id, sequence: this.#sequence++, data });
   }
 
   public paste(data: string): void {
-    if (this.#lease === undefined) return;
+    if (!this.#initialized || this.#lease === undefined) return;
     this.send({ type: "paste", leaseId: this.#lease.id, data });
   }
 
   public focus(focused: boolean): void {
-    if (this.#lease === undefined) return;
+    if (!this.#initialized || this.#lease === undefined) return;
     this.send({ type: "focus", leaseId: this.#lease.id, focused });
   }
 
   public resize(cols: number, rows: number): void {
+    this.#cols = cols;
+    this.#rows = rows;
     if (this.#lease === undefined) return;
     this.send({ type: "resize", leaseId: this.#lease.id, cols, rows });
   }
 
   public takeover(): void {
+    this.#requestedRole = "controller";
+    this.#takeoverOnReconnect = true;
     this.send({
       type: "takeover",
       ...(this.#lease === undefined ? {} : { expectedLeaseId: this.#lease.id }),
@@ -122,6 +143,8 @@ export class TerminalTransport {
   }
 
   public releaseController(): void {
+    this.#requestedRole = "observer";
+    this.#takeoverOnReconnect = false;
     if (this.#lease === undefined) return;
     this.send({ type: "release", leaseId: this.#lease.id });
     this.#lease = undefined;

@@ -1,7 +1,7 @@
 ---
 title: Security boundaries
 description: Loopback authority, credentials, terminal control, extensions, and package integrity
-ms.date: 2026-08-30
+ms.date: 2026-08-31
 ms.topic: concept
 ---
 
@@ -11,7 +11,12 @@ The daemon binds to loopback by default. HTTP and WebSocket operations enforce H
 
 ## Runtime authority
 
-Only the controller lease can send terminal input, paste, focus, resize, or approved effects. Observers are read-only. OSC 52 reads are rejected. Clipboard payloads, raw terminal output, and provider transcripts do not enter ordinary logs or events.
+Only the controller lease can send terminal input, paste, focus, resize, or
+approve effects. Observers are read-only. The daemon consumes OSC 52 reads,
+malformed writes, unsupported terminal string controls, and clipboard writes
+seen by observers. Valid controller writes remain memory-only until approval or
+expiry. Clipboard payloads are not rendered and do not enter terminal history,
+ordinary logs, events, or persistence.
 
 ## Supply chain and state
 

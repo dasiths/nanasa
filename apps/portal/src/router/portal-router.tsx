@@ -1,19 +1,12 @@
 import { type MouseEvent, useCallback, useEffect, useState } from "react";
 import type { WorkspaceSection } from "../hooks/use-portal-preferences.js";
+import {
+  globalDestinations,
+  groupDestinations,
+  type GlobalDestination,
+} from "./portal-destinations.js";
 
-export const globalDestinations = [
-  "attention",
-  "agents",
-  "checkouts",
-  "extensions",
-  "settings",
-  "diagnostics",
-  "help",
-  "release",
-  "service",
-  "remote",
-] as const;
-export type GlobalDestination = (typeof globalDestinations)[number];
+export { globalDestinations, type GlobalDestination } from "./portal-destinations.js";
 
 export type PortalRoute =
   | { kind: "home" }
@@ -21,12 +14,7 @@ export type PortalRoute =
   | { kind: "global"; destination: GlobalDestination }
   | { kind: "invalid"; path: string };
 
-const workspaceSections: readonly WorkspaceSection[] = [
-  "terminals",
-  "messages",
-  "activity",
-  "settings",
-];
+const workspaceSections: readonly WorkspaceSection[] = groupDestinations.map(({ id }) => id);
 
 export function parsePortalRoute(pathname: string): PortalRoute {
   const segments = pathname.split("/").filter(Boolean).map(decodeURIComponent);

@@ -25,19 +25,34 @@ test("deep links, reload, history, keyboard palette, and focus remain coherent",
   nanasa,
 }) => {
   const { group } = await nanasa.seedGroup("Route team", ["Navigator"]);
+  await nanasa.startAll(group.id);
   await page.goto(deepLink(nanasa, `/groups/${group.id}/messages`));
   await expect(page).toHaveURL(new RegExp(`/groups/${group.id}/messages$`));
   await expect(page.getByRole("region", { name: "Group messages" })).toBeVisible();
 
   await page.reload();
   await expect(page.getByRole("region", { name: "Group messages" })).toBeVisible();
-  await page.getByRole("link", { name: "activity", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Route team sections" })
+    .getByRole("link", { name: "Attention", exact: true })
+    .click();
   await expect(page).toHaveURL(new RegExp(`/groups/${group.id}/activity$`));
-  await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Attention" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Group messages" })).toHaveCount(0);
   await page.goBack();
   await expect(page.getByRole("region", { name: "Group messages" })).toBeVisible();
   await page.goForward();
   await expect(page.locator("h1", { hasText: "Route team" })).toBeFocused();
+
+  await page.goto(`${nanasa.baseUrl}/groups/${group.id}/activity#wait-example`);
+  await expect(page).toHaveURL(new RegExp(`/groups/${group.id}/activity#wait-example$`));
+  await expect(page.getByRole("heading", { name: "Attention" })).toBeVisible();
+  await page.goto(`${nanasa.baseUrl}/groups/${group.id}/activity#action-example`);
+  await expect(page).toHaveURL(new RegExp(`/groups/${group.id}/activity#action-example$`));
+  const currentRun = (await nanasa.snapshot()).runs.find((run) => run.groupId === group.id)!;
+  await page.goto(`${nanasa.baseUrl}/groups/${group.id}/terminals/${currentRun.id}`);
+  await expect(page).toHaveURL(new RegExp(`/groups/${group.id}/terminals/${currentRun.id}$`));
+  await expect(page.getByRole("region", { name: "Agent terminals" })).toBeVisible();
 
   await page.keyboard.press("Control+k");
   const palette = page.getByRole("dialog", { name: "Command palette" });
@@ -68,15 +83,17 @@ test("preferences synchronize, mobile switching works, and xterm mounts stay sta
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(page.locator(`[data-terminal-mount-id="${mountId}"]`)).toHaveCount(1);
 
-  await page.getByRole("link", { name: "messages", exact: true }).click();
+  await page.getByRole("link", { name: "Messages", exact: true }).click();
   await expect(page.getByRole("region", { name: "Group messages" })).toBeVisible();
-  await page.getByRole("link", { name: "terminals", exact: true }).click();
+  await page.getByRole("link", { name: "Terminals", exact: true }).click();
   await expect(page.locator(`[data-terminal-mount-id="${mountId}"]`)).toBeVisible();
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.getByLabel("Switch group")).toBeVisible();
+  await page.getByRole("button", { name: "Open application menu" }).click();
+  const mobileMenu = page.getByRole("dialog", { name: "Nanasa" });
+  await expect(mobileMenu.getByRole("link", { name: "Stable team" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-  await page.getByLabel("Switch group").selectOption(group.id);
+  await mobileMenu.getByRole("link", { name: "Stable team" }).click();
   await expect(page).toHaveURL(new RegExp(`/groups/${group.id}/terminals`));
 });
 
@@ -94,7 +111,8 @@ test("portal has no serious or critical a11y findings at 200 percent zoom", asyn
   );
   await expectNoHighImpactViolations(page);
 
-  await page.getByRole("link", { name: "settings", exact: true }).last().click();
+  await page.locator('summary[aria-label="Portal utilities"]').click();
+  await page.getByRole("link", { name: "Preferences", exact: true }).click();
   await page.getByLabel("Motion").selectOption("reduce");
   await page.getByLabel("Contrast").selectOption("forced");
   await expectNoHighImpactViolations(page);

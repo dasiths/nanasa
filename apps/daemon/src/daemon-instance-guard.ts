@@ -40,17 +40,22 @@ export class DaemonLeadershipError extends Error {
   }
 }
 
+export function linuxProcessStartIdentityFromStat(stat: string): string | undefined {
+  const commandEnd = stat.lastIndexOf(")");
+  if (commandEnd < 0) return undefined;
+  const fields = stat
+    .slice(commandEnd + 2)
+    .trim()
+    .split(/\s+/);
+  if (fields[0] === "Z") return undefined;
+  const startTicks = fields[19];
+  return startTicks === undefined ? undefined : `linux-proc-start:${startTicks}`;
+}
+
 export function linuxProcessStartIdentity(processId: number): string | undefined {
   try {
     const stat = readFileSync(`/proc/${processId}/stat`, "utf8");
-    const commandEnd = stat.lastIndexOf(")");
-    if (commandEnd < 0) return undefined;
-    const fields = stat
-      .slice(commandEnd + 2)
-      .trim()
-      .split(/\s+/);
-    const startTicks = fields[19];
-    return startTicks === undefined ? undefined : `linux-proc-start:${startTicks}`;
+    return linuxProcessStartIdentityFromStat(stat);
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
     throw error;

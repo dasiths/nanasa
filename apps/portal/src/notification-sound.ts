@@ -1,10 +1,13 @@
-const SOUND_DEDUPE_KEY = "nanasa.portal.attention-sound.v1";
-const SOUND_DEDUPE_MS = 5_000;
+const NOTIFICATION_CLAIMS_KEY = "nanasa.portal.notification-claims.v1";
+const NOTIFICATION_CLAIM_MS = 24 * 60 * 60 * 1_000;
+const NOTIFICATION_CLAIM_LIMIT = 512;
 
 interface AttentionSoundRequest {
   enabled: boolean;
   eventId: string;
 }
+
+export type NotificationDeliveryClaim = "claimed" | "duplicate" | "unavailable";
 
 function eventDigest(value: string): string {
   let digest = 2_166_136_261;
@@ -15,34 +18,63 @@ function eventDigest(value: string): string {
   return (digest >>> 0).toString(16).padStart(8, "0");
 }
 
-function claimEvent(eventId: string): boolean {
-  const now = Date.now();
-  const digest = eventDigest(eventId);
+interface NotificationClaim {
+  key: string;
+  expiresAt: number;
+}
+
+function storedClaims(value: string | null, now: number): NotificationClaim[] {
+  if (value === null) return [];
   try {
-    const previous = JSON.parse(window.localStorage.getItem(SOUND_DEDUPE_KEY) ?? "null") as {
-      eventDigest?: string;
-      expiresAt?: number;
-    } | null;
-    if (
-      previous?.eventDigest === digest &&
-      typeof previous.expiresAt === "number" &&
-      previous.expiresAt > now
-    ) {
-      return false;
-    }
-    const candidate = { eventDigest: digest, expiresAt: now + SOUND_DEDUPE_MS };
-    window.localStorage.setItem(SOUND_DEDUPE_KEY, JSON.stringify(candidate));
-    return window.localStorage.getItem(SOUND_DEDUPE_KEY) === JSON.stringify(candidate);
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (claim): claim is NotificationClaim =>
+        typeof claim === "object" &&
+        claim !== null &&
+        typeof (claim as NotificationClaim).key === "string" &&
+        typeof (claim as NotificationClaim).expiresAt === "number" &&
+        (claim as NotificationClaim).expiresAt > now,
+    );
   } catch {
-    return false;
+    return [];
   }
 }
 
-async function claimBrowserLocalEvent(eventId: string): Promise<boolean> {
-  if (navigator.locks === undefined) return false;
-  return navigator.locks.request("nanasa-attention-sound", { mode: "exclusive" }, () =>
-    claimEvent(eventId),
-  );
+function claimEvent(channel: "desktop" | "sound", eventId: string): NotificationDeliveryClaim {
+  const now = Date.now();
+  const key = eventDigest(`${channel}:${eventId}`);
+  try {
+    const claims = storedClaims(window.localStorage.getItem(NOTIFICATION_CLAIMS_KEY), now);
+    if (claims.some((claim) => claim.key === key)) return "duplicate";
+    const candidate = [
+      { key, expiresAt: now + NOTIFICATION_CLAIM_MS },
+      ...claims.sort((left, right) => right.expiresAt - left.expiresAt),
+    ].slice(0, NOTIFICATION_CLAIM_LIMIT);
+    const serialized = JSON.stringify(candidate);
+    window.localStorage.setItem(NOTIFICATION_CLAIMS_KEY, serialized);
+    return window.localStorage.getItem(NOTIFICATION_CLAIMS_KEY) === serialized
+      ? "claimed"
+      : "unavailable";
+  } catch {
+    return "unavailable";
+  }
+}
+
+export async function claimNotificationDelivery(
+  channel: "desktop" | "sound",
+  eventId: string,
+): Promise<NotificationDeliveryClaim> {
+  try {
+    if (navigator.locks === undefined) return "unavailable";
+    return await navigator.locks.request(
+      "nanasa-notification-delivery",
+      { mode: "exclusive" },
+      () => claimEvent(channel, eventId),
+    );
+  } catch {
+    return "unavailable";
+  }
 }
 
 export async function playAttentionSound(request: AttentionSoundRequest): Promise<boolean> {
@@ -51,7 +83,7 @@ export async function playAttentionSound(request: AttentionSoundRequest): Promis
     request.eventId.length === 0 ||
     navigator.userActivation?.hasBeenActive !== true ||
     typeof window.AudioContext !== "function" ||
-    !(await claimBrowserLocalEvent(request.eventId))
+    (await claimNotificationDelivery("sound", request.eventId)) !== "claimed"
   ) {
     return false;
   }

@@ -177,6 +177,15 @@ export class AgentActionService {
     const action = this.store.getAgentAction(actionId);
     this.policy.assertCancel(principal, action);
     if (TERMINAL_ACTION_STATES.has(action.state)) return action;
+    if (
+      this.store.listActionAttempts(action.id).some((attempt) => attempt.state === "submitting")
+    ) {
+      throw new DomainError(
+        "agent_action_submission_in_progress",
+        "The action has crossed the terminal-input commit boundary",
+        409,
+      );
+    }
     if (!["created", "deferred"].includes(action.state)) {
       throw new DomainError(
         "agent_action_cancel_requires_ack",

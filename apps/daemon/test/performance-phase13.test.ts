@@ -450,7 +450,7 @@ describe("Phase 13 measured performance and backpressure", () => {
     store.recordProcessStatus(run.id, {
       event: "process.alive",
       eventId: "performance-process",
-      observedAt: "2026-08-30T00:00:00.000Z",
+      observedAt: new Date().toISOString(),
       process: processObservation.process,
     });
     store.ingestAgentStatusEvent(

@@ -53,6 +53,10 @@ function membership(id = "agent_one"): GroupMembership {
   };
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
 function filesBeneath(path: string): string[] {
   const result: string[] = [];
   for (const entry of readdirSync(path, { withFileTypes: true })) {
@@ -340,15 +344,64 @@ describe("credentials, trust, model precedence, and MCP-independent provisioning
       }),
     ).not.toContain("membership-model");
     expect(result.command.join(" ")).not.toContain("additional-mcp-config");
+    expect(result.command).toEqual(
+      expect.arrayContaining([
+        "--plugin-dir",
+        join(result.snapshot.overlayRoot, "copilot-status-plugin"),
+      ]),
+    );
     const generated = filesBeneath(result.snapshot.overlayRoot);
-    expect(generated.some((path) => path.endsWith("status-hook.mjs"))).toBe(true);
+    expect(generated.some((path) => path.endsWith("copilot-status-plugin/status-hook.mjs"))).toBe(
+      true,
+    );
+    expect(generated.some((path) => path.endsWith("copilot-status-plugin/plugin.json"))).toBe(true);
     expect(generated.some((path) => path.endsWith(".agent.md"))).toBe(true);
-    expect(generated.some((path) => path.endsWith("hooks.json"))).toBe(true);
+    expect(
+      generated.some((path) =>
+        path.endsWith("copilot-status-plugin/com.github.copilot/hooks/hooks.json"),
+      ),
+    ).toBe(true);
     expect(generated.map((path) => readFileSync(path, "utf8")).join("\n")).not.toContain(
       "top-secret",
     );
     expect(Object.isFrozen(result.snapshot)).toBe(true);
     expect(Object.isFrozen(result.snapshot.command)).toBe(true);
+  });
+
+  it("generates an OpenCode reporter with a discovered JavaScript extension", () => {
+    const overlay = ProviderAdapterRegistry.builtIn().get("opencode").planOverlay({
+      membershipId: "agent_one",
+      memberAlias: "Agent One",
+      stateRoot: "/state",
+      overlayRoot: "/overlay",
+      statusEndpointUrl: "http://127.0.0.1:3210/api/v1/agent-status/events",
+      readOnly: false,
+    });
+
+    expect(overlay.generatedIdentities).toContain("plugins/nanasa-status.js");
+    expect(overlay.generatedIdentities).not.toContain("plugins/nanasa-status.mjs");
+  });
+
+  it("shell-quotes Copilot status hook paths", () => {
+    const overlayRoot = "/tmp/repo $(touch injected) 'quoted'/overlay";
+    const overlay = ProviderAdapterRegistry.builtIn().get("copilot").planOverlay({
+      membershipId: "agent_one",
+      memberAlias: "Agent One",
+      stateRoot: "/state",
+      overlayRoot,
+      statusEndpointUrl: "http://127.0.0.1:3210/api/v1/agent-status/events",
+      readOnly: false,
+    });
+    const hooks = overlay.files.find((file) => file.relativePath.endsWith("hooks.json"));
+    expect(hooks).toBeDefined();
+    const parsed = JSON.parse(hooks!.content) as {
+      hooks: { sessionStart: Array<{ bash: string }> };
+    };
+    const reporterPath = join(overlayRoot, "copilot-status-plugin", "status-hook.mjs");
+
+    expect(parsed.hooks.sessionStart[0]?.bash).toBe(
+      `${shellQuote(process.execPath)} ${shellQuote(reporterPath)} copilot ${shellQuote("sessionStart")}`,
+    );
   });
 });
 

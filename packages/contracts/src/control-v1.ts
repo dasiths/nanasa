@@ -55,6 +55,12 @@ export const ControlMetadataSchema = z
 export const OperatorBootstrapCommandSchema = z
   .object({ token: z.string().trim().min(32).max(256) })
   .strict();
+export const OperatorBootstrapGrantSchema = z
+  .object({
+    fragment: z.string().regex(/^nanasa-bootstrap=[A-Za-z0-9_-]{32,256}$/),
+    expiresAt: TimestampSchema,
+  })
+  .strict();
 export const OperatorSessionSchema = z
   .object({
     operatorId: IdentifierSchema,
@@ -67,6 +73,7 @@ export type Principal = z.infer<typeof PrincipalSchema>;
 export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
 export type ControlMetadata = z.infer<typeof ControlMetadataSchema>;
 export type OperatorBootstrapCommand = z.infer<typeof OperatorBootstrapCommandSchema>;
+export type OperatorBootstrapGrant = z.infer<typeof OperatorBootstrapGrantSchema>;
 export type OperatorSession = z.infer<typeof OperatorSessionSchema>;
 
 export const RoleIdSchema = z

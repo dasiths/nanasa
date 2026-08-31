@@ -55,6 +55,7 @@ help:
 		'  make first-run     Install, initialize, set up, diagnose, and start in order' \
 		'  make dev           Run daemon and portal development watchers (Ctrl+C to stop)' \
 		'  make portal        Open the production base URL for an authenticated session' \
+		'  make portal-auth   Mint and open a one-use production portal login URL' \
 		'  make portal-dev    Open the development base URL for an authenticated session' \
 		'' \
 		'  First start prints an exact one-use URL containing a #fragment; open it exactly.' \
@@ -94,7 +95,7 @@ help:
 # Application lifecycle
 # -----------------------------------------------------------------------------
 
-.PHONY: install init reset-alpha setup doctor build package start run first-run dev portal portal-dev
+.PHONY: install init reset-alpha setup doctor build package start run first-run dev portal portal-auth portal-dev
 
 install:
 	@$(call run_with_registry_env,pnpm install --frozen-lockfile)
@@ -135,6 +136,17 @@ dev:
 
 portal:
 	@$(call open_url,PORTAL_URL)
+
+portal-auth: package
+	@url="$$(node bin/nanasa.js auth portal --output text)" || exit $$?; \
+	if [ -n "$$BROWSER" ]; then \
+		"$$BROWSER" "$$url"; \
+	elif command -v xdg-open >/dev/null 2>&1; then \
+		"$$(command -v xdg-open)" "$$url"; \
+	else \
+		printf '%s\n' "Unable to open portal login URL: set BROWSER or install xdg-open." >&2; \
+		exit 1; \
+	fi
 
 portal-dev:
 	@$(call open_url,DEV_PORTAL_URL)

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CLI_COMMAND_REGISTRY } from "../src/cli/command-registry.js";
-import { runControlCli } from "../src/cli/control.js";
+import { portalBootstrapUrl, runControlCli } from "../src/cli/control.js";
 import {
   CONTROL_ROUTE_REGISTRY,
   generateControlOpenApi,
@@ -152,6 +152,21 @@ describe("typed control facade registries", () => {
       "rollback",
     ]);
     expect(CLI_COMMAND_REGISTRY.every((command) => command.summary.length > 0)).toBe(true);
+    expect(CLI_COMMAND_REGISTRY.find((command) => command.id === "auth.portal")).toMatchObject({
+      command: "portal",
+      method: "POST",
+      output: "text",
+      mutating: true,
+    });
+  });
+
+  it("constructs a portal bootstrap URL without encoding the fragment separator", () => {
+    expect(
+      portalBootstrapUrl(
+        "http://127.0.0.1:3210/api/v1",
+        "nanasa-bootstrap=abcdefghijklmnopqrstuvwxyz012345",
+      ),
+    ).toBe("http://127.0.0.1:3210/#nanasa-bootstrap=abcdefghijklmnopqrstuvwxyz012345");
   });
 
   it("binds every HTTP mutation command to the shared route idempotency policy", () => {

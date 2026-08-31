@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { PortalClient } from "../api.js";
-import { CheckoutWorktreeDialog } from "./checkout-worktree-dialog.js";
+import { CheckoutWorkspace } from "./checkout-workspace.js";
 
 const timestamp = "2026-08-29T12:00:00.000Z";
 const repository = {
@@ -81,19 +81,13 @@ function client(overrides: Partial<PortalClient> = {}): PortalClient {
   } as PortalClient;
 }
 
-describe("CheckoutWorktreeDialog", () => {
+describe("CheckoutWorkspace", () => {
   it("submits branch and base through the managed-worktree route", async () => {
     const user = userEvent.setup();
     const portal = client({ createWorktree: vi.fn().mockResolvedValue({}) });
     const changed = vi.fn().mockResolvedValue(undefined);
     render(
-      <CheckoutWorktreeDialog
-        client={portal}
-        snapshot={snapshot}
-        config={config}
-        onChanged={changed}
-        onClose={vi.fn()}
-      />,
+      <CheckoutWorkspace client={portal} snapshot={snapshot} config={config} onChanged={changed} />,
     );
     await user.type(screen.getByLabelText("New branch"), "feature/new");
     await user.click(screen.getByRole("button", { name: "Create managed worktree" }));
@@ -116,12 +110,11 @@ describe("CheckoutWorktreeDialog", () => {
       .mockResolvedValueOnce({});
     const portal = client({ removeWorktree });
     render(
-      <CheckoutWorktreeDialog
+      <CheckoutWorkspace
         client={portal}
         snapshot={snapshot}
         config={config}
         onChanged={vi.fn().mockResolvedValue(undefined)}
-        onClose={vi.fn()}
       />,
     );
     await user.click(screen.getByRole("button", { name: "Remove worktree feature/one" }));

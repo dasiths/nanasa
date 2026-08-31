@@ -1,11 +1,12 @@
 import {
+  type AgentRun,
   TERMINAL_PROTOCOL,
+  type TerminalClientFrame,
   TerminalClientFrameSchema,
   TerminalEndpointStatusSchema,
-  TerminalServerFrameSchema,
-  type AgentRun,
-  type TerminalClientFrame,
+  type TerminalReadResult,
   type TerminalServerFrame,
+  TerminalServerFrameSchema,
 } from "@nanasa/contracts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type WebSocket from "ws";
@@ -33,6 +34,64 @@ function messageText(data: WebSocket.RawData): string {
   return Buffer.isBuffer(data)
     ? data.toString("utf8")
     : Buffer.from(new Uint8Array(data)).toString("utf8");
+}
+
+export async function initializeTerminalAttachment(options: {
+  read(): Promise<Pick<TerminalReadResult, "text" | "truncated">>;
+  sendBaseline(baseline: Pick<TerminalReadResult, "text" | "truncated">): boolean;
+  sendReset(): boolean;
+  attach(): void;
+  timeoutMs?: number;
+}): Promise<void> {
+  let timeout: NodeJS.Timeout | undefined;
+  let baseline: Pick<TerminalReadResult, "text" | "truncated">;
+  try {
+    baseline = await Promise.race([
+      options.read(),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("terminal_history_timeout")),
+          options.timeoutMs ?? TERMINAL_HANDSHAKE_TIMEOUT_MS,
+        );
+        timeout.unref();
+      }),
+    ]);
+  } catch {
+    if (options.sendReset()) options.attach();
+    return;
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+  if (options.sendBaseline(baseline)) options.attach();
+}
+
+export function boundedBaselineFrame(
+  sequence: number,
+  baseline: Pick<TerminalReadResult, "text" | "truncated">,
+): Extract<TerminalServerFrame, { type: "baseline" }> {
+  const frame = (data: string, truncated: boolean) => ({
+    type: "baseline" as const,
+    sequence,
+    data,
+    truncated,
+  });
+  const encodedBytes = (candidate: ReturnType<typeof frame>) =>
+    Buffer.byteLength(JSON.stringify(candidate), "utf8");
+  const full = frame(baseline.text, baseline.truncated);
+  if (encodedBytes(full) <= TERMINAL_LIMITS.maxFrameBytes) return full;
+
+  let low = 0;
+  let high = baseline.text.length;
+  while (low < high) {
+    const start = Math.floor((low + high) / 2);
+    if (encodedBytes(frame(baseline.text.slice(start), true)) <= TERMINAL_LIMITS.maxFrameBytes) {
+      high = start;
+    } else {
+      low = start + 1;
+    }
+  }
+  if (/^[\uDC00-\uDFFF]/.test(baseline.text.slice(low))) low += 1;
+  return frame(baseline.text.slice(low), true);
 }
 
 export class TerminalGateway {
@@ -119,6 +178,9 @@ export class TerminalGateway {
     let windowBytes = 0;
     let windowMessages = 0;
     let closed = false;
+    let initializing = false;
+    let pendingResize: Extract<TerminalClientFrame, { type: "resize" }> | undefined;
+    let attachmentSize = { cols: 120, rows: 40 };
     const effects = new TerminalEffectPolicy();
     let connectedRun: AgentRun | undefined;
 
@@ -152,6 +214,7 @@ export class TerminalGateway {
       exitSubscription?.dispose();
       pty?.close();
       const attachment = new AttachmentPty(run, role, { cols, rows }, { tmuxPath: this.tmuxPath });
+      attachmentSize = { cols, rows };
       pty = attachment;
       dataSubscription = attachment.onData((data) => {
         const filtered = effects.filter(data, viewer?.role === "controller");
@@ -215,7 +278,7 @@ export class TerminalGateway {
           });
           connectedRun = connected.run;
           viewer = connected.viewer;
-          send({
+          const welcome: TerminalServerFrame = {
             type: "welcome",
             version: 1,
             daemonEpoch: this.daemonEpoch,
@@ -236,25 +299,32 @@ export class TerminalGateway {
               read: true,
               checkpoints: true,
             },
-          });
-          void this.reads
-            .read({
-              runId: connected.run.id,
-              generation: connected.run.generation,
-              source: "history",
-              maxLines: 500,
-              maxBytes: 256 * 1024,
-            })
-            .then((baseline) =>
-              send({
-                type: "baseline",
-                sequence: sequence++,
-                data: baseline.text,
-                truncated: baseline.truncated,
+          };
+          if (!send(welcome)) return;
+          initializing = true;
+          void initializeTerminalAttachment({
+            read: () =>
+              this.reads.read({
+                runId: connected.run.id,
+                generation: connected.run.generation,
+                source: "history",
+                maxLines: 500,
+                maxBytes: 256 * 1024,
               }),
-            )
-            .catch(() => send({ type: "reset", reason: "history_lost" }));
-          attach(connected.run, viewer.role, frame.cols, frame.rows);
+            sendBaseline: (baseline) => send(boundedBaselineFrame(sequence++, baseline)),
+            sendReset: () => send({ type: "reset", reason: "history_lost" }),
+            attach: () => {
+              initializing = false;
+              attach(
+                connected.run,
+                connected.viewer.role,
+                pendingResize?.cols ?? frame.cols,
+                pendingResize?.rows ?? frame.rows,
+              );
+            },
+          }).catch((error: unknown) =>
+            close(1011, error instanceof Error ? error.message : "terminal_attachment_failed"),
+          );
           return;
         }
         if (frame.type === "hello") {
@@ -272,23 +342,34 @@ export class TerminalGateway {
           }
           return;
         }
+        if (initializing) {
+          if (frame.type === "resize") {
+            this.#control.assertController(request.params.runId, viewer.streamId, frame.leaseId);
+            pendingResize = frame;
+            return;
+          }
+          if (frame.type === "ack") return;
+          close(1008, "terminal_initializing");
+          return;
+        }
         if (frame.type === "takeover") {
           const lease = this.#control.takeover(
             request.params.runId,
             viewer.streamId,
             frame.expectedLeaseId,
           );
-          attach(connectedRun as AgentRun, "controller", 120, 40);
+          attach(connectedRun as AgentRun, "controller", attachmentSize.cols, attachmentSize.rows);
           send({ type: "lease", role: "controller", lease, reason: "taken-over" });
           return;
         }
         if (frame.type === "release") {
           this.#control.release(request.params.runId, viewer.streamId, frame.leaseId);
-          attach(connectedRun as AgentRun, "observer", 120, 40);
+          attach(connectedRun as AgentRun, "observer", attachmentSize.cols, attachmentSize.rows);
           send({ type: "lease", role: "observer", reason: "released" });
           return;
         }
         if (frame.type !== "ack") {
+          if (frame.type === "resize") attachmentSize = { cols: frame.cols, rows: frame.rows };
           this.#arbiter.dispatch(
             request.params.runId,
             viewer.streamId,

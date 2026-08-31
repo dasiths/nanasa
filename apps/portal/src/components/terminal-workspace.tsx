@@ -8,8 +8,9 @@ import type {
   TerminalEndpointState,
 } from "@nanasa/contracts";
 import {
+  BellOff,
+  BellRing,
   CircleAlert,
-  Copy,
   Grid2X2,
   LoaderCircle,
   Maximize2,
@@ -19,11 +20,12 @@ import {
   RefreshCw,
   Rows3,
 } from "lucide-react";
-import { type CSSProperties, useState } from "react";
+import { type CSSProperties, type ReactNode, useState } from "react";
 
 import type { PortalClient } from "../api.js";
 import { copyToClipboard } from "../copy-to-clipboard.js";
 import { usePortalPreferences } from "../hooks/use-portal-preferences.js";
+import { memberStatusView } from "../member-status.js";
 import { useTerminalEndpoint } from "../hooks/use-terminal-endpoint.js";
 import { TerminalConsole } from "../terminal/terminal-console.js";
 import { RoleIdentity, roleColorClass } from "./role-identity.js";
@@ -43,9 +45,12 @@ function TerminalPane({
   role,
   connectionRevision,
   suspended,
+  visible,
   theme,
+  completionNotificationsEnabled,
   pinned,
   maximized,
+  onToggleCompletionNotifications,
   onTogglePinned,
   onToggleMaximized,
 }: {
@@ -57,9 +62,12 @@ function TerminalPane({
   role: RoleDefinition | undefined;
   connectionRevision: number;
   suspended: boolean;
+  visible: boolean;
   theme: "light" | "dark";
+  completionNotificationsEnabled: boolean;
   pinned: boolean;
   maximized: boolean;
+  onToggleCompletionNotifications(): void;
   onTogglePinned(): void;
   onToggleMaximized(): void;
 }) {
@@ -71,71 +79,78 @@ function TerminalPane({
     endpointState === undefined || endpointState === "ready"
       ? "Loading terminal"
       : endpointLabels[endpointState];
+  const identity: ReactNode = (
+    <>
+      <span
+        className={`connection-dot connection-${endpointState ?? "starting"}`}
+        aria-hidden="true"
+      />
+      <strong>{alias}</strong>
+      {kind !== undefined && (
+        <span className="terminal-agent-kind" aria-label={`Agent kind ${kind}`} title="Agent kind">
+          {kind}
+        </span>
+      )}
+      <RoleIdentity role={role} compact />
+    </>
+  );
+  const memberIdentity = (
+    <button
+      type="button"
+      className="terminal-member-id"
+      aria-label={`Copy agent name ${memberId}`}
+      title={`Copy ${memberId}`}
+      onClick={() => void copyToClipboard(memberId).catch(() => undefined)}
+    >
+      {memberId}
+    </button>
+  );
+  const paneActions = (
+    <>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={`${completionNotificationsEnabled ? "Disable" : "Enable"} completion notifications for ${alias}`}
+        title={`${completionNotificationsEnabled ? "Disable" : "Enable"} completion notifications for ${alias}`}
+        aria-pressed={completionNotificationsEnabled}
+        onClick={onToggleCompletionNotifications}
+      >
+        {completionNotificationsEnabled ? (
+          <BellRing aria-hidden="true" size={12} />
+        ) : (
+          <BellOff aria-hidden="true" size={12} />
+        )}
+      </button>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={`${pinned ? "Unpin" : "Pin"} ${alias} terminal`}
+        aria-pressed={pinned}
+        onClick={onTogglePinned}
+      >
+        <Pin aria-hidden="true" size={12} />
+      </button>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={`${maximized ? "Restore" : "Maximize"} ${alias} terminal`}
+        aria-pressed={maximized}
+        onClick={onToggleMaximized}
+      >
+        {maximized ? (
+          <Minimize2 aria-hidden="true" size={12} />
+        ) : (
+          <Maximize2 aria-hidden="true" size={12} />
+        )}
+      </button>
+    </>
+  );
 
   return (
     <section
-      className={`terminal-pane ${roleColorClass(role)}`}
+      className={`terminal-pane ${status?.state === "ready" ? "terminal-pane-ready" : ""} ${roleColorClass(role)}`}
       aria-label={`${alias} (${memberId}) terminal`}
     >
-      <div className="terminal-statusbar">
-        <span
-          className={`connection-dot connection-${endpointState ?? "starting"}`}
-          aria-hidden="true"
-        />
-        <strong>{alias}</strong>
-        {kind !== undefined && (
-          <span
-            className="terminal-agent-kind"
-            aria-label={`Agent kind ${kind}`}
-            title="Agent kind"
-          >
-            {kind}
-          </span>
-        )}
-        <RoleIdentity role={role} compact />
-        <span className="status-separator" aria-hidden="true" />
-        <span>{endpointState ?? (loading ? "loading" : "unavailable")}</span>
-        <button
-          type="button"
-          className="terminal-pane-control"
-          aria-label={`${pinned ? "Unpin" : "Pin"} ${alias} terminal`}
-          aria-pressed={pinned}
-          onClick={onTogglePinned}
-        >
-          <Pin aria-hidden="true" size={12} />
-        </button>
-        <button
-          type="button"
-          className="terminal-pane-control"
-          aria-label={`${maximized ? "Restore" : "Maximize"} ${alias} terminal`}
-          aria-pressed={maximized}
-          onClick={onToggleMaximized}
-        >
-          {maximized ? (
-            <Minimize2 aria-hidden="true" size={12} />
-          ) : (
-            <Maximize2 aria-hidden="true" size={12} />
-          )}
-        </button>
-        <div className="terminal-title-tools">
-          <code
-            className="terminal-member-id"
-            aria-label={`Member ID ${memberId}`}
-            title={memberId}
-          >
-            {memberId}
-          </code>
-          <button
-            type="button"
-            className="icon-button terminal-title-copy"
-            aria-label={`Copy member ID ${memberId}`}
-            title={`Copy ${memberId}`}
-            onClick={() => void copyToClipboard(memberId).catch(() => undefined)}
-          >
-            <Copy aria-hidden="true" size={12} />
-          </button>
-        </div>
-      </div>
       {status?.state === "ready" ? (
         <TerminalConsole
           client={client}
@@ -144,26 +159,40 @@ function TerminalPane({
           theme={theme}
           label={`${alias} (${memberId}) terminal console`}
           suspended={suspended}
+          visible={visible}
+          headerIdentity={identity}
+          memberIdentity={memberIdentity}
+          paneActions={paneActions}
         />
       ) : (
-        <div
-          className="terminal-state"
-          role={endpointState === "unavailable" || error !== undefined ? "alert" : "status"}
-        >
-          {loading || endpointState === "starting" ? (
-            <LoaderCircle className="spin" aria-hidden="true" size={22} />
-          ) : (
-            <CircleAlert aria-hidden="true" size={22} />
-          )}
-          <strong>{stateLabel}</strong>
-          {detail !== undefined && <span>{detail}</span>}
-          {(endpointState === "unavailable" || error !== undefined) && (
-            <button type="button" onClick={retry}>
-              <RefreshCw aria-hidden="true" size={15} />
-              Retry
-            </button>
-          )}
-        </div>
+        <>
+          <div className="terminal-statusbar">
+            {identity}
+            <span className="status-separator" aria-hidden="true" />
+            <span>{endpointState ?? (loading ? "loading" : "unavailable")}</span>
+            <span className="terminal-header-spacer" />
+            {memberIdentity}
+            <div className="terminal-pane-actions">{paneActions}</div>
+          </div>
+          <div
+            className="terminal-state"
+            role={endpointState === "unavailable" || error !== undefined ? "alert" : "status"}
+          >
+            {loading || endpointState === "starting" ? (
+              <LoaderCircle className="spin" aria-hidden="true" size={22} />
+            ) : (
+              <CircleAlert aria-hidden="true" size={22} />
+            )}
+            <strong>{stateLabel}</strong>
+            {detail !== undefined && <span>{detail}</span>}
+            {(endpointState === "unavailable" || error !== undefined) && (
+              <button type="button" onClick={retry}>
+                <RefreshCw aria-hidden="true" size={15} />
+                Retry
+              </button>
+            )}
+          </div>
+        </>
       )}
       {suspended && (
         <div className="terminal-suspension-overlay" role="status">
@@ -202,14 +231,18 @@ export function TerminalWorkspace({
   onSelectRun,
   theme = "dark",
 }: TerminalWorkspaceProps) {
-  const availableRuns = members
-    .map(
-      (member) =>
-        runs
-          .filter((run) => run.memberId === member.memberId)
-          .sort((left, right) => right.generation - left.generation)[0],
-    )
+  const memberViews = members.map((member) => ({
+    member,
+    status: memberStatusView(agentStatuses, runs, member),
+  }));
+  const availableRuns = memberViews
+    .map(({ status }) => status.run)
     .filter((run): run is AgentRun => run !== undefined);
+  const statusByRunId = new Map(
+    memberViews.flatMap(({ status }) =>
+      status.run === undefined ? [] : [[status.run.id, status]],
+    ),
+  );
   const groupId = availableRuns[0]?.groupId;
   const { preferences, setTerminalLayout, updatePreferences } = usePortalPreferences();
   const layout = preferences.terminalLayout;
@@ -234,6 +267,11 @@ export function TerminalWorkspace({
     : undefined;
   const splitRatio =
     groupId === undefined ? 50 : (preferences.terminalSplitRatioByGroup[groupId] ?? 50);
+  const completionNotificationMemberIds =
+    groupId === undefined
+      ? []
+      : (preferences.completionNotificationMemberIdsByGroup[groupId] ?? []);
+  const completionNotificationMemberIdSet = new Set(completionNotificationMemberIds);
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const selectedCandidate = requestedActiveRunId ?? selectedRunId;
   const activeRunId = availableRuns.some((run) => run.id === selectedCandidate)
@@ -256,6 +294,22 @@ export function TerminalWorkspace({
       };
     });
   };
+  const toggleCompletionNotifications = (memberId: string) => {
+    if (groupId === undefined) return;
+    updatePreferences((current) => {
+      const existing = current.completionNotificationMemberIdsByGroup[groupId] ?? [];
+      const next = existing.includes(memberId)
+        ? existing.filter((candidate) => candidate !== memberId)
+        : [...existing, memberId];
+      return {
+        ...current,
+        completionNotificationMemberIdsByGroup: {
+          ...current.completionNotificationMemberIdsByGroup,
+          [groupId]: next,
+        },
+      };
+    });
+  };
   const toggleMaximized = (runId: string) => {
     if (groupId === undefined) return;
     updatePreferences((current) => {
@@ -265,24 +319,21 @@ export function TerminalWorkspace({
       return { ...current, maximizedRunByGroup };
     });
   };
-  const memberAlias = (run: AgentRun) =>
-    members.find((member) => member.memberId === run.memberId)?.alias ?? run.memberId;
+  const memberForRun = (run: AgentRun) =>
+    members.find((member) => member.groupId === run.groupId && member.memberId === run.memberId);
+  const memberAlias = (run: AgentRun) => memberForRun(run)?.alias ?? run.memberId;
   const memberRole = (run: AgentRun) => {
-    const roleId = members.find((member) => member.memberId === run.memberId)?.roleId;
+    const roleId = memberForRun(run)?.roleId;
     return roleId === undefined ? undefined : roles[roleId];
   };
   const memberKind = (run: AgentRun) => {
-    const member = members.find((candidate) => candidate.memberId === run.memberId);
+    const member = memberForRun(run);
     const integrationId =
       member === undefined
         ? undefined
         : config?.groups[run.groupId]?.agents[member.id]?.integrationId;
     return integrationId === undefined ? undefined : config?.integrations[integrationId]?.kind;
   };
-  const displayStatus = (run: AgentRun) =>
-    agentStatuses.find(
-      (status) => status.groupId === run.groupId && status.memberId === run.memberId,
-    )?.state ?? run.status;
 
   if (availableRuns.length === 0) {
     return (
@@ -298,25 +349,28 @@ export function TerminalWorkspace({
     <div className="terminal-workspace">
       <div className="terminal-toolbar">
         <div className="terminal-tabs" role="tablist" aria-label="Agent terminals">
-          {orderedRuns.map((run) => (
-            <div className="terminal-tab-item" role="presentation" key={run.id}>
-              <button
-                type="button"
-                className={`terminal-tab-select ${roleColorClass(memberRole(run))}`}
-                role="tab"
-                aria-selected={run.id === activeRunId}
-                onClick={() => selectRun(run.id)}
-              >
-                <span
-                  className={`status-dot status-${displayStatus(run)}`}
-                  title={displayStatus(run).replaceAll("_", " ")}
-                  aria-label={`${displayStatus(run).replaceAll("_", " ")} agent status`}
-                />
-                <span>{memberAlias(run)}</span>
-                <RoleIdentity role={memberRole(run)} compact />
-              </button>
-            </div>
-          ))}
+          {orderedRuns.map((run) => {
+            const status = statusByRunId.get(run.id);
+            return (
+              <div className="terminal-tab-item" role="presentation" key={run.id}>
+                <button
+                  type="button"
+                  className={`terminal-tab-select ${roleColorClass(memberRole(run))}`}
+                  role="tab"
+                  aria-selected={run.id === activeRunId}
+                  onClick={() => selectRun(run.id)}
+                >
+                  <span
+                    className={`status-dot status-${status?.key ?? "unknown"}`}
+                    title={status?.label ?? "Unknown"}
+                    aria-label={`${status?.label ?? "Unknown"} agent status`}
+                  />
+                  <span>{memberAlias(run)}</span>
+                  <RoleIdentity role={memberRole(run)} compact />
+                </button>
+              </div>
+            );
+          })}
         </div>
         <div className="segmented-control" role="group" aria-label="Terminal layout">
           <button
@@ -366,32 +420,34 @@ export function TerminalWorkspace({
         className={`terminal-layout terminal-layout-${layout}${maximizedRunId === undefined ? "" : " terminal-layout-maximized"}`}
         style={{ "--terminal-first-ratio": `${splitRatio}%` } as CSSProperties}
       >
-        {orderedRuns.map((run) => (
-          <div
-            className="terminal-pane-slot"
-            key={run.id}
-            hidden={
-              (maximizedRunId !== undefined && run.id !== maximizedRunId) ||
-              (maximizedRunId === undefined && layout === "tabs" && run.id !== activeRunId)
-            }
-          >
-            <TerminalPane
-              client={client}
-              run={run}
-              alias={memberAlias(run)}
-              memberId={run.memberId}
-              kind={memberKind(run)}
-              role={memberRole(run)}
-              connectionRevision={connectionRevision}
-              suspended={suspended}
-              theme={theme}
-              pinned={pinnedSet.has(run.id)}
-              maximized={maximizedRunId === run.id}
-              onTogglePinned={() => togglePinned(run.id)}
-              onToggleMaximized={() => toggleMaximized(run.id)}
-            />
-          </div>
-        ))}
+        {orderedRuns.map((run) => {
+          const visible = !(
+            (maximizedRunId !== undefined && run.id !== maximizedRunId) ||
+            (maximizedRunId === undefined && layout === "tabs" && run.id !== activeRunId)
+          );
+          return (
+            <div className="terminal-pane-slot" key={run.id} hidden={!visible}>
+              <TerminalPane
+                client={client}
+                run={run}
+                alias={memberAlias(run)}
+                memberId={run.memberId}
+                kind={memberKind(run)}
+                role={memberRole(run)}
+                connectionRevision={connectionRevision}
+                suspended={suspended}
+                visible={visible}
+                theme={theme}
+                completionNotificationsEnabled={completionNotificationMemberIdSet.has(run.memberId)}
+                pinned={pinnedSet.has(run.id)}
+                maximized={maximizedRunId === run.id}
+                onToggleCompletionNotifications={() => toggleCompletionNotifications(run.memberId)}
+                onTogglePinned={() => togglePinned(run.id)}
+                onToggleMaximized={() => toggleMaximized(run.id)}
+              />
+            </div>
+          );
+        })}
       </div>
     </div>
   );

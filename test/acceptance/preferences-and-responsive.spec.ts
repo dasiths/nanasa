@@ -11,6 +11,7 @@ test("theme and terminal layout persist and synchronize across tabs", async ({
   await page.goto(nanasa.portalUrl);
   await secondPage.goto(nanasa.baseUrl);
 
+  await page.locator('summary[aria-label="Portal utilities"]').click();
   await page.getByRole("button", { name: "Use dark theme" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(secondPage.locator("html")).toHaveAttribute("data-theme", "dark");
@@ -91,19 +92,20 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
   expect(desktopRail).not.toBeNull();
   expect(desktopWorkspace).not.toBeNull();
   expect(desktopWorkspace!.x).toBeGreaterThanOrEqual(desktopRail!.x + desktopRail!.width - 1);
-  await page.getByRole("button", { name: "Messages", exact: true }).click();
-  const desktopMessages = await page
-    .getByRole("region", { name: "Messages overlay" })
-    .boundingBox();
-  expect(desktopMessages).not.toBeNull();
-  expect(desktopMessages!.x).toBeGreaterThan(desktopWorkspace!.x);
-  expect(desktopMessages!.y).toBeGreaterThan(0);
-  expect(desktopMessages!.x + desktopMessages!.width).toBeLessThanOrEqual(1280);
-  expect(desktopMessages!.y + desktopMessages!.height).toBeLessThanOrEqual(800);
-
+  await expect(
+    page
+      .getByRole("navigation", { name: "Repository operations" })
+      .getByRole("link", { name: "Attention", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open Attention" })).toBeHidden();
+  await expect(
+    page.getByRole("button", { name: "Compose message to Responsive team" }),
+  ).toBeVisible();
   await expect(page.getByLabel("Message body")).toHaveCount(0);
-  await expect(page.getByLabel("Compose message")).toBeVisible();
   await expect(page.getByRole("region", { name: "Agent terminals" })).toBeVisible();
+  await page.getByRole("button", { name: "Compose message to Responsive team" }).click();
+  await expect(page.getByRole("dialog", { name: "New message" })).toBeVisible();
+  await page.getByRole("button", { name: "Close message composer" }).click();
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
@@ -112,20 +114,33 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
   expect(mobileRail).toBeNull();
   expect(mobileWorkspace).not.toBeNull();
   expect(mobileWorkspace!.y).toBe(0);
-  await expect(page.getByLabel("Switch group")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open application menu" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open Attention" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-  await expect(page.getByRole("region", { name: "Messages overlay" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Messages", exact: true })).toBeHidden();
-  await expect(page.getByRole("region", { name: "Messages", exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "Agent terminals" })).toBeVisible();
-  await expect(page.getByLabel("Compose message")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Compose message to Responsive team" }),
+  ).toBeVisible();
   await expect(page.getByLabel("Message body")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Start all non-running agents in Responsive team" }),
   ).toBeVisible();
 
-  await page.getByRole("button", { name: "Close messages" }).click();
-  await expect(page.getByRole("region", { name: "Messages overlay" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Open application menu" }).click();
+  const mobileMenu = page.getByRole("dialog", { name: "Nanasa" });
+  await expect(mobileMenu.getByRole("link", { name: "Attention", exact: true })).toBeVisible();
+  await expect(mobileMenu.getByRole("link", { name: "Responsive team" })).toBeVisible();
+  await expect(mobileMenu.getByRole("link", { name: "Preferences" })).toBeVisible();
+  await mobileMenu.getByRole("button", { name: "Close menu" }).click();
+
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.reload();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  await expect(page.getByRole("button", { name: "Open application menu" })).toBeVisible();
+  const groupNavigation = page.getByRole("navigation", { name: "Responsive team sections" });
+  await expect(groupNavigation.getByRole("link", { name: "Terminals" })).toBeVisible();
+  await expect(groupNavigation.getByRole("link", { name: "Attention" })).toBeVisible();
+  await expect(groupNavigation.getByRole("link", { name: "Overview" })).toBeVisible();
 
   await page.setViewportSize({ width: 721, height: 844 });
   const groupRow = page.locator(".tree-group-row").filter({ hasText: "Responsive team" });

@@ -18,13 +18,12 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
     "3 started",
   );
   await expect(page.getByRole("region", { name: /terminal$/ })).toHaveCount(1);
-  await expect(page.getByRole("button", { name: "Messages", exact: true })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Messages overlay" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Messages", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Compose message to Acceptance team" }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Grid terminal layout" }).click();
   await expect(page.getByRole("region", { name: /terminal$/ })).toHaveCount(3);
-  await page.getByRole("button", { name: "Messages", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Messages overlay" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Messages", exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "Agent terminals" })).toBeVisible();
   await expect(page.getByRole("group", { name: "Workspace input mode" })).toHaveCount(0);
 
@@ -58,6 +57,12 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
   await page.mouse.wheel(0, 120);
   await nanasa.waitForPaneText(paneByMember.get(members[0]!.memberId)!, "SAFE_MOUSE:WheelUp");
   await nanasa.waitForPaneText(paneByMember.get(members[0]!.memberId)!, "SAFE_MOUSE:WheelDown");
+
+  await page.getByRole("link", { name: "Messages", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Group messages" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Compose message to Acceptance team" }),
+  ).toHaveCount(0);
 
   const openComposer = async () => {
     await page.getByLabel("Compose message").click();

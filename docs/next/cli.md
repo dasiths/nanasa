@@ -1,7 +1,7 @@
 ---
 title: CLI reference
 description: Operator command families, output contract, and local lifecycle commands
-ms.date: 2026-08-30
+ms.date: 2026-08-31
 ms.topic: reference
 ---
 
@@ -16,3 +16,13 @@ Command families cover metadata, config, auth, state, trust, extensions, topolog
 The [CLI registry](reference/cli.json) is generated from the same declarations used for parsing, completion, and help. Run `nanasa completion bash` to produce shell completion.
 
 Service commands operate on the exact repository-local systemd user unit. Remote commands retain OpenSSH as the authentication authority.
+
+## Portal login
+
+Run `nanasa auth portal` to mint a short-lived, one-use login URL from the
+running daemon. The command authenticates with the repository's owner-only
+operator credential. In a source checkout, `make portal-auth` rebuilds the
+packaged CLI, mints the URL, and opens it through `BROWSER` or `xdg-open`.
+
+`make portal` opens only the base portal URL and therefore requires an existing
+browser session. Minting a new URL does not revoke current browser sessions.

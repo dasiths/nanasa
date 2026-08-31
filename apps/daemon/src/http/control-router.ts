@@ -321,14 +321,15 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
   register("schema.extensions", () => services.extensions.generatedReference());
   register("auth.bootstrap", (request, reply) => services.auth.bootstrap(request.body, reply));
   register("auth.session", (request) => services.auth.session(request));
+  register("auth.portal", () => services.auth.createBootstrapGrant());
   register("auth.revoke", (request, reply) => {
     services.auth.revoke(request, reply);
     return reply.status(204).send();
   });
   register("config.get", () => services.config.load().config);
   register("config.status", () => services.config.load().status);
-  register("snapshot.get", () => ({
-    ...services.snapshot.read(),
+  register("snapshot.get", (request) => ({
+    ...services.snapshot.read(operatorPrincipal(services, request).operatorId),
     messages: [],
     deliveryOutcomes: [],
   }));

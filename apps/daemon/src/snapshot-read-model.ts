@@ -7,7 +7,7 @@ export class SnapshotReadModel {
     private readonly authority: { instanceId: string; daemonEpoch: number },
   ) {}
 
-  public read(): PortalSnapshot {
-    return this.store.getSnapshot(this.authority);
+  public read(operatorId: string): PortalSnapshot {
+    return this.store.getSnapshot(this.authority, operatorId);
   }
 }

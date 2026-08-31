@@ -73,7 +73,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
   public planOverlay(context: ProviderOverlayContext): ProviderOverlayPlan {
     const files: ProviderOverlayPlan["files"][number][] = [
       {
-        relativePath: "plugins/nanasa-status.mjs",
+        relativePath: "plugins/nanasa-status.js",
         content: OPENCODE_STATUS_REPORTER_SOURCE,
         ownerKind: "reporter",
       },

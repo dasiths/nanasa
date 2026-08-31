@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { playAttentionSound } from "./notification-sound.js";
+import { claimNotificationDelivery, playAttentionSound } from "./notification-sound.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -8,6 +8,37 @@ afterEach(() => {
 });
 
 describe("attention notification sound", () => {
+  it("bounds channel-qualified claims, expires them, and fails closed without storage", async () => {
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (_name: string, _options: unknown, callback: () => boolean) =>
+          Promise.resolve(callback()),
+      },
+    });
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    await expect(claimNotificationDelivery("sound", "same-item")).resolves.toBe("claimed");
+    await expect(claimNotificationDelivery("sound", "same-item")).resolves.toBe("duplicate");
+    await expect(claimNotificationDelivery("desktop", "same-item")).resolves.toBe("claimed");
+
+    for (let index = 0; index < 520; index += 1) {
+      await claimNotificationDelivery("sound", `item-${index}`);
+    }
+    const claims = JSON.parse(
+      window.localStorage.getItem("nanasa.portal.notification-claims.v1") ?? "[]",
+    ) as unknown[];
+    expect(claims).toHaveLength(512);
+
+    now.mockReturnValue(24 * 60 * 60 * 1_000 + 1_001);
+    await expect(claimNotificationDelivery("sound", "same-item")).resolves.toBe("claimed");
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("storage unavailable");
+    });
+    await expect(claimNotificationDelivery("sound", "storage-failure")).resolves.toBe(
+      "unavailable",
+    );
+  });
+
   it("requires the dedicated sound preference and browser activation", async () => {
     Object.defineProperty(navigator, "userActivation", {
       configurable: true,
@@ -85,17 +116,37 @@ describe("attention notification sound", () => {
     );
   });
 
-  it("suppresses playback when cross-tab Web Locks are unavailable", async () => {
+  it("suppresses playback when cross-tab claiming is unavailable", async () => {
     Object.defineProperty(navigator, "userActivation", {
       configurable: true,
       value: { hasBeenActive: true },
     });
-    Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
     const audio = vi.fn();
     vi.stubGlobal("AudioContext", audio);
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: { request: () => Promise.reject(new Error("lock unavailable")) },
+    });
+    await expect(
+      playAttentionSound({ enabled: true, eventId: "attention-lock-error" }),
+    ).resolves.toBe(false);
+    Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
     await expect(playAttentionSound({ enabled: true, eventId: "attention-no-lock" })).resolves.toBe(
       false,
     );
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (_name: string, _options: unknown, callback: () => boolean) =>
+          Promise.resolve(callback()),
+      },
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("storage unavailable");
+    });
+    await expect(
+      playAttentionSound({ enabled: true, eventId: "attention-storage-error" }),
+    ).resolves.toBe(false);
     expect(audio).not.toHaveBeenCalled();
   });
 });
