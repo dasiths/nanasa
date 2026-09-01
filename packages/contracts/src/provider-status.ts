@@ -1,17 +1,17 @@
 import { z } from "zod";
 import {
   AdapterIdSchema,
-  IntegrationIdV3Schema,
+  ProviderIntegrationIdSchema,
   ProcessIncarnationDigestSchema,
   ProviderAuthorityFenceSchema,
   ProviderIdSchema,
   ReporterSourceIdSchema,
   SnapshotDigestSchema,
   StatusPolicyDigestSchema,
-} from "./provider-runtime-v2.js";
+} from "./provider-runtime.js";
 
-export const STATUS_V3_PROTOCOL_VERSION = 3 as const;
-export const StatusSemanticStateV3Schema = z.enum([
+export const PROVIDER_STATUS_PROTOCOL_VERSION = 3 as const;
+export const ProviderStatusSemanticStateSchema = z.enum([
   "starting",
   "idle",
   "working",
@@ -22,7 +22,7 @@ export const StatusSemanticStateV3Schema = z.enum([
   "failed",
   "unknown",
 ]);
-export const StatusProjectionV3Schema = z.enum([
+export const ProviderStatusProjectionSchema = z.enum([
   "starting",
   "running",
   "idle",
@@ -34,7 +34,7 @@ export const StatusProjectionV3Schema = z.enum([
   "failed",
   "unknown",
 ]);
-export const StatusPhaseV3Schema = z.enum([
+export const ProviderStatusPhaseSchema = z.enum([
   "startup",
   "model",
   "tool",
@@ -46,16 +46,16 @@ export const StatusPhaseV3Schema = z.enum([
   "settled",
   "exited",
 ]);
-export const StatusOutcomeV3Schema = z.enum(["unknown", "succeeded", "failed", "cancelled"]);
-export const StatusConfidenceV3Schema = z.enum(["high", "medium", "low"]);
-export const StatusClaimSourceV3Schema = z.enum([
+export const ProviderStatusOutcomeSchema = z.enum(["unknown", "succeeded", "failed", "cancelled"]);
+export const ProviderStatusConfidenceSchema = z.enum(["high", "medium", "low"]);
+export const ProviderStatusClaimSourceSchema = z.enum([
   "process",
   "reporter",
   "status-api",
   "screen",
   "osc",
 ]);
-export const StatusClaimTypeV3Schema = z.enum([
+export const ProviderStatusClaimTypeSchema = z.enum([
   "process-liveness",
   "semantic-state",
   "phase",
@@ -65,22 +65,22 @@ export const StatusClaimTypeV3Schema = z.enum([
   "observer-health",
 ]);
 
-export const StatusSourceClaimV3Schema = z
+export const ProviderStatusClaimSchema = z
   .object({
     id: z.string().min(1).max(128),
     fence: ProviderAuthorityFenceSchema,
     policyDigest: StatusPolicyDigestSchema,
-    source: StatusClaimSourceV3Schema,
+    source: ProviderStatusClaimSourceSchema,
     sourceId: z.string().min(1).max(128),
     sourceSessionId: z.string().min(1).max(128).optional(),
     sourceManifestDigest: SnapshotDigestSchema.optional(),
-    claimType: StatusClaimTypeV3Schema,
-    semanticState: StatusSemanticStateV3Schema.optional(),
-    phase: StatusPhaseV3Schema.optional(),
-    outcome: StatusOutcomeV3Schema.optional(),
+    claimType: ProviderStatusClaimTypeSchema,
+    semanticState: ProviderStatusSemanticStateSchema.optional(),
+    phase: ProviderStatusPhaseSchema.optional(),
+    outcome: ProviderStatusOutcomeSchema.optional(),
     processState: z.enum(["present", "dead", "missing", "indeterminate"]).optional(),
     waitRequestId: z.string().min(1).max(128).optional(),
-    confidence: StatusConfidenceV3Schema,
+    confidence: ProviderStatusConfidenceSchema,
     reasonCode: z
       .string()
       .min(1)
@@ -134,9 +134,9 @@ export const StatusSourceClaimV3Schema = z
       });
     }
   });
-export type StatusSourceClaimV3 = z.infer<typeof StatusSourceClaimV3Schema>;
+export type ProviderStatusClaim = z.infer<typeof ProviderStatusClaimSchema>;
 
-export const ReporterEventKindV3Schema = z.enum([
+export const ProviderReporterEventKindSchema = z.enum([
   "reporter.ready",
   "session.ready",
   "turn.started",
@@ -154,11 +154,11 @@ export const ReporterEventKindV3Schema = z.enum([
   "session.ended",
   "heartbeat",
 ]);
-export const ReporterEventV3Schema = z
+export const ProviderReporterEventSchema = z
   .object({
-    version: z.literal(STATUS_V3_PROTOCOL_VERSION),
+    version: z.literal(PROVIDER_STATUS_PROTOCOL_VERSION),
     eventId: z.string().min(1).max(128),
-    integrationId: IntegrationIdV3Schema,
+    integrationId: ProviderIntegrationIdSchema,
     providerId: ProviderIdSchema,
     adapterId: AdapterIdSchema,
     snapshotDigest: SnapshotDigestSchema,
@@ -170,7 +170,7 @@ export const ReporterEventV3Schema = z
     runId: z.string().min(1).max(128),
     generation: z.number().int().positive(),
     sourceSequence: z.number().int().positive(),
-    event: ReporterEventKindV3Schema,
+    event: ProviderReporterEventKindSchema,
     occurredAt: z.string().datetime({ offset: true }).optional(),
     rootSessionId: z.string().min(1).max(128).optional(),
     turnId: z.string().min(1).max(128).optional(),
@@ -217,13 +217,13 @@ export const ReporterEventV3Schema = z
       });
     }
   });
-export type ReporterEventV3 = z.infer<typeof ReporterEventV3Schema>;
+export type ProviderReporterEvent = z.infer<typeof ProviderReporterEventSchema>;
 
-export const ReporterSessionV3Schema = z
+export const ProviderReporterSessionSchema = z
   .object({
     id: z.string().min(1).max(128),
     fence: ProviderAuthorityFenceSchema,
-    integrationId: IntegrationIdV3Schema,
+    integrationId: ProviderIntegrationIdSchema,
     adapterId: AdapterIdSchema,
     reporterId: z.string().min(1).max(128),
     sourceId: ReporterSourceIdSchema,
@@ -232,7 +232,7 @@ export const ReporterSessionV3Schema = z
       .strict(),
     reporterEpoch: z.string().min(1).max(128),
     rootNativeSessionId: z.string().min(1).max(128).optional(),
-    exactEvents: z.array(ReporterEventKindV3Schema).min(1).max(128),
+    exactEvents: z.array(ProviderReporterEventKindSchema).min(1).max(128),
     sourceSequence: z.number().int().nonnegative(),
     openedAt: z.string().datetime({ offset: true }),
     transportLeaseExpiresAt: z.string().datetime({ offset: true }),
@@ -241,7 +241,7 @@ export const ReporterSessionV3Schema = z
   })
   .strict();
 
-export const ReporterTurnCycleV3Schema = z
+export const ProviderReporterTurnCycleSchema = z
   .object({
     id: z.string().min(1).max(128),
     fence: ProviderAuthorityFenceSchema,
@@ -257,9 +257,9 @@ export const ReporterTurnCycleV3Schema = z
     closedAt: z.string().datetime({ offset: true }).optional(),
   })
   .strict();
-export type ReporterTurnCycleV3 = z.infer<typeof ReporterTurnCycleV3Schema>;
+export type ProviderReporterTurnCycle = z.infer<typeof ProviderReporterTurnCycleSchema>;
 
-export const EffectiveAgentStatusV3Schema = z
+export const EffectiveProviderStatusSchema = z
   .object({
     runId: z.string().min(1).max(128),
     generation: z.number().int().positive(),
@@ -267,11 +267,11 @@ export const EffectiveAgentStatusV3Schema = z
     snapshotDigest: SnapshotDigestSchema,
     processIncarnationDigest: ProcessIncarnationDigestSchema.optional(),
     policyDigest: StatusPolicyDigestSchema,
-    projection: StatusProjectionV3Schema,
-    semanticState: StatusSemanticStateV3Schema,
-    phase: StatusPhaseV3Schema,
-    outcome: StatusOutcomeV3Schema,
-    confidence: StatusConfidenceV3Schema,
+    projection: ProviderStatusProjectionSchema,
+    semanticState: ProviderStatusSemanticStateSchema,
+    phase: ProviderStatusPhaseSchema,
+    outcome: ProviderStatusOutcomeSchema,
+    confidence: ProviderStatusConfidenceSchema,
     winningClaimId: z.string().min(1).max(128).optional(),
     activeClaimIds: z.array(z.string().min(1).max(128)).max(64),
     statusRevision: z.number().int().nonnegative(),
@@ -288,4 +288,4 @@ export const EffectiveAgentStatusV3Schema = z
       });
     }
   });
-export type EffectiveAgentStatusV3 = z.infer<typeof EffectiveAgentStatusV3Schema>;
+export type EffectiveProviderStatus = z.infer<typeof EffectiveProviderStatusSchema>;

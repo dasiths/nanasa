@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
@@ -15,115 +14,12 @@ import {
   BrowserRestartFrameSchema,
   type BuildIdentity,
 } from "@nanasa/contracts";
-import { AnchoredDirectory } from "../anchored-directory.js";
-import {
-  PROVIDER_PLATFORM_MIGRATION,
-  PROVIDER_PLATFORM_SCHEMA_10_MIGRATION,
-} from "../persistence/migrations.js";
+import { openNanasaDatabase } from "../persistence/database.js";
 import { repositoryIdentity } from "../protocol-metadata.js";
 import { SystemdUserService } from "../service/systemd-user-service.js";
 import { type ActivationArtifact, ActivationService } from "./activation-service.js";
 import { BackupService } from "./backup-service.js";
 import { loadBuildIdentity } from "./build-identity.js";
-import { MigrationRunner, type MigrationStep } from "./migration-runner.js";
-
-export const RELEASE_MIGRATIONS: readonly MigrationStep[] = [
-  {
-    from: 7,
-    to: 8,
-    name: "checkpoint-identity-and-http-idempotency",
-    apply(database, context) {
-      const checkpointRoot = resolve(
-        dirname(dirname(context.databasePath)),
-        "runtime",
-        "terminal-checkpoints",
-      );
-      const checkpoints = database
-        .prepare("SELECT id, storage_reference FROM terminal_checkpoints")
-        .all() as Array<{ id: string; storage_reference: string }>;
-      const digests = new Map<string, string>();
-      const anchoredRoot =
-        checkpoints.length === 0 ? undefined : new AnchoredDirectory(checkpointRoot);
-      for (const checkpoint of checkpoints) {
-        let name: string;
-        try {
-          name = anchoredRoot!.basenameFor(checkpoint.storage_reference);
-        } catch {
-          throw new Error(`Checkpoint storage escaped its root during migration: ${checkpoint.id}`);
-        }
-        try {
-          digests.set(
-            checkpoint.id,
-            createHash("sha256")
-              .update(anchoredRoot!.withHandle((directory) => directory.readFile(name)))
-              .digest("hex"),
-          );
-        } catch {
-          throw new Error(`Checkpoint storage is unsafe during migration: ${checkpoint.id}`);
-        }
-      }
-      database.exec(`
-        ALTER TABLE terminal_checkpoints RENAME TO terminal_checkpoints_v7;
-        CREATE TABLE terminal_checkpoints (
-          id TEXT PRIMARY KEY,
-          owner_principal_id TEXT NOT NULL,
-          run_id TEXT NOT NULL REFERENCES runs(id),
-          generation INTEGER NOT NULL CHECK (generation > 0),
-          terminal_binding_json TEXT NOT NULL,
-          captured_at TEXT NOT NULL,
-          line_count INTEGER NOT NULL CHECK (line_count >= 0),
-          byte_count INTEGER NOT NULL CHECK (byte_count >= 0),
-          truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
-          sensitivity_policy TEXT NOT NULL CHECK (sensitivity_policy IN ('repository-private', 'encrypted')),
-          storage_reference TEXT NOT NULL,
-          content_digest TEXT NOT NULL,
-          expires_at TEXT NOT NULL,
-          deleted_at TEXT,
-          deletion_audit_id TEXT,
-          CHECK ((deleted_at IS NULL AND deletion_audit_id IS NULL) OR (deleted_at IS NOT NULL AND deletion_audit_id IS NOT NULL))
-        ) STRICT;
-        CREATE TABLE http_idempotency_keys (
-          principal_id TEXT NOT NULL,
-          route_id TEXT NOT NULL,
-          key TEXT NOT NULL,
-          request_digest TEXT NOT NULL,
-          state TEXT NOT NULL CHECK (state IN ('in-progress', 'completed')),
-          status_code INTEGER CHECK (status_code IS NULL OR status_code BETWEEN 100 AND 599),
-          response_json TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          expires_at TEXT NOT NULL,
-          PRIMARY KEY (principal_id, route_id, key)
-        ) STRICT;
-        CREATE INDEX http_idempotency_expiry ON http_idempotency_keys (expires_at);
-      `);
-      const copy = database.prepare(`
-        INSERT INTO terminal_checkpoints
-          (id, owner_principal_id, run_id, generation, terminal_binding_json, captured_at,
-           line_count, byte_count, truncated, sensitivity_policy, storage_reference,
-           content_digest, expires_at, deleted_at, deletion_audit_id)
-        SELECT id, owner_principal_id, run_id, generation, terminal_binding_json, captured_at,
-               line_count, byte_count, truncated, sensitivity_policy, storage_reference,
-               ?, expires_at, deleted_at, deletion_audit_id
-        FROM terminal_checkpoints_v7 WHERE id = ?
-      `);
-      for (const checkpoint of checkpoints) {
-        const contentDigest = digests.get(checkpoint.id);
-        if (contentDigest === undefined) {
-          throw new Error(`Checkpoint digest is missing during migration: ${checkpoint.id}`);
-        }
-        copy.run(contentDigest, checkpoint.id);
-      }
-      database.exec(`
-        DROP TABLE terminal_checkpoints_v7;
-        CREATE INDEX terminal_checkpoints_owner_expiry
-          ON terminal_checkpoints (owner_principal_id, expires_at);
-      `);
-    },
-  },
-  PROVIDER_PLATFORM_MIGRATION,
-  PROVIDER_PLATFORM_SCHEMA_10_MIGRATION,
-];
 
 function ensureFile(path: string, contents: string): void {
   if (existsSync(path)) return;
@@ -210,7 +106,12 @@ export class ReleaseManager {
     if (to.databaseSchema.minimum !== to.databaseSchema.maximum)
       throw new Error("Candidate schema range must be exact during prerelease");
     const database = join(this.#repositoryRoot, ".nanasa", "state", "nanasa.sqlite");
-    new MigrationRunner(database, to.databaseSchema.maximum, RELEASE_MIGRATIONS).preflight();
+    if (!existsSync(database)) throw new Error("A clean current database is required for release");
+    const current = openNanasaDatabase(database);
+    current.close();
+    if (from.databaseSchema.maximum !== to.databaseSchema.maximum) {
+      throw new Error("Release activation does not transform database schemas");
+    }
     return { from, to };
   }
 
@@ -249,7 +150,6 @@ export class ReleaseManager {
       `${JSON.stringify({ packageRoot: candidateRoot, build: to }, null, 2)}\n`,
       { mode: 0o600 },
     );
-    new MigrationRunner(candidateDatabase, to.databaseSchema.maximum, RELEASE_MIGRATIONS).apply();
     const pointerPath = join(stateRoot, "release", "active-package.json");
     ensureFile(
       pointerPath,

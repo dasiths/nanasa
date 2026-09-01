@@ -16,7 +16,22 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function fixture(): { store: NanasaStore; run: AgentRun; registry: ReporterRegistry } {
+const reporterAuthority = {
+  reporterPolicy: async () => ({
+    integrationId: "claude-code",
+    adapterId: "claude-code",
+    reporterId: "claude-hooks",
+    source: "claude-code",
+    reporterVersion: "2",
+    events: ["session.ready", "turn.started", "turn.waiting", "turn.settled"],
+  }),
+};
+
+async function fixture(): Promise<{
+  store: NanasaStore;
+  run: AgentRun;
+  registry: ReporterRegistry;
+}> {
   const store = new NanasaStore(":memory:");
   const group = store.createGroup({ name: "Status" });
   const profile = store.createInternalAgentProfile({
@@ -33,8 +48,11 @@ function fixture(): { store: NanasaStore; run: AgentRun; registry: ReporterRegis
     alias: "Worker",
   });
   const run = store.createRunForMembership(group.id, "worker").run;
-  const registry = new ReporterRegistry(store, { runtimeDirectory: "/runtime" });
-  registry.open(run);
+  const registry = new ReporterRegistry(store, {
+    runtimeDirectory: "/runtime",
+    authority: reporterAuthority,
+  });
+  await registry.open(run);
   store.bindReporterProcess(run.id, run.generation, "a".repeat(64));
   store.recordProcessStatus(run.id, {
     event: "process.alive",
@@ -78,8 +96,8 @@ function report(
 }
 
 describe("reporter authority", () => {
-  it("rejects wrong identity, reordered sequence, native session changes, process reuse, and post-exit reports", () => {
-    const { store, run } = fixture();
+  it("rejects wrong identity, reordered sequence, native session changes, process reuse, and post-exit reports", async () => {
+    const { store, run } = await fixture();
     const session = store.getCurrentReporterSession(run.id, run.generation)!;
     store.revokeReporterAuthority(run.id, run.generation, "replace deterministic fixture");
     store.registerReporterSession({
@@ -182,8 +200,8 @@ describe("reporter authority", () => {
     store.close();
   });
 
-  it("projects every canonical semantic state and per-operator completion acknowledgement", () => {
-    const { store, run } = fixture();
+  it("projects every canonical semantic state and per-operator completion acknowledgement", async () => {
+    const { store, run } = await fixture();
     const session = store.getCurrentReporterSession(run.id, run.generation)!;
     store.revokeReporterAuthority(run.id, run.generation, "replace deterministic fixture");
     store.registerReporterSession({
@@ -274,8 +292,8 @@ describe("reporter authority", () => {
     store.close();
   });
 
-  it("rejects reporter renewal when process-source evidence is stale", () => {
-    const { store, run } = fixture();
+  it("rejects reporter renewal when process-source evidence is stale", async () => {
+    const { store, run } = await fixture();
     const session = store.getCurrentReporterSession(run.id, run.generation)!;
     store.revokeReporterAuthority(run.id, run.generation, "replace deterministic fixture");
     store.registerReporterSession({
@@ -369,8 +387,8 @@ describe("process, hook, screen, privacy, and scale behavior", () => {
     );
   });
 
-  it("retains reporter authority when mutable evidence changes for the same kernel process", () => {
-    const { store, run, registry } = fixture();
+  it("retains reporter authority when mutable evidence changes for the same kernel process", async () => {
+    const { store, run, registry } = await fixture();
     const changedEvidence = {
       foregroundPgid: 10,
       leaderPid: 10,
@@ -382,7 +400,7 @@ describe("process, hook, screen, privacy, and scale behavior", () => {
       wrapperChain: ["claude"],
     };
 
-    expect(() => registry.observeProcess(run, changedEvidence)).not.toThrow();
+    await expect(registry.observeProcess(run, changedEvidence)).resolves.toBeUndefined();
     expect(store.getCurrentReporterSession(run.id, run.generation)?.processFingerprint).toBe(
       changedEvidence.processFingerprint,
     );
@@ -391,24 +409,24 @@ describe("process, hook, screen, privacy, and scale behavior", () => {
       eventId: "legacy-alive-without-process",
       observedAt: "2026-08-29T12:00:01.000Z",
     });
-    expect(() =>
+    await expect(
       registry.observeProcess(run, {
         ...changedEvidence,
         executableFingerprint: "8".repeat(64),
         processFingerprint: "7".repeat(64),
       }),
-    ).not.toThrow();
-    expect(() =>
+    ).resolves.toBeUndefined();
+    await expect(
       registry.observeProcess(run, {
         ...changedEvidence,
         pidStartIdentity: "10:101",
         processFingerprint: "9".repeat(64),
       }),
-    ).toThrowError(expect.objectContaining({ code: "status_process_fingerprint_changed" }));
+    ).rejects.toThrowError(expect.objectContaining({ code: "status_process_fingerprint_changed" }));
     store.close();
   });
 
-  it("renews no-heartbeat reporter freshness from matching process evidence", () => {
+  it("renews no-heartbeat reporter freshness from matching process evidence", async () => {
     let now = new Date("2026-08-29T12:10:00.000Z");
     const store = new NanasaStore(":memory:");
     const group = store.createGroup({ name: "Status" });
@@ -428,9 +446,10 @@ describe("process, hook, screen, privacy, and scale behavior", () => {
     const run = store.createRunForMembership(group.id, "worker").run;
     const registry = new ReporterRegistry(store, {
       runtimeDirectory: "/runtime",
+      authority: reporterAuthority,
       now: () => now,
     });
-    const opened = registry.open(run);
+    const opened = await registry.open(run);
     now = new Date("2026-08-29T12:11:00.000Z");
     const process = {
       foregroundPgid: 10,
@@ -443,7 +462,7 @@ describe("process, hook, screen, privacy, and scale behavior", () => {
       wrapperChain: ["claude"],
     };
 
-    registry.observeProcess(run, process);
+    await registry.observeProcess(run, process);
 
     expect(store.getCurrentReporterSession(run.id, run.generation)?.leaseExpiresAt).toBe(
       new Date(now.getTime() + 45_000).toISOString(),
@@ -454,8 +473,8 @@ describe("process, hook, screen, privacy, and scale behavior", () => {
     store.close();
   });
 
-  it("supersedes persisted waits when reporter authority is revoked", () => {
-    const { store, run } = fixture();
+  it("supersedes persisted waits when reporter authority is revoked", async () => {
+    const { store, run } = await fixture();
     const session = store.getCurrentReporterSession(run.id, run.generation)!;
     store.revokeReporterAuthority(run.id, run.generation, "replace deterministic fixture");
     store.registerReporterSession({
@@ -494,7 +513,7 @@ describe("process, hook, screen, privacy, and scale behavior", () => {
     store.close();
   });
 
-  it("records every verified present observation while deduplicating unchanged failures", () => {
+  it("records every verified present observation while deduplicating unchanged failures", async () => {
     const store = {
       getRun: vi.fn(() => ({ id: "run", generation: 1 })),
       recordProcessStatus: vi.fn(),
@@ -512,7 +531,7 @@ describe("process, hook, screen, privacy, and scale behavior", () => {
       wrapperChain: ["claude"],
     };
 
-    service.observeRuntime({
+    await service.observeRuntime({
       id: "present-one",
       runId: "run",
       generation: 1,
@@ -522,7 +541,7 @@ describe("process, hook, screen, privacy, and scale behavior", () => {
       evidenceCode: "exact_owned_pane_and_process",
       process,
     });
-    service.observeRuntime({
+    await service.observeRuntime({
       id: "present-two",
       runId: "run",
       generation: 1,
@@ -537,7 +556,7 @@ describe("process, hook, screen, privacy, and scale behavior", () => {
     expect(reporters.observeProcess).toHaveBeenCalledTimes(2);
   });
 
-  it("records a same-provider process replacement after reporter revocation", () => {
+  it("records a same-provider process replacement after reporter revocation", async () => {
     const store = {
       getRun: vi.fn(() => ({ id: "run", generation: 1 })),
       recordProcessStatus: vi.fn(),
@@ -564,7 +583,7 @@ describe("process, hook, screen, privacy, and scale behavior", () => {
       wrapperChain: ["claude"],
     };
 
-    expect(() =>
+    await expect(
       service.observeRuntime({
         id: "replacement",
         runId: "run",
@@ -575,7 +594,7 @@ describe("process, hook, screen, privacy, and scale behavior", () => {
         evidenceCode: "exact_owned_pane_and_process",
         process,
       }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
     expect(store.recordProcessStatus).toHaveBeenCalledWith(
       "run",
       expect.objectContaining({
@@ -586,7 +605,7 @@ describe("process, hook, screen, privacy, and scale behavior", () => {
     );
   });
 
-  it("records provider mismatches without aborting reconciliation", () => {
+  it("records provider mismatches without aborting reconciliation", async () => {
     const store = {
       getRun: vi.fn(() => ({ id: "run", generation: 1 })),
       recordProcessStatus: vi.fn(),
@@ -613,7 +632,7 @@ describe("process, hook, screen, privacy, and scale behavior", () => {
       wrapperChain: ["bash"],
     };
 
-    expect(() =>
+    await expect(
       service.observeRuntime({
         id: "provider-mismatch",
         runId: "run",
@@ -624,7 +643,7 @@ describe("process, hook, screen, privacy, and scale behavior", () => {
         evidenceCode: "provider_process_mismatch",
         process,
       }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
     expect(store.recordProcessStatus).toHaveBeenCalledWith(
       "run",
       expect.objectContaining({

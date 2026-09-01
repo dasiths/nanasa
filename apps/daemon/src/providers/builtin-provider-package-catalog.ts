@@ -5,7 +5,7 @@ import {
   canonicalProviderSnapshotBytes,
   digestProviderSnapshot,
   ImmutableAssetReferenceSchema,
-  ProviderExtensionV2ManifestSchema,
+  ProviderPackageManifestSchema,
   type ProviderGrant,
   ProviderPackageRecordSchema,
   ResolvedProviderAdapterSnapshotSchema,
@@ -142,7 +142,7 @@ async function buildTrustedBuiltin(spec: BuiltInSpec): Promise<TrustedBuiltInPro
     assets,
     antiRollbackSequence: 1,
   };
-  const manifest = ProviderExtensionV2ManifestSchema.parse({
+  const manifest = ProviderPackageManifestSchema.parse({
     ...unsignedManifest,
     signatures: [
       {

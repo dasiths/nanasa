@@ -9,7 +9,6 @@ import { AgentActionService } from "../src/actions/agent-action-service.js";
 import { AgentOpenWaitService } from "../src/actions/agent-open-wait-service.js";
 import { AgentWaitService } from "../src/actions/agent-wait-service.js";
 import { PeerCapabilityPolicy } from "../src/actions/peer-capability-policy.js";
-import { ProviderAdapterRegistry } from "../src/providers/provider-adapter-registry.js";
 import { NanasaStore } from "../src/store.js";
 import { TerminalControlService } from "../src/terminal/terminal-control-service.js";
 import { TerminalInputArbiter } from "../src/terminal/terminal-input-arbiter.js";
@@ -17,6 +16,24 @@ import { TerminalInputArbiter } from "../src/terminal/terminal-input-arbiter.js"
 const stores: NanasaStore[] = [];
 const controls: TerminalControlService[] = [];
 const directories: string[] = [];
+
+const waitAuthority = {
+  controlPolicy: async () => ({
+    waitReplyChannels: ["terminal"],
+    supportsPromptAcknowledgement: true,
+    supportsCancellation: true,
+    terminalSubmitSequence: "\r",
+    operations: [],
+  }),
+  encodeWaitReply: async (
+    _run: AgentRun,
+    reply: { kind: string; text?: string; option?: string },
+  ) => {
+    if (reply.kind === "answer") return reply.text ?? "";
+    if (reply.kind === "select") return reply.option ?? "";
+    return ["allow-once", "approve-plan"].includes(reply.kind) ? "y" : "n";
+  },
+};
 
 afterEach(() => {
   for (const control of controls.splice(0)) control.close();
@@ -560,7 +577,7 @@ describe("exact provider waits and authority", () => {
       context.store,
       context.runtime,
       context.arbiter,
-      ProviderAdapterRegistry.builtIn(),
+      waitAuthority,
     );
     await expect(
       service.reply(context.principal, wait.id, {
@@ -669,7 +686,7 @@ describe("exact provider waits and authority", () => {
       context.store,
       context.runtime,
       context.arbiter,
-      ProviderAdapterRegistry.builtIn(),
+      waitAuthority,
     );
     let releaseBlocker: (() => void) | undefined;
     let markStarted: (() => void) | undefined;
@@ -737,7 +754,7 @@ describe("exact provider waits and authority", () => {
       context.store,
       context.runtime,
       context.arbiter,
-      ProviderAdapterRegistry.builtIn(),
+      waitAuthority,
     );
     let resolveObservation:
       | ((value: Awaited<ReturnType<typeof context.runtime.observeRun>>) => void)
@@ -812,7 +829,7 @@ describe("exact provider waits and authority", () => {
       context.store,
       context.runtime,
       context.arbiter,
-      ProviderAdapterRegistry.builtIn(),
+      waitAuthority,
     );
     let releasePaste: (() => void) | undefined;
     let markPasting: (() => void) | undefined;

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IdentifierSchema, TimestampSchema } from "./control-v1.js";
+import { IdentifierSchema, TimestampSchema } from "./control.js";
 
 export const PROVIDER_EXTENSION_API_VERSION = "nanasa.dev/provider-extension/v1" as const;
 export const PROVIDER_EXTENSION_LOCK_VERSION = 1 as const;

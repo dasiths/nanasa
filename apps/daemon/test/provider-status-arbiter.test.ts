@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import {
   canonicalJson,
   type ProviderAuthorityFence,
-  type StatusSourceClaimV3,
+  type ProviderStatusClaim,
 } from "@nanasa/contracts";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildTrustedBuiltinCopilotPackage } from "../src/providers/builtin-provider-packages.js";
@@ -32,9 +32,9 @@ beforeAll(async () => {
 
 function claim(
   id: string,
-  input: Partial<StatusSourceClaimV3> &
-    Pick<StatusSourceClaimV3, "source" | "claimType" | "confidence" | "reasonCode">,
-): StatusSourceClaimV3 {
+  input: Partial<ProviderStatusClaim> &
+    Pick<ProviderStatusClaim, "source" | "claimType" | "confidence" | "reasonCode">,
+): ProviderStatusClaim {
   return {
     id,
     fence,
@@ -43,7 +43,7 @@ function claim(
     sourceSequence: 1,
     receivedAt,
     ...input,
-  } as StatusSourceClaimV3;
+  } as ProviderStatusClaim;
 }
 
 describe("provider-aware status arbitration", () => {

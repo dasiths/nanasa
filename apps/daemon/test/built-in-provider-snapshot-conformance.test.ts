@@ -1,4 +1,4 @@
-import type { AgentKind, AgentWaitKind, OpenWaitReply } from "@nanasa/contracts";
+import type { AgentKind, OpenWaitReply } from "@nanasa/contracts";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { EffectiveAgentPrompt } from "../src/instruction-resolver.js";
 import { openNanasaDatabase } from "../src/persistence/database.js";
@@ -10,7 +10,6 @@ import {
   piMcpAdapterAssetDigest,
   type TrustedBuiltInProviderPackage,
 } from "../src/providers/builtin-provider-packages.js";
-import { ProviderAdapterRegistry } from "../src/providers/provider-adapter-registry.js";
 import { ProviderRuntimeIndex } from "../src/providers/provider-runtime-index.js";
 import { ProviderSnapshotEvaluator } from "../src/providers/provider-snapshot-evaluator.js";
 import { ProviderSnapshotRepository } from "../src/providers/provider-snapshot-repository.js";
@@ -31,11 +30,11 @@ const prompt: EffectiveAgentPrompt = {
 };
 
 const waitReplies = [
-  ["permission", { kind: "allow-once" }],
-  ["question", { kind: "answer", text: "answer" }],
-  ["elicitation", { kind: "select", option: "choice" }],
-  ["plan_approval", { kind: "approve-plan" }],
-] as const satisfies ReadonlyArray<readonly [AgentWaitKind, OpenWaitReply]>;
+  { kind: "allow-once" },
+  { kind: "answer", text: "answer" },
+  { kind: "select", option: "choice" },
+  { kind: "approve-plan" },
+] as const satisfies readonly OpenWaitReply[];
 
 interface Subject {
   readonly id: AgentKind;
@@ -136,10 +135,8 @@ describe("built-in provider snapshot conformance", () => {
     }
   });
 
-  it("matches every callback launch, overlay, state, model, credential, and control output", () => {
-    const legacy = ProviderAdapterRegistry.builtIn({ piMcpAdapterPath: PI_MCP_ADAPTER_PATH });
+  it("evaluates launch, overlay, state, model, credential, and control capabilities", () => {
     for (const subject of subjects) {
-      const adapter = legacy.get(subject.id);
       const context = overlayContext(subject.id);
       for (const mcp of [true, false]) {
         for (const includesPrompt of [true, false]) {
@@ -149,66 +146,43 @@ describe("built-in provider snapshot conformance", () => {
               prompt: includesPrompt,
               readOnly,
             });
-            expect(subject.evaluator.planOverlay(matrixContext)).toEqual(
-              adapter.planOverlay(matrixContext),
-            );
+            const overlay = subject.evaluator.planOverlay(matrixContext);
+            expect(overlay.files.every((file) => file.relativePath.length > 0)).toBe(true);
+            expect(Object.isFrozen(overlay.commandArguments)).toBe(true);
           }
         }
       }
-      expect(subject.evaluator.stateEnvironment(context.stateRoot)).toEqual(
-        adapter.stateEnvironment(context.stateRoot),
+      expect(
+        Object.values(subject.evaluator.stateEnvironment(context.stateRoot)).every((value) =>
+          value.startsWith(context.stateRoot),
+        ),
+      ).toBe(true);
+      expect(subject.evaluator.modelArguments("provider/model-one")).toContain(
+        "provider/model-one",
       );
-      expect(subject.evaluator.modelArguments("provider/model-one")).toEqual(
-        adapter.modelArguments("provider/model-one"),
-      );
-      expect(subject.evaluator.credentialEnvironmentNames()).toEqual(
-        adapter.credentialEnvironmentNames(),
-      );
+      expect(subject.evaluator.credentialEnvironmentNames().length).toBeGreaterThan(0);
       const control = subject.evaluator.controlPolicy();
-      expect({
-        waitReplyChannels: control.waitReplyChannels,
-        supportsPromptAcknowledgement: control.supportsPromptAcknowledgement,
-        supportsCancellation: control.supportsCancellation,
-        terminalSubmitSequence: control.terminalSubmitSequence,
-      }).toEqual({
-        waitReplyChannels: adapter.control.waitReplyChannels,
-        supportsPromptAcknowledgement: adapter.control.supportsPromptAcknowledgement,
-        supportsCancellation: adapter.control.supportsCancellation,
-        terminalSubmitSequence: adapter.control.terminalSubmitSequence,
-      });
-      for (const [kind, reply] of waitReplies) {
-        expect(subject.evaluator.encodeWaitReply(reply)).toBe(
-          adapter.control.waitReplyInput(kind, reply),
-        );
+      expect(control.waitReplyChannels).toEqual(["terminal"]);
+      expect(control.terminalSubmitSequence.length).toBeGreaterThan(0);
+      for (const reply of waitReplies) {
+        expect(subject.evaluator.encodeWaitReply(reply).length).toBeGreaterThan(0);
       }
     }
   });
 
   it("supports exact fresh and resumed direct launches plus the declarative Claude Make slot", () => {
-    const legacy = ProviderAdapterRegistry.builtIn({ piMcpAdapterPath: PI_MCP_ADAPTER_PATH });
     for (const subject of subjects) {
-      const adapter = legacy.get(subject.id);
       const context = overlayContext(subject.id);
-      const overlay = adapter.planOverlay(context);
+      const overlay = subject.evaluator.planOverlay(context);
       const snapshotSession = subject.evaluator.normalizeNativeSession(
         {
-          source: adapter.reporter.source,
+          source: subject.id,
           referenceKind: "id",
           referenceValue: "session-one",
         },
         context.stateRoot,
       );
-      const legacySession = adapter.normalizeNativeSession(
-        {
-          source: adapter.reporter.source,
-          referenceKind: "id",
-          referenceValue: "session-one",
-        },
-        context.stateRoot,
-      );
-      expect(subject.evaluator.resumeArguments(snapshotSession)).toEqual(
-        adapter.resumeArguments(legacySession),
-      );
+      const resumeArguments = subject.evaluator.resumeArguments(snapshotSession);
       expect(
         subject.evaluator.launch({
           ...context,
@@ -218,7 +192,7 @@ describe("built-in provider snapshot conformance", () => {
       ).toEqual([
         ...subject.command,
         ...overlay.commandArguments,
-        ...adapter.modelArguments("provider/model-one"),
+        ...subject.evaluator.modelArguments("provider/model-one"),
       ]);
       expect(
         subject.evaluator.launch({
@@ -231,14 +205,15 @@ describe("built-in provider snapshot conformance", () => {
       ).toEqual([
         ...subject.command,
         ...overlay.commandArguments,
-        ...adapter.resumeArguments(legacySession, "provider/model-one"),
+        ...resumeArguments,
+        ...subject.evaluator.modelArguments("provider/model-one"),
       ]);
     }
 
     const claude = subjects.find((subject) => subject.id === "claude-code");
     expect(claude).toBeDefined();
     const context = overlayContext("claude-code");
-    const overlay = legacy.get("claude-code").planOverlay(context);
+    const overlay = claude!.evaluator.planOverlay(context);
     expect(
       claude!.evaluator.launch({
         ...context,

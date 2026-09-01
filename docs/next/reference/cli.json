@@ -919,22 +919,6 @@
       "summary": "Restore one verified package-state backup"
     },
     {
-      "id": "migration.probe",
-      "family": "migration",
-      "command": "probe",
-      "mode": "local",
-      "positionals": [],
-      "summary": "Probe schema and integrity without mutation"
-    },
-    {
-      "id": "migration.apply",
-      "family": "migration",
-      "command": "apply",
-      "mode": "local",
-      "positionals": [],
-      "summary": "Apply the complete supported migration path"
-    },
-    {
       "id": "remote.describe",
       "family": "remote",
       "command": "describe",

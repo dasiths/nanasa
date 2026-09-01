@@ -1,22 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
-  AgentActionV2Schema,
   assertSameProviderAuthority,
   CapabilityNegotiationError,
   canonicalJson,
   canonicalProviderSnapshotBytes,
   digestProviderSnapshot,
-  NanasaConfigV3Schema,
   negotiateProviderCapabilities,
-  ProviderExtensionV2ManifestSchema,
+  ProviderPackageManifestSchema,
   ProviderGrantSchema,
   ProviderRpcOperationRequestSchema,
   parseResolvedProviderAdapterSnapshot,
   parseStrictJson,
-  ReporterEventV3Schema,
+  ProviderReporterEventSchema,
   ResolvedProviderAdapterSnapshotBodySchema,
   requireCanonicalJson,
-  StatusSourceClaimV3Schema,
+  ProviderStatusClaimSchema,
 } from "../src/index.js";
 
 const identityPayload = {
@@ -253,15 +251,15 @@ describe("clean target surface contracts", () => {
       ],
       antiRollbackSequence: 1,
     } as const;
-    expect(ProviderExtensionV2ManifestSchema.safeParse(manifest).success).toBe(true);
+    expect(ProviderPackageManifestSchema.safeParse(manifest).success).toBe(true);
     expect(
-      ProviderExtensionV2ManifestSchema.safeParse({
+      ProviderPackageManifestSchema.safeParse({
         ...manifest,
         providerId: "other.agent",
       }).success,
     ).toBe(false);
     expect(
-      ProviderExtensionV2ManifestSchema.safeParse({
+      ProviderPackageManifestSchema.safeParse({
         ...manifest,
         assets: [
           {
@@ -289,30 +287,6 @@ describe("clean target surface contracts", () => {
     ).toBe(false);
   });
 
-  it("expresses config without kind or agentType aliases", () => {
-    const config = NanasaConfigV3Schema.parse({
-      version: 3,
-      integrations: {
-        reviewer: {
-          id: "reviewer",
-          name: "Reviewer",
-          providerId: "acme.agent",
-          command: ["acme-agent"],
-          requiredCapabilities: ["launch", "reporter"],
-        },
-      },
-    });
-    expect(config.integrations.reviewer?.providerId).toBe("acme.agent");
-    expect(
-      NanasaConfigV3Schema.safeParse({
-        ...config,
-        integrations: {
-          reviewer: { ...config.integrations.reviewer, kind: "copilot" },
-        },
-      }).success,
-    ).toBe(false);
-  });
-
   it("requires open reporter identity plus snapshot and process fences", () => {
     const event = {
       version: 3,
@@ -332,9 +306,10 @@ describe("clean target surface contracts", () => {
       event: "turn.started",
       data: {},
     } as const;
-    expect(ReporterEventV3Schema.parse(event).source).toBe("acme.agent");
+    expect(ProviderReporterEventSchema.parse(event).source).toBe("acme.agent");
     expect(
-      ReporterEventV3Schema.safeParse({ ...event, processIncarnationDigest: undefined }).success,
+      ProviderReporterEventSchema.safeParse({ ...event, processIncarnationDigest: undefined })
+        .success,
     ).toBe(false);
   });
 
@@ -350,7 +325,7 @@ describe("clean target surface contracts", () => {
       receivedAt: "2026-09-01T00:00:00Z",
     } as const;
     expect(
-      StatusSourceClaimV3Schema.safeParse({
+      ProviderStatusClaimSchema.safeParse({
         ...base,
         source: "process",
         claimType: "semantic-state",
@@ -358,47 +333,12 @@ describe("clean target surface contracts", () => {
       }).success,
     ).toBe(false);
     expect(
-      StatusSourceClaimV3Schema.safeParse({
+      ProviderStatusClaimSchema.safeParse({
         ...base,
         source: "screen",
         claimType: "outcome",
         outcome: "succeeded",
       }).success,
-    ).toBe(false);
-  });
-
-  it("requires exact wait IDs and complete action authority fences", () => {
-    const action = {
-      version: 2,
-      id: "action_1",
-      kind: "wait-reply",
-      principalId: "operator_1",
-      groupId: "group_1",
-      memberId: "member_1",
-      target: {
-        ...fence,
-        daemonEpoch: 1,
-        reporterSessionId: "reporter_1",
-        reporterId: "acme-reporter",
-        reporterSourceId: "acme.agent",
-        reporterEpoch: "epoch_1",
-        baselineStatusRevision: 3,
-        baselineCompletionRevision: 1,
-        operationId: "wait/reply",
-        transportId: "terminal",
-      },
-      idempotencyKey: "reply-1",
-      requestDigest: "e".repeat(64),
-      input: { waitId: "wait_1" },
-      state: "created",
-      queueDeadlineAt: "2026-09-01T00:01:00Z",
-      createdAt: "2026-09-01T00:00:00Z",
-      updatedAt: "2026-09-01T00:00:00Z",
-    } as const;
-    expect(AgentActionV2Schema.parse(action).input.waitId).toBe("wait_1");
-    expect(
-      AgentActionV2Schema.safeParse({ ...action, input: {}, snapshotDigest: "f".repeat(64) })
-        .success,
     ).toBe(false);
   });
 

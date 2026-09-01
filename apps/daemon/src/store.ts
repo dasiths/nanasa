@@ -513,6 +513,10 @@ export class NanasaStore {
     this.#memberNameGenerator = options.memberNameGenerator ?? dockerMemberName;
   }
 
+  public get database(): DatabaseSync {
+    return this.#database;
+  }
+
   public close(): void {
     this.#database.close();
   }

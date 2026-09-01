@@ -7,7 +7,6 @@ import type {
   ProviderExtensionHealth,
 } from "@nanasa/contracts";
 import type { z } from "zod";
-import type { ProviderAdapterRegistry } from "../providers/provider-adapter-registry.js";
 import { descriptorDigest } from "./extension-package-loader.js";
 
 type ExtensionPackageSource = z.infer<typeof ExtensionPackageSourceSchema>;
@@ -102,16 +101,15 @@ const definitions = {
 export class ProviderCatalogService {
   readonly #packages = new Map<string, Map<string, CatalogPackage>>();
 
-  public constructor(adapters: ProviderAdapterRegistry) {
-    for (const adapter of adapters.list()) {
-      const definition = definitions[adapter.id];
+  public constructor() {
+    for (const [providerId, definition] of Object.entries(definitions)) {
       const descriptor: ProviderExtensionDescriptor = {
         apiVersion: "nanasa.dev/provider-extension/v1",
         kind: "ProviderExtension",
         metadata: {
           id: definition.extensionId,
           name: definition.name,
-          version: adapter.version,
+          version: "1.0.0",
           publisher: definition.publisher,
           description: `Nanasa-maintained declarative provider package for ${definition.name}`,
         },
@@ -121,7 +119,7 @@ export class ProviderCatalogService {
         },
         providers: [
           {
-            id: adapter.id,
+            id: providerId,
             displayName: definition.name,
             commandNames: [...definition.commandNames],
             strategies: {
@@ -138,7 +136,7 @@ export class ProviderCatalogService {
         descriptor,
         descriptorDigest: digest,
         packageDigest: digest,
-        packageReference: `builtin:${definition.extensionId}@${adapter.version}`,
+        packageReference: `builtin:${definition.extensionId}@1.0.0`,
         source: { kind: "builtin", name: definition.extensionId },
         signatureState: "builtin",
       });

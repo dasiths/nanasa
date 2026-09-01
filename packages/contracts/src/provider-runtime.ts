@@ -7,10 +7,10 @@ const EnvironmentNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export const OpenIdentitySchema = z.string().min(1).max(128).regex(OpenIdPattern);
 export const ProviderIdSchema = OpenIdentitySchema;
-export const ExtensionIdV2Schema = OpenIdentitySchema;
+export const ProviderExtensionIdSchema = OpenIdentitySchema;
 export const AdapterIdSchema = OpenIdentitySchema;
 export const ReporterSourceIdSchema = OpenIdentitySchema;
-export const IntegrationIdV3Schema = z
+export const ProviderIntegrationIdSchema = z
   .string()
   .min(1)
   .max(128)
@@ -101,7 +101,7 @@ export const IdentityCapabilityPayloadSchema = z
   .object({
     publisherId: OpenIdentitySchema,
     providerId: ProviderIdSchema,
-    extensionId: ExtensionIdV2Schema,
+    extensionId: ProviderExtensionIdSchema,
     adapterId: AdapterIdSchema,
     ownedNamespaces: z.array(OpenIdentitySchema).min(1).max(32),
   })
@@ -872,7 +872,7 @@ export const ResolvedProviderAdapterSnapshotBodySchema = z
     compilerDigest: SnapshotDigestSchema.optional(),
     providerId: ProviderIdSchema,
     adapterId: AdapterIdSchema,
-    extensionId: ExtensionIdV2Schema,
+    extensionId: ProviderExtensionIdSchema,
     extensionGeneration: z.string().min(1).max(128),
     interpreterVersions: z.record(z.string().min(1).max(64), z.string().min(1).max(64)),
     capabilities: z.array(SelectedCapabilitySchema).min(1).max(PROVIDER_CAPABILITY_IDS.length),
@@ -1026,7 +1026,7 @@ export const RunProviderBindingSchema = z
     id: z.string().min(1).max(128),
     runId: z.string().min(1).max(128),
     generation: RunGenerationSchema,
-    integrationId: IntegrationIdV3Schema,
+    integrationId: ProviderIntegrationIdSchema,
     providerId: ProviderIdSchema,
     adapterId: AdapterIdSchema,
     snapshotDigest: SnapshotDigestSchema,
@@ -1082,10 +1082,10 @@ export const ProviderAuthorityFenceSchema = RunProviderBindingFenceSchema.extend
 }).strict();
 export type ProviderAuthorityFence = z.infer<typeof ProviderAuthorityFenceSchema>;
 
-export const ProviderStateRecordV2Schema = z
+export const ProviderStateRecordSchema = z
   .object({
     id: z.string().min(1).max(128),
-    integrationId: IntegrationIdV3Schema,
+    integrationId: ProviderIntegrationIdSchema,
     providerId: ProviderIdSchema,
     snapshotDigest: SnapshotDigestSchema,
     stateFormatVersion: z.string().min(1).max(64),
@@ -1099,7 +1099,7 @@ export const ProviderStateRecordV2Schema = z
   })
   .strict();
 
-export const GeneratedOverlayV2Schema = z
+export const ProviderGeneratedOverlaySchema = z
   .object({
     id: z.string().min(1).max(128),
     fence: RunProviderBindingFenceSchema,
@@ -1113,21 +1113,21 @@ export const GeneratedOverlayV2Schema = z
     createdAt: z.string().datetime({ offset: true }),
   })
   .strict();
-export type GeneratedOverlayV2 = z.infer<typeof GeneratedOverlayV2Schema>;
+export type ProviderGeneratedOverlay = z.infer<typeof ProviderGeneratedOverlaySchema>;
 
-export const NativeSessionV2Schema = z
+export const ProviderNativeSessionSchema = z
   .object({
     id: z.string().min(1).max(128),
     fence: ProviderAuthorityFenceSchema,
     memberId: z.string().min(1).max(128),
-    integrationId: IntegrationIdV3Schema,
+    integrationId: ProviderIntegrationIdSchema,
     providerId: ProviderIdSchema,
     referenceKind: z.enum(["id", "state-contained-path"]),
     opaqueReference: z.string().min(1).max(4_096),
     normalizationVersion: z.string().min(1).max(64),
     dedupeVersion: z.string().min(1).max(64),
     dedupeDigest: SnapshotDigestSchema,
-    resumeCompatibility: z.enum(["compatible", "migration-required", "incompatible"]),
+    resumeCompatibility: z.enum(["compatible", "incompatible"]),
     status: z.enum(["ready", "reserved", "resumed", "invalid"]),
     reportedAt: z.string().datetime({ offset: true }),
   })
@@ -1142,7 +1142,7 @@ export const NativeSessionV2Schema = z
     }
   });
 
-export const ProviderTrustReceiptV2Schema = z
+export const ProviderTrustReceiptSchema = z
   .object({
     id: z.string().min(1).max(128),
     providerId: ProviderIdSchema,
@@ -1206,10 +1206,10 @@ export const ProviderHealthStateSchema = z.enum([
   "disabled",
   "unavailable",
 ]);
-export const ProviderHealthV2Schema = z
+export const ProviderRuntimeHealthSchema = z
   .object({
     providerId: ProviderIdSchema,
-    extensionId: ExtensionIdV2Schema,
+    extensionId: ProviderExtensionIdSchema,
     snapshotDigest: SnapshotDigestSchema.optional(),
     state: ProviderHealthStateSchema,
     checkedAt: z.string().datetime({ offset: true }),

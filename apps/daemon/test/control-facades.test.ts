@@ -106,7 +106,6 @@ describe("typed control facade registries", () => {
         "group",
         "message",
         "metadata",
-        "migration",
         "remote",
         "role",
         "run",

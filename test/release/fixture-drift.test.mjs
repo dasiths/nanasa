@@ -38,25 +38,3 @@ test("versioned fixtures parse through final contracts", () => {
   );
   NanasaConfigSchema.parse(parseYaml(readFileSync(join(fixtures, "config-v2.yaml"), "utf8")));
 });
-
-test("database-v7 is a complete immutable prior-schema fixture", () => {
-  const databaseV7 = readFileSync(join(fixtures, "database-v7.sql"), "utf8");
-  assert.match(databaseV7, /PRAGMA user_version = 7/);
-  assert.match(databaseV7, /CREATE TABLE schema_metadata/);
-  assert.match(databaseV7, /CREATE TABLE terminal_checkpoints/);
-  assert.match(databaseV7, /CREATE TABLE retention_metadata/);
-  assert.match(databaseV7, /CREATE INDEX open_waits_target/);
-  assert.doesNotMatch(databaseV7, /content_digest|http_idempotency_keys/);
-  const productionSchema = readFileSync(
-    join(root, "..", "apps", "daemon", "src", "persistence", "schema.ts"),
-    "utf8",
-  );
-  const productionTables = [...productionSchema.matchAll(/CREATE TABLE (\w+)/g)].map(
-    (match) => match[1],
-  );
-  const fixtureTables = [...databaseV7.matchAll(/CREATE TABLE (\w+)/g)].map((match) => match[1]);
-  assert.deepEqual(
-    fixtureTables,
-    productionTables.filter((name) => name !== "http_idempotency_keys"),
-  );
-});

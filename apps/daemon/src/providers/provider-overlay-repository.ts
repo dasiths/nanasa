@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
   canonicalJson,
-  type GeneratedOverlayV2,
-  GeneratedOverlayV2Schema,
+  type ProviderGeneratedOverlay,
+  ProviderGeneratedOverlaySchema,
   type RunProviderBinding,
 } from "@nanasa/contracts";
 import {
@@ -11,7 +11,7 @@ import {
   type OverlayLedger,
   type OverlayLedgerEntry,
 } from "../generated-overlay-transaction.js";
-import type { GeneratedOverlayFile } from "./provider-adapter.js";
+import type { GeneratedOverlayFile } from "./provider-runtime-types.js";
 import type { RecoveredRunProviderBinding } from "./provider-run-binding-repository.js";
 
 interface OverlayRow {
@@ -41,7 +41,7 @@ export interface CommitProviderOverlayInput {
 }
 
 export interface RecoveredProviderOverlay {
-  readonly record: GeneratedOverlayV2;
+  readonly record: ProviderGeneratedOverlay;
   readonly root: string;
   readonly ledger: OverlayLedger;
 }
@@ -73,8 +73,8 @@ function ownershipDigest(ledger: OverlayLedger): string {
   });
 }
 
-function recordFromRow(row: OverlayRow): GeneratedOverlayV2 {
-  return GeneratedOverlayV2Schema.parse({
+function recordFromRow(row: OverlayRow): ProviderGeneratedOverlay {
+  return ProviderGeneratedOverlaySchema.parse({
     id: row.id,
     fence: {
       runId: row.run_id,
@@ -120,7 +120,7 @@ export class ProviderOverlayRepository {
       input.adapterVersion,
       input.files,
     );
-    const record = GeneratedOverlayV2Schema.parse({
+    const record = ProviderGeneratedOverlaySchema.parse({
       id: input.binding.overlayId,
       fence: {
         runId: input.binding.runId,

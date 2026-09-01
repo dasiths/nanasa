@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ConfiguredAgentIdSchema, IdentifierSchema, TimestampSchema } from "./control-v1.js";
+import { ConfiguredAgentIdSchema, IdentifierSchema, TimestampSchema } from "./control.js";
 export const GitObjectFormatSchema = z.enum(["sha1", "sha256"]);
 export const GitRefStorageSchema = z.enum(["files", "reftable"]);
 export const CheckoutKindSchema = z.enum(["primary", "linked", "bare"]);

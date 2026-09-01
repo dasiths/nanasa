@@ -28,7 +28,7 @@ export class AgentStatusService {
     }
   }
 
-  public observeRuntime(observation: RuntimeStatusObservation): void {
+  public async observeRuntime(observation: RuntimeStatusObservation): Promise<void> {
     const run = this.#store.getRun(observation.runId);
     if (run.generation !== observation.generation) return;
     const evidence = `${observation.state}:${observation.process?.processFingerprint ?? "none"}:${observation.process?.expectedProviderMatch ?? "none"}:${observation.process?.executableFingerprint ?? "none"}:${observation.process?.argvFingerprint ?? "none"}:${observation.exitCode ?? ""}:${observation.signal ?? ""}`;
@@ -46,7 +46,7 @@ export class AgentStatusService {
       }
       let reporterError: unknown;
       try {
-        this.#reporters.observeProcess(run, observation.process);
+        await this.#reporters.observeProcess(run, observation.process);
       } catch (error) {
         reporterError = error;
       }

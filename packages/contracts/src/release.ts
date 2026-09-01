@@ -32,17 +32,6 @@ export const BuildIdentitySchema = z
   })
   .strict();
 
-export const MigrationProbeSchema = z
-  .object({
-    path: AbsolutePathSchema,
-    foundSchema: z.number().int().nonnegative(),
-    targetSchema: z.number().int().positive(),
-    compatibility: z.enum(["current", "upgrade-available", "future-schema", "unsupported-old"]),
-    integrity: z.enum(["ok", "failed", "not-run"]),
-    foreignKeys: z.enum(["ok", "failed", "not-run"]),
-  })
-  .strict();
-
 export const BackupArtifactSchema = z
   .object({
     path: z.string().min(1).max(4_096),
@@ -145,7 +134,6 @@ export const BrowserRestartFrameSchema = z
   .strict();
 
 export type BuildIdentity = z.infer<typeof BuildIdentitySchema>;
-export type MigrationProbe = z.infer<typeof MigrationProbeSchema>;
 export type BackupManifest = z.infer<typeof BackupManifestSchema>;
 export type ActivationManifest = z.infer<typeof ActivationManifestSchema>;
 export type ServiceDescriptor = z.infer<typeof ServiceDescriptorSchema>;

@@ -1,12 +1,12 @@
 import { hostHeaderValidation, originValidation } from "@modelcontextprotocol/node";
-import { AgentStatusEventInputSchema, type AgentProfile } from "@nanasa/contracts";
+import { AgentStatusEventInputSchema } from "@nanasa/contracts";
 import type { FastifyInstance } from "fastify";
 
 import type { AgentActionAckService } from "./actions/agent-action-ack-service.js";
 import { AgentStatusService } from "./agent-status-service.js";
+import type { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
 import { McpCredentialIssuer } from "./mcp-auth.js";
 import { NativeSessionService } from "./native-session-service.js";
-import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
 import { DomainError, NanasaStore } from "./store.js";
 
 export interface AgentStatusRouteOptions {
@@ -16,8 +16,7 @@ export interface AgentStatusRouteOptions {
   store: NanasaStore;
   statusService: AgentStatusService;
   nativeSessions?: NativeSessionService;
-  adapters?: ProviderAdapterRegistry;
-  providerStateRoot?: (profile: AgentProfile) => string;
+  runtimeProvisioner?: AgentRuntimeProvisioner;
   actionAcks?: AgentActionAckService;
 }
 
@@ -59,22 +58,42 @@ export function registerAgentStatusRoutes(
     limiter.check(principal.runId);
     const event = AgentStatusEventInputSchema.parse(request.body);
     const result = options.statusService.ingestReporter(principal, event);
-    if (
-      options.nativeSessions !== undefined &&
-      options.adapters !== undefined &&
-      options.providerStateRoot !== undefined
-    ) {
+    if (options.nativeSessions !== undefined && options.runtimeProvisioner !== undefined) {
       const run = options.store.getRun(principal.runId);
-      const profile = options.store.getAgentProfile(run.agentProfileId);
-      options.nativeSessions.observe({
-        memberId: run.memberId,
-        integrationId: profile.agentType,
-        runId: run.id,
-        generation: run.generation,
-        adapter: options.adapters.get(profile.kind),
-        stateRoot: options.providerStateRoot(profile),
-        event,
-      });
+      if (event.event === "session.ready") {
+        const reported =
+          event.data.nativeSession ??
+          (event.nativeSessionId === undefined
+            ? undefined
+            : { kind: "id" as const, value: event.nativeSessionId });
+        if (reported !== undefined) {
+          const profile = options.store.getAgentProfile(run.agentProfileId);
+          const reporter = await options.runtimeProvisioner.reporterPolicy(run);
+          if (
+            event.source !== reporter.source ||
+            event.reporterVersion !== reporter.reporterVersion
+          ) {
+            throw new Error("Native session report does not match the bound provider reporter");
+          }
+          const reference = await options.runtimeProvisioner.normalizeNativeSession(
+            run,
+            {
+              source: event.source,
+              referenceKind: reported.kind,
+              referenceValue: reported.value,
+            },
+            await options.runtimeProvisioner.providerStateRoot(run),
+          );
+          options.nativeSessions.observe({
+            memberId: run.memberId,
+            integrationId: profile.agentType,
+            runId: run.id,
+            generation: run.generation,
+            reference,
+            event,
+          });
+        }
+      }
       if (event.data.effectiveModel !== undefined) {
         options.store.updateRunProviderMetadata(run.id, {
           effectiveModel: event.data.effectiveModel,

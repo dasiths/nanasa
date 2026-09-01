@@ -4,7 +4,7 @@ import {
   ProcessIncarnationDigestSchema,
   ProviderAuthorityFenceSchema,
   SnapshotDigestSchema,
-} from "./provider-runtime-v2.js";
+} from "./provider-runtime.js";
 
 export const PROVIDER_RPC_PROTOCOL = "nanasa-provider-rpc.v2" as const;
 export const PROVIDER_RPC_MAX_FRAME_BYTES = 1_048_576;

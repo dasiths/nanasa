@@ -1,7 +1,6 @@
 import type { AgentRun } from "@nanasa/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { NativeSessionService } from "../src/native-session-service.js";
-import { ProviderAdapterRegistry } from "../src/providers/provider-adapter-registry.js";
 import { RunRuntimeCoordinator } from "../src/run-runtime-coordinator.js";
 import { NanasaStore } from "../src/store.js";
 
@@ -40,8 +39,13 @@ function recoveryStore(): {
     integrationId: "copilot",
     runId: run.id,
     generation: run.generation,
-    adapter: ProviderAdapterRegistry.builtIn().get("copilot"),
-    stateRoot: "/state",
+    reference: {
+      provider: "copilot",
+      source: "copilot",
+      referenceKind: "id",
+      referenceValue: "native-session-one",
+      dedupeHash: "a".repeat(64),
+    },
     event: {
       version: 2,
       eventId: "session-initial",
@@ -187,8 +191,13 @@ describe("confirmed native recovery coordination", () => {
         integrationId: "copilot",
         runId: replacement.id,
         generation: replacement.generation,
-        adapter: ProviderAdapterRegistry.builtIn().get("copilot"),
-        stateRoot: "/state",
+        reference: {
+          provider: "copilot",
+          source: "copilot",
+          referenceKind: "id",
+          referenceValue: "native-session-one",
+          dedupeHash: "a".repeat(64),
+        },
         event: {
           version: 2,
           eventId: "session-resumed",

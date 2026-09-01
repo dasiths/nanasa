@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { GeneratedOverlayFile } from "./providers/provider-adapter.js";
+import type { GeneratedOverlayFile } from "./providers/provider-runtime-types.js";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;

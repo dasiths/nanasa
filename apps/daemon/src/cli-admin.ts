@@ -9,7 +9,13 @@ import {
   resetFromAlpha,
 } from "./persistence/reset-service.js";
 import { ProviderStateRepository } from "./provider-state-repository.js";
-import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
+import {
+  buildTrustedBuiltinClaudeCodePackage,
+  buildTrustedBuiltinCopilotPackage,
+  buildTrustedBuiltinOpenCodePackage,
+  buildTrustedBuiltinPiPackage,
+} from "./providers/builtin-provider-packages.js";
+import { ProviderSnapshotEvaluator } from "./providers/provider-snapshot-evaluator.js";
 import { UserCredentialBroker } from "./user-credential-broker.js";
 
 const DIRECTORY_MODE = 0o700;
@@ -179,21 +185,30 @@ export function doctorIntegrations(repositoryRoot: string): void {
   );
 }
 
-export function authenticateAgent(
+export async function authenticateAgent(
   repositoryRoot: string,
   integrationId: string,
   agentId?: string,
-): void {
+): Promise<void> {
   const loaded = loadNanasaConfig(repositoryRoot);
   const integration = selectedIntegration(repositoryRoot, integrationId);
   const configHome = selectedHome(repositoryRoot, integration, agentId);
   ensurePrivateTree(loaded.integrationsDirectory, configHome);
   const command = integration.command[0] as string;
-  const adapter = ProviderAdapterRegistry.builtIn().get(integration.kind);
+  const providerPackage = await {
+    copilot: buildTrustedBuiltinCopilotPackage,
+    pi: buildTrustedBuiltinPiPackage,
+    opencode: buildTrustedBuiltinOpenCodePackage,
+    "claude-code": buildTrustedBuiltinClaudeCodePackage,
+  }[integration.kind]();
+  const evaluator = new ProviderSnapshotEvaluator(
+    providerPackage.resolved,
+    providerPackage.reporterDrivers,
+  );
   const credentials = new UserCredentialBroker().resolve(
     integration.credentials,
     integration.kind,
-    adapter.credentialEnvironmentNames(),
+    evaluator.credentialEnvironmentNames(),
   );
   if (credentials.health === "missing") {
     throw new Error(`Credential profile ${credentials.profileId} is unavailable`);
@@ -207,7 +222,7 @@ export function authenticateAgent(
     env: {
       ...process.env,
       ...integration.environment,
-      ...adapter.stateEnvironment(configHome),
+      ...evaluator.stateEnvironment(configHome),
       ...credentials.environment,
     },
     stdio: "inherit",

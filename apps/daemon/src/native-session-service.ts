@@ -5,7 +5,6 @@ import type {
   NativeSessionReference,
 } from "@nanasa/contracts";
 import { DurableNativeSessionSchema } from "@nanasa/contracts";
-import type { ProviderAdapter } from "./providers/provider-adapter.js";
 
 export interface NativeSessionPersistence {
   saveNativeSession(session: DurableNativeSession): DurableNativeSession;
@@ -22,8 +21,7 @@ export interface NativeSessionObservation {
   readonly integrationId: string;
   readonly runId: string;
   readonly generation: number;
-  readonly adapter: ProviderAdapter;
-  readonly stateRoot: string;
+  readonly reference: NativeSessionReference;
   readonly event: AgentStatusEventInput;
 }
 
@@ -37,29 +35,10 @@ export class NativeSessionService {
 
   public observe(input: NativeSessionObservation): DurableNativeSession | undefined {
     if (input.event.event !== "session.ready") return undefined;
-    const reported =
-      input.event.data.nativeSession ??
-      (input.event.nativeSessionId === undefined
-        ? undefined
-        : { kind: "id" as const, value: input.event.nativeSessionId });
-    if (reported === undefined) return undefined;
-    if (
-      input.event.source !== input.adapter.reporter.source ||
-      input.event.reporterVersion !== input.adapter.reporter.version
-    ) {
-      throw new Error("Native session report does not match the configured provider reporter");
+    const reference = input.reference;
+    if (input.event.source !== reference.source) {
+      throw new Error("Native session report does not match the normalized provider reference");
     }
-    const reference = input.adapter.normalizeNativeSession(
-      {
-        source: input.event.source,
-        referenceKind: reported.kind,
-        referenceValue: reported.value,
-        ...(input.event.data.effectiveModel === undefined
-          ? {}
-          : { effectiveModel: input.event.data.effectiveModel }),
-      },
-      input.stateRoot,
-    );
     const previous =
       this.persistence.reservedNativeSession(input.memberId, input.integrationId) ??
       this.persistence.latestNativeSession(input.memberId, input.integrationId);

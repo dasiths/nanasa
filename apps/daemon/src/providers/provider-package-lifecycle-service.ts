@@ -5,8 +5,8 @@ import {
   canonicalJsonBytes,
   canonicalProviderSnapshotBytes,
   digestProviderSnapshot,
-  type ProviderExtensionV2Manifest,
-  ProviderExtensionV2ManifestSchema,
+  type ProviderPackageManifest,
+  ProviderPackageManifestSchema,
   ProviderPackageRecordSchema,
   ResolvedProviderAdapterSnapshotSchema,
 } from "@nanasa/contracts";
@@ -45,13 +45,13 @@ function sha256(value: Uint8Array | string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function unsignedManifest(manifest: ProviderExtensionV2Manifest) {
+function unsignedManifest(manifest: ProviderPackageManifest) {
   const { signatures, ...unsigned } = manifest;
   void signatures;
   return unsigned;
 }
 
-function expectedPackageDigest(manifest: ProviderExtensionV2Manifest): string {
+function expectedPackageDigest(manifest: ProviderPackageManifest): string {
   return sha256(
     canonicalJsonBytes({
       providerId: manifest.providerId,
@@ -62,7 +62,7 @@ function expectedPackageDigest(manifest: ProviderExtensionV2Manifest): string {
   );
 }
 
-function expectedManifestDigest(manifest: ProviderExtensionV2Manifest): string {
+function expectedManifestDigest(manifest: ProviderPackageManifest): string {
   return sha256(
     canonicalJsonBytes({
       packageDigest: manifest.generation.packageDigest,
@@ -97,7 +97,7 @@ export class ProviderPackageLifecycleService {
   public async importAndActivate(
     input: ImportProviderPackageInput,
   ): Promise<TrustedBuiltInProviderPackage> {
-    const manifest = ProviderExtensionV2ManifestSchema.parse(input.manifest);
+    const manifest = ProviderPackageManifestSchema.parse(input.manifest);
     const importedAt = input.importedAt ?? this.#now();
     this.#namespaces.assertManifest(manifest);
     this.#assertDigestChain(manifest);
@@ -334,7 +334,7 @@ export class ProviderPackageLifecycleService {
     this.#index.refresh();
   }
 
-  #assertDigestChain(manifest: ProviderExtensionV2Manifest): void {
+  #assertDigestChain(manifest: ProviderPackageManifest): void {
     if (manifest.generation.packageDigest !== expectedPackageDigest(manifest)) {
       throw new Error("Provider package digest chain does not match its manifest");
     }
@@ -343,7 +343,7 @@ export class ProviderPackageLifecycleService {
     }
   }
 
-  #assertAntiRollback(manifest: ProviderExtensionV2Manifest): void {
+  #assertAntiRollback(manifest: ProviderPackageManifest): void {
     const current = this.#database
       .prepare(
         `SELECT max(anti_rollback_sequence) AS sequence FROM provider_packages
@@ -355,7 +355,7 @@ export class ProviderPackageLifecycleService {
     }
   }
 
-  #verifySignatures(manifest: ProviderExtensionV2Manifest): void {
+  #verifySignatures(manifest: ProviderPackageManifest): void {
     const now = Date.parse(this.#now());
     const bytes = Buffer.from(canonicalJson(unsignedManifest(manifest)), "utf8");
     const accepted = manifest.signatures.some((signature) => {
@@ -369,10 +369,7 @@ export class ProviderPackageLifecycleService {
     if (!accepted) throw new Error("Provider package has no current trusted signature");
   }
 
-  #assertAssets(
-    manifest: ProviderExtensionV2Manifest,
-    assets: readonly ProviderAssetContent[],
-  ): void {
+  #assertAssets(manifest: ProviderPackageManifest, assets: readonly ProviderAssetContent[]): void {
     const declared = new Map(manifest.assets.map((asset) => [asset.digest, asset]));
     if (declared.size !== assets.length)
       throw new Error("Provider package asset inventory is incomplete");

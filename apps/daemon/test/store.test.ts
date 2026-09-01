@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -327,7 +327,6 @@ describe("NanasaStore persistence", () => {
     store.close();
   });
 });
-
 describe("NanasaStore HTTP idempotency transactions", () => {
   it("rolls back reservation and SQLite domain mutation after a killed process", async () => {
     const directory = mkdtempSync(join(tmpdir(), "nanasa-idempotency-kill-"));
@@ -827,452 +826,41 @@ describe("NanasaStore message routing", () => {
   });
 });
 
-describe("NanasaStore schema migration", () => {
-  it("refuses schema 4 rather than migrating alpha state", () => {
-    const legacyPath = join(mkdtempSync(join(tmpdir(), "nanasa-schema-4-")), "nanasa.sqlite");
-    const oldSchema = new DatabaseSync(legacyPath);
-    oldSchema.exec("CREATE TABLE legacy (id TEXT PRIMARY KEY) STRICT; PRAGMA user_version = 4");
-    oldSchema.close();
-    expect(() => new NanasaStore(legacyPath)).toThrowError(
-      /Refusing to mutate old database schema 4/,
-    );
-    return;
-    const directory = mkdtempSync(join(tmpdir(), "nanasa-terminal-migration-"));
-    temporaryDirectories.push(directory);
-    const databasePath = join(directory, "nanasa.sqlite");
-    const sessionDirectory = join(directory, "pi");
-    const sessionFile = join(sessionDirectory, "session.jsonl");
-    mkdirSync(sessionDirectory);
-    writeFileSync(sessionFile, '{"type":"session"}\n');
-
-    const store = new NanasaStore(databasePath);
-    const group = store.createGroup({ name: "Migration fixture" });
-    const profile = store.createInternalAgentProfile(
-      {
-        name: "Legacy Pi",
-        agentType: "pi",
-        kind: "pi",
-        command: "pi",
-        args: [],
-        environment: {},
-      },
-      "profile-key",
-    );
-    store.addMembership(group.id, {
-      memberId: "worker",
-      agentProfileId: profile.id,
-      alias: "Worker",
-    });
-    const terminal = {
-      serverName: "nanasa-test",
-      sessionId: "nanasa-group",
-      windowId: "@1",
-      paneId: "%1",
-    };
-    store.createRun({
-      id: "run_active",
-      groupId: group.id,
-      memberId: "worker",
-      agentProfileId: profile.id,
-      generation: 1,
-      status: "running",
-      desiredState: "running",
-      recoveryPhase: "resuming",
-      recoveryAttempts: 2,
-      recoveryNotBefore: "2026-08-10T13:00:00.000Z",
-      adapterSessionId: "active-session",
-      adapterSession: {
-        adapter: "pi-rpc",
-        sessionId: "active-session",
-        sessionFile,
-        updatedAt: "2026-08-10T12:00:00.000Z",
-      },
-      terminal,
-      startedAt: "2026-08-10T12:00:00.000Z",
-    });
-    store.createRun({
-      id: "run_historical",
-      groupId: group.id,
-      memberId: "worker",
-      agentProfileId: profile.id,
-      generation: 2,
-      status: "failed",
-      desiredState: "stopped",
-      recoveryPhase: "resuming",
-      recoveryAttempts: 4,
-      startedAt: "2026-08-10T12:30:00.000Z",
-      stoppedAt: "2026-08-10T12:31:00.000Z",
-    });
-    const pending = store.submitMessage(group.id, {
-      intent: "request",
-      sender: { kind: "operator", operatorId: "operator" },
-      audience: { kind: "dm", memberId: "worker" },
-      body: { contentType: "text/plain", text: "Pending" },
-      delivery: {},
-    });
-    const completed = store.submitMessage(group.id, {
-      intent: "request",
-      sender: { kind: "operator", operatorId: "operator" },
-      audience: { kind: "dm", memberId: "worker" },
-      body: { contentType: "text/plain", text: "Completed" },
-      delivery: {},
-    });
-    const eventIds = store.listEvents().map((event) => event.id);
-    store.close();
-
-    const legacy = new DatabaseSync(databasePath);
-    legacy
-      .prepare(
-        "UPDATE agent_profiles SET adapter = 'pi-rpc', capabilities_json = '[\"queue\",\"steer\"]' WHERE id = ?",
-      )
-      .run(profile.id);
-    legacy
-      .prepare(
-        `UPDATE runs
-         SET recovery_phase = 'resuming', recovery_attempts = 2,
-             recovery_not_before = '2026-08-10T13:00:00.000Z',
-             adapter_session_id = 'active-session',
-             adapter_session_json = ?
-         WHERE id = 'run_active'`,
-      )
-      .run(
-        JSON.stringify({
-          adapter: "pi-rpc",
-          sessionId: "active-session",
-          sessionFile,
-          updatedAt: "2026-08-10T12:00:00.000Z",
-        }),
-      );
-    legacy.prepare("UPDATE runs SET recovery_phase = 'resuming' WHERE id = 'run_historical'").run();
-    legacy
-      .prepare(
-        `UPDATE deliveries
-         SET requested_mode = 'steer', applied_mode = 'steer', fallback_applied = 0,
-             status = 'delivering', adapter = 'pi-rpc',
-             adapter_session_id = 'pending-session', adapter_message_id = 'pending-message',
-             lease_owner = 'legacy-worker', lease_expires_at = '2099-01-01T00:00:00.000Z',
-             next_attempt_at = '2099-01-01T00:00:00.000Z',
-             run_id = 'run_active', run_generation = 1
-         WHERE message_id = ?`,
-      )
-      .run(pending.message.id);
-    legacy
-      .prepare(
-        `UPDATE deliveries
-         SET requested_mode = 'queue', applied_mode = 'steer', fallback_applied = 1,
-             status = 'processed', adapter = 'pi-rpc',
-             adapter_session_id = 'completed-session', adapter_message_id = 'completed-message'
-         WHERE message_id = ?`,
-      )
-      .run(completed.message.id);
-    legacy
-      .prepare(
-        `UPDATE idempotency_keys
-         SET response_json = json_set(
-           response_json,
-           '$.adapter', 'pi-rpc',
-           '$.capabilities', json('["queue","steer"]')
-         )
-         WHERE scope = 'agent-profile.create' AND key = 'profile-key'`,
-      )
-      .run();
-    legacy.exec("PRAGMA user_version = 0");
-    legacy.close();
-
-    const migrated = new NanasaStore(databasePath);
-    const snapshot = migrated.getSnapshot();
-    expect(snapshot.groups.map((item) => item.id)).toEqual([group.id]);
-    expect(snapshot.agentProfiles.map((item) => item.id)).toEqual([profile.id]);
-    expect(snapshot.agentProfiles[0]).not.toHaveProperty("adapter");
-    expect(snapshot.agentProfiles[0]).not.toHaveProperty("capabilities");
-    expect(snapshot.runs.find((run) => run.id === "run_active")).toMatchObject({
-      generation: 1,
-      recoveryPhase: "reconciling",
-      recoveryAttempts: 0,
-      recoveryReason: "terminal_runtime_migration",
-      terminal,
-    });
-    expect(snapshot.runs.find((run) => run.id === "run_active")).not.toHaveProperty(
-      "adapterSession",
-    );
-    expect(snapshot.runs.find((run) => run.id === "run_historical")).toMatchObject({
-      generation: 2,
-      recoveryPhase: "restarting",
-    });
-    expect(snapshot.deliveryOutcomes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ messageId: pending.message.id, status: "queued" }),
-        expect.objectContaining({ messageId: completed.message.id, status: "processed" }),
-      ]),
-    );
-    expect(snapshot.deliveryOutcomes[0]).not.toHaveProperty("requestedMode");
-    expect(migrated.listEvents().map((event) => event.id)).toEqual(eventIds);
-    expect(
-      migrated.createInternalAgentProfile(
-        {
-          name: "Legacy Pi",
-          agentType: "pi",
-          kind: "pi",
-          command: "pi",
-          args: [],
-          environment: {},
-        },
-        "profile-key",
-      ),
-    ).not.toHaveProperty("adapter");
-    migrated.close();
-
-    const inspected = new DatabaseSync(databasePath);
-    expect(
-      (inspected.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
-    ).toBe(4);
-    expect(
-      inspected
-        .prepare("PRAGMA table_info(memberships)")
-        .all()
-        .map((row) => (row as { name: string }).name),
-    ).toContain("role_id");
-    expect(
-      inspected
-        .prepare(
-          `SELECT name FROM sqlite_master
-           WHERE type = 'table' AND name IN (
-             'agent_status_events', 'agent_status_current', 'agent_task_reports'
-           )
-           ORDER BY name`,
-        )
-        .all()
-        .map((row) => (row as { name: string }).name),
-    ).toEqual(["agent_status_current", "agent_status_events", "agent_task_reports"]);
-    expect(
-      inspected
-        .prepare("SELECT adapter, capabilities_json FROM agent_profiles WHERE id = ?")
-        .get(profile.id),
-    ).toEqual({ adapter: "terminal", capabilities_json: "[]" });
-    expect(
-      inspected.prepare("SELECT * FROM deliveries WHERE message_id = ?").get(pending.message.id),
-    ).toMatchObject({
-      requested_mode: "terminal",
-      applied_mode: "terminal",
-      fallback_applied: 0,
-      status: "queued",
-      adapter: "terminal",
-      adapter_session_id: null,
-      adapter_message_id: null,
-      lease_owner: null,
-      lease_expires_at: null,
-      next_attempt_at: null,
-      run_id: null,
-      run_generation: null,
-    });
-    expect(
-      inspected.prepare("SELECT * FROM deliveries WHERE message_id = ?").get(completed.message.id),
-    ).toMatchObject({
-      requested_mode: "queue",
-      applied_mode: "steer",
-      fallback_applied: 1,
-      status: "processed",
-      adapter: "pi-rpc",
-      adapter_session_id: "completed-session",
-      adapter_message_id: "completed-message",
-    });
-    inspected.prepare("UPDATE runs SET recovery_attempts = 2 WHERE id = 'run_active'").run();
-    inspected.close();
-
-    const reopened = new NanasaStore(databasePath);
-    expect(reopened.getRun("run_active").recoveryAttempts).toBe(2);
-    reopened.close();
-    expect(existsSync(sessionFile)).toBe(true);
+describe("NanasaStore schema compatibility", () => {
+  it("refuses old schemas", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "nanasa-schema-old-")), "nanasa.sqlite");
+    const database = new DatabaseSync(path);
+    database.exec("CREATE TABLE old_state (id TEXT PRIMARY KEY) STRICT; PRAGMA user_version = 4");
+    database.close();
+    expect(() => new NanasaStore(path)).toThrow(/Refusing to mutate old database schema 4/);
   });
 
-  it("refuses future schemas for mutation", () => {
-    const futurePath = join(mkdtempSync(join(tmpdir(), "nanasa-schema-future-")), "nanasa.sqlite");
-    const future = new DatabaseSync(futurePath);
-    future.exec("CREATE TABLE future (id TEXT PRIMARY KEY) STRICT; PRAGMA user_version = 999");
-    future.close();
-    expect(() => new NanasaStore(futurePath)).toThrowError(
-      /Refusing to mutate future database schema 999/,
+  it("refuses future schemas", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "nanasa-schema-future-")), "nanasa.sqlite");
+    const database = new DatabaseSync(path);
+    database.exec(
+      "CREATE TABLE future_state (id TEXT PRIMARY KEY) STRICT; PRAGMA user_version = 999",
     );
-    return;
-    const directory = mkdtempSync(join(tmpdir(), "nanasa-copilot-adapter-migration-"));
-    temporaryDirectories.push(directory);
-    const databasePath = join(directory, "nanasa.sqlite");
-    const store = new NanasaStore(databasePath);
-    const profile = store.createInternalAgentProfile({
-      name: "Historical Copilot",
-      agentType: "copilot",
-      kind: "copilot",
-      command: "copilot",
-      args: [],
-      environment: {},
-    });
-    store.close();
-
-    const historical = new DatabaseSync(databasePath);
-    historical
-      .prepare("UPDATE agent_profiles SET adapter = ?, capabilities_json = ? WHERE id = ?")
-      .run("copilot-sdk", '["queue","steer"]', profile.id);
-    historical.close();
-
-    const migrated = new NanasaStore(databasePath);
-    const migratedProfile = migrated.getAgentProfile(profile.id);
-    expect(migratedProfile).toBeDefined();
-    expect(migratedProfile).not.toHaveProperty("adapter");
-    expect(migratedProfile).not.toHaveProperty("capabilities");
-    migrated.close();
+    database.close();
+    expect(() => new NanasaStore(path)).toThrow(/Refusing to mutate future database schema 999/);
   });
 
   it("refuses unversioned nonempty databases", () => {
-    const directory = mkdtempSync(join(tmpdir(), "nanasa-schema-"));
-    temporaryDirectories.push(directory);
-    const databasePath = join(directory, "nanasa.sqlite");
-    const legacy = new DatabaseSync(databasePath);
-    legacy.exec(`
-      CREATE TABLE agent_profiles (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        command TEXT NOT NULL,
-        args_json TEXT NOT NULL,
-        working_directory TEXT,
-        environment_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE runs (
-        id TEXT PRIMARY KEY,
-        group_id TEXT NOT NULL,
-        member_id TEXT NOT NULL,
-        agent_profile_id TEXT NOT NULL,
-        generation INTEGER NOT NULL,
-        status TEXT NOT NULL,
-        adapter_session_id TEXT,
-        terminal_json TEXT,
-        started_at TEXT NOT NULL,
-        stopped_at TEXT
-      ) STRICT;
-      CREATE TABLE deliveries (
-        message_id TEXT NOT NULL,
-        recipient_member_id TEXT NOT NULL,
-        requested_mode TEXT NOT NULL,
-        applied_mode TEXT,
-        fallback_applied INTEGER NOT NULL,
-        reason TEXT,
-        status TEXT NOT NULL,
-        attempts INTEGER NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (message_id, recipient_member_id)
-      ) STRICT;
-      INSERT INTO agent_profiles
-        (id, name, kind, command, args_json, working_directory, environment_json,
-         created_at, updated_at)
-      VALUES
-        ('legacy_claude', 'Claude via Copilot', 'claude-code', 'make', '["claude-copilot"]',
-         NULL, '{}', '2026-08-09T15:00:00Z', '2026-08-09T15:00:00Z');
-    `);
-    legacy.close();
-
-    expect(() => new NanasaStore(databasePath)).toThrowError(
-      /Refusing to mutate old database schema 0/,
-    );
-    return;
-    const store = new NanasaStore(databasePath);
-    expect(store.getAgentProfile("legacy_claude")).toMatchObject({
-      id: "legacy_claude",
-      agentType: "claude-copilot",
-    });
-    expect(store.getAgentProfile("legacy_claude")).not.toHaveProperty("adapter");
-    expect(store.getAgentProfile("legacy_claude")).not.toHaveProperty("capabilities");
-    expect(store.getSnapshot().agentProfiles).toEqual([]);
-    store.close();
-
-    const migrated = new DatabaseSync(databasePath, { readOnly: true });
-    const columnNames = (table: string) =>
-      (migrated.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
-        (column) => column.name,
-      );
-    expect(columnNames("runs")).toEqual(
-      expect.arrayContaining([
-        "desired_state",
-        "recovery_phase",
-        "recovery_attempts",
-        "recovery_not_before",
-        "recovery_reason",
-        "adapter_session_json",
-      ]),
-    );
-    expect(columnNames("deliveries")).toEqual(
-      expect.arrayContaining([
-        "adapter",
-        "adapter_session_id",
-        "adapter_message_id",
-        "lease_owner",
-        "lease_expires_at",
-        "next_attempt_at",
-        "run_id",
-        "run_generation",
-      ]),
-    );
-    migrated.close();
+    const path = join(mkdtempSync(join(tmpdir(), "nanasa-schema-unversioned-")), "nanasa.sqlite");
+    const database = new DatabaseSync(path);
+    database.exec("CREATE TABLE unknown_state (id TEXT PRIMARY KEY) STRICT");
+    database.close();
+    expect(() => new NanasaStore(path)).toThrow(/Refusing to mutate old database schema 0/);
   });
 
-  it("reopens the cohesive baseline idempotently", () => {
-    const baselineDirectory = mkdtempSync(join(tmpdir(), "nanasa-baseline-reopen-"));
-    temporaryDirectories.push(baselineDirectory);
-    const baselinePath = join(baselineDirectory, "nanasa.sqlite");
-    new NanasaStore(baselinePath).close();
-    new NanasaStore(baselinePath).close();
-    const baseline = new DatabaseSync(baselinePath, { readOnly: true });
+  it("reopens the current baseline without mutation", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "nanasa-schema-current-")), "nanasa.sqlite");
+    new NanasaStore(path).close();
+    new NanasaStore(path).close();
+    const database = new DatabaseSync(path, { readOnly: true });
     expect(
-      (baseline.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
+      (database.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
     ).toBe(DATABASE_SCHEMA_VERSION);
-    baseline.close();
-    return;
-    const directory = mkdtempSync(join(tmpdir(), "nanasa-delivery-migration-"));
-    temporaryDirectories.push(directory);
-    const databasePath = join(directory, "nanasa.sqlite");
-    const store = new NanasaStore(databasePath);
-    const group = store.createGroup({ name: "Legacy delivery" });
-    const profile = store.createInternalAgentProfile({
-      name: "Legacy",
-      agentType: "opencode",
-      kind: "opencode",
-      command: "opencode",
-      args: [],
-      environment: {},
-    });
-    const member = store.addMembership(group.id, {
-      memberId: "legacy",
-      agentProfileId: profile.id,
-      alias: "Legacy",
-    });
-    const submission = store.submitMessage(group.id, {
-      intent: "request",
-      sender: { kind: "operator", operatorId: "operator" },
-      audience: { kind: "dm", memberId: member.memberId },
-      body: { contentType: "text/plain", text: "Historical" },
-      delivery: {},
-    });
-    store.close();
-
-    const legacy = new DatabaseSync(databasePath);
-    legacy
-      .prepare("UPDATE messages SET delivery_json = ? WHERE id = ?")
-      .run('{"mode":"inbox","fallback":"terminal"}', submission.message.id);
-    legacy
-      .prepare(
-        "UPDATE deliveries SET requested_mode = 'interrupt', applied_mode = 'terminal' WHERE message_id = ?",
-      )
-      .run(submission.message.id);
-    legacy.close();
-
-    const reopened = new NanasaStore(databasePath);
-    expect(reopened.getSnapshot()).toMatchObject({
-      messages: [{ delivery: {} }],
-      deliveryOutcomes: [{ status: "queued" }],
-    });
-    expect(reopened.getSnapshot().deliveryOutcomes[0]).not.toHaveProperty("requestedMode");
-    expect(reopened.getSnapshot().deliveryOutcomes[0]).not.toHaveProperty("appliedMode");
-    reopened.close();
+    database.close();
   });
 });

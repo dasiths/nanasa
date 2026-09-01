@@ -2,14 +2,14 @@ import { z } from "zod";
 import {
   AssetDigestSchema,
   CapabilityDeclarationSchema,
-  ExtensionIdV2Schema,
+  ProviderExtensionIdSchema,
   ImmutableAssetReferenceSchema,
   OpenIdentitySchema,
   ProviderGrantSchema,
-  ProviderHealthV2Schema,
+  ProviderRuntimeHealthSchema,
   ProviderIdSchema,
   SnapshotDigestSchema,
-} from "./provider-runtime-v2.js";
+} from "./provider-runtime.js";
 
 export const PROVIDER_EXTENSION_V2_API_VERSION = "nanasa.dev/provider-extension/v2" as const;
 
@@ -18,7 +18,7 @@ const ReservedBuiltinProviderIds = new Set(["copilot", "claude-code", "pi", "ope
 export const ProviderExtensionGenerationSchema = z
   .object({
     id: z.string().min(1).max(128),
-    extensionId: ExtensionIdV2Schema,
+    extensionId: ProviderExtensionIdSchema,
     version: z
       .string()
       .regex(
@@ -31,7 +31,7 @@ export const ProviderExtensionGenerationSchema = z
   })
   .strict();
 
-export const ProviderPackageSignatureV2Schema = z
+export const ProviderPackageSignatureSchema = z
   .object({
     algorithm: z.literal("ed25519"),
     keyId: OpenIdentitySchema,
@@ -41,7 +41,7 @@ export const ProviderPackageSignatureV2Schema = z
   })
   .strict();
 
-export const ProviderExtensionV2ManifestSchema = z
+export const ProviderPackageManifestSchema = z
   .object({
     apiVersion: z.literal(PROVIDER_EXTENSION_V2_API_VERSION),
     kind: z.literal("ProviderExtension"),
@@ -52,7 +52,7 @@ export const ProviderExtensionV2ManifestSchema = z
     capabilities: z.array(CapabilityDeclarationSchema).min(1).max(128),
     requestedGrants: z.array(ProviderGrantSchema).max(128),
     assets: z.array(ImmutableAssetReferenceSchema).max(256),
-    signatures: z.array(ProviderPackageSignatureV2Schema).min(1).max(16),
+    signatures: z.array(ProviderPackageSignatureSchema).min(1).max(16),
     antiRollbackSequence: z.number().int().nonnegative(),
   })
   .strict()
@@ -106,9 +106,9 @@ export const ProviderExtensionV2ManifestSchema = z
       }
     }
   });
-export type ProviderExtensionV2Manifest = z.infer<typeof ProviderExtensionV2ManifestSchema>;
+export type ProviderPackageManifest = z.infer<typeof ProviderPackageManifestSchema>;
 
-export const ProviderPackageSourceV2Schema = z.discriminatedUnion("kind", [
+export const ProviderPackageSourceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("builtin"), buildDigest: SnapshotDigestSchema }).strict(),
   z
     .object({
@@ -129,8 +129,8 @@ export const ProviderPackageSourceV2Schema = z.discriminatedUnion("kind", [
 export const ProviderPackageRecordSchema = z
   .object({
     generation: ProviderExtensionGenerationSchema,
-    source: ProviderPackageSourceV2Schema,
-    manifest: ProviderExtensionV2ManifestSchema,
+    source: ProviderPackageSourceSchema,
+    manifest: ProviderPackageManifestSchema,
     state: z.enum(["quarantined", "verified", "resolved", "revoked", "rejected"]),
     importedAt: z.string().datetime({ offset: true }),
     verifiedAt: z.string().datetime({ offset: true }).optional(),
@@ -138,7 +138,7 @@ export const ProviderPackageRecordSchema = z
   })
   .strict();
 
-export const ProviderActivationV2Schema = z
+export const ProviderActivationSchema = z
   .object({
     id: z.string().min(1).max(128),
     indexGeneration: z.number().int().positive(),
@@ -154,7 +154,7 @@ export const ProviderActivationV2Schema = z
   })
   .strict();
 
-export const ProviderPermissionPlanV2Schema = z
+export const ProviderPermissionPlanSchema = z
   .object({
     providerId: ProviderIdSchema,
     extensionGeneration: z.string().min(1).max(128),
@@ -177,11 +177,11 @@ export const ProviderPermissionPlanV2Schema = z
   })
   .strict();
 
-export const ProviderExtensionInspectV2Schema = z
+export const ProviderPackageInspectSchema = z
   .object({
     package: ProviderPackageRecordSchema,
-    activation: ProviderActivationV2Schema.optional(),
-    plan: ProviderPermissionPlanV2Schema.optional(),
-    health: ProviderHealthV2Schema,
+    activation: ProviderActivationSchema.optional(),
+    plan: ProviderPermissionPlanSchema.optional(),
+    health: ProviderRuntimeHealthSchema,
   })
   .strict();

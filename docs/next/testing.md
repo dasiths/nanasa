@@ -1,13 +1,22 @@
 ---
 title: Testing and quality gates
-description: Static, runtime, browser, migration, security, performance, and release validation
-ms.date: 2026-08-30
+description: Static, runtime, browser, security, performance, and release validation
+ms.date: 2026-09-01
 ms.topic: reference
 ---
 
 ## Local gates
 
-The release gate includes formatting, linting, type checking, unit tests, smoke tests, package build and installation, Chromium acceptance, architecture scans, package security scans, measured performance budgets, provenance, SBOM validation, documentation drift, migration and rollback fault injection, process-watchdog checks, immutable fixture drift, fixed-seed property models, bounded fuzzing, and a coverage ratchet. Fixed-seed performance checks cover a real 100-terminal tmux fleet, event storms, default-batch delivery, real action scheduling, and slow-consumer closure. Warmed repeated samples assert median throughput, p95 elapsed time and event-loop delay, and peak heap and RSS deltas, then write machine-readable results only to ignored test output.
+The release gate includes formatting, linting, type checking, unit tests, smoke
+tests, package build and installation, Chromium acceptance, architecture scans,
+package security scans, measured performance budgets, provenance, SBOM
+validation, documentation drift, exact-schema release and rollback fault
+injection, process-watchdog checks, immutable fixture drift, fixed-seed property
+models, bounded fuzzing, and a coverage ratchet. Fixed-seed performance checks
+cover a real 100-terminal tmux fleet, event storms, default-batch delivery, real
+action scheduling, and slow-consumer closure. Warmed repeated samples assert
+median throughput, p95 elapsed time and event-loop delay, and peak heap and RSS
+deltas, then write machine-readable results only to ignored test output.
 
 Load `.devcontainer/.env` before every package-manager operation. Its registry values are authoritative and must not be printed or replaced.
 

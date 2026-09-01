@@ -1,16 +1,16 @@
 import { z } from "zod";
-import { DeliveryOutcomeSchema, GroupMessageStateSchema, MessageSchema } from "./actions-v1.js";
-import { ConfigStatusSchema, NanasaConfigSchema } from "./config-v2.js";
+import { DeliveryOutcomeSchema, GroupMessageStateSchema, MessageSchema } from "./actions.js";
+import { ConfigStatusSchema, NanasaConfigSchema } from "./config.js";
 import {
   AgentRunSchema,
   GroupMembershipSchema,
   GroupSchema,
   IdentifierSchema,
   TimestampSchema,
-} from "./control-v1.js";
-import { AgentProfileSchema } from "./provider-v1.js";
-import { AgentStatusSummarySchema } from "./status-v2.js";
-import { CheckoutSchema, RepositorySchema, WorktreeSchema } from "./git-v1.js";
+} from "./control.js";
+import { AgentProfileSchema } from "./provider.js";
+import { AgentStatusSummarySchema } from "./status.js";
+import { CheckoutSchema, RepositorySchema, WorktreeSchema } from "./git.js";
 
 export const EVENT_PROTOCOL_VERSION = 1 as const;
 export const EventCursorSchema = z.number().int().nonnegative();

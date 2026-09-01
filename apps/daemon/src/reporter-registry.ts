@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
+  AgentStatusSourceSchema,
   type AgentRun,
   type ProcessIdentityObservation,
   REPORTER_LEASE_MS,
@@ -8,12 +9,12 @@ import {
   type ReporterSession,
   STATUS_PROTOCOL_VERSION,
 } from "@nanasa/contracts";
-import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
+import type { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
 import { DomainError, NanasaStore } from "./store.js";
 
 export interface ReporterRegistryOptions {
   runtimeDirectory: string;
-  adapters?: ProviderAdapterRegistry;
+  authority: Pick<AgentRuntimeProvisioner, "reporterPolicy">;
   now?: () => Date;
 }
 
@@ -30,34 +31,38 @@ function coverageFor(values: {
 export class ReporterRegistry {
   readonly #store: NanasaStore;
   readonly #runtimeDirectory: string;
-  readonly #adapters: ProviderAdapterRegistry;
+  readonly #authority: ReporterRegistryOptions["authority"];
   readonly #now: () => Date;
 
   public constructor(store: NanasaStore, options: ReporterRegistryOptions) {
     this.#store = store;
     this.#runtimeDirectory = options.runtimeDirectory;
-    this.#adapters = options.adapters ?? ProviderAdapterRegistry.builtIn();
+    this.#authority = options.authority;
     this.#now = options.now ?? (() => new Date());
   }
 
-  public open(run: AgentRun): ReporterSession {
+  public async open(run: AgentRun): Promise<ReporterSession> {
     const current = this.#store.getCurrentReporterSession(run.id, run.generation);
     if (current !== undefined) return current;
-    const profile = this.#store.getAgentProfile(run.agentProfileId);
-    const adapter = this.#adapters.get(profile.kind);
+    const reporter = await this.#authority.reporterPolicy(run);
     const openedAt = this.#now();
     const session: ReporterSession = {
       id: `reporter_${randomUUID()}`,
-      providerId: profile.agentType,
-      adapterId: adapter.id,
-      reporterId: adapter.reporter.id,
-      source: adapter.reporter.source,
+      providerId: reporter.integrationId,
+      adapterId: reporter.adapterId,
+      reporterId: reporter.reporterId,
+      source: AgentStatusSourceSchema.parse(reporter.source),
       protocolVersion: STATUS_PROTOCOL_VERSION,
-      reporterVersion: adapter.reporter.version,
+      reporterVersion: reporter.reporterVersion,
       runId: run.id,
       generation: run.generation,
       reporterEpoch: `epoch_${randomUUID()}`,
-      readinessCoverage: coverageFor(adapter.reporter.coverage),
+      readinessCoverage: coverageFor({
+        session: reporter.events.some((event) => event.startsWith("session.")),
+        turns: reporter.events.some((event) => event.startsWith("turn.")),
+        tools: reporter.events.some((event) => event.startsWith("tool.")),
+        waits: reporter.events.some((event) => event.startsWith("wait.")),
+      }),
       sourceSequence: 0,
       openedAt: openedAt.toISOString(),
       leaseExpiresAt: new Date(openedAt.getTime() + REPORTER_LEASE_MS).toISOString(),
@@ -65,8 +70,8 @@ export class ReporterRegistry {
     return this.#store.registerReporterSession(session);
   }
 
-  public environment(run: AgentRun): Readonly<Record<string, string>> {
-    const session = this.open(run);
+  public async environment(run: AgentRun): Promise<Readonly<Record<string, string>>> {
+    const session = await this.open(run);
     return Object.freeze({
       NANASA_REPORTER_PROVIDER_ID: session.providerId,
       NANASA_REPORTER_ADAPTER_ID: session.adapterId,
@@ -86,7 +91,7 @@ export class ReporterRegistry {
     });
   }
 
-  public observeProcess(run: AgentRun, process: ProcessIdentityObservation): void {
+  public async observeProcess(run: AgentRun, process: ProcessIdentityObservation): Promise<void> {
     if (process.expectedProviderMatch !== "match") {
       this.#store.revokeReporterAuthority(run.id, run.generation, "provider_process_mismatch");
       throw new DomainError(
@@ -96,9 +101,8 @@ export class ReporterRegistry {
       );
     }
     this.#store.bindReporterProcess(run.id, run.generation, process);
-    const profile = this.#store.getAgentProfile(run.agentProfileId);
-    const adapter = this.#adapters.get(profile.kind);
-    if (!adapter.reporter.coverage.heartbeat) {
+    const reporter = await this.#authority.reporterPolicy(run);
+    if (!reporter.events.includes("heartbeat")) {
       this.#store.refreshReporterLease(
         run.id,
         run.generation,

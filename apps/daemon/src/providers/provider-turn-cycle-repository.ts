@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
   canonicalJson,
-  type ReporterTurnCycleV3,
-  ReporterTurnCycleV3Schema,
+  type ProviderReporterTurnCycle,
+  ProviderReporterTurnCycleSchema,
   type RunProviderBinding,
 } from "@nanasa/contracts";
 import type { ReporterEventAdmissionResult } from "./provider-reporter-event-admission.js";
@@ -19,7 +19,7 @@ interface CycleRow {
   readonly reporter_session_id: string;
   readonly root_session_id: string;
   readonly turn_id: string;
-  readonly state: ReporterTurnCycleV3["state"];
+  readonly state: ProviderReporterTurnCycle["state"];
   readonly open_tool_count: number;
   readonly open_wait_count: number;
   readonly completion_revision: number;
@@ -32,8 +32,8 @@ function digest(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
 }
 
-function fromRow(row: CycleRow): ReporterTurnCycleV3 {
-  return ReporterTurnCycleV3Schema.parse({
+function fromRow(row: CycleRow): ProviderReporterTurnCycle {
+  return ProviderReporterTurnCycleSchema.parse({
     id: row.id,
     fence: {
       bindingId: row.binding_id,
@@ -66,7 +66,7 @@ export class ProviderTurnCycleRepository {
   public apply(
     binding: RunProviderBinding,
     admission: ReporterEventAdmissionResult,
-  ): ReporterTurnCycleV3 | undefined {
+  ): ProviderReporterTurnCycle | undefined {
     const event = admission.event;
     if (admission.duplicate) return this.#currentForEvent(binding, event);
     if (event.event === "session.ended") {
@@ -201,7 +201,7 @@ export class ProviderTurnCycleRepository {
     return this.get(cycle.id);
   }
 
-  public get(cycleId: string): ReporterTurnCycleV3 | undefined {
+  public get(cycleId: string): ProviderReporterTurnCycle | undefined {
     const row = this.#database
       .prepare(
         `SELECT cycle.*, binding.provider_id
@@ -216,7 +216,7 @@ export class ProviderTurnCycleRepository {
   #currentForEvent(
     binding: RunProviderBinding,
     event: ReporterEventAdmissionResult["event"],
-  ): ReporterTurnCycleV3 | undefined {
+  ): ProviderReporterTurnCycle | undefined {
     if (event.rootSessionId === undefined || event.turnId === undefined) return undefined;
     const row = this.#database
       .prepare(

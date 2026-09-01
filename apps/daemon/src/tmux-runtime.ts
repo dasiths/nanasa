@@ -16,7 +16,6 @@ import type {
   AgentRuntimeProvisioner,
 } from "./agent-runtime-provisioner.js";
 import { ProcessIdentityObserver } from "./process-identity-observer.js";
-import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
 import { type RuntimeObservation, runtimeObservation } from "./runtime-observation.js";
 import { DomainError, NanasaStore } from "./store.js";
 import { terminalViewSessionName } from "./terminal/terminal-input-arbiter.js";
@@ -24,9 +23,9 @@ import { terminalViewSessionName } from "./terminal/terminal-input-arbiter.js";
 export interface TmuxRuntimeOptions {
   serverName?: string;
   tmuxPath?: string;
-  runtimeEnvironment?: (run: AgentRun) => Record<string, string>;
+  runtimeEnvironment?: (run: AgentRun) => Record<string, string> | Promise<Record<string, string>>;
   runtimeProvisioner?: AgentRuntimeProvisioner;
-  adapterRegistry?: ProviderAdapterRegistry;
+  providerAuthority?: Pick<AgentRuntimeProvisioner, "controlPolicy" | "processRecognizer">;
   processIdentityObserver?: ProcessIdentityObserver;
   invalidationHooks?: Readonly<Record<string, string>>;
 }
@@ -95,9 +94,11 @@ export class TmuxRuntime {
   public readonly serverName: string;
   readonly #store: NanasaStore;
   readonly #tmuxPath: string;
-  readonly #runtimeEnvironment: (run: AgentRun) => Record<string, string>;
+  readonly #runtimeEnvironment: NonNullable<TmuxRuntimeOptions["runtimeEnvironment"]>;
   readonly #runtimeProvisioner: AgentRuntimeProvisioner | undefined;
-  readonly #adapters: ProviderAdapterRegistry;
+  readonly #providerAuthority:
+    | Pick<AgentRuntimeProvisioner, "controlPolicy" | "processRecognizer">
+    | undefined;
   readonly #processIdentityObserver: ProcessIdentityObserver;
   readonly #invalidationHooks: Readonly<Record<string, string>>;
   readonly #reconciliations = new Set<Promise<void>>();
@@ -113,7 +114,7 @@ export class TmuxRuntime {
     this.#tmuxPath = options.tmuxPath ?? "tmux";
     this.#runtimeEnvironment = options.runtimeEnvironment ?? (() => ({}));
     this.#runtimeProvisioner = options.runtimeProvisioner;
-    this.#adapters = options.adapterRegistry ?? ProviderAdapterRegistry.builtIn();
+    this.#providerAuthority = options.providerAuthority ?? options.runtimeProvisioner;
     this.#processIdentityObserver =
       options.processIdentityObserver ?? new ProcessIdentityObserver();
     this.#invalidationHooks = options.invalidationHooks ?? {};
@@ -151,8 +152,7 @@ export class TmuxRuntime {
       );
     }
     if (
-      (current.recoveryReason === "terminal_runtime_migration" ||
-        current.recoveryPhase === "resuming") &&
+      current.recoveryPhase === "resuming" &&
       (current.status === "starting" || current.status === "running")
     ) {
       try {
@@ -345,8 +345,10 @@ export class TmuxRuntime {
       throw new Error("terminal_delivery_too_large");
     }
     const target = terminalInputTarget(run.terminal!);
-    const submitInput = this.#adapters.get(this.#store.getAgentProfile(run.agentProfileId).kind)
-      .control.terminalSubmitSequence;
+    if (this.#providerAuthority === undefined) {
+      throw new Error("Provider snapshot authority is unavailable");
+    }
+    const submitInput = (await this.#providerAuthority.controlPolicy(run)).terminalSubmitSequence;
     const bufferName = `nanasa-${randomUUID()}`;
     await this.#tmux(["load-buffer", "-b", bufferName, "-"], false, text);
     try {
@@ -424,10 +426,12 @@ export class TmuxRuntime {
       return runtimeObservation(run, "indeterminate", { evidenceCode: "pane_pid_malformed" });
     }
     try {
-      const profile = this.#store.getAgentProfile(run.agentProfileId);
+      if (this.#providerAuthority === undefined) {
+        throw new Error("Provider snapshot authority is unavailable");
+      }
       const process = await this.#processIdentityObserver.observe(
         Number(panePid),
-        this.#adapters.get(profile.kind),
+        await this.#providerAuthority.processRecognizer(run),
       );
       return runtimeObservation(run, "present", {
         evidenceCode: "exact_owned_pane_and_process",
@@ -632,24 +636,25 @@ export class TmuxRuntime {
     size: { cols: number; rows: number },
     nativeSession?: NativeSessionReference,
   ): Promise<TerminalBinding> {
-    const provisioned = this.#runtimeProvisioner?.provision(membership, profile);
+    const provisioned = await this.#runtimeProvisioner?.provision(
+      run,
+      membership,
+      profile,
+      nativeSession,
+    );
     const environment = {
       ...profile.environment,
-      ...this.#runtimeEnvironment(run),
+      ...(await this.#runtimeEnvironment(run)),
       ...provisioned?.environment,
     };
     const launchArguments =
-      provisioned === undefined
-        ? [profile.command, ...profile.args]
-        : nativeSession === undefined
-          ? [...provisioned.command]
-          : [...this.#runtimeProvisioner!.resumeCommand(provisioned.snapshot, nativeSession)];
+      provisioned === undefined ? [profile.command, ...profile.args] : [...provisioned.command];
     if (provisioned !== undefined) {
       this.#provisionedRuns.set(run.id, provisioned);
       this.#store.updateRunProviderMetadata(run.id, {
         launchKind: nativeSession === undefined ? run.launchKind : "resuming",
-        requestedModel: provisioned.snapshot.desiredModel,
-        requestedModelSource: provisioned.snapshot.desiredModelSource,
+        requestedModel: provisioned.desiredModel,
+        requestedModelSource: provisioned.desiredModelSource,
       });
     }
     return this.#launchCommand(

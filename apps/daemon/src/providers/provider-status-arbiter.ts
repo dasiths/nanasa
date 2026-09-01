@@ -1,10 +1,10 @@
 import {
   canonicalJson,
-  type EffectiveAgentStatusV3,
-  EffectiveAgentStatusV3Schema,
+  type EffectiveProviderStatus,
+  EffectiveProviderStatusSchema,
   type ProviderAuthorityFence,
-  type StatusSourceClaimV3,
-  StatusSourceClaimV3Schema,
+  type ProviderStatusClaim,
+  ProviderStatusClaimSchema,
 } from "@nanasa/contracts";
 import { providerStatusPolicy } from "./provider-status-policy.js";
 import type { ResolvedProviderAdapter } from "./resolved-provider-adapter.js";
@@ -15,14 +15,14 @@ export interface ProviderStatusArbitrationInput {
   readonly policyDigest: string;
   readonly desiredState: "running" | "stopped";
   readonly claims: readonly unknown[];
-  readonly previous?: EffectiveAgentStatusV3;
+  readonly previous?: EffectiveProviderStatus;
   readonly completionRevision: number;
   readonly rootTurnOpenedAt?: string;
   readonly now?: string;
 }
 
 export interface ProviderStatusArbitration {
-  readonly status: EffectiveAgentStatusV3;
+  readonly status: EffectiveProviderStatus;
   readonly reporterHealth: "healthy" | "degraded" | "unavailable" | "unknown";
 }
 
@@ -30,7 +30,7 @@ function sameFence(left: ProviderAuthorityFence, right: ProviderAuthorityFence):
   return canonicalJson(left) === canonicalJson(right);
 }
 
-function newest(claims: readonly StatusSourceClaimV3[]): StatusSourceClaimV3 | undefined {
+function newest(claims: readonly ProviderStatusClaim[]): ProviderStatusClaim | undefined {
   return [...claims].sort(
     (left, right) =>
       right.sourceSequence - left.sourceSequence ||
@@ -38,13 +38,13 @@ function newest(claims: readonly StatusSourceClaimV3[]): StatusSourceClaimV3 | u
   )[0];
 }
 
-function waitPhase(reasonCode: string): EffectiveAgentStatusV3["phase"] {
+function waitPhase(reasonCode: string): EffectiveProviderStatus["phase"] {
   if (reasonCode.includes("plan")) return "plan-approval";
   if (reasonCode.includes("question") || reasonCode.includes("elicitation")) return "question";
   return "permission";
 }
 
-function meaningfulStatus(status: EffectiveAgentStatusV3): unknown {
+function meaningfulStatus(status: EffectiveProviderStatus): unknown {
   return {
     runId: status.runId,
     generation: status.generation,
@@ -68,7 +68,7 @@ export function arbitrateProviderStatus(
   const nowTime = Date.parse(now);
   const policy = providerStatusPolicy(input.snapshot).semantic;
   const claims = input.claims
-    .map((claim) => StatusSourceClaimV3Schema.safeParse(claim))
+    .map((claim) => ProviderStatusClaimSchema.safeParse(claim))
     .filter((result) => result.success)
     .map((result) => result.data)
     .filter(
@@ -124,10 +124,10 @@ export function arbitrateProviderStatus(
   );
 
   let winning = semantic;
-  let semanticState: EffectiveAgentStatusV3["semanticState"] = "unknown";
-  let projection: EffectiveAgentStatusV3["projection"] = "unknown";
-  let effectivePhase: EffectiveAgentStatusV3["phase"] = "startup";
-  let confidence: EffectiveAgentStatusV3["confidence"] = "low";
+  let semanticState: EffectiveProviderStatus["semanticState"] = "unknown";
+  let projection: EffectiveProviderStatus["projection"] = "unknown";
+  let effectivePhase: EffectiveProviderStatus["phase"] = "startup";
+  let confidence: EffectiveProviderStatus["confidence"] = "low";
   if (process?.processState === "dead" || process?.processState === "missing") {
     winning = process;
     semanticState = input.desiredState === "running" ? "failed" : "stopped";
@@ -174,7 +174,7 @@ export function arbitrateProviderStatus(
     confidence = process.confidence;
   }
 
-  const draft = EffectiveAgentStatusV3Schema.parse({
+  const draft = EffectiveProviderStatusSchema.parse({
     runId: input.fence.runId,
     generation: input.fence.generation,
     providerId: input.fence.providerId,
@@ -196,7 +196,7 @@ export function arbitrateProviderStatus(
     input.previous !== undefined &&
     canonicalJson(meaningfulStatus(input.previous)) === canonicalJson(meaningfulStatus(draft));
   const status = unchanged
-    ? EffectiveAgentStatusV3Schema.parse({
+    ? EffectiveProviderStatusSchema.parse({
         ...draft,
         statusRevision: input.previous!.statusRevision,
         observedAt: input.previous!.observedAt,

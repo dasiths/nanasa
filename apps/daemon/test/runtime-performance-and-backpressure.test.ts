@@ -424,7 +424,19 @@ describe("measured runtime performance and backpressure", () => {
       alias: "Worker",
     });
     const serverName = `nanasa-performance-actions-${crypto.randomUUID()}`;
-    const runtime = new TmuxRuntime(store, { serverName });
+    const runtime = new TmuxRuntime(store, {
+      serverName,
+      providerAuthority: {
+        processRecognizer: async () => ({ recognizeCommand: () => true }),
+        controlPolicy: async () => ({
+          waitReplyChannels: ["terminal"],
+          supportsPromptAcknowledgement: true,
+          supportsCancellation: true,
+          terminalSubmitSequence: "\r",
+          operations: [],
+        }),
+      },
+    });
     const run = await runtime.startRun(group.id, "worker", { cols: 100, rows: 30 });
     store.registerReporterSession({
       id: "performance-reporter-session",

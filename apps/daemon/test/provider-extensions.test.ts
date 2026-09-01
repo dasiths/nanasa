@@ -11,7 +11,6 @@ import { ProviderCatalogService } from "../src/extensions/provider-catalog-servi
 import { ProviderExtensionPlanner } from "../src/extensions/provider-extension-planner.js";
 import { ProviderExtensionService } from "../src/extensions/provider-extension-service.js";
 import { ProviderHealthService } from "../src/extensions/provider-health-service.js";
-import { ProviderAdapterRegistry } from "../src/providers/provider-adapter-registry.js";
 import { NanasaStore } from "../src/store.js";
 
 const temporaryDirectories: string[] = [];
@@ -46,9 +45,8 @@ groups:
         integrationId: copilot
 `,
   );
-  const adapters = ProviderAdapterRegistry.builtIn();
   const locks = new ExtensionLockRepository(root);
-  const catalog = new ProviderCatalogService(adapters);
+  const catalog = new ProviderCatalogService();
   const planner = new ProviderExtensionPlanner();
   const store = new NanasaStore(":memory:", { config: loadNanasaConfig(root).config });
   const read = (): { config: NanasaConfig; revision: string } => {

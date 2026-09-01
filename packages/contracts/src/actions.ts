@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { IdentifierSchema, TimestampSchema } from "./control-v1.js";
-import { AgentWaitKindSchema } from "./status-v2.js";
+import { IdentifierSchema, TimestampSchema } from "./control.js";
+import { AgentWaitKindSchema } from "./status.js";
 
 export const MAX_MESSAGE_TEXT_BYTES = 1_048_576;
 export const MAX_MESSAGE_REQUEST_BYTES = 6_356_992;

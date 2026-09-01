@@ -81,6 +81,7 @@ describe("snapshot-bound provider runtime planning", () => {
       providerStateId: "state-one",
       overlayId: "overlay-one",
       credentialSlots: { "github-token": "credential-reference" },
+      additionalEnvironmentNames: ["NANASA_MCP_TOKEN", "NANASA_REPORTER_EPOCH"],
       repositoryTrustDigest: "9".repeat(64),
       membershipId: "membership-one",
       memberAlias: "Reviewer One",
@@ -105,7 +106,7 @@ describe("snapshot-bound provider runtime planning", () => {
     expect(bound.binding.snapshotDigest).toBe(builtIn.snapshot.digest);
     expect(bound.binding.launchPlan.command).toEqual(bound.command);
     expect(bound.binding.launchPlan.environmentNames).toEqual(
-      Object.keys(bound.environment).sort(),
+      [...Object.keys(bound.environment), "NANASA_MCP_TOKEN", "NANASA_REPORTER_EPOCH"].sort(),
     );
     const persisted = database
       .prepare(

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IdentifierSchema, TerminalBindingSchema, TimestampSchema } from "./control-v1.js";
+import { IdentifierSchema, TerminalBindingSchema, TimestampSchema } from "./control.js";
 
 export const TERMINAL_PROTOCOL = "nanasa-terminal.v1" as const;
 export const TERMINAL_PROTOCOL_VERSION = 1 as const;

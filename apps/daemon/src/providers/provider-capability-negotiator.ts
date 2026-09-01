@@ -4,7 +4,7 @@ import {
   type HostCapabilitySupport,
   negotiateProviderCapabilities,
   PROVIDER_CAPABILITY_IDS,
-  type ProviderExtensionV2Manifest,
+  type ProviderPackageManifest,
   type ProviderGrant,
   ProviderGrantSchema,
   type SelectedCapability,
@@ -32,7 +32,7 @@ export class ProviderNamespaceOwnership {
     for (const providerId of RESERVED_BUILTIN_PROVIDERS) this.#owners.set(providerId, "nanasa");
   }
 
-  public assertManifest(manifest: ProviderExtensionV2Manifest): void {
+  public assertManifest(manifest: ProviderPackageManifest): void {
     const publisherId = manifest.generation.publisherId;
     const providerId = manifest.providerId;
     const ownsNamespace =
@@ -49,7 +49,7 @@ export class ProviderNamespaceOwnership {
     }
   }
 
-  public claim(manifest: ProviderExtensionV2Manifest): void {
+  public claim(manifest: ProviderPackageManifest): void {
     this.assertManifest(manifest);
     this.#owners.set(manifest.providerId, manifest.generation.publisherId);
   }
@@ -189,7 +189,7 @@ export class ProviderPermissionPolicy {
 }
 
 export function negotiateProviderPackage(
-  manifest: ProviderExtensionV2Manifest,
+  manifest: ProviderPackageManifest,
   host: readonly HostCapabilitySupport[] = HOST_PROVIDER_CAPABILITIES,
   namespaceOwnership = new ProviderNamespaceOwnership(),
   permissionPolicy = new ProviderPermissionPolicy(),

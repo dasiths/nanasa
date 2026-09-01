@@ -1,6 +1,6 @@
 import type { AgentActionPrincipal, OpenWait, ReplyOpenWaitCommand } from "@nanasa/contracts";
 import { ReplyOpenWaitCommandSchema } from "@nanasa/contracts";
-import { ProviderAdapterRegistry } from "../providers/provider-adapter-registry.js";
+import type { AgentRuntimeProvisioner } from "../agent-runtime-provisioner.js";
 import type { RuntimeObservation } from "../runtime-observation.js";
 import { DomainError, type NanasaStore } from "../store.js";
 import type { TerminalInputArbiter } from "../terminal/terminal-input-arbiter.js";
@@ -16,7 +16,7 @@ export class AgentOpenWaitService {
     private readonly store: NanasaStore,
     private readonly runtime: WaitReplyRuntime,
     private readonly arbiter: TerminalInputArbiter,
-    private readonly adapters = ProviderAdapterRegistry.builtIn(),
+    private readonly authority: Pick<AgentRuntimeProvisioner, "controlPolicy" | "encodeWaitReply">,
     private readonly policy = new PeerCapabilityPolicy(),
   ) {}
 
@@ -48,8 +48,7 @@ export class AgentOpenWaitService {
     ) {
       throw new DomainError("open_wait_replaced", "The wait target run was replaced", 409);
     }
-    const profile = this.store.getAgentProfile(run.agentProfileId);
-    const strategy = this.adapters.get(profile.kind).control;
+    const strategy = await this.authority.controlPolicy(run);
     if (
       !strategy.waitReplyChannels.includes(wait.replyChannel) &&
       !strategy.waitReplyChannels.includes("terminal")
@@ -67,7 +66,7 @@ export class AgentOpenWaitService {
       statusRevision: input.expectedStatusRevision,
     });
     try {
-      const terminalInput = strategy.waitReplyInput(wait.kind, input.reply);
+      const terminalInput = await this.authority.encodeWaitReply(run, input.reply);
       await this.arbiter.dispatchAutomated(run.id, async () => {
         const currentWait = this.store.getOpenWait(wait.id);
         const currentRun = this.store.getActiveRun(wait.groupId, wait.memberId);

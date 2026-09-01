@@ -24,7 +24,7 @@ export interface RunRuntimeCoordinatorOptions {
     integrationId: string;
     policy: NativeRecoveryPolicy;
   };
-  onRuntimeObservation?: (observation: RuntimeObservation) => void;
+  onRuntimeObservation?: (observation: RuntimeObservation) => void | Promise<void>;
 }
 
 const RECOVERY_TERMINAL_SIZE = { cols: 120, rows: 40 } as const;
@@ -255,11 +255,8 @@ export class RunRuntimeCoordinator {
       for (const persisted of this.#store.listDesiredRunningRuns()) {
         const observationKey = `${persisted.id}:${persisted.generation}`;
         const observation = await this.#runtime.observeRun(persisted);
-        this.#onRuntimeObservation?.(observation);
-        if (
-          persisted.recoveryReason !== "terminal_runtime_migration" &&
-          observation.state === "present"
-        ) {
+        await this.#onRuntimeObservation?.(observation);
+        if (observation.state === "present") {
           this.#missingConfirmations.delete(observationKey);
           let current = persisted;
           if (markOrphanedStarting && persisted.recoveryPhase !== "resuming") {
@@ -324,7 +321,7 @@ export class RunRuntimeCoordinator {
           this.#missingConfirmations.set(observationKey, confirmations);
           if (confirmations < 2) continue;
           const finalObservation = await this.#runtime.observeRun(persisted);
-          this.#onRuntimeObservation?.(finalObservation);
+          await this.#onRuntimeObservation?.(finalObservation);
           if (finalObservation.state !== "missing" && finalObservation.state !== "dead") {
             this.#missingConfirmations.delete(observationKey);
             if (finalObservation.state === "present") recoveredRuns.push(persisted);
@@ -462,13 +459,11 @@ export class RunRuntimeCoordinator {
         incrementAttempt: true,
         recoveryNotBefore: new Date(now.getTime() + cooldown).toISOString(),
         reason:
-          current.recoveryReason === "terminal_runtime_migration"
-            ? "terminal_runtime_migration"
-            : reservation === undefined
-              ? forceFresh
-                ? "native_resume_fallback_restart"
-                : "process_restart"
-              : "native_session_resume",
+          reservation === undefined
+            ? forceFresh
+              ? "native_resume_fallback_restart"
+              : "process_restart"
+            : "native_session_resume",
       },
     );
     try {

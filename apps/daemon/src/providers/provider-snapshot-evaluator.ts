@@ -6,7 +6,7 @@ import type {
   GeneratedOverlayFile,
   ProviderOverlayContext,
   ProviderOverlayPlan,
-} from "./provider-adapter.js";
+} from "./provider-runtime-types.js";
 import type { ProviderReporterDriverRegistry } from "./provider-reporter-driver-registry.js";
 import type { ResolvedProviderAdapter } from "./resolved-provider-adapter.js";
 

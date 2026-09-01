@@ -5,7 +5,7 @@ import {
   canonicalProviderSnapshotBytes,
   digestProviderSnapshot,
   ImmutableAssetReferenceSchema,
-  ProviderExtensionV2ManifestSchema,
+  ProviderPackageManifestSchema,
   type ProviderGrant,
   ProviderPackageRecordSchema,
   ResolvedProviderAdapterSnapshotSchema,
@@ -460,7 +460,7 @@ export async function buildTrustedBuiltinCopilotPackage(): Promise<TrustedBuiltI
   const signature = createHash("sha512")
     .update(canonicalJsonBytes(unsignedManifest))
     .digest("base64url");
-  const manifest = ProviderExtensionV2ManifestSchema.parse({
+  const manifest = ProviderPackageManifestSchema.parse({
     ...unsignedManifest,
     signatures: [
       {

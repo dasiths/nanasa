@@ -51,7 +51,17 @@ import { NativeSessionService } from "./native-session-service.js";
 import { OperatorAuth } from "./operator-auth.js";
 import { controlMetadata, PRODUCT_VERSION, repositoryTmuxNamespace } from "./protocol-metadata.js";
 import { ProviderStateRepository } from "./provider-state-repository.js";
-import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
+import {
+  buildTrustedBuiltinClaudeCodePackage,
+  buildTrustedBuiltinCopilotPackage,
+  buildTrustedBuiltinOpenCodePackage,
+  buildTrustedBuiltinPiPackage,
+} from "./providers/builtin-provider-packages.js";
+import { ProviderBoundRuntimePlanner } from "./providers/provider-bound-runtime-planner.js";
+import { ProviderOverlayRepository } from "./providers/provider-overlay-repository.js";
+import { ProviderRunBindingRepository } from "./providers/provider-run-binding-repository.js";
+import { ProviderRuntimeIndex } from "./providers/provider-runtime-index.js";
+import { ProviderSnapshotRepository } from "./providers/provider-snapshot-repository.js";
 import { ActivationService } from "./release/activation-service.js";
 import { createRemoteDescriptorFromMetadata } from "./remote/remote-descriptor.js";
 import { ReporterRegistry } from "./reporter-registry.js";
@@ -129,7 +139,6 @@ export interface DaemonContext {
   bootstrapFragment: string;
   providerStates: ProviderStateRepository;
   nativeSessions: NativeSessionService;
-  providerAdapters: ProviderAdapterRegistry;
   extensions: ProviderExtensionService;
 }
 
@@ -254,9 +263,8 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         ? {}
         : { operatorToken: options.mcp.operatorToken }),
     });
-    const providerAdapters = ProviderAdapterRegistry.builtIn();
     const extensionLocks = new ExtensionLockRepository(loadedConfig.repoRoot);
-    const providerCatalog = new ProviderCatalogService(providerAdapters);
+    const providerCatalog = new ProviderCatalogService();
     const extensionPlanner = new ProviderExtensionPlanner();
     const extensionConfig = () => {
       const current = configRepository.load();
@@ -284,19 +292,34 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       repositoryIdentity,
     );
     extensions.initializeBuiltIns();
+    const providerSnapshots = new ProviderSnapshotRepository(store.database);
+    const providerRuntimeIndex = new ProviderRuntimeIndex(store.database, providerSnapshots);
+    for (const buildPackage of [
+      buildTrustedBuiltinCopilotPackage,
+      buildTrustedBuiltinPiPackage,
+      buildTrustedBuiltinOpenCodePackage,
+      buildTrustedBuiltinClaudeCodePackage,
+    ]) {
+      await providerRuntimeIndex.registerTrustedBuiltin(await buildPackage());
+    }
+    const providerBindings = new ProviderRunBindingRepository(
+      store.database,
+      providerRuntimeIndex,
+      providerSnapshots,
+    );
     const providerStates = new ProviderStateRepository(
       options.providerStateRoot ?? loadedConfig.integrationsDirectory,
       store,
     );
     const generatedOverlays = new GeneratedOverlayTransaction(loadedConfig.integrationsDirectory);
+    const providerOverlays = new ProviderOverlayRepository(store.database, generatedOverlays);
+    const providerRuntimePlanner = new ProviderBoundRuntimePlanner(
+      providerBindings,
+      providerOverlays,
+    );
     const credentialBroker = new UserCredentialBroker();
     const repositoryTrust = new RepositoryTrustService(store);
     const nativeSessions = new NativeSessionService(store);
-    const reporterRegistry = new ReporterRegistry(store, {
-      runtimeDirectory: runtimePath,
-      adapters: providerAdapters,
-    });
-    const statusService = new AgentStatusService(store, reporterRegistry);
     const statusQueries = new AgentStatusQueryService(store);
     const coordinatorReference: { current?: RunRuntimeCoordinator } = {};
     const tmuxServerName = options.tmuxServerName ?? repositoryTmuxNamespace(loadedConfig.repoRoot);
@@ -319,9 +342,9 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       statusEndpointUrl,
       ...(options.mcp?.enabled === true ? { mcpEndpointUrl } : {}),
       repositoryIdentity,
-      adapterRegistry: providerAdapters,
+      planner: providerRuntimePlanner,
+      bindings: providerBindings,
       stateRepository: providerStates,
-      overlayTransaction: generatedOverlays,
       credentialBroker,
       trustService: repositoryTrust,
       assertProviderExtension: (kind) => extensions.assertProviderKind(kind),
@@ -339,11 +362,15 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         return current.config.groups[membership.groupId]?.agents[membership.id]?.desiredModel;
       },
     });
+    const reporterRegistry = new ReporterRegistry(store, {
+      runtimeDirectory: runtimePath,
+      authority: runtimeProvisioner,
+    });
+    const statusService = new AgentStatusService(store, reporterRegistry);
     const runtime = new TmuxRuntime(store, {
       serverName: tmuxServerName,
       ...(options.tmuxPath === undefined ? {} : { tmuxPath: options.tmuxPath }),
       runtimeProvisioner,
-      adapterRegistry: providerAdapters,
       invalidationHooks: {
         "pane-died": tmuxEvents.hookCommand(tmuxInvalidationUrl.toString(), "pane_died"),
         "pane-exited": tmuxEvents.hookCommand(tmuxInvalidationUrl.toString(), "pane_exited"),
@@ -353,11 +380,11 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         ),
         "alert-bell": tmuxEvents.hookCommand(tmuxInvalidationUrl.toString(), "bell"),
       },
-      runtimeEnvironment: (run) => ({
+      runtimeEnvironment: async (run) => ({
         ...(options.mcp?.enabled === true ? { NANASA_MCP_URL: mcpEndpointUrl } : {}),
         NANASA_MCP_TOKEN: mcpCredentials.issueAgent(run),
         NANASA_STATUS_URL: statusEndpointUrl,
-        ...reporterRegistry.environment(run),
+        ...(await reporterRegistry.environment(run)),
       }),
     });
     const terminalControl = new TerminalControlService(store);
@@ -386,7 +413,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     const actionScheduler = new AgentActionScheduler(store, runtime, terminalInput);
     const actionAcks = new AgentActionAckService(store);
     const actionWaits = new AgentWaitService(store);
-    const openWaits = new AgentOpenWaitService(store, runtime, terminalInput, providerAdapters);
+    const openWaits = new AgentOpenWaitService(store, runtime, terminalInput, runtimeProvisioner);
     const coordinator = new RunRuntimeCoordinator(store, runtime, terminalGateway, dispatcher, {
       ...(options.reconcileIntervalMs === undefined
         ? {}
@@ -554,25 +581,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       store,
       statusService,
       nativeSessions,
-      adapters: providerAdapters,
-      providerStateRoot: (profile) => {
-        const existing = providerStates
-          .list()
-          .find(
-            (binding) =>
-              binding.integrationId === profile.agentType &&
-              (binding.memberId === profile.id || binding.memberId === undefined),
-          );
-        if (existing !== undefined) return existing.storageReference;
-        const integration = loadedConfig.config.integrations[profile.agentType];
-        if (integration === undefined) throw new Error(`Missing integration ${profile.agentType}`);
-        return providerStates.resolve({
-          membershipId: profile.id,
-          integrationId: profile.agentType,
-          policy: integration.providerState,
-          credentialReference: integration.credentials,
-        }).storageReference;
-      },
+      runtimeProvisioner,
       actionAcks,
     });
     if (options.mcp?.enabled === true) {
@@ -678,7 +687,6 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       bootstrapFragment,
       providerStates,
       nativeSessions,
-      providerAdapters,
       extensions,
     };
   } catch (error) {

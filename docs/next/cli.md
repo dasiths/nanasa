@@ -1,7 +1,7 @@
 ---
 title: CLI reference
 description: Operator command families, output contract, and local lifecycle commands
-ms.date: 2026-08-31
+ms.date: 2026-09-01
 ms.topic: reference
 ---
 
@@ -9,7 +9,7 @@ ms.topic: reference
 
 Operational commands use the versioned daemon control plane. Local bootstrap and lifecycle commands can run before the daemon is available. Output is compact JSON by default. Exit code 0 means success, 1 means an operational failure, and 2 means invalid command usage.
 
-Command families cover metadata, config, auth, state, trust, extensions, topology, runs, status, messages, actions, waits, terminals, consoles, Git, events, daemon diagnostics, migrations, service lifecycle, remote access, and completion.
+Command families cover metadata, config, auth, state, trust, extensions, topology, runs, status, messages, actions, waits, terminals, consoles, Git, events, daemon diagnostics, service lifecycle, remote access, and completion.
 
 ## Generated command inventory
 

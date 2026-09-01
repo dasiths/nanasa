@@ -5,11 +5,9 @@ import { ControlClientError } from "@nanasa/control-client";
 import WebSocket from "ws";
 import { authenticateAgent, doctorIntegrations } from "../cli-admin.js";
 import { matchControlRoute } from "../http/route-registry.js";
-import { DATABASE_SCHEMA_VERSION } from "../persistence/database.js";
 import { repositoryIdentity } from "../protocol-metadata.js";
 import { loadBuildIdentity } from "../release/build-identity.js";
-import { MigrationRunner } from "../release/migration-runner.js";
-import { RELEASE_MIGRATIONS, ReleaseManager } from "../release/release-manager.js";
+import { ReleaseManager } from "../release/release-manager.js";
 import { createRemoteDescriptor } from "../remote/remote-descriptor.js";
 import { buildRemoteSshPlan, RemoteSshSession } from "../remote/remote-ssh.js";
 import { SystemdUserService } from "../service/systemd-user-service.js";
@@ -253,7 +251,7 @@ export async function runControlCli(
       return 0;
     }
     if (declaration.id === "auth.login") {
-      authenticateAgent(repositoryRoot, options.positionals[0] as string, options.agentId);
+      await authenticateAgent(repositoryRoot, options.positionals[0] as string, options.agentId);
       return 0;
     }
     const packageRoot = publicPackageRoot(import.meta.dirname);
@@ -280,19 +278,6 @@ export async function runControlCli(
         value = { restored: options.positionals[0] };
       }
       outputSuccess(value, declaration.command === "logs" ? "text" : "json", stdout);
-      return 0;
-    }
-    if (declaration.family === "migration") {
-      const runner = new MigrationRunner(
-        join(repositoryRoot, ".nanasa", "state", "nanasa.sqlite"),
-        DATABASE_SCHEMA_VERSION,
-        RELEASE_MIGRATIONS,
-      );
-      outputSuccess(
-        declaration.command === "probe" ? runner.preflight() : runner.apply(),
-        "json",
-        stdout,
-      );
       return 0;
     }
     if (declaration.id === "remote.describe") {

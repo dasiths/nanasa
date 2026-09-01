@@ -1,7 +1,7 @@
 ---
 title: Troubleshooting
 description: Symptom-based diagnostics for startup, service, terminal, provider, and remote failures
-ms.date: 2026-08-31
+ms.date: 2026-09-01
 ms.topic: troubleshooting
 ---
 
@@ -14,7 +14,9 @@ the process start identity and state. A verified zombie does not block startup;
 the existing owner, inode, link-count, and permission checks still protect lock
 replacement. Do not remove `daemon.lock` manually when a live owner exists.
 
-A future or unsupported old database is refused. Create and verify a backup before reset or migration. Do not open a newer database with older code.
+A future or old database is refused. Create and verify a backup, then run
+`nanasa reset --from-alpha` to initialize the current schema. Nanasa does not
+upgrade databases in place. Do not open a newer database with older code.
 
 If the portal reports that an operator session is required, run
 `make portal-auth` from a source checkout or `nanasa auth portal` from an

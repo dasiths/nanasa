@@ -5,16 +5,10 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { DATABASE_BASELINE_SQL, DATABASE_SCHEMA_VERSION } from "../src/persistence/schema.js";
-import { MigrationRunner } from "../src/release/migration-runner.js";
-import {
-  RELEASE_MIGRATIONS,
-  ReleaseManager,
-  type ReleaseService,
-} from "../src/release/release-manager.js";
+import { DATABASE_SCHEMA_VERSION } from "../src/persistence/schema.js";
+import { ReleaseManager, type ReleaseService } from "../src/release/release-manager.js";
 import { NanasaStore } from "../src/store.js";
 
 const roots: string[] = [];
@@ -66,116 +60,6 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-describe("canonical schema 7 to current migration", () => {
-  it("migrates the previously released inert schema 9 to the complete target schema", () => {
-    const root = temporary("schema-nine-forward");
-    const path = join(root, "state.sqlite");
-    const database = new DatabaseSync(path);
-    database.exec(
-      readFileSync(
-        resolve(import.meta.dirname, "../../../test/fixtures/release/database-v7.sql"),
-        "utf8",
-      ),
-    );
-    database.exec("INSERT INTO schema_metadata VALUES (1,7,'2026-08-30T00:00:00Z')");
-    database.close();
-
-    expect(new MigrationRunner(path, 9, RELEASE_MIGRATIONS).apply()).toMatchObject({
-      foundSchema: 9,
-      compatibility: "current",
-    });
-    const schemaNine = new DatabaseSync(path, { readOnly: true });
-    expect(
-      schemaNine
-        .prepare(
-          "SELECT count(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'provider_reporter_sessions'",
-        )
-        .get(),
-    ).toEqual({ count: 0 });
-    schemaNine.close();
-
-    expect(
-      new MigrationRunner(path, DATABASE_SCHEMA_VERSION, RELEASE_MIGRATIONS).apply(),
-    ).toMatchObject({ foundSchema: DATABASE_SCHEMA_VERSION, compatibility: "current" });
-    const current = new DatabaseSync(path, { readOnly: true });
-    expect(
-      current
-        .prepare(
-          "SELECT count(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'provider_reporter_sessions'",
-        )
-        .get(),
-    ).toEqual({ count: 1 });
-    current.close();
-  });
-
-  it("rebuilds checkpoint constraints and structurally matches a fresh schema", () => {
-    const root = temporary("migration");
-    const nanasa = join(root, ".nanasa");
-    const state = join(nanasa, "state");
-    const checkpointRoot = join(nanasa, "runtime", "terminal-checkpoints");
-    mkdirSync(state, { recursive: true, mode: 0o700 });
-    mkdirSync(checkpointRoot, { recursive: true, mode: 0o700 });
-    const checkpoint = join(checkpointRoot, "retained.txt");
-    writeFileSync(checkpoint, "retained checkpoint", { mode: 0o600 });
-    const path = join(state, "nanasa.sqlite");
-    const database = new DatabaseSync(path);
-    database.exec(
-      readFileSync(
-        resolve(import.meta.dirname, "../../../test/fixtures/release/database-v7.sql"),
-        "utf8",
-      ),
-    );
-    database.exec(`
-      INSERT INTO schema_metadata VALUES (1,7,'2026-08-30T00:00:00Z');
-      INSERT INTO groups (id,name,order_index,membership_revision,message_sequence,created_at,updated_at)
-        VALUES ('g','G',0,0,0,'2026-08-30T00:00:00Z','2026-08-30T00:00:00Z');
-      INSERT INTO agent_profiles (id,name,agent_type,kind,command,args_json,working_directory,environment_json,created_at,updated_at)
-        VALUES ('p','P','pi','pi','cat','[]',NULL,'{}','2026-08-30T00:00:00Z','2026-08-30T00:00:00Z');
-      INSERT INTO runs (id,group_id,member_id,agent_profile_id,generation,status,desired_state,recovery_phase,recovery_attempts,launch_kind,requested_model_source,started_at)
-        VALUES ('r','g','m','p',1,'running','running','recovered',0,'fresh','provider-default','2026-08-30T00:00:00Z');
-    `);
-    database
-      .prepare(`INSERT INTO terminal_checkpoints VALUES
-      ('c','owner','r',1,'{}','2026-08-30T00:00:00Z',1,19,0,'repository-private',?,
-       '2026-08-31T00:00:00Z',NULL,NULL)`)
-      .run(checkpoint);
-    database.close();
-
-    expect(
-      new MigrationRunner(path, DATABASE_SCHEMA_VERSION, RELEASE_MIGRATIONS).apply(),
-    ).toMatchObject({
-      foundSchema: DATABASE_SCHEMA_VERSION,
-      compatibility: "current",
-      integrity: "ok",
-      foreignKeys: "ok",
-    });
-    const migrated = new DatabaseSync(path, { readOnly: true });
-    expect(migrated.prepare("SELECT content_digest FROM terminal_checkpoints").get()).toEqual({
-      content_digest: hash("retained checkpoint"),
-    });
-    const fresh = new DatabaseSync(":memory:");
-    fresh.exec(DATABASE_BASELINE_SQL);
-    const schema = (value: DatabaseSync) =>
-      value
-        .prepare(`SELECT type,name,tbl_name,sql FROM sqlite_schema
-      WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name`)
-        .all()
-        .map((row) => {
-          const item = row as { type: string; name: string; tbl_name: string; sql: string | null };
-          return {
-            ...item,
-            sql: item.sql
-              ?.replaceAll(/\s+/g, " ")
-              .replaceAll(/\s*([(),])\s*/g, "$1")
-              .trim(),
-          };
-        });
-    expect(schema(migrated)).toEqual(schema(fresh));
-    fresh.close();
-    migrated.close();
-  });
-});
-
 describe("PR-6 real daemon rollback composition", () => {
   it("uses live metadata and event reset while preserving the daemon-created tmux identity", async () => {
     const root = temporary("pr6");
@@ -205,7 +89,7 @@ describe("PR-6 real daemon rollback composition", () => {
       ],
       { stdio: "ignore" },
     );
-    const provider = join(root, "provider");
+    const provider = join(root, "pi");
     writeFileSync(
       provider,
       "#!/bin/sh\nprintf 'ready\\n'\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done\n",

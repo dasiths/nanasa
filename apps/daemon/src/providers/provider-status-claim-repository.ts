@@ -1,8 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
   canonicalJson,
-  type StatusSourceClaimV3,
-  StatusSourceClaimV3Schema,
+  type ProviderStatusClaim,
+  ProviderStatusClaimSchema,
 } from "@nanasa/contracts";
 
 interface ClaimRow {
@@ -14,13 +14,13 @@ interface ClaimRow {
   readonly snapshot_digest: string;
   readonly process_incarnation_digest: string;
   readonly status_policy_digest: string;
-  readonly source: StatusSourceClaimV3["source"];
+  readonly source: ProviderStatusClaim["source"];
   readonly source_id: string;
   readonly source_session_id: string | null;
   readonly source_manifest_digest: string | null;
-  readonly claim_type: StatusSourceClaimV3["claimType"];
+  readonly claim_type: ProviderStatusClaim["claimType"];
   readonly value_json: string;
-  readonly confidence: StatusSourceClaimV3["confidence"];
+  readonly confidence: ProviderStatusClaim["confidence"];
   readonly reason_code: string;
   readonly source_sequence: number;
   readonly source_occurred_at: string | null;
@@ -29,11 +29,11 @@ interface ClaimRow {
 }
 
 export interface StatusClaimWriteResult {
-  readonly claim: StatusSourceClaimV3;
+  readonly claim: ProviderStatusClaim;
   readonly changed: boolean;
 }
 
-function claimValue(claim: StatusSourceClaimV3): Record<string, unknown> {
+function claimValue(claim: ProviderStatusClaim): Record<string, unknown> {
   return {
     ...(claim.semanticState === undefined ? {} : { semanticState: claim.semanticState }),
     ...(claim.phase === undefined ? {} : { phase: claim.phase }),
@@ -43,8 +43,8 @@ function claimValue(claim: StatusSourceClaimV3): Record<string, unknown> {
   };
 }
 
-function fromRow(row: ClaimRow): StatusSourceClaimV3 {
-  return StatusSourceClaimV3Schema.parse({
+function fromRow(row: ClaimRow): ProviderStatusClaim {
+  return ProviderStatusClaimSchema.parse({
     id: row.id,
     fence: {
       bindingId: row.binding_id,
@@ -72,7 +72,7 @@ function fromRow(row: ClaimRow): StatusSourceClaimV3 {
   });
 }
 
-function semanticIdentity(claim: StatusSourceClaimV3): unknown {
+function semanticIdentity(claim: ProviderStatusClaim): unknown {
   return {
     fence: claim.fence,
     policyDigest: claim.policyDigest,
@@ -98,7 +98,7 @@ export class ProviderStatusClaimRepository {
   }
 
   public record(input: unknown): StatusClaimWriteResult {
-    const claim = StatusSourceClaimV3Schema.parse(input);
+    const claim = ProviderStatusClaimSchema.parse(input);
     const authority = this.#database
       .prepare(
         `SELECT binding.provider_id
@@ -193,7 +193,7 @@ export class ProviderStatusClaimRepository {
     return Object.freeze({ claim, changed: true });
   }
 
-  public list(runId: string, generation: number): readonly StatusSourceClaimV3[] {
+  public list(runId: string, generation: number): readonly ProviderStatusClaim[] {
     const rows = this.#database
       .prepare(
         `SELECT claim.*, binding.provider_id
@@ -206,7 +206,7 @@ export class ProviderStatusClaimRepository {
     return Object.freeze(rows.map(fromRow));
   }
 
-  #current(claim: StatusSourceClaimV3): StatusSourceClaimV3 | undefined {
+  #current(claim: ProviderStatusClaim): ProviderStatusClaim | undefined {
     const row = this.#database
       .prepare(
         `SELECT claim.*, binding.provider_id

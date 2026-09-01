@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AgentWaitKind, OpenWaitReply } from "@nanasa/contracts";
+import type { OpenWaitReply } from "@nanasa/contracts";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { EffectiveAgentPrompt } from "../src/instruction-resolver.js";
 import { openNanasaDatabase } from "../src/persistence/database.js";
@@ -7,7 +7,6 @@ import {
   buildTrustedBuiltinCopilotPackage,
   type TrustedBuiltInProviderPackage,
 } from "../src/providers/builtin-provider-packages.js";
-import { CopilotAdapter } from "../src/providers/copilot-adapter.js";
 import {
   ProviderNamespaceOwnership,
   ProviderPermissionPolicy,
@@ -43,11 +42,11 @@ const overlayContext = {
 } as const;
 
 const waitReplies = [
-  ["permission", { kind: "allow-once" }],
-  ["question", { kind: "answer", text: "answer" }],
-  ["elicitation", { kind: "select", option: "choice" }],
-  ["plan_approval", { kind: "approve-plan" }],
-] as const satisfies ReadonlyArray<readonly [AgentWaitKind, OpenWaitReply]>;
+  { kind: "allow-once" },
+  { kind: "answer", text: "answer" },
+  { kind: "select", option: "choice" },
+  { kind: "approve-plan" },
+] as const satisfies readonly OpenWaitReply[];
 
 let builtIn: TrustedBuiltInProviderPackage;
 let evaluator: ProviderSnapshotEvaluator;
@@ -85,11 +84,8 @@ describe("Copilot provider snapshot conformance", () => {
     expect(Object.isFrozen(builtIn.snapshot.body.capabilities[0]?.payload)).toBe(true);
   });
 
-  it("shadow-compares exact Copilot launch and overlay bytes against callback authority", () => {
-    const legacy = new CopilotAdapter();
-    const legacyOverlay = legacy.planOverlay(overlayContext);
+  it("evaluates exact Copilot launch, overlay, session, and control capabilities", () => {
     const snapshotOverlay = evaluator.planOverlay(overlayContext);
-    expect(snapshotOverlay).toEqual(legacyOverlay);
     const reporterSource = snapshotOverlay.files.find(
       (file) => file.relativePath === "copilot-status-plugin/status-hook.mjs",
     );
@@ -102,26 +98,26 @@ describe("Copilot provider snapshot conformance", () => {
         .update(reporterSource?.content ?? "")
         .digest("hex"),
     );
-    expect(evaluator.stateEnvironment(overlayContext.stateRoot)).toEqual(
-      legacy.stateEnvironment(overlayContext.stateRoot),
-    );
-    expect(evaluator.modelArguments("provider/model-one")).toEqual(
-      legacy.modelArguments("provider/model-one"),
-    );
-    expect(evaluator.credentialEnvironmentNames()).toEqual(legacy.credentialEnvironmentNames());
+    expect(evaluator.stateEnvironment(overlayContext.stateRoot)).toEqual({
+      COPILOT_HOME: overlayContext.stateRoot,
+      COPILOT_CACHE_HOME: `${overlayContext.stateRoot}/cache`,
+    });
+    expect(evaluator.modelArguments("provider/model-one")).toEqual([
+      "--model",
+      "provider/model-one",
+    ]);
+    expect(evaluator.credentialEnvironmentNames()).toEqual([
+      "COPILOT_GITHUB_TOKEN",
+      "GH_TOKEN",
+      "GITHUB_TOKEN",
+    ]);
 
     const snapshotSession = evaluator.normalizeNativeSession({
       source: "copilot",
       referenceKind: "id",
       referenceValue: "session-one",
     });
-    const legacySession = legacy.normalizeNativeSession(
-      { source: "copilot", referenceKind: "id", referenceValue: "session-one" },
-      overlayContext.stateRoot,
-    );
-    expect(evaluator.resumeArguments(snapshotSession)).toEqual(
-      legacy.resumeArguments(legacySession),
-    );
+    expect(evaluator.resumeArguments(snapshotSession)).toEqual(["--resume=session-one"]);
 
     const fresh = evaluator.launch({
       ...overlayContext,
@@ -130,8 +126,8 @@ describe("Copilot provider snapshot conformance", () => {
     });
     expect(fresh.command).toEqual([
       "copilot",
-      ...legacyOverlay.commandArguments,
-      ...legacy.modelArguments("provider/model-one"),
+      ...snapshotOverlay.commandArguments,
+      ...evaluator.modelArguments("provider/model-one"),
     ]);
     const resumed = evaluator.launch({
       ...overlayContext,
@@ -142,24 +138,20 @@ describe("Copilot provider snapshot conformance", () => {
     });
     expect(resumed.command).toEqual([
       "copilot",
-      ...legacyOverlay.commandArguments,
-      ...legacy.resumeArguments(legacySession, "provider/model-one"),
+      ...snapshotOverlay.commandArguments,
+      ...evaluator.resumeArguments(snapshotSession),
+      ...evaluator.modelArguments("provider/model-one"),
     ]);
 
     const control = evaluator.controlPolicy();
-    expect({
-      waitReplyChannels: control.waitReplyChannels,
-      supportsPromptAcknowledgement: control.supportsPromptAcknowledgement,
-      supportsCancellation: control.supportsCancellation,
-      terminalSubmitSequence: control.terminalSubmitSequence,
-    }).toEqual({
-      waitReplyChannels: legacy.control.waitReplyChannels,
-      supportsPromptAcknowledgement: legacy.control.supportsPromptAcknowledgement,
-      supportsCancellation: legacy.control.supportsCancellation,
-      terminalSubmitSequence: legacy.control.terminalSubmitSequence,
+    expect(control).toMatchObject({
+      waitReplyChannels: ["terminal"],
+      supportsPromptAcknowledgement: false,
+      supportsCancellation: false,
+      terminalSubmitSequence: "\u001b[I\r",
     });
-    for (const [kind, reply] of waitReplies) {
-      expect(evaluator.encodeWaitReply(reply)).toBe(legacy.control.waitReplyInput(kind, reply));
+    for (const reply of waitReplies) {
+      expect(evaluator.encodeWaitReply(reply).length).toBeGreaterThan(0);
     }
   });
 

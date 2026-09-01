@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { EnvironmentSchema, IdentifierSchema, TimestampSchema } from "./control-v1.js";
+import { EnvironmentSchema, IdentifierSchema, TimestampSchema } from "./control.js";
 
 export const AgentKindSchema = z.enum(["copilot", "pi", "opencode", "claude-code"]);
 export type AgentKind = z.infer<typeof AgentKindSchema>;

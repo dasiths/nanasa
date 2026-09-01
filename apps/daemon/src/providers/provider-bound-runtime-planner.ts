@@ -5,7 +5,7 @@ import {
   type RunProviderLaunchSelection,
   RunProviderLaunchSelectionSchema,
 } from "@nanasa/contracts";
-import type { GeneratedOverlayFile } from "./provider-adapter.js";
+import type { GeneratedOverlayFile } from "./provider-runtime-types.js";
 import {
   ProviderOverlayRepository,
   type RecoveredProviderOverlay,
@@ -32,6 +32,8 @@ export interface BindProviderRuntimeInput
   readonly providerStateId: string;
   readonly overlayId: string;
   readonly credentialSlots: Readonly<Record<string, string>>;
+  readonly additionalEnvironment?: Readonly<Record<string, string>>;
+  readonly additionalEnvironmentNames?: readonly string[];
   readonly repositoryTrustDigest: string;
   readonly workingDirectory?: string;
   readonly modelResumePolicy: "preserve-session" | "enforce-configured";
@@ -124,11 +126,17 @@ export class ProviderBoundRuntimePlanner {
       ...(input.nativeSession === undefined ? {} : { nativeSession: input.nativeSession }),
       enforceConfiguredModelOnResume: input.modelResumePolicy === "enforce-configured",
     });
+    const environment = Object.freeze({
+      ...input.additionalEnvironment,
+      ...planned.environment,
+    });
     const launchPlan = RunProviderLaunchSelectionSchema.parse({
       configuredCommand: input.configuredCommand,
       command: planned.command,
       overlayArguments: planned.overlay.commandArguments,
-      environmentNames: Object.keys(planned.environment).sort(),
+      environmentNames: [
+        ...new Set([...Object.keys(environment), ...(input.additionalEnvironmentNames ?? [])]),
+      ].sort(),
       stateStorageReference: input.stateRoot,
       ...(input.workingDirectory === undefined ? {} : { workingDirectory: input.workingDirectory }),
       ...(input.model === undefined ? {} : { desiredModel: input.model }),
@@ -183,8 +191,12 @@ export class ProviderBoundRuntimePlanner {
       snapshot,
       overlay,
       command: Object.freeze([...planned.command]),
-      environment: Object.freeze({ ...planned.environment }),
+      environment,
     });
+  }
+
+  public overlayRoot(overlayId: string, revision = 1): string {
+    return this.#overlays.overlayRoot(overlayId, revision);
   }
 
   public async recover(runId: string, generation: number): Promise<RecoveredProviderRuntime> {

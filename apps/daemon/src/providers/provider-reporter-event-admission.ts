@@ -2,14 +2,14 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
   canonicalJson,
-  type ReporterEventV3,
-  ReporterEventV3Schema,
+  type ProviderReporterEvent,
+  ProviderReporterEventSchema,
   type RunProviderBinding,
 } from "@nanasa/contracts";
 import type { ResolvedProviderAdapter } from "./resolved-provider-adapter.js";
 
 export interface ReporterEventAdmissionResult {
-  readonly event: ReporterEventV3;
+  readonly event: ProviderReporterEvent;
   readonly duplicate: boolean;
 }
 
@@ -30,7 +30,7 @@ export class ProviderReporterEventAdmission {
     input: unknown,
     acceptedAt = new Date().toISOString(),
   ): ReporterEventAdmissionResult {
-    const event = ReporterEventV3Schema.parse(input);
+    const event = ProviderReporterEventSchema.parse(input);
     if (
       event.runId !== binding.runId ||
       event.generation !== binding.generation ||

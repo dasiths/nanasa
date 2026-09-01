@@ -4,7 +4,7 @@
   "baselines": [
     {
       "id": "built-in-launch",
-      "owners": ["apps/daemon/test/built-in-launch-goldens.test.ts"]
+      "owners": ["apps/daemon/test/built-in-provider-snapshot-conformance.test.ts"]
     },
     {
       "id": "reporter-events",
@@ -127,7 +127,7 @@
       "condition": "Runtime index visible before all immutable objects, grants, trust, and journal commit",
       "owners": [
         "apps/daemon/test/provider-extensions.test.ts",
-        "apps/daemon/test/release-migration-and-activation.test.ts"
+        "apps/daemon/test/release-and-activation.test.ts"
       ]
     },
     {

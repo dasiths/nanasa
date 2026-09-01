@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { IdentifierSchema, RunStatusSchema, TimestampSchema } from "./control-v1.js";
-import { AgentTypeKeySchema, IntegrationIdSchema } from "./provider-v1.js";
-import { RoleIdSchema } from "./control-v1.js";
+import { IdentifierSchema, RunStatusSchema, TimestampSchema } from "./control.js";
+import { AgentTypeKeySchema, IntegrationIdSchema } from "./provider.js";
+import { AdapterIdSchema } from "./provider-runtime.js";
+import { RoleIdSchema } from "./control.js";
 
 export const STATUS_PROTOCOL_VERSION = 2 as const;
 export const REPORTER_LEASE_MS = 45_000 as const;
@@ -116,7 +117,7 @@ export const AgentStatusEventInputSchema = z
     version: z.literal(2),
     eventId: IdentifierSchema,
     providerId: IntegrationIdSchema,
-    adapterId: AgentTypeKeySchema,
+    adapterId: AdapterIdSchema,
     reporterId: IdentifierSchema,
     source: AgentStatusSourceSchema,
     protocolVersion: z.literal(STATUS_PROTOCOL_VERSION),
@@ -244,7 +245,7 @@ export const ReporterSessionSchema = z
   .object({
     id: IdentifierSchema,
     providerId: IntegrationIdSchema,
-    adapterId: AgentTypeKeySchema,
+    adapterId: AdapterIdSchema,
     reporterId: IdentifierSchema,
     source: AgentStatusSourceSchema,
     protocolVersion: z.literal(STATUS_PROTOCOL_VERSION),
