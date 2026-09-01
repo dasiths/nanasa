@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 describe("discarded mixed-state provisioner", () => {
-  it("is replaced by provider-phase3 coverage", () => expect(true).toBe(true));
+  it("is covered by provider adapter behavior tests", () => expect(true).toBe(true));
 });
 
 /* Discarded mixed-state provisioner tests.
@@ -279,7 +279,7 @@ describe("AgentRuntimeProvisioner", () => {
         existing: { command: "existing-server" },
         nanasa: {
           protocolVersion: "auto",
-          lifecycle: "eager",
+          lifecycle: "lazy",
           headers: { Authorization: "Bearer ${NANASA_MCP_TOKEN}" },
         },
       },

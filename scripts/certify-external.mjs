@@ -37,6 +37,18 @@ function run(command, args, options = {}) {
 
 function exactCandidate() {
   const expected = required("NANASA_CERT_CANDIDATE_SHA");
+  if (expected === "ignore") {
+    if (
+      process.env.NANASA_CERT_LOCAL !== "true" ||
+      process.env.CI === "true" ||
+      process.env.GITHUB_ACTIONS === "true"
+    ) {
+      throw new Error(
+        "Candidate SHA ignore is allowed only with NANASA_CERT_LOCAL=true outside CI",
+      );
+    }
+    return;
+  }
   if (!/^[a-f0-9]{40}$/.test(expected)) throw new Error("Candidate SHA must be exact and full");
   const result = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" });
   if (result.status !== 0 || result.stdout.trim() !== expected) {
@@ -64,11 +76,35 @@ function provider() {
     "TMPDIR",
     "XDG_RUNTIME_DIR",
     "DBUS_SESSION_BUS_ADDRESS",
+    "NPM_CONFIG_REGISTRY",
+    "COREPACK_NPM_REGISTRY",
   ]) {
     if (process.env[name] !== undefined) environment[name] = process.env[name];
   }
   environment.NANASA_CERT_CANDIDATE_SHA = required("NANASA_CERT_CANDIDATE_SHA");
-  for (const name of credentialNames) environment[name] = required(name);
+  const authMode = process.env.NANASA_CERT_AUTH_MODE ?? "environment";
+  if (authMode === "provider-home") {
+    if (process.env.NANASA_CERT_LOCAL !== "true") {
+      throw new Error("Provider-home certification is available only in local mode");
+    }
+    environment.NANASA_CERT_LOCAL = "true";
+    environment.NANASA_CERT_AUTH_MODE = authMode;
+    environment.NANASA_CERT_LEVEL = process.env.NANASA_CERT_LEVEL ?? "smoke";
+    environment.NANASA_CERT_INTEGRATIONS_DIRECTORY = required("NANASA_CERT_INTEGRATIONS_DIRECTORY");
+    environment.NANASA_CERT_INTEGRATION_ID = required("NANASA_CERT_INTEGRATION_ID");
+    environment.NANASA_CERT_PROVIDER_STATE_SCOPE = required("NANASA_CERT_PROVIDER_STATE_SCOPE");
+    if (process.env.NANASA_CERT_AGENT_ID !== undefined) {
+      environment.NANASA_CERT_AGENT_ID = process.env.NANASA_CERT_AGENT_ID;
+    }
+    environment.NANASA_CERT_PROVIDER_COMMAND_JSON = required("NANASA_CERT_PROVIDER_COMMAND_JSON");
+    environment.NANASA_CERT_PROVIDER_CWD = required("NANASA_CERT_PROVIDER_CWD");
+    environment.NANASA_CERT_MODEL_POLICY_JSON = required("NANASA_CERT_MODEL_POLICY_JSON");
+  } else if (authMode === "environment") {
+    environment.NANASA_CERT_LEVEL = "full";
+    for (const name of credentialNames) environment[name] = required(name);
+  } else {
+    throw new Error(`Unsupported provider certification auth mode: ${authMode}`);
+  }
   run(
     process.execPath,
     ["--import", "tsx", resolve("scripts/provider-certification.ts"), providerId],

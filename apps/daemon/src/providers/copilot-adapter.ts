@@ -13,7 +13,6 @@ import type {
   ProviderOverlayContext,
   ProviderOverlayPlan,
 } from "./provider-adapter.js";
-import { freezeProviderSemanticClaims } from "./provider-adapter.js";
 import {
   closedTerminalWaitReplyInput,
   freezeControlStrategy,
@@ -33,6 +32,19 @@ export class CopilotAdapter implements ProviderAdapter {
     version: "2",
     source: "copilot",
     readinessEvents: ["session.ready"],
+    events: [
+      "session.ready",
+      "turn.started",
+      "turn.settled",
+      "tool.started",
+      "tool.finished",
+      "tool.failed",
+      "wait.opened",
+      "wait.closed",
+      "compaction.started",
+      "failure.observed",
+      "session.ended",
+    ],
     coverage: {
       session: true,
       turns: true,
@@ -40,27 +52,16 @@ export class CopilotAdapter implements ProviderAdapter {
       waits: true,
       effectiveModel: false,
       heartbeat: false,
+      actionCorrelation: false,
     },
   });
   public readonly control = freezeControlStrategy({
     waitReplyChannels: ["terminal"],
     supportsPromptAcknowledgement: false,
-    supportsCancellation: true,
+    supportsCancellation: false,
     terminalSubmitSequence: "\u001b[I\r",
     waitReplyInput: closedTerminalWaitReplyInput,
   });
-  public readonly semantics = freezeProviderSemanticClaims(
-    {
-      reporterReadiness: true,
-      modelObservation: "desired-launch",
-      waitCoverage: true,
-      waitReplyChannels: ["terminal"],
-      nativeResume: true,
-    },
-    this.reporter,
-    this.control,
-  );
-
   public recognizeCommand(command: readonly string[]): boolean {
     return command.some((part) => /(?:^|[/\\])copilot(?:\.exe)?$/.test(part));
   }
@@ -89,6 +90,7 @@ export class CopilotAdapter implements ProviderAdapter {
           name: "nanasa-status-reporter",
           description: "Nanasa lifecycle status reporter",
           version: this.version,
+          agents: "com.github.copilot/agents/",
           hooks: "com.github.copilot/hooks/hooks.json",
         }),
         ownerKind: "reporter",
@@ -134,11 +136,11 @@ export class CopilotAdapter implements ProviderAdapter {
     if (context.prompt !== undefined) {
       const name = generatedAgentName(context.membershipId);
       files.push({
-        relativePath: `prompts/${name}.agent.md`,
+        relativePath: `copilot-status-plugin/com.github.copilot/agents/${name}.agent.md`,
         content: `---\nname: ${JSON.stringify(`Nanasa ${context.memberAlias}`)}\ndescription: ${JSON.stringify(`Nanasa-managed ${context.prompt.role?.name ?? "agent"}`)}\ninfer: false\n---\n\n${context.prompt.text}`,
         ownerKind: "prompt",
       });
-      commandArguments.push("--agent", name);
+      commandArguments.push("--agent", `nanasa-status-reporter:${name}`);
     }
     if (context.readOnly) commandArguments.push("--deny-tool=write", "--deny-tool=shell");
     return Object.freeze({

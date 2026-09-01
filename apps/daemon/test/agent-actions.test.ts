@@ -190,6 +190,17 @@ function createAction(context: ReturnType<typeof fixture>, key = "action-key") {
 }
 
 describe("durable exact-runtime actions", () => {
+  it("serializes event-driven and explicit scheduler ticks before provider writes", async () => {
+    const context = fixture();
+    context.scheduler.start();
+    const action = createAction(context, "scheduler-reentrancy");
+    await context.scheduler.tick();
+
+    expect(context.runtime.pasteToRun).toHaveBeenCalledOnce();
+    expect(context.store.getAgentAction(action.id).state).toBe("submitted");
+    await context.scheduler.close();
+  });
+
   it("keeps terminal injection as submission evidence until fenced reporter acknowledgements", async () => {
     const context = fixture();
     const action = createAction(context);
@@ -471,6 +482,50 @@ describe("durable exact-runtime actions", () => {
 });
 
 describe("exact provider waits and authority", () => {
+  it("accepts exact wait-open retries without duplicating the wait", () => {
+    const context = fixture();
+    const identity = {
+      groupId: context.group.id,
+      memberId: "worker",
+      runId: context.run.id,
+      generation: 1,
+    };
+    const metadata = {
+      requestId: "permission_retried",
+      data: {
+        waitKind: "permission" as const,
+        summary: "Allow one tool?",
+        replyChannel: "terminal" as const,
+      },
+    };
+    context.store.ingestAgentStatusEvent(
+      identity,
+      reporterEvent(context.run, 2, "wait.opened", metadata),
+    );
+    const wait = context.store.listOpenWaits(context.group.id)[0]!;
+    const eventSequence = context.store.listEvents().at(-1)!.sequence;
+
+    expect(
+      context.store.ingestAgentStatusEvent(
+        identity,
+        reporterEvent(context.run, 3, "wait.opened", metadata),
+      ),
+    ).toMatchObject({ accepted: true });
+    expect(context.store.listOpenWaits(context.group.id)).toEqual([wait]);
+    expect(
+      context.store.listEvents(eventSequence).filter((event) => event.type === "open-wait.changed"),
+    ).toEqual([]);
+    expect(() =>
+      context.store.ingestAgentStatusEvent(
+        identity,
+        reporterEvent(context.run, 4, "wait.opened", {
+          ...metadata,
+          data: { ...metadata.data, summary: "Conflicting summary" },
+        }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: "open_wait_identity_mismatch" }));
+  });
+
   it("keeps a reply transport-only until the reporter closes the exact wait", async () => {
     const context = fixture();
     const identity = {

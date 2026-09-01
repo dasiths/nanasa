@@ -21,7 +21,7 @@ const roots: string[] = [];
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 
 function temporary(name: string): string {
-  const path = join(tmpdir(), `nanasa-phase13-${name}-${crypto.randomUUID()}`);
+  const path = join(tmpdir(), `nanasa-checkpoint-rollback-${name}-${crypto.randomUUID()}`);
   mkdirSync(path, { recursive: true });
   roots.push(path);
   return path;
@@ -66,7 +66,48 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-describe("canonical schema 7 to 8 migration", () => {
+describe("canonical schema 7 to current migration", () => {
+  it("migrates the previously released inert schema 9 to the complete target schema", () => {
+    const root = temporary("schema-nine-forward");
+    const path = join(root, "state.sqlite");
+    const database = new DatabaseSync(path);
+    database.exec(
+      readFileSync(
+        resolve(import.meta.dirname, "../../../test/fixtures/release/database-v7.sql"),
+        "utf8",
+      ),
+    );
+    database.exec("INSERT INTO schema_metadata VALUES (1,7,'2026-08-30T00:00:00Z')");
+    database.close();
+
+    expect(new MigrationRunner(path, 9, RELEASE_MIGRATIONS).apply()).toMatchObject({
+      foundSchema: 9,
+      compatibility: "current",
+    });
+    const schemaNine = new DatabaseSync(path, { readOnly: true });
+    expect(
+      schemaNine
+        .prepare(
+          "SELECT count(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'provider_reporter_sessions'",
+        )
+        .get(),
+    ).toEqual({ count: 0 });
+    schemaNine.close();
+
+    expect(
+      new MigrationRunner(path, DATABASE_SCHEMA_VERSION, RELEASE_MIGRATIONS).apply(),
+    ).toMatchObject({ foundSchema: DATABASE_SCHEMA_VERSION, compatibility: "current" });
+    const current = new DatabaseSync(path, { readOnly: true });
+    expect(
+      current
+        .prepare(
+          "SELECT count(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'provider_reporter_sessions'",
+        )
+        .get(),
+    ).toEqual({ count: 1 });
+    current.close();
+  });
+
   it("rebuilds checkpoint constraints and structurally matches a fresh schema", () => {
     const root = temporary("migration");
     const nanasa = join(root, ".nanasa");
@@ -100,8 +141,10 @@ describe("canonical schema 7 to 8 migration", () => {
       .run(checkpoint);
     database.close();
 
-    expect(new MigrationRunner(path, 8, RELEASE_MIGRATIONS).apply()).toMatchObject({
-      foundSchema: 8,
+    expect(
+      new MigrationRunner(path, DATABASE_SCHEMA_VERSION, RELEASE_MIGRATIONS).apply(),
+    ).toMatchObject({
+      foundSchema: DATABASE_SCHEMA_VERSION,
       compatibility: "current",
       integrity: "ok",
       foreignKeys: "ok",

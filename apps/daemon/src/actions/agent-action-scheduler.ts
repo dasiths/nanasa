@@ -102,7 +102,7 @@ export class AgentActionScheduler {
   public tick(): Promise<void> {
     if (this.#closing) return Promise.resolve();
     if (this.#pending !== undefined) return this.#pending;
-    const operation = this.#schedule();
+    const operation = Promise.resolve().then(() => this.#schedule());
     const pending = operation.finally(() => {
       if (this.#pending === pending) this.#pending = undefined;
     });

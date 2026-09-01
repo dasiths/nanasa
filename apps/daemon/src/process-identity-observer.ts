@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { readFile, readlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { ProcessIdentityObservation } from "@nanasa/contracts";
-import type { ProviderAdapter } from "./providers/provider-adapter.js";
+
+export interface ProcessCommandRecognizer {
+  recognizeCommand(command: readonly string[]): boolean;
+}
 
 const MAX_GROUP_MEMBERS = 64;
 
@@ -53,7 +56,7 @@ export class ProcessIdentityObserver {
 
   public async observe(
     panePid: number,
-    adapter: ProviderAdapter,
+    adapter: ProcessCommandRecognizer,
   ): Promise<ProcessIdentityObservation> {
     const pane = await this.#readStat(panePid);
     const foregroundPgid =

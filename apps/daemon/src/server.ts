@@ -52,6 +52,7 @@ import { OperatorAuth } from "./operator-auth.js";
 import { controlMetadata, PRODUCT_VERSION, repositoryTmuxNamespace } from "./protocol-metadata.js";
 import { ProviderStateRepository } from "./provider-state-repository.js";
 import { ProviderAdapterRegistry } from "./providers/provider-adapter-registry.js";
+import { ActivationService } from "./release/activation-service.js";
 import { createRemoteDescriptorFromMetadata } from "./remote/remote-descriptor.js";
 import { ReporterRegistry } from "./reporter-registry.js";
 import { RepositoryTrustService } from "./repository-trust-service.js";
@@ -76,6 +77,7 @@ export interface DaemonOptions {
   runtimePath?: string;
   repoRoot?: string;
   loadedConfig?: LoadedNanasaConfig;
+  providerStateRoot?: string;
   logger?: boolean | FastifyBaseLogger;
   tmuxServerName?: string;
   tmuxPath?: string;
@@ -166,6 +168,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
   let appForCleanup: FastifyInstance | undefined;
   let storeForCleanup: NanasaStore | undefined;
   try {
+    new ActivationService().recoverIncomplete(runtimePath, [loadedConfig.repoRoot]);
     const app = Fastify({ logger: options.logger ?? false, bodyLimit: 1024 * 1024 });
     appForCleanup = app;
     const store = new NanasaStore(dataPath, {
@@ -281,7 +284,10 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       repositoryIdentity,
     );
     extensions.initializeBuiltIns();
-    const providerStates = new ProviderStateRepository(loadedConfig.integrationsDirectory, store);
+    const providerStates = new ProviderStateRepository(
+      options.providerStateRoot ?? loadedConfig.integrationsDirectory,
+      store,
+    );
     const generatedOverlays = new GeneratedOverlayTransaction(loadedConfig.integrationsDirectory);
     const credentialBroker = new UserCredentialBroker();
     const repositoryTrust = new RepositoryTrustService(store);

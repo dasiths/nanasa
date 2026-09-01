@@ -1,0 +1,122 @@
+[
+  { "type": "session.created", "properties": { "info": { "id": "opencode-root" } } },
+  {
+    "type": "session.created",
+    "properties": { "info": { "id": "opencode-child", "parentID": "opencode-root" } }
+  },
+  { "type": "server.connected", "properties": { "sessionID": "opencode-root" } },
+  {
+    "type": "session.status",
+    "properties": { "sessionID": "opencode-root", "status": { "type": "busy" } }
+  },
+  {
+    "type": "session.status",
+    "properties": { "sessionID": "opencode-child", "status": { "type": "busy" } }
+  },
+  {
+    "type": "message.part.updated",
+    "properties": {
+      "part": {
+        "type": "tool",
+        "sessionID": "opencode-root",
+        "callID": "opencode-tool-1",
+        "tool": "bash",
+        "state": { "status": "running" }
+      }
+    }
+  },
+  {
+    "type": "message.part.updated",
+    "properties": {
+      "part": {
+        "type": "tool",
+        "sessionID": "opencode-root",
+        "callID": "opencode-tool-2",
+        "tool": "read",
+        "state": { "status": "pending" }
+      }
+    }
+  },
+  {
+    "type": "message.part.updated",
+    "properties": {
+      "part": {
+        "type": "tool",
+        "sessionID": "opencode-child",
+        "callID": "opencode-child-tool",
+        "tool": "read",
+        "state": { "status": "running" }
+      }
+    }
+  },
+  {
+    "type": "permission.asked",
+    "properties": { "sessionID": "opencode-root", "id": "opencode-permission-1" }
+  },
+  {
+    "type": "permission.replied",
+    "properties": { "sessionID": "opencode-root", "requestID": "opencode-permission-1" }
+  },
+  {
+    "type": "question.asked",
+    "properties": { "sessionID": "opencode-root", "id": "opencode-question-1" }
+  },
+  {
+    "type": "question.rejected",
+    "properties": { "sessionID": "opencode-root", "requestID": "opencode-question-1" }
+  },
+  {
+    "type": "session.status",
+    "properties": {
+      "sessionID": "opencode-root",
+      "status": { "type": "retry", "next": 1786430000000 }
+    }
+  },
+  {
+    "type": "message.part.updated",
+    "properties": {
+      "part": {
+        "type": "tool",
+        "sessionID": "opencode-root",
+        "callID": "opencode-tool-2",
+        "tool": "read",
+        "state": { "status": "completed" }
+      }
+    }
+  },
+  {
+    "type": "message.part.updated",
+    "properties": {
+      "part": {
+        "type": "tool",
+        "sessionID": "opencode-root",
+        "callID": "opencode-tool-1",
+        "tool": "bash",
+        "state": { "status": "error" }
+      }
+    }
+  },
+  {
+    "type": "message.part.updated",
+    "properties": {
+      "part": {
+        "type": "tool",
+        "sessionID": "opencode-child",
+        "callID": "opencode-child-tool",
+        "tool": "read",
+        "state": { "status": "completed" }
+      }
+    }
+  },
+  {
+    "type": "session.error",
+    "properties": { "sessionID": "opencode-root", "error": { "name": "ProviderError" } }
+  },
+  {
+    "type": "session.status",
+    "properties": { "sessionID": "opencode-root", "status": { "type": "idle" } }
+  },
+  { "type": "session.idle", "properties": { "sessionID": "opencode-child" } },
+  { "type": "session.deleted", "properties": { "sessionID": "opencode-child" } },
+  { "type": "session.deleted", "properties": { "sessionID": "opencode-root" } }
+]

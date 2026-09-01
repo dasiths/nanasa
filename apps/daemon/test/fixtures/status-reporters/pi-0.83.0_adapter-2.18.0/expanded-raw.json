@@ -1,0 +1,17 @@
+[
+  { "event": "session_start", "sessionId": "pi-session" },
+  { "event": "agent_start" },
+  { "event": "tool_execution_start", "toolCallId": "pi-tool-1", "toolName": "bash" },
+  { "event": "tool_execution_start", "toolCallId": "pi-tool-2", "toolName": "read" },
+  {
+    "event": "tool_execution_end",
+    "toolCallId": "pi-tool-2",
+    "toolName": "read",
+    "isError": false
+  },
+  { "event": "tool_execution_end", "toolCallId": "pi-tool-1", "toolName": "bash", "isError": true },
+  { "event": "session_before_compact" },
+  { "event": "session_compact" },
+  { "event": "agent_settled" },
+  { "event": "session_shutdown" }
+]

@@ -1,6 +1,9 @@
 import { join } from "node:path";
 import type { NativeSessionReference } from "@nanasa/contracts";
-import { OPENCODE_STATUS_REPORTER_SOURCE } from "../status-reporter-assets.js";
+import {
+  OPENCODE_STATUS_REPORTER_SOURCE,
+  OPENCODE_TUI_STATUS_REPORTER_SOURCE,
+} from "../status-reporter-assets.js";
 import {
   generatedAgentName,
   json,
@@ -13,7 +16,6 @@ import type {
   ProviderOverlayContext,
   ProviderOverlayPlan,
 } from "./provider-adapter.js";
-import { freezeProviderSemanticClaims } from "./provider-adapter.js";
 import {
   closedTerminalWaitReplyInput,
   freezeControlStrategy,
@@ -29,6 +31,20 @@ export class OpenCodeAdapter implements ProviderAdapter {
     version: "2",
     source: "opencode",
     readinessEvents: ["session.ready"],
+    events: [
+      "session.ready",
+      "turn.started",
+      "turn.settled",
+      "tool.started",
+      "tool.finished",
+      "tool.failed",
+      "wait.opened",
+      "wait.closed",
+      "retry.observed",
+      "failure.observed",
+      "session.ended",
+      "heartbeat",
+    ],
     coverage: {
       session: true,
       turns: true,
@@ -36,26 +52,16 @@ export class OpenCodeAdapter implements ProviderAdapter {
       waits: true,
       effectiveModel: false,
       heartbeat: true,
+      actionCorrelation: false,
     },
   });
   public readonly control = freezeControlStrategy({
-    waitReplyChannels: ["terminal", "api"],
+    waitReplyChannels: ["terminal"],
     supportsPromptAcknowledgement: false,
-    supportsCancellation: true,
+    supportsCancellation: false,
     terminalSubmitSequence: "\r",
     waitReplyInput: closedTerminalWaitReplyInput,
   });
-  public readonly semantics = freezeProviderSemanticClaims(
-    {
-      reporterReadiness: true,
-      modelObservation: "desired-launch",
-      waitCoverage: true,
-      waitReplyChannels: ["terminal"],
-      nativeResume: true,
-    },
-    this.reporter,
-    this.control,
-  );
   public recognizeCommand(command: readonly string[]): boolean {
     return command.some((part) => /(?:^|[/\\])opencode(?:\.exe)?$/.test(part));
   }
@@ -77,6 +83,16 @@ export class OpenCodeAdapter implements ProviderAdapter {
         content: OPENCODE_STATUS_REPORTER_SOURCE,
         ownerKind: "reporter",
       },
+      {
+        relativePath: "nanasa-tui-session.js",
+        content: OPENCODE_TUI_STATUS_REPORTER_SOURCE,
+        ownerKind: "reporter",
+      },
+      {
+        relativePath: "tui.jsonc",
+        content: json({ plugin: ["./nanasa-tui-session.js"] }),
+        ownerKind: "reporter",
+      },
     ];
     const generatedAgent =
       context.prompt === undefined ? undefined : generatedAgentName(context.membershipId);
@@ -88,6 +104,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
       });
     }
     const managed = {
+      plugin: [join(context.overlayRoot, "plugins", "nanasa-status.js")],
       ...(context.mcpEndpointUrl === undefined
         ? {}
         : {
@@ -126,7 +143,8 @@ export class OpenCodeAdapter implements ProviderAdapter {
       ),
       environment: Object.freeze({
         OPENCODE_CONFIG_CONTENT: JSON.stringify(managed),
-        OPENCODE_CONFIG_DIR: context.overlayRoot,
+        OPENCODE_CONFIG_DIR: join(context.stateRoot, "xdg-config", "opencode"),
+        OPENCODE_TUI_CONFIG: join(context.overlayRoot, "tui.jsonc"),
       }),
       generatedIdentities: Object.freeze(files.map((file) => file.relativePath)),
     });

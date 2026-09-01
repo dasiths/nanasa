@@ -4769,6 +4769,34 @@ export class NanasaStore {
         }
       }
       const timestamp = new Date().toISOString();
+      const nativeSessionId = input.nativeSessionId ?? session.nativeSessionId ?? null;
+      const existing = this.#database
+        .prepare(
+          `SELECT * FROM open_waits
+           WHERE run_id = ? AND generation = ? AND reporter_epoch = ?
+             AND provider_request_id = ?`,
+        )
+        .get(run.id, run.generation, session.reporterEpoch, input.requestId) as
+        | OpenWaitRow
+        | undefined;
+      if (existing !== undefined) {
+        if (
+          existing.action_id !== (input.actionId ?? null) ||
+          existing.reporter_session_id !== session.id ||
+          existing.reporter_id !== session.reporterId ||
+          existing.native_session_id !== nativeSessionId ||
+          existing.kind !== input.data.waitKind ||
+          existing.summary !== input.data.summary ||
+          existing.reply_channel !== input.data.replyChannel
+        ) {
+          throw new DomainError(
+            "open_wait_identity_mismatch",
+            "The provider reused an exact wait identity with different metadata",
+            409,
+          );
+        }
+        return [];
+      }
       const waitId = `wait_${randomUUID()}`;
       this.#database
         .prepare(
@@ -4789,7 +4817,7 @@ export class NanasaStore {
           session.id,
           session.reporterId,
           session.reporterEpoch,
-          input.nativeSessionId ?? session.nativeSessionId ?? null,
+          nativeSessionId,
           input.requestId,
           input.data.waitKind,
           input.data.summary,

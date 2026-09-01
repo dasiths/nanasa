@@ -16,6 +16,10 @@ import {
   type BuildIdentity,
 } from "@nanasa/contracts";
 import { AnchoredDirectory } from "../anchored-directory.js";
+import {
+  PROVIDER_PLATFORM_MIGRATION,
+  PROVIDER_PLATFORM_SCHEMA_10_MIGRATION,
+} from "../persistence/migrations.js";
 import { repositoryIdentity } from "../protocol-metadata.js";
 import { SystemdUserService } from "../service/systemd-user-service.js";
 import { type ActivationArtifact, ActivationService } from "./activation-service.js";
@@ -117,6 +121,8 @@ export const RELEASE_MIGRATIONS: readonly MigrationStep[] = [
       `);
     },
   },
+  PROVIDER_PLATFORM_MIGRATION,
+  PROVIDER_PLATFORM_SCHEMA_10_MIGRATION,
 ];
 
 function ensureFile(path: string, contents: string): void {

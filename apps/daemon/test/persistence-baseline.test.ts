@@ -71,6 +71,15 @@ describe("database baseline", () => {
         "idempotency_keys",
         "audits",
         "retention_metadata",
+        "provider_packages",
+        "provider_snapshots",
+        "provider_activations",
+        "run_provider_bindings",
+        "provider_process_incarnations",
+        "provider_authority_fences",
+        "provider_operation_audits",
+        "status_source_claims",
+        "reporter_turn_cycles",
       ]),
     );
     const nonStrict = database

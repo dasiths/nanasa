@@ -1,6 +1,6 @@
 import { type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -21,7 +21,7 @@ const repositoryRoot = resolve(import.meta.dirname, "../../..");
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
 function fixtureDirectory(name: string): string {
-  const path = join(tmpdir(), `nanasa-phase11-${name}-${crypto.randomUUID()}`);
+  const path = join(tmpdir(), `nanasa-release-migration-${name}-${crypto.randomUUID()}`);
   mkdirSync(path, { recursive: true });
   directories.push(path);
   return path;
@@ -262,6 +262,39 @@ describe("staged atomic activation", () => {
     ).toBe(true);
   });
 
+  it("durably creates a missing package-pointer parent", async () => {
+    const fixture = activationFixture();
+    const pointer = fixture.artifacts.find((item) => item.id === "packagePointer")!;
+    const nestedPointer = join(fixture.root, "missing", "release", "active-pointer");
+    const artifacts = fixture.artifacts.map((item) =>
+      item.id === "packagePointer" ? { ...pointer, activePath: nestedPointer } : item,
+    );
+    const manifest = await new ActivationService().activate({
+      runtimeDirectory: fixture.root,
+      from: build("a".repeat(40)),
+      to: build("b".repeat(40)),
+      artifacts,
+    });
+    expect(manifest.state).toBe("ready");
+    expect(readFileSync(nestedPointer, "utf8")).toBe("new-packagePointer\n");
+  });
+
+  it("rejects a symlinked activation staging root", async () => {
+    const root = fixtureDirectory("activation-root-symlink");
+    const outside = join(root, "outside");
+    mkdirSync(outside);
+    symlinkSync(outside, join(root, "activations"));
+    await expect(
+      new ActivationService().activate({
+        runtimeDirectory: root,
+        from: build("a".repeat(40)),
+        to: build("b".repeat(40)),
+        artifacts: [],
+      }),
+    ).rejects.toThrow(/cannot traverse a symlink/);
+    expect(existsSync(join(outside, "manifest.json"))).toBe(false);
+  });
+
   it("removes absent overlay files and restores them when readiness fails", async () => {
     const successful = activationFixture();
     const removedPath = join(successful.root, "active", "obsolete.txt");
@@ -329,6 +362,92 @@ describe("staged atomic activation", () => {
         expect(readFileSync(item.activePath, "utf8")).toBe(original.get(item.id));
     },
   );
+
+  it("recovers replaced and pending artifacts from a durable startup journal", () => {
+    const fixture = activationFixture();
+    const activationId = "crash-recovery";
+    const activationRoot = join(fixture.root, "activations", activationId);
+    const rollbackRoot = join(activationRoot, "rollback");
+    mkdirSync(rollbackRoot, { recursive: true });
+    const artifacts = fixture.artifacts.map((item, index) => {
+      const rollbackPath = join(rollbackRoot, `${index}.txt`);
+      writeFileSync(rollbackPath, `old-${item.id}\n`);
+      return { ...item, rollbackPath, existed: true };
+    });
+    const database = artifacts.find((item) => item.id === "database")!;
+    const config = artifacts.find((item) => item.id === "config")!;
+    writeFileSync(database.activePath, "new-database\n");
+    writeFileSync(config.activePath, "new-config\n");
+    writeFileSync(
+      join(activationRoot, "journal.json"),
+      `${JSON.stringify(
+        {
+          formatVersion: 1,
+          activationId,
+          state: "activating",
+          artifacts,
+          replacedIds: ["database"],
+          pendingId: "config",
+        },
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
+
+    expect(new ActivationService().recoverIncomplete(fixture.root)).toEqual([activationId]);
+    expect(readFileSync(database.activePath, "utf8")).toBe("old-database\n");
+    expect(readFileSync(config.activePath, "utf8")).toBe("old-config\n");
+    expect(JSON.parse(readFileSync(join(activationRoot, "journal.json"), "utf8"))).toMatchObject({
+      state: "rolled-back",
+    });
+  });
+
+  it("rejects a startup journal that traverses an active-path symlink", () => {
+    const root = fixtureDirectory("activation-symlink");
+    const activationId = "symlink-recovery";
+    const activationRoot = join(root, "activations", activationId);
+    const rollbackRoot = join(activationRoot, "rollback");
+    const outside = join(root, "outside");
+    mkdirSync(rollbackRoot, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(rollbackRoot, "database"), "old\n");
+    symlinkSync(outside, join(root, "active-link"));
+    writeFileSync(
+      join(activationRoot, "journal.json"),
+      `${JSON.stringify({
+        formatVersion: 1,
+        activationId,
+        state: "activating",
+        artifacts: [
+          {
+            id: "database",
+            activePath: join(root, "active-link", "database"),
+            rollbackPath: join(rollbackRoot, "database"),
+            existed: true,
+          },
+        ],
+        replacedIds: ["database"],
+      })}\n`,
+      { mode: 0o600 },
+    );
+
+    expect(() => new ActivationService().recoverIncomplete(root)).toThrow(/traverse a symlink/);
+    expect(existsSync(join(outside, "database"))).toBe(false);
+  });
+
+  it("rejects a symlinked activation entry during startup recovery", () => {
+    const root = fixtureDirectory("activation-entry-symlink");
+    const activationsRoot = join(root, "activations");
+    const outside = join(root, "outside-entry");
+    mkdirSync(activationsRoot);
+    mkdirSync(outside);
+    symlinkSync(outside, join(activationsRoot, "redirected-entry"));
+
+    expect(() => new ActivationService().recoverIncomplete(root)).toThrow(
+      /entry cannot be a symlink/,
+    );
+  });
 });
 
 describe("systemd and OpenSSH plans", () => {

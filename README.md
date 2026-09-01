@@ -95,6 +95,28 @@ the stable configured agent ID:
 npx nanasa auth login copilot --agent agent_example
 ```
 
+For repeatable local certification, authenticate the selected provider home
+once, then certify the current working tree without building a release
+candidate. The default membership scope requires the same stable configured
+agent ID for both commands:
+
+```bash
+node bin/nanasa.js auth login copilot --agent agent_example
+pnpm certify:provider:local copilot copilot --agent agent_example
+```
+
+The first argument is the provider ID. The second is the configured integration
+ID and defaults to the provider ID. Local certification uses that integration's
+command, model policy, and persistent provider-owned authentication state. It
+does not read, copy, or print provider credentials. The SHA bypass is local-only
+and is rejected in CI and GitHub Actions.
+
+An integration-scoped home omits `--agent` from both commands.
+Local certification defaults to the non-destructive real launch, reporter,
+process, and native-session smoke profile. Add `--full` to require
+provider-native wait acknowledgement and pane-loss resume recovery as well.
+Formal CI and release certification always uses the full profile.
+
 ### Agent configuration homes
 
 Each integration selects how provider configuration, authentication, and

@@ -1,7 +1,22 @@
 {
   "harness": "opencode",
   "version": "1.18.15",
-  "reporterVersion": "1",
+  "reporterVersion": "2",
   "captureDate": "2026-08-11",
-  "scenario": "lifecycle-tool-wait"
+  "scenario": "root-child-parallel-tools-waits-retry-failure-heartbeat",
+  "declaredEvents": [
+    "session.ready",
+    "turn.started",
+    "turn.settled",
+    "tool.started",
+    "tool.finished",
+    "tool.failed",
+    "wait.opened",
+    "wait.closed",
+    "retry.observed",
+    "failure.observed",
+    "session.ended",
+    "heartbeat"
+  ],
+  "limitations": ["no-effective-model", "no-action-correlation", "no-reload-republish"]
 }

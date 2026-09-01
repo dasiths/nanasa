@@ -1,4 +1,6 @@
-export const DATABASE_SCHEMA_VERSION = 8;
+import { PROVIDER_PLATFORM_SCHEMA_SQL } from "./provider-platform-schema.js";
+
+export const DATABASE_SCHEMA_VERSION = 10;
 
 export const DATABASE_BASELINE_SQL = `
   CREATE TABLE schema_metadata (
@@ -546,4 +548,5 @@ export const DATABASE_BASELINE_SQL = `
   CREATE INDEX action_acknowledgements_action_time ON action_acknowledgements (action_id, acknowledged_at);
   CREATE INDEX open_waits_group_state ON open_waits (group_id, state, updated_at);
   CREATE INDEX open_waits_target ON open_waits (run_id, generation, reporter_epoch, provider_request_id);
+  ${PROVIDER_PLATFORM_SCHEMA_SQL}
 `;

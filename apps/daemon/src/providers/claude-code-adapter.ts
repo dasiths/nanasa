@@ -8,7 +8,6 @@ import type {
   ProviderOverlayContext,
   ProviderOverlayPlan,
 } from "./provider-adapter.js";
-import { freezeProviderSemanticClaims } from "./provider-adapter.js";
 import {
   closedTerminalWaitReplyInput,
   freezeControlStrategy,
@@ -24,6 +23,20 @@ export class ClaudeCodeAdapter implements ProviderAdapter {
     version: "2",
     source: "claude-code",
     readinessEvents: ["session.ready"],
+    events: [
+      "session.ready",
+      "turn.started",
+      "turn.settled",
+      "tool.started",
+      "tool.finished",
+      "tool.failed",
+      "wait.opened",
+      "wait.closed",
+      "compaction.started",
+      "compaction.finished",
+      "failure.observed",
+      "session.ended",
+    ],
     coverage: {
       session: true,
       turns: true,
@@ -31,27 +44,16 @@ export class ClaudeCodeAdapter implements ProviderAdapter {
       waits: true,
       effectiveModel: false,
       heartbeat: false,
+      actionCorrelation: false,
     },
   });
   public readonly control = freezeControlStrategy({
-    waitReplyChannels: ["terminal", "hook"],
+    waitReplyChannels: ["terminal"],
     supportsPromptAcknowledgement: false,
-    supportsCancellation: true,
+    supportsCancellation: false,
     terminalSubmitSequence: "\r",
     waitReplyInput: closedTerminalWaitReplyInput,
   });
-  public readonly semantics = freezeProviderSemanticClaims(
-    {
-      reporterReadiness: true,
-      modelObservation: "desired-launch",
-      waitCoverage: true,
-      waitReplyChannels: ["terminal"],
-      nativeResume: true,
-    },
-    this.reporter,
-    this.control,
-  );
-
   public recognizeCommand(command: readonly string[]): boolean {
     return (
       command.some((part) => /(?:^|[/\\])claude(?:\.exe)?$/.test(part)) ||

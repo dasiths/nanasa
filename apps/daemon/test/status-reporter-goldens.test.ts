@@ -4,12 +4,17 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { type AgentStatusEventInput, AgentStatusEventInputSchema } from "@nanasa/contracts";
+import {
+  type AgentStatusEventInput,
+  type AgentStatusEventKind,
+  AgentStatusEventInputSchema,
+} from "@nanasa/contracts";
 import { afterEach, describe, expect, it } from "vitest";
-
+import { ProviderAdapterRegistry } from "../src/providers/provider-adapter-registry.js";
 import {
   HOOK_STATUS_REPORTER_SOURCE,
   OPENCODE_STATUS_REPORTER_SOURCE,
+  OPENCODE_TUI_STATUS_REPORTER_SOURCE,
   PI_STATUS_REPORTER_SOURCE,
 } from "../src/status-reporter-assets.js";
 
@@ -111,6 +116,32 @@ async function waitForCount(events: unknown[], count: number): Promise<void> {
   expect(events).toHaveLength(count);
 }
 
+async function waitForEvent(
+  events: readonly AgentStatusEventInput[],
+  event: AgentStatusEventKind,
+): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!events.some((item) => item.event === event) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect(events.some((item) => item.event === event)).toBe(true);
+}
+
+function expectExactFixtureCoverage(
+  source: "claude-code" | "copilot" | "pi" | "opencode",
+  events: readonly AgentStatusEventInput[],
+  declaredEvents: readonly AgentStatusEventKind[],
+): void {
+  const descriptor = ProviderAdapterRegistry.builtIn().get(source).reporter;
+  expect(declaredEvents).toEqual(descriptor.events);
+  expect([...new Set(events.map((event) => event.event))].sort()).toEqual(
+    declaredEvents.filter((event) => event !== "heartbeat").sort(),
+  );
+  expect(events.every((event) => event.actionId === undefined && event.turnId === undefined)).toBe(
+    true,
+  );
+}
+
 async function runHook(
   scriptPath: string,
   source: string,
@@ -177,6 +208,22 @@ function clearReporterEnvironment(): void {
     delete process.env[name];
 }
 
+async function selectOpenCodeRoot(
+  temporaryDirectory: string,
+  sessionId: string,
+): Promise<() => void> {
+  const modulePath = join(temporaryDirectory, "opencode-tui-session.mjs");
+  writeFileSync(modulePath, OPENCODE_TUI_STATUS_REPORTER_SOURCE);
+  const module = await import(`${pathToFileURL(modulePath).href}?test=${Date.now()}`);
+  let dispose = () => {};
+  await module.default.tui({
+    route: { current: { name: "session", params: { sessionID: sessionId } } },
+    state: { session: { get: () => ({ id: sessionId }) } },
+    lifecycle: { onDispose: (handler: () => void) => (dispose = handler) },
+  });
+  return dispose;
+}
+
 describe("version-pinned status reporter traces", () => {
   it.each([
     ["claude-code-2.1.220", "claude-code"],
@@ -189,15 +236,21 @@ describe("version-pinned status reporter traces", () => {
     const capture = await captureServer();
     const raw = readFileSync(fixturePath(directory, "raw.jsonl"), "utf8").trim().split("\n");
     const expected = readJson<Array<Record<string, unknown>>>(
-      fixturePath(directory, "normalized.json"),
+      fixturePath(directory, "expanded-normalized.json"),
     );
-    const manifest = readJson<{ hooks?: string[] }>(fixturePath(directory, "manifest.json"));
+    const manifest = readJson<{
+      hooks?: string[];
+      declaredEvents: AgentStatusEventKind[];
+      limitations: string[];
+    }>(fixturePath(directory, "manifest.json"));
     try {
       for (const [index, line] of raw.entries()) {
         await runHook(scriptPath, source, line, capture.url, manifest.hooks?.[index]);
       }
       await waitForCount(capture.events, expected.length);
       expect(capture.events.map(canonical)).toEqual(expected);
+      expectExactFixtureCoverage(source, capture.events, manifest.declaredEvents);
+      expect(manifest.limitations).toContain("no-action-correlation");
     } finally {
       await closeServer(capture.server);
     }
@@ -218,27 +271,50 @@ describe("version-pinned status reporter traces", () => {
     try {
       type PiHandler = (
         event: Record<string, unknown>,
-        context?: { sessionManager: { getSessionId(): unknown } },
-      ) => void;
+        context?: {
+          mode: "tui";
+          isIdle(): boolean;
+          sessionManager: { getSessionId(): unknown };
+        },
+      ) => void | Promise<void>;
       const extension = (await import(`${pathToFileURL(modulePath).href}?test=${Date.now()}`))
         .default as (pi: { on(name: string, handler: PiHandler): void }) => void;
       const handlers = new Map<string, PiHandler>();
       extension({ on: (name, handler) => handlers.set(name, handler) });
-      const raw = readJson<Array<Record<string, unknown>>>(fixturePath(directory, "raw.json"));
+      const raw = readJson<Array<Record<string, unknown>>>(
+        fixturePath(directory, "expanded-raw.json"),
+      );
       for (const item of raw) {
         const handler = handlers.get(String(item.event));
         expect(handler).toBeDefined();
         if (item.event === "session_start") {
-          handler?.({}, { sessionManager: { getSessionId: () => item.sessionId } });
+          await handler?.(
+            {},
+            {
+              mode: "tui",
+              isIdle: () => true,
+              sessionManager: { getSessionId: () => item.sessionId },
+            },
+          );
         } else {
-          handler?.(item);
+          await handler?.(item, {
+            mode: "tui",
+            isIdle: () => true,
+            sessionManager: { getSessionId: () => "pi-session" },
+          });
         }
       }
       const expected = readJson<Array<Record<string, unknown>>>(
-        fixturePath(directory, "normalized.json"),
+        fixturePath(directory, "expanded-normalized.json"),
       );
       await waitForCount(capture.events, expected.length);
       expect(capture.events.map(canonical)).toEqual(expected);
+      const manifest = readJson<{
+        declaredEvents: AgentStatusEventKind[];
+        limitations: string[];
+      }>(fixturePath(directory, "manifest.json"));
+      expectExactFixtureCoverage("pi", capture.events, manifest.declaredEvents);
+      expect(manifest.limitations).not.toContain("no-reload-republish");
     } finally {
       if (previousUrl === undefined) delete process.env.NANASA_STATUS_URL;
       else process.env.NANASA_STATUS_URL = previousUrl;
@@ -261,21 +337,101 @@ describe("version-pinned status reporter traces", () => {
     process.env.NANASA_STATUS_URL = capture.url;
     process.env.NANASA_MCP_TOKEN = "fixture-token";
     setReporterEnvironment("opencode");
+    let disposeTui = () => {};
     try {
       const module = await import(`${pathToFileURL(modulePath).href}?test=${Date.now()}`);
       const plugin = await module.default();
-      const raw = readJson<Array<Record<string, unknown>>>(fixturePath(directory, "raw.json"));
+      disposeTui = await selectOpenCodeRoot(temporaryDirectory, "opencode-root");
+      const raw = readJson<Array<Record<string, unknown>>>(
+        fixturePath(directory, "expanded-raw.json"),
+      );
       for (const event of raw) await plugin.event({ event });
       const expected = readJson<Array<Record<string, unknown>>>(
-        fixturePath(directory, "normalized.json"),
+        fixturePath(directory, "expanded-normalized.json"),
       );
       await waitForCount(capture.events, expected.length);
       expect(capture.events.map(canonical)).toEqual(expected);
+      const manifest = readJson<{
+        declaredEvents: AgentStatusEventKind[];
+        limitations: string[];
+      }>(fixturePath(directory, "manifest.json"));
+      expectExactFixtureCoverage("opencode", capture.events, manifest.declaredEvents);
+      expect(manifest.limitations).not.toContain("no-root-child-qualification");
+      expect(
+        capture.events.some(
+          (event) => event.nativeSessionId === "opencode-child" && event.event === "turn.started",
+        ),
+      ).toBe(false);
+    } finally {
+      disposeTui();
+      if (previousUrl === undefined) delete process.env.NANASA_STATUS_URL;
+      else process.env.NANASA_STATUS_URL = previousUrl;
+      if (previousToken === undefined) delete process.env.NANASA_MCP_TOKEN;
+      else process.env.NANASA_MCP_TOKEN = previousToken;
+      clearReporterEnvironment();
+      await closeServer(capture.server);
+    }
+  });
+
+  it.each([
+    ["pi", PI_STATUS_REPORTER_SOURCE],
+    ["opencode", OPENCODE_STATUS_REPORTER_SOURCE],
+  ] as const)("emits the declared %s heartbeat without provider work", async (source, code) => {
+    const temporaryDirectory = mkdtempSync(join(tmpdir(), `nanasa-${source}-heartbeat-`));
+    temporaryDirectories.push(temporaryDirectory);
+    const modulePath = join(temporaryDirectory, `${source}-reporter.mjs`);
+    writeFileSync(modulePath, code);
+    const capture = await captureServer();
+    const previousUrl = process.env.NANASA_STATUS_URL;
+    const previousToken = process.env.NANASA_MCP_TOKEN;
+    const previousHeartbeat = process.env.NANASA_REPORTER_HEARTBEAT_MS;
+    process.env.NANASA_STATUS_URL = capture.url;
+    process.env.NANASA_MCP_TOKEN = "fixture-token";
+    process.env.NANASA_REPORTER_HEARTBEAT_MS = "50";
+    setReporterEnvironment(source);
+    try {
+      const module = await import(`${pathToFileURL(modulePath).href}?test=${Date.now()}`);
+      if (source === "pi") {
+        type PiHandler = (
+          event: Record<string, unknown>,
+          context?: {
+            mode: "tui";
+            isIdle(): boolean;
+            sessionManager: { getSessionId(): unknown };
+          },
+        ) => void | Promise<void>;
+        const handlers = new Map<string, PiHandler>();
+        (module.default as (pi: { on(name: string, handler: PiHandler): void }) => void)({
+          on: (name, handler) => handlers.set(name, handler),
+        });
+        await handlers.get("session_start")?.(
+          {},
+          {
+            mode: "tui",
+            isIdle: () => true,
+            sessionManager: { getSessionId: () => "heartbeat-session" },
+          },
+        );
+        await waitForEvent(capture.events, "heartbeat");
+        handlers.get("session_shutdown")?.({});
+      } else {
+        const plugin = await module.default();
+        await plugin.event({
+          event: { type: "session.created", properties: { info: { id: "heartbeat-session" } } },
+        });
+        await waitForEvent(capture.events, "heartbeat");
+        await plugin.event({
+          event: { type: "session.deleted", properties: { sessionID: "heartbeat-session" } },
+        });
+      }
+      expect(ProviderAdapterRegistry.builtIn().get(source).reporter.events).toContain("heartbeat");
     } finally {
       if (previousUrl === undefined) delete process.env.NANASA_STATUS_URL;
       else process.env.NANASA_STATUS_URL = previousUrl;
       if (previousToken === undefined) delete process.env.NANASA_MCP_TOKEN;
       else process.env.NANASA_MCP_TOKEN = previousToken;
+      if (previousHeartbeat === undefined) delete process.env.NANASA_REPORTER_HEARTBEAT_MS;
+      else process.env.NANASA_REPORTER_HEARTBEAT_MS = previousHeartbeat;
       clearReporterEnvironment();
       await closeServer(capture.server);
     }
@@ -311,22 +467,34 @@ describe("version-pinned status reporter traces", () => {
       if (source === "pi") {
         type PiHandler = (
           event: Record<string, unknown>,
-          context?: { sessionManager: { getSessionId(): unknown } },
-        ) => void;
+          context?: {
+            mode: "tui";
+            isIdle(): boolean;
+            sessionManager: { getSessionId(): unknown };
+          },
+        ) => void | Promise<void>;
         const handlers = new Map<string, PiHandler>();
         (module.default as (pi: { on(name: string, handler: PiHandler): void }) => void)({
           on: (name, handler) => handlers.set(name, handler),
         });
-        handlers.get("session_start")?.(
+        await handlers.get("session_start")?.(
           {},
-          { sessionManager: { getSessionId: () => "session-fenced" } },
+          {
+            mode: "tui",
+            isIdle: () => true,
+            sessionManager: { getSessionId: () => "session-fenced" },
+          },
         );
         await waitForCount(capture.events, 1);
         handlers.get("agent_start")?.({});
         await new Promise((resolve) => setTimeout(resolve, 225));
-        handlers.get("session_start")?.(
+        await handlers.get("session_start")?.(
           {},
-          { sessionManager: { getSessionId: () => "session-after-fence" } },
+          {
+            mode: "tui",
+            isIdle: () => true,
+            sessionManager: { getSessionId: () => "session-after-fence" },
+          },
         );
         handlers.get("agent_start")?.({});
       } else {
@@ -384,22 +552,43 @@ describe("version-pinned status reporter traces", () => {
     try {
       type PiHandler = (
         event: Record<string, unknown>,
-        context?: { sessionManager: { getSessionId(): unknown } },
-      ) => void;
+        context?: {
+          mode: "tui";
+          isIdle(): boolean;
+          sessionManager: { getSessionId(): unknown };
+        },
+      ) => void | Promise<void>;
       const handlers = new Map<string, PiHandler>();
       const extension = (await import(`${pathToFileURL(modulePath).href}?test=${Date.now()}`))
         .default as (pi: { on(name: string, handler: PiHandler): void }) => void;
       extension({ on: (name, handler) => handlers.set(name, handler) });
-      handlers.get("session_start")?.({}, { sessionManager: { getSessionId: () => "session-a" } });
+      const sessionA = handlers.get("session_start")?.(
+        {},
+        {
+          mode: "tui",
+          isIdle: () => true,
+          sessionManager: { getSessionId: () => "session-a" },
+        },
+      );
       handlers.get("agent_start")?.({});
-      handlers.get("session_start")?.({}, { sessionManager: { getSessionId: () => "session-b" } });
-      await waitForCount(capture.events, 3);
+      const sessionB = handlers.get("session_start")?.(
+        {},
+        {
+          mode: "tui",
+          isIdle: () => true,
+          sessionManager: { getSessionId: () => "session-b" },
+        },
+      );
+      await Promise.all([sessionA, sessionB]);
+      await waitForCount(capture.events, 5);
       expect(
         capture.events.map((event) => [event.event, event.nativeSessionId, event.sourceSequence]),
       ).toEqual([
         ["session.ready", "session-a", 1],
         ["turn.started", "session-a", 2],
         ["session.ready", "session-b", 3],
+        ["turn.settled", "session-a", 4],
+        ["turn.settled", "session-b", 5],
       ]);
       handlers.get("session_shutdown")?.({});
     } finally {
@@ -412,23 +601,27 @@ describe("version-pinned status reporter traces", () => {
     }
   });
 
-  it("records exact tested harness versions in each manifest", () => {
+  it("records exact tested harness and reporter versions in each manifest", () => {
     expect(readJson(fixturePath("claude-code-2.1.220", "manifest.json"))).toMatchObject({
       harness: "claude-code",
       version: "2.1.220",
+      reporterVersion: "2",
     });
     expect(readJson(fixturePath("copilot-1.0.79", "manifest.json"))).toMatchObject({
       harness: "copilot",
       version: "1.0.79",
+      reporterVersion: "2",
     });
     expect(readJson(fixturePath("pi-0.83.0_adapter-2.18.0", "manifest.json"))).toMatchObject({
       harness: "pi",
       version: "0.83.0",
       adapterVersion: "2.18.0",
+      reporterVersion: "2",
     });
     expect(readJson(fixturePath("opencode-1.18.15", "manifest.json"))).toMatchObject({
       harness: "opencode",
       version: "1.18.15",
+      reporterVersion: "2",
     });
   });
 });

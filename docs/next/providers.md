@@ -11,7 +11,13 @@ Nanasa includes closed adapters for GitHub Copilot CLI, Claude Code, Pi, and Ope
 
 ## Authentication and state
 
-Run `nanasa auth login <integration>` for provider-managed login. Membership scope is the default provider-state boundary. Named credential references can inject short-lived values without persisting raw credentials.
+Run `nanasa auth login <integration>` for provider-managed login. The provider
+stores its own authentication state in the selected private provider home;
+Nanasa does not implement or copy the provider's login protocol. Integration
+scope supports one-time authentication shared by runs using that integration.
+Membership scope remains the default isolation boundary and requires an exact
+agent ID when authenticating. Named credential references can inject short-lived
+values without persisting raw credentials.
 
 Nanasa-managed reporter, prompt, MCP, and permission-floor files live in revisioned generated overlays. Provider-owned state remains separate. Health and drift checks never grant arbitrary extension code execution.
 

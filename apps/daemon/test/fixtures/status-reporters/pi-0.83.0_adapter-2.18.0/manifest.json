@@ -2,7 +2,20 @@
   "harness": "pi",
   "version": "0.83.0",
   "adapterVersion": "2.18.0",
-  "reporterVersion": "1",
+  "reporterVersion": "2",
   "captureDate": "2026-08-11",
-  "scenario": "lifecycle-tool-settled"
+  "scenario": "lifecycle-parallel-tools-compaction-failure-heartbeat",
+  "declaredEvents": [
+    "session.ready",
+    "turn.started",
+    "turn.settled",
+    "tool.started",
+    "tool.finished",
+    "tool.failed",
+    "compaction.started",
+    "compaction.finished",
+    "session.ended",
+    "heartbeat"
+  ],
+  "limitations": ["no-waits", "no-effective-model", "no-action-correlation"]
 }

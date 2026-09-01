@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 function root(): string {
-  const value = mkdtempSync(join(tmpdir(), "nanasa-provider-phase3-"));
+  const value = mkdtempSync(join(tmpdir(), "nanasa-provider-adapter-"));
   roots.push(value);
   return value;
 }
@@ -79,8 +79,8 @@ describe("closed provider adapter interfaces", () => {
     for (const adapter of adapters.list()) {
       expect(Object.isFrozen(adapter.reporter)).toBe(true);
       expect(Object.isFrozen(adapter.reporter.coverage)).toBe(true);
+      expect(Object.isFrozen(adapter.reporter.events)).toBe(true);
       expect(Object.isFrozen(adapter.control)).toBe(true);
-      expect(Object.isFrozen(adapter.semantics)).toBe(true);
       const reference = adapter.normalizeNativeSession(
         { source: adapter.reporter.source, referenceKind: "id", referenceValue: "session-123" },
         "/state",
@@ -97,44 +97,34 @@ describe("closed provider adapter interfaces", () => {
     }
   });
 
-  it("declares reachable certification claims for every built-in provider", () => {
-    const claims = Object.fromEntries(
+  it("declares exact reporter coverage and only executable controls", () => {
+    const capabilities = Object.fromEntries(
       ProviderAdapterRegistry.builtIn({ piMcpAdapterPath: "/runtime/pi-mcp.mjs" })
         .list()
-        .map((adapter) => [adapter.id, adapter.semantics]),
+        .map((adapter) => [
+          adapter.id,
+          {
+            events: adapter.reporter.events,
+            coverage: adapter.reporter.coverage,
+            waitReplyChannels: adapter.control.waitReplyChannels,
+            supportsPromptAcknowledgement: adapter.control.supportsPromptAcknowledgement,
+            supportsCancellation: adapter.control.supportsCancellation,
+          },
+        ]),
     );
-    expect(claims).toEqual({
-      copilot: {
-        reporterReadiness: true,
-        modelObservation: "desired-launch",
-        waitCoverage: true,
-        waitReplyChannels: ["terminal"],
-        nativeResume: true,
-      },
-      "claude-code": {
-        reporterReadiness: true,
-        modelObservation: "desired-launch",
-        waitCoverage: true,
-        waitReplyChannels: ["terminal"],
-        nativeResume: true,
-      },
-      pi: {
-        reporterReadiness: true,
-        modelObservation: "desired-launch",
-        waitCoverage: false,
-        waitReplyChannels: [],
-        nativeResume: true,
-      },
-      opencode: {
-        reporterReadiness: true,
-        modelObservation: "desired-launch",
-        waitCoverage: true,
-        waitReplyChannels: ["terminal"],
-        nativeResume: true,
-      },
-    });
-    expect(claims.pi.waitCoverage).toBe(false);
-    expect(claims.pi.waitReplyChannels).toEqual([]);
+    for (const capability of Object.values(capabilities)) {
+      expect(capability.events).toContain("session.ready");
+      expect(capability.events).toContain("session.ended");
+      expect(capability.coverage.effectiveModel).toBe(false);
+      expect(capability.coverage.actionCorrelation).toBe(false);
+      expect(capability.waitReplyChannels).toEqual(["terminal"]);
+      expect(capability.supportsPromptAcknowledgement).toBe(false);
+      expect(capability.supportsCancellation).toBe(false);
+    }
+    expect(capabilities.pi.coverage.waits).toBe(false);
+    expect(capabilities.pi.events).not.toContain("wait.opened");
+    expect(capabilities.opencode.events).toContain("retry.observed");
+    expect(capabilities["claude-code"].events).toContain("compaction.finished");
   });
 
   it("validates Pi paths inside state and rejects external or malformed references", () => {
@@ -332,7 +322,13 @@ describe("credentials, trust, model precedence, and MCP-independent provisioning
     expect(result.snapshot.desiredModel).toBe("membership-model");
     expect(result.snapshot.desiredModelSource).toBe("membership");
     expect(result.command).toEqual(
-      expect.arrayContaining(["--model", "membership-model", "--deny-tool=write"]),
+      expect.arrayContaining([
+        "--agent",
+        expect.stringMatching(/^nanasa-status-reporter:nanasa-[a-f0-9]{16}$/),
+        "--model",
+        "membership-model",
+        "--deny-tool=write",
+      ]),
     );
     expect(
       provisioner.resumeCommand(result.snapshot, {
@@ -355,7 +351,13 @@ describe("credentials, trust, model precedence, and MCP-independent provisioning
       true,
     );
     expect(generated.some((path) => path.endsWith("copilot-status-plugin/plugin.json"))).toBe(true);
-    expect(generated.some((path) => path.endsWith(".agent.md"))).toBe(true);
+    expect(
+      generated.some(
+        (path) =>
+          path.includes("copilot-status-plugin/com.github.copilot/agents/") &&
+          path.endsWith(".agent.md"),
+      ),
+    ).toBe(true);
     expect(
       generated.some((path) =>
         path.endsWith("copilot-status-plugin/com.github.copilot/hooks/hooks.json"),
@@ -380,6 +382,32 @@ describe("credentials, trust, model precedence, and MCP-independent provisioning
 
     expect(overlay.generatedIdentities).toContain("plugins/nanasa-status.js");
     expect(overlay.generatedIdentities).not.toContain("plugins/nanasa-status.mjs");
+  });
+
+  it("passes Pi's generated MCP config through the adapter's supported flag", () => {
+    const overlay = ProviderAdapterRegistry.builtIn({
+      piMcpAdapterPath: "/runtime/pi-mcp-adapter/index.ts",
+    })
+      .get("pi")
+      .planOverlay({
+        membershipId: "agent_one",
+        memberAlias: "Agent One",
+        stateRoot: "/state",
+        overlayRoot: "/overlay",
+        statusEndpointUrl: "http://127.0.0.1:3210/api/v1/agent-status/events",
+        mcpEndpointUrl: "http://127.0.0.1:3210/mcp",
+        readOnly: false,
+      });
+
+    expect(overlay.commandArguments).toEqual(
+      expect.arrayContaining([
+        "--extension",
+        "/runtime/pi-mcp-adapter/index.ts",
+        "--mcp-config",
+        "/overlay/mcp.json",
+      ]),
+    );
+    expect(overlay.environment).not.toHaveProperty("NANASA_PI_MCP_CONFIG");
   });
 
   it("shell-quotes Copilot status hook paths", () => {

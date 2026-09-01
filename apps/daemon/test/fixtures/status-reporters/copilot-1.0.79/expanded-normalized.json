@@ -1,0 +1,87 @@
+[
+  { "event": "session.ready", "sessionId": "copilot-session" },
+  { "event": "turn.started", "sessionId": "copilot-session" },
+  {
+    "event": "tool.started",
+    "sessionId": "copilot-session",
+    "operationId": "<stable-tool>",
+    "data": { "tool": "bash" }
+  },
+  {
+    "event": "tool.started",
+    "sessionId": "copilot-session",
+    "operationId": "<stable-tool>",
+    "data": { "tool": "read" }
+  },
+  {
+    "event": "tool.finished",
+    "sessionId": "copilot-session",
+    "operationId": "<stable-tool>",
+    "data": { "tool": "read" }
+  },
+  { "event": "wait.closed", "sessionId": "copilot-session", "requestId": "<stable-permission>" },
+  {
+    "event": "tool.failed",
+    "sessionId": "copilot-session",
+    "operationId": "<stable-tool>",
+    "data": { "tool": "bash" }
+  },
+  { "event": "wait.closed", "sessionId": "copilot-session", "requestId": "<stable-permission>" },
+  {
+    "event": "wait.opened",
+    "sessionId": "copilot-session",
+    "requestId": "<stable-permission>",
+    "data": {
+      "waitKind": "question",
+      "summary": "Agent question requires input",
+      "replyChannel": "terminal"
+    }
+  },
+  { "event": "wait.closed", "sessionId": "copilot-session", "requestId": "<stable-permission>" },
+  { "event": "wait.closed", "sessionId": "copilot-session", "requestId": "<stable-permission>" },
+  {
+    "event": "wait.opened",
+    "sessionId": "copilot-session",
+    "requestId": "<stable-permission>",
+    "data": {
+      "waitKind": "plan_approval",
+      "summary": "Plan approval required",
+      "replyChannel": "terminal"
+    }
+  },
+  { "event": "wait.closed", "sessionId": "copilot-session", "requestId": "<stable-permission>" },
+  { "event": "wait.closed", "sessionId": "copilot-session", "requestId": "<stable-permission>" },
+  {
+    "event": "wait.opened",
+    "sessionId": "copilot-session",
+    "requestId": "<stable-permission>",
+    "data": {
+      "waitKind": "permission",
+      "summary": "Tool permission required",
+      "replyChannel": "terminal"
+    }
+  },
+  {
+    "event": "tool.finished",
+    "sessionId": "copilot-session",
+    "operationId": "<stable-tool>",
+    "data": { "tool": "bash" }
+  },
+  { "event": "wait.closed", "sessionId": "copilot-session", "requestId": "<stable-permission>" },
+  {
+    "event": "tool.failed",
+    "sessionId": "copilot-session",
+    "operationId": "<stable-tool>",
+    "data": { "tool": "bash" }
+  },
+  { "event": "wait.closed", "sessionId": "copilot-session", "requestId": "<stable-permission>" },
+  {
+    "event": "failure.observed",
+    "sessionId": "copilot-session",
+    "data": { "errorClass": "ProviderError", "fatal": true }
+  },
+  { "event": "compaction.started", "sessionId": "copilot-session" },
+  { "event": "wait.closed", "sessionId": "copilot-session", "requestId": "<stable-permission>" },
+  { "event": "turn.settled", "sessionId": "copilot-session", "data": { "activeCount": 1 } },
+  { "event": "session.ended", "sessionId": "copilot-session" }
+]

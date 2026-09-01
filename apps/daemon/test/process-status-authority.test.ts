@@ -77,7 +77,7 @@ function report(
   };
 }
 
-describe("Phase 4 reporter authority", () => {
+describe("reporter authority", () => {
   it("rejects wrong identity, reordered sequence, native session changes, process reuse, and post-exit reports", () => {
     const { store, run } = fixture();
     const session = store.getCurrentReporterSession(run.id, run.generation)!;
@@ -320,7 +320,7 @@ describe("Phase 4 reporter authority", () => {
   });
 });
 
-describe("Phase 4 process, hook, screen, privacy, and scale behavior", () => {
+describe("process, hook, screen, privacy, and scale behavior", () => {
   it("includes process evidence in fingerprints and detects PID reuse", async () => {
     const root = mkdtempSync(join(tmpdir(), "nanasa-proc-"));
     roots.push(root);

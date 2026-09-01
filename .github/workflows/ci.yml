@@ -246,7 +246,7 @@ jobs:
         if: always()
         with:
           name: measured-performance-${{ env.NANASA_CANDIDATE_SHA }}
-          path: test-results/performance/phase13-measured.json
+          path: test-results/performance/runtime-performance-measured.json
           if-no-files-found: error
 
   quality-gate:
@@ -254,7 +254,7 @@ jobs:
     needs: [static-unit-package, runtime-linux, node-compat, browser-matrix, architecture-arm64, security, measured-performance]
     runs-on: ubuntu-24.04
     steps:
-      - name: Require every Phase 11 lane
+      - name: Require every release lane
         run: |
           test "${{ needs.static-unit-package.result }}" = success
           test "${{ needs.runtime-linux.result }}" = success

@@ -352,8 +352,12 @@ export class TmuxRuntime {
     try {
       await this.#tmux(["paste-buffer", "-b", bufferName, "-d", "-p", "-t", target]);
       await delay(TERMINAL_SUBMIT_DELAY_MS);
-      await this.#tmux(["load-buffer", "-b", bufferName, "-"], false, submitInput);
-      await this.#tmux(["paste-buffer", "-b", bufferName, "-d", "-t", target]);
+      if (submitInput === "\r") {
+        await this.#tmux(["send-keys", "-t", target, "Enter"]);
+      } else {
+        await this.#tmux(["load-buffer", "-b", bufferName, "-"], false, submitInput);
+        await this.#tmux(["paste-buffer", "-b", bufferName, "-d", "-t", target]);
+      }
     } finally {
       await this.#tmux(["delete-buffer", "-b", bufferName], true);
     }

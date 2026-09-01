@@ -140,31 +140,43 @@ export const PI_STATUS_REPORTER_SOURCE = String.raw`function reporter() {
   let sourceSequence = 0;
   let heartbeat;
   let disabled = false;
+  let rootSession = false;
   let delivery = Promise.resolve();
   const heartbeatMs = Math.max(50, Number(process.env.NANASA_REPORTER_HEARTBEAT_MS) || 15000);
-  const disable = () => { disabled = true; clearInterval(heartbeat); heartbeat = undefined; };
-  const send = (event, fields = {}) => {
-    if (!url || !token || disabled) return;
-    const eventSessionId = sessionId;
-    const envelope = { version: 2, eventId: crypto.randomUUID(), providerId: process.env.NANASA_REPORTER_PROVIDER_ID, adapterId: process.env.NANASA_REPORTER_ADAPTER_ID, reporterId: process.env.NANASA_REPORTER_ID, source: process.env.NANASA_REPORTER_SOURCE, protocolVersion: Number(process.env.NANASA_REPORTER_PROTOCOL_VERSION), reporterVersion: process.env.NANASA_REPORTER_VERSION, runId: process.env.NANASA_REPORTER_RUN_ID, generation: Number(process.env.NANASA_REPORTER_GENERATION), reporterEpoch: process.env.NANASA_REPORTER_EPOCH, sourceSequence: ++sourceSequence, event, occurredAt: new Date().toISOString(), ...(eventSessionId ? { nativeSessionId: eventSessionId } : {}), ...fields };
-    delivery = delivery.then(async () => {
+  const retryDelays = [0, 100, 400];
+  const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+  const disable = () => { disabled = true; rootSession = false; clearInterval(heartbeat); heartbeat = undefined; };
+  const deliver = async (envelope) => {
+    for (const retryDelay of retryDelays) {
       if (disabled) return;
+      if (retryDelay > 0) await delay(retryDelay);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 1000);
       try {
         const response = await fetch(url, { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify(envelope), signal: controller.signal });
-        if (response.status !== 409) return;
-        const body = await response.json().catch(() => undefined);
-        if (body?.code === "status_reporter_identity_fenced" || body?.code === "status_native_session_fenced") disable();
+        if (response.status === 409) {
+          const body = await response.json().catch(() => undefined);
+          if (body?.code === "status_reporter_identity_fenced" || body?.code === "status_native_session_fenced") { disable(); return; }
+        }
+        if (response.ok) return;
       } catch {}
       finally { clearTimeout(timeout); }
-    });
+    }
+  };
+  const send = (event, fields = {}, eventSessionId = sessionId) => {
+    if (!url || !token || disabled || !rootSession) return Promise.resolve();
+    const envelope = { version: 2, eventId: crypto.randomUUID(), providerId: process.env.NANASA_REPORTER_PROVIDER_ID, adapterId: process.env.NANASA_REPORTER_ADAPTER_ID, reporterId: process.env.NANASA_REPORTER_ID, source: process.env.NANASA_REPORTER_SOURCE, protocolVersion: Number(process.env.NANASA_REPORTER_PROTOCOL_VERSION), reporterVersion: process.env.NANASA_REPORTER_VERSION, runId: process.env.NANASA_REPORTER_RUN_ID, generation: Number(process.env.NANASA_REPORTER_GENERATION), reporterEpoch: process.env.NANASA_REPORTER_EPOCH, sourceSequence: ++sourceSequence, event, occurredAt: new Date().toISOString(), ...(eventSessionId ? { nativeSessionId: eventSessionId } : {}), ...fields };
+    delivery = delivery.then(() => deliver(envelope));
+    return delivery;
   };
   return (pi) => {
-    pi.on("session_start", (_event, ctx) => {
-      if (disabled) return;
-      sessionId = ctx.sessionManager.getSessionId();
-      send("session.ready");
+    pi.on("session_start", async (_event, ctx) => {
+      if (disabled || ctx?.mode !== "tui") return;
+      rootSession = true;
+      const startedSessionId = ctx.sessionManager.getSessionId();
+      sessionId = startedSessionId;
+      await send("session.ready", {}, startedSessionId);
+      await send(ctx?.isIdle?.() === false ? "turn.started" : "turn.settled", {}, startedSessionId);
       clearInterval(heartbeat);
       heartbeat = setInterval(() => send("heartbeat"), heartbeatMs);
       heartbeat.unref?.();
@@ -174,52 +186,91 @@ export const PI_STATUS_REPORTER_SOURCE = String.raw`function reporter() {
     pi.on("tool_execution_end", (event) => send(event.isError ? "tool.failed" : "tool.finished", { operationId: event.toolCallId, data: { tool: event.toolName } }));
     pi.on("session_before_compact", () => send("compaction.started"));
     pi.on("session_compact", () => send("compaction.finished"));
-    pi.on("agent_settled", () => send("turn.settled"));
-    pi.on("session_shutdown", () => { send("session.ended"); clearInterval(heartbeat); heartbeat = undefined; });
+    pi.on("agent_settled", (_event, ctx) => { if (ctx?.isIdle?.() !== false) send("turn.settled"); });
+    pi.on("session_shutdown", () => { send("session.ended"); clearInterval(heartbeat); heartbeat = undefined; rootSession = false; });
   };
 }
 export default reporter();
 `;
 
-export const OPENCODE_STATUS_REPORTER_SOURCE = String.raw`export const NanasaStatusPlugin = async () => {
+export const OPENCODE_STATUS_REPORTER_SOURCE = String.raw`const ROOT_SESSION_KEY = Symbol.for("nanasa.opencode.root-session.v1");
+function rootSessionState() {
+  if (!globalThis[ROOT_SESSION_KEY]) globalThis[ROOT_SESSION_KEY] = { sessionId: undefined, listeners: new Set() };
+  return globalThis[ROOT_SESSION_KEY];
+}
+export const NanasaStatusPlugin = async () => {
   const url = process.env.NANASA_STATUS_URL;
   const token = process.env.NANASA_MCP_TOKEN;
-  const sessions = new Set();
+  const roots = rootSessionState();
+  const childParents = new Map();
   let sourceSequence = 0;
+  let reportedRootSessionId;
   let heartbeat;
   let disabled = false;
   let delivery = Promise.resolve();
   const heartbeatMs = Math.max(50, Number(process.env.NANASA_REPORTER_HEARTBEAT_MS) || 15000);
-  const disable = () => { disabled = true; clearInterval(heartbeat); heartbeat = undefined; sessions.clear(); };
-  const send = (event, sessionId, fields = {}) => {
-    if (!url || !token || disabled) return;
-    delivery = delivery.then(async () => {
+  const retryDelays = [0, 100, 400, 1000];
+  const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+  const disable = () => { disabled = true; clearInterval(heartbeat); heartbeat = undefined; childParents.clear(); roots.listeners.delete(selectRoot); };
+  const deliver = async (envelope) => {
+    for (const retryDelay of retryDelays) {
       if (disabled) return;
-      const envelope = { version: 2, eventId: crypto.randomUUID(), providerId: process.env.NANASA_REPORTER_PROVIDER_ID, adapterId: process.env.NANASA_REPORTER_ADAPTER_ID, reporterId: process.env.NANASA_REPORTER_ID, source: process.env.NANASA_REPORTER_SOURCE, protocolVersion: Number(process.env.NANASA_REPORTER_PROTOCOL_VERSION), reporterVersion: process.env.NANASA_REPORTER_VERSION, runId: process.env.NANASA_REPORTER_RUN_ID, generation: Number(process.env.NANASA_REPORTER_GENERATION), reporterEpoch: process.env.NANASA_REPORTER_EPOCH, sourceSequence: ++sourceSequence, event, occurredAt: new Date().toISOString(), ...(sessionId ? { nativeSessionId: sessionId } : {}), ...fields };
+      if (retryDelay > 0) await delay(retryDelay);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 1000);
       try {
         const response = await fetch(url, { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify(envelope), signal: controller.signal });
-        if (response.status !== 409) return;
-        const body = await response.json().catch(() => undefined);
-        if (body?.code === "status_reporter_identity_fenced" || body?.code === "status_native_session_fenced") disable();
+        if (response.status === 409) {
+          const body = await response.json().catch(() => undefined);
+          if (body?.code === "status_reporter_identity_fenced" || body?.code === "status_native_session_fenced") { disable(); return; }
+        }
+        if (response.ok) return;
       } catch {}
       finally { clearTimeout(timeout); }
-    });
+    }
   };
-  heartbeat = setInterval(() => { for (const sessionId of sessions) send("heartbeat", sessionId); }, heartbeatMs);
+  const send = (event, sessionId, fields = {}) => {
+    if (!url || !token || disabled || !sessionId) return Promise.resolve();
+    const envelope = { version: 2, eventId: crypto.randomUUID(), providerId: process.env.NANASA_REPORTER_PROVIDER_ID, adapterId: process.env.NANASA_REPORTER_ADAPTER_ID, reporterId: process.env.NANASA_REPORTER_ID, source: process.env.NANASA_REPORTER_SOURCE, protocolVersion: Number(process.env.NANASA_REPORTER_PROTOCOL_VERSION), reporterVersion: process.env.NANASA_REPORTER_VERSION, runId: process.env.NANASA_REPORTER_RUN_ID, generation: Number(process.env.NANASA_REPORTER_GENERATION), reporterEpoch: process.env.NANASA_REPORTER_EPOCH, sourceSequence: ++sourceSequence, event, occurredAt: new Date().toISOString(), nativeSessionId: sessionId, ...fields };
+    delivery = delivery.then(() => deliver(envelope));
+    return delivery;
+  };
+  const selectRoot = (sessionId) => {
+    if (disabled || !sessionId || reportedRootSessionId === sessionId) return;
+    reportedRootSessionId = sessionId;
+    send("session.ready", sessionId);
+  };
+  roots.listeners.add(selectRoot);
+  selectRoot(roots.sessionId);
+  heartbeat = setInterval(() => send("heartbeat", reportedRootSessionId), heartbeatMs);
   heartbeat.unref?.();
   return {
     event: async ({ event }) => {
       if (disabled) return;
       const properties = event.properties || {};
       const sessionId = properties.sessionID || properties.sessionId || properties.info?.id || properties.part?.sessionID;
-      if (event.type === "session.created" || event.type === "server.connected") { if (sessionId) sessions.add(sessionId); send("session.ready", sessionId); }
-      else if (event.type === "session.status") {
+      if (event.type === "session.created" && properties.info?.id) {
+        if (properties.info.parentID) childParents.set(properties.info.id, properties.info.parentID);
+        else selectRoot(properties.info.id);
+        return;
+      }
+      const childParent = sessionId ? childParents.get(sessionId) : undefined;
+      const authoritativeSessionId = childParent === reportedRootSessionId ? reportedRootSessionId : sessionId;
+      if (childParent !== undefined) {
+        if (authoritativeSessionId !== reportedRootSessionId) return;
+        if (event.type === "permission.asked") send("wait.opened", authoritativeSessionId, { requestId: properties.id, data: { waitKind: "permission", summary: "Tool permission required", replyChannel: "terminal" } });
+        else if (event.type === "permission.replied") send("wait.closed", authoritativeSessionId, { requestId: properties.requestID, data: {} });
+        else if (event.type === "question.asked") send("wait.opened", authoritativeSessionId, { requestId: properties.id, data: { waitKind: "question", summary: "Agent question requires input", replyChannel: "terminal" } });
+        else if (event.type === "question.replied" || event.type === "question.rejected") send("wait.closed", authoritativeSessionId, { requestId: properties.requestID, data: {} });
+        else if (event.type === "session.deleted") childParents.delete(sessionId);
+        return;
+      }
+      if (!sessionId || sessionId !== reportedRootSessionId) return;
+      if (event.type === "session.status") {
         const status = properties.status || {};
-        if (status.type === "busy") send("turn.started", sessionId);
-        else if (status.type === "idle") send("turn.settled", sessionId);
-        else if (status.type === "retry") send("retry.observed", sessionId, { data: { ...(status.next ? { retryAt: new Date(status.next).toISOString() } : {}) } });
+        if (["active", "busy", "pending", "running", "streaming", "working"].includes(String(status.type).toLowerCase())) send("turn.started", sessionId);
+        else if (String(status.type).toLowerCase() === "idle") send("turn.settled", sessionId);
+        else if (String(status.type).toLowerCase() === "retry") send("retry.observed", sessionId, { data: { ...(status.next ? { retryAt: new Date(status.next).toISOString() } : {}) } });
       } else if (event.type === "session.idle") send("turn.settled", sessionId);
       else if (event.type === "permission.asked") send("wait.opened", sessionId, { requestId: properties.id, data: { waitKind: "permission", summary: "Tool permission required", replyChannel: "terminal" } });
       else if (event.type === "permission.replied") send("wait.closed", sessionId, { requestId: properties.requestID, data: {} });
@@ -233,9 +284,35 @@ export const OPENCODE_STATUS_REPORTER_SOURCE = String.raw`export const NanasaSta
         else if (operationId && state === "completed") send("tool.finished", sessionId, { operationId, data: { tool: part.tool } });
         else if (operationId && state === "error") send("tool.failed", sessionId, { operationId, data: { tool: part.tool } });
       } else if (event.type === "session.error") send("failure.observed", sessionId, { data: { errorClass: properties.error?.name || "session_error" } });
-      else if (event.type === "session.deleted") { send("session.ended", sessionId); if (sessionId) sessions.delete(sessionId); }
+      else if (event.type === "session.deleted") { send("session.ended", sessionId); reportedRootSessionId = undefined; }
     },
   };
 };
 export default NanasaStatusPlugin;
+`;
+
+export const OPENCODE_TUI_STATUS_REPORTER_SOURCE = String.raw`const ROOT_SESSION_KEY = Symbol.for("nanasa.opencode.root-session.v1");
+function rootSessionState() {
+  if (!globalThis[ROOT_SESSION_KEY]) globalThis[ROOT_SESSION_KEY] = { sessionId: undefined, listeners: new Set() };
+  return globalThis[ROOT_SESSION_KEY];
+}
+export default {
+  id: "nanasa.opencode.root-session",
+  tui: async (api) => {
+    const roots = rootSessionState();
+    const syncSelectedSession = () => {
+      const route = api.route.current;
+      const sessionId = route?.name === "session" ? route.params?.sessionID : undefined;
+      const session = typeof sessionId === "string" && sessionId ? api.state.session.get(sessionId) : undefined;
+      if (!session || session.parentID) return;
+      if (roots.sessionId === sessionId) return;
+      roots.sessionId = sessionId;
+      for (const listener of roots.listeners) listener(sessionId);
+    };
+    syncSelectedSession();
+    const routePoll = setInterval(syncSelectedSession, 100);
+    routePoll.unref?.();
+    api.lifecycle.onDispose(() => clearInterval(routePoll));
+  },
+};
 `;

@@ -9,7 +9,6 @@ import type {
   ProviderOverlayContext,
   ProviderOverlayPlan,
 } from "./provider-adapter.js";
-import { freezeProviderSemanticClaims } from "./provider-adapter.js";
 import {
   closedTerminalWaitReplyInput,
   freezeControlStrategy,
@@ -27,6 +26,18 @@ export class PiAdapter implements ProviderAdapter {
     version: "2",
     source: "pi",
     readinessEvents: ["session.ready"],
+    events: [
+      "session.ready",
+      "turn.started",
+      "turn.settled",
+      "tool.started",
+      "tool.finished",
+      "tool.failed",
+      "compaction.started",
+      "compaction.finished",
+      "session.ended",
+      "heartbeat",
+    ],
     coverage: {
       session: true,
       turns: true,
@@ -34,26 +45,16 @@ export class PiAdapter implements ProviderAdapter {
       waits: false,
       effectiveModel: false,
       heartbeat: true,
+      actionCorrelation: false,
     },
   });
   public readonly control = freezeControlStrategy({
     waitReplyChannels: ["terminal"],
     supportsPromptAcknowledgement: false,
-    supportsCancellation: true,
+    supportsCancellation: false,
     terminalSubmitSequence: "\r",
     waitReplyInput: closedTerminalWaitReplyInput,
   });
-  public readonly semantics = freezeProviderSemanticClaims(
-    {
-      reporterReadiness: true,
-      modelObservation: "desired-launch",
-      waitCoverage: false,
-      waitReplyChannels: [],
-      nativeResume: true,
-    },
-    this.reporter,
-    this.control,
-  );
   readonly #mcpAdapterPath: string;
 
   public constructor(mcpAdapterPath = fileURLToPath(import.meta.resolve("pi-mcp-adapter"))) {
@@ -90,14 +91,14 @@ export class PiAdapter implements ProviderAdapter {
               url: context.mcpEndpointUrl,
               headers: { Authorization: "Bearer ${NANASA_MCP_TOKEN}" },
               protocolVersion: "auto",
-              lifecycle: "eager",
+              lifecycle: "lazy",
             },
           },
         }),
         ownerKind: "mcp",
       });
       commandArguments.push("--extension", this.#mcpAdapterPath);
-      environment.NANASA_PI_MCP_CONFIG = mcpPath;
+      commandArguments.push("--mcp-config", mcpPath);
     }
     if (context.prompt !== undefined) {
       const promptPath = join(context.overlayRoot, "prompts", "system.md");

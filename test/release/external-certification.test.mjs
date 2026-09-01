@@ -10,7 +10,7 @@ import { validateCertificationDispatch } from "../../scripts/certification-dispa
 const root = resolve(import.meta.dirname, "../..");
 const script = resolve(root, "scripts", "certify-external.mjs");
 
-test("external certification uses closed semantic profiles and real environment lifecycles", () => {
+test("external certification uses executable capability profiles and real environment lifecycles", () => {
   const source = readFileSync(script, "utf8");
   const workflow = parseYaml(
     readFileSync(resolve(root, ".github", "workflows", "certification.yml"), "utf8"),
@@ -20,6 +20,11 @@ test("external certification uses closed semantic profiles and real environment 
     "utf8",
   );
   const provider = readFileSync(resolve(root, "scripts", "provider-certification.ts"), "utf8");
+  const localProvider = readFileSync(resolve(root, "scripts/certify-provider-local.ts"), "utf8");
+  const compiler = readFileSync(
+    resolve(root, "apps/daemon/src/providers/provider-compiler-supervisor.ts"),
+    "utf8",
+  );
 
   assert.deepEqual(workflow.on.workflow_dispatch.inputs.provider_id.options, [
     "copilot",
@@ -57,12 +62,28 @@ test("external certification uses closed semantic profiles and real environment 
   assert.throws(() => validateCertificationDispatch("webkit", "copilot"), /only in provider/);
   assert.match(source, /provider-certification\.ts/);
   assert.match(source, /environment = \{\}/);
+  assert.match(source, /expected === "ignore"/);
+  assert.match(source, /NANASA_CERT_LOCAL/);
+  assert.match(source, /GITHUB_ACTIONS/);
+  assert.match(source, /NPM_CONFIG_REGISTRY/);
+  assert.match(source, /COREPACK_NPM_REGISTRY/);
   assert.doesNotMatch(source, /systemd-run|\/usr\/bin\/true/);
   assert.match(provider, /status\.interactiveReady/);
   assert.doesNotMatch(provider, /interactiveReady && status\.effectiveModel/);
-  assert.match(provider, /if \(claims\.waitCoverage\)/);
-  assert.match(provider, /claims\.waitReplyChannels\.includes/);
-  assert.match(provider, /claims\.modelObservation === "desired-launch"/);
+  assert.match(provider, /new Set\(adapter\.reporter\.events\)/);
+  assert.match(provider, /NANASA_CERT_AUTH_MODE/);
+  assert.match(provider, /persistentIntegrationsDirectory/);
+  assert.match(provider, /credentials: \$\{usesProviderHome/);
+  assert.match(localProvider, /providerState\.scope === "membership"/);
+  assert.match(localProvider, /NANASA_CERT_AGENT_ID/);
+  assert.match(localProvider, /NANASA_CERT_PROVIDER_COMMAND_JSON/);
+  assert.match(localProvider, /NANASA_CERT_MODEL_POLICY_JSON/);
+  assert.match(compiler, /NANASA_PROVIDER_COMPILER_MODE/);
+  assert.match(compiler, /\?\? "manual"/);
+  assert.match(provider, /adapter\.control\.waitReplyChannels\.includes/);
+  assert.match(provider, /adapter\.reporter\.coverage\.actionCorrelation/);
+  assert.match(provider, /OpenWaitReplySchema\.parse/);
+  assert.doesNotMatch(provider, /modelObservation|desired-launch/);
   assert.match(provider, /listOpenWaits/);
   assert.match(provider, /recoveryOutcome === "resumed"/);
   assert.match(runtime, /service\.install\(\)/);

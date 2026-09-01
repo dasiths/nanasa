@@ -47,7 +47,7 @@ interface BenchmarkMetric {
   thresholds: BenchmarkThresholds;
 }
 
-// Calibrated on the Phase 13 Linux x64 baseline with 35-70% CI variance headroom.
+// Calibrated on the Linux x64 release baseline with 35-70% CI variance headroom.
 const thresholdByBenchmark: Record<string, BenchmarkThresholds> = {
   "terminal-fleet": {
     maxElapsedP95Ms: 5_000,
@@ -219,14 +219,17 @@ afterAll(() => {
     },
     metrics,
   };
-  writeFileSync(join(directory, "phase13-measured.json"), `${JSON.stringify(result, null, 2)}\n`);
+  writeFileSync(
+    join(directory, "runtime-performance-measured.json"),
+    `${JSON.stringify(result, null, 2)}\n`,
+  );
   console.log(`NANASA_PERFORMANCE_RESULT=${JSON.stringify(result)}`);
   for (const directoryPath of directories.splice(0)) {
     rmSync(directoryPath, { recursive: true, force: true });
   }
 });
 
-describe("Phase 13 measured performance and backpressure", () => {
+describe("measured runtime performance and backpressure", () => {
   it("measures a real 100-terminal tmux fleet with controller and observer pressure", async () => {
     const directory = mkdtempSync(join(tmpdir(), "nanasa-performance-terminal-fleet-"));
     directories.push(directory);
