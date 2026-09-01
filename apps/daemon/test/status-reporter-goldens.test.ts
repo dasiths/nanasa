@@ -54,6 +54,24 @@ async function captureServer(): Promise<{
   server: Server;
   url: string;
   events: AgentStatusEventInput[];
+}>;
+async function captureServer(
+  responseForEvent: (
+    event: AgentStatusEventInput,
+  ) => { status: number; body: Record<string, unknown>; delayMs?: number } | undefined,
+): Promise<{
+  server: Server;
+  url: string;
+  events: AgentStatusEventInput[];
+}>;
+async function captureServer(
+  responseForEvent?: (
+    event: AgentStatusEventInput,
+  ) => { status: number; body: Record<string, unknown>; delayMs?: number } | undefined,
+): Promise<{
+  server: Server;
+  url: string;
+  events: AgentStatusEventInput[];
 }> {
   const events: AgentStatusEventInput[] = [];
   const server = createServer((request, response) => {
@@ -61,9 +79,15 @@ async function captureServer(): Promise<{
     request.on("data", (chunk: Buffer) => chunks.push(chunk));
     request.on("end", () => {
       expect(request.headers.authorization).toBe("Bearer fixture-token");
-      events.push(AgentStatusEventInputSchema.parse(JSON.parse(Buffer.concat(chunks).toString())));
-      response.writeHead(202, { "content-type": "application/json" });
-      response.end('{"accepted":true}');
+      const event = AgentStatusEventInputSchema.parse(JSON.parse(Buffer.concat(chunks).toString()));
+      events.push(event);
+      const configured = responseForEvent?.(event);
+      const complete = () => {
+        response.writeHead(configured?.status ?? 202, { "content-type": "application/json" });
+        response.end(JSON.stringify(configured?.body ?? { accepted: true }));
+      };
+      if ((configured?.delayMs ?? 0) > 0) setTimeout(complete, configured!.delayMs);
+      else complete();
     });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -148,6 +172,7 @@ function clearReporterEnvironment(): void {
     "NANASA_REPORTER_RUN_ID",
     "NANASA_REPORTER_GENERATION",
     "NANASA_REPORTER_EPOCH",
+    "NANASA_REPORTER_HEARTBEAT_MS",
   ])
     delete process.env[name];
 }
@@ -246,6 +271,137 @@ describe("version-pinned status reporter traces", () => {
       );
       await waitForCount(capture.events, expected.length);
       expect(capture.events.map(canonical)).toEqual(expected);
+    } finally {
+      if (previousUrl === undefined) delete process.env.NANASA_STATUS_URL;
+      else process.env.NANASA_STATUS_URL = previousUrl;
+      if (previousToken === undefined) delete process.env.NANASA_MCP_TOKEN;
+      else process.env.NANASA_MCP_TOKEN = previousToken;
+      clearReporterEnvironment();
+      await closeServer(capture.server);
+    }
+  });
+
+  it.each([
+    ["pi", "status_reporter_identity_fenced", PI_STATUS_REPORTER_SOURCE],
+    ["pi", "status_native_session_fenced", PI_STATUS_REPORTER_SOURCE],
+    ["opencode", "status_reporter_identity_fenced", OPENCODE_STATUS_REPORTER_SOURCE],
+    ["opencode", "status_native_session_fenced", OPENCODE_STATUS_REPORTER_SOURCE],
+  ] as const)("stops %s reporting after %s", async (source, rejectionCode, code) => {
+    const temporaryDirectory = mkdtempSync(join(tmpdir(), `nanasa-${source}-fenced-`));
+    temporaryDirectories.push(temporaryDirectory);
+    const modulePath = join(temporaryDirectory, `${source}-reporter.mjs`);
+    writeFileSync(modulePath, code);
+    const capture = await captureServer(() => ({
+      status: 409,
+      delayMs: 125,
+      body: {
+        code: rejectionCode,
+        message: "Reporter identity is not authoritative",
+      },
+    }));
+    const previousUrl = process.env.NANASA_STATUS_URL;
+    const previousToken = process.env.NANASA_MCP_TOKEN;
+    const previousHeartbeat = process.env.NANASA_REPORTER_HEARTBEAT_MS;
+    process.env.NANASA_STATUS_URL = capture.url;
+    process.env.NANASA_MCP_TOKEN = "fixture-token";
+    process.env.NANASA_REPORTER_HEARTBEAT_MS = "50";
+    setReporterEnvironment(source);
+    try {
+      const module = await import(`${pathToFileURL(modulePath).href}?test=${Date.now()}`);
+      if (source === "pi") {
+        type PiHandler = (
+          event: Record<string, unknown>,
+          context?: { sessionManager: { getSessionId(): unknown } },
+        ) => void;
+        const handlers = new Map<string, PiHandler>();
+        (module.default as (pi: { on(name: string, handler: PiHandler): void }) => void)({
+          on: (name, handler) => handlers.set(name, handler),
+        });
+        handlers.get("session_start")?.(
+          {},
+          { sessionManager: { getSessionId: () => "session-fenced" } },
+        );
+        await waitForCount(capture.events, 1);
+        handlers.get("agent_start")?.({});
+        await new Promise((resolve) => setTimeout(resolve, 225));
+        handlers.get("session_start")?.(
+          {},
+          { sessionManager: { getSessionId: () => "session-after-fence" } },
+        );
+        handlers.get("agent_start")?.({});
+      } else {
+        const plugin = await module.default();
+        await plugin.event({
+          event: { type: "session.created", properties: { info: { id: "session-fenced" } } },
+        });
+        await waitForCount(capture.events, 1);
+        await plugin.event({
+          event: {
+            type: "session.status",
+            properties: { sessionID: "session-fenced", status: { type: "busy" } },
+          },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 225));
+        await plugin.event({
+          event: { type: "session.created", properties: { info: { id: "session-after-fence" } } },
+        });
+        await plugin.event({
+          event: {
+            type: "session.status",
+            properties: { sessionID: "session-fenced", status: { type: "busy" } },
+          },
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 125));
+      expect(capture.events).toHaveLength(1);
+    } finally {
+      if (previousUrl === undefined) delete process.env.NANASA_STATUS_URL;
+      else process.env.NANASA_STATUS_URL = previousUrl;
+      if (previousToken === undefined) delete process.env.NANASA_MCP_TOKEN;
+      else process.env.NANASA_MCP_TOKEN = previousToken;
+      if (previousHeartbeat === undefined) delete process.env.NANASA_REPORTER_HEARTBEAT_MS;
+      else process.env.NANASA_REPORTER_HEARTBEAT_MS = previousHeartbeat;
+      clearReporterEnvironment();
+      await closeServer(capture.server);
+    }
+  });
+
+  it("binds queued Pi events to their event-time session", async () => {
+    const temporaryDirectory = mkdtempSync(join(tmpdir(), "nanasa-pi-session-boundary-"));
+    temporaryDirectories.push(temporaryDirectory);
+    const modulePath = join(temporaryDirectory, "pi-reporter.mjs");
+    writeFileSync(modulePath, PI_STATUS_REPORTER_SOURCE);
+    const capture = await captureServer((event) => ({
+      status: 202,
+      delayMs: event.sourceSequence === 1 ? 100 : 0,
+      body: { accepted: true },
+    }));
+    const previousUrl = process.env.NANASA_STATUS_URL;
+    const previousToken = process.env.NANASA_MCP_TOKEN;
+    process.env.NANASA_STATUS_URL = capture.url;
+    process.env.NANASA_MCP_TOKEN = "fixture-token";
+    setReporterEnvironment("pi");
+    try {
+      type PiHandler = (
+        event: Record<string, unknown>,
+        context?: { sessionManager: { getSessionId(): unknown } },
+      ) => void;
+      const handlers = new Map<string, PiHandler>();
+      const extension = (await import(`${pathToFileURL(modulePath).href}?test=${Date.now()}`))
+        .default as (pi: { on(name: string, handler: PiHandler): void }) => void;
+      extension({ on: (name, handler) => handlers.set(name, handler) });
+      handlers.get("session_start")?.({}, { sessionManager: { getSessionId: () => "session-a" } });
+      handlers.get("agent_start")?.({});
+      handlers.get("session_start")?.({}, { sessionManager: { getSessionId: () => "session-b" } });
+      await waitForCount(capture.events, 3);
+      expect(
+        capture.events.map((event) => [event.event, event.nativeSessionId, event.sourceSequence]),
+      ).toEqual([
+        ["session.ready", "session-a", 1],
+        ["turn.started", "session-a", 2],
+        ["session.ready", "session-b", 3],
+      ]);
+      handlers.get("session_shutdown")?.({});
     } finally {
       if (previousUrl === undefined) delete process.env.NANASA_STATUS_URL;
       else process.env.NANASA_STATUS_URL = previousUrl;

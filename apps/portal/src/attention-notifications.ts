@@ -24,8 +24,17 @@ interface UseAttentionNotificationsOptions {
   ready: boolean;
   hydrationKey: string | undefined;
   route: PortalRoute;
+  visibleTerminalRunIds: ReadonlySet<string>;
   preferences: AttentionNotificationPreferences;
   navigate(path: string): void;
+}
+
+interface VisibleTerminalRunOptions {
+  route: PortalRoute;
+  runIds: readonly string[];
+  terminalLayout: "tabs" | "grid";
+  activeRunByGroup: Readonly<Record<string, string>>;
+  maximizedRunByGroup: Readonly<Record<string, string>>;
 }
 
 const TOAST_LIMIT = 3;
@@ -58,7 +67,35 @@ export function attentionNotificationTier(item: AttentionItem): AttentionNotific
   }
 }
 
-export function routeOwnsAttentionItem(route: PortalRoute, item: AttentionItem): boolean {
+export function deriveVisibleTerminalRunIds({
+  route,
+  runIds,
+  terminalLayout,
+  activeRunByGroup,
+  maximizedRunByGroup,
+}: VisibleTerminalRunOptions): ReadonlySet<string> {
+  if (route.kind !== "group" || route.section !== "terminals" || runIds.length === 0) {
+    return new Set();
+  }
+  const availableRunIds = new Set(runIds);
+  const requestedMaximizedRunId = maximizedRunByGroup[route.groupId];
+  if (requestedMaximizedRunId !== undefined && availableRunIds.has(requestedMaximizedRunId)) {
+    return new Set([requestedMaximizedRunId]);
+  }
+  if (terminalLayout === "grid") return availableRunIds;
+  const selectedCandidate = route.runId ?? activeRunByGroup[route.groupId];
+  const activeRunId =
+    selectedCandidate !== undefined && availableRunIds.has(selectedCandidate)
+      ? selectedCandidate
+      : runIds[0];
+  return activeRunId === undefined ? new Set() : new Set([activeRunId]);
+}
+
+export function routeOwnsAttentionItem(
+  route: PortalRoute,
+  item: AttentionItem,
+  visibleTerminalRunIds: ReadonlySet<string>,
+): boolean {
   if (route.kind === "global") return route.destination === "attention";
   if (route.kind !== "group" || route.groupId !== item.groupId) return false;
   switch (item.kind) {
@@ -70,7 +107,8 @@ export function routeOwnsAttentionItem(route: PortalRoute, item: AttentionItem):
     case "completion":
       return (
         route.section === "terminals" &&
-        (item.runId === undefined ? route.runId === undefined : route.runId === item.runId)
+        item.runId !== undefined &&
+        visibleTerminalRunIds.has(item.runId)
       );
     case "delivery":
     case "unread":
@@ -118,6 +156,7 @@ export function useAttentionNotifications({
   ready,
   hydrationKey,
   route,
+  visibleTerminalRunIds,
   preferences,
   navigate,
 }: UseAttentionNotificationsOptions) {
@@ -158,7 +197,7 @@ export function useAttentionNotifications({
       const nextToasts = additions.flatMap((item): AttentionToast[] => {
         if (!completionNotificationsEnabled(item, preferences)) return [];
         const tier = attentionNotificationTier(item);
-        return tier === "none" || routeOwnsAttentionItem(route, item)
+        return tier === "none" || routeOwnsAttentionItem(route, item, visibleTerminalRunIds)
           ? []
           : [{ id: item.id, item, tier, createdAt }];
       });
@@ -197,6 +236,7 @@ export function useAttentionNotifications({
     preferences.sound,
     ready,
     route,
+    visibleTerminalRunIds,
   ]);
 
   useEffect(() => {

@@ -88,6 +88,7 @@ function welcome(socket: MockWebSocket, role: "controller" | "observer"): void {
       runGeneration: 1,
       binding: { serverName: "nanasa", sessionId: "$1", windowId: "@1", paneId: "%1" },
       role,
+      inputState: "interactive",
       ...(role === "controller"
         ? {
             lease: {
@@ -231,6 +232,56 @@ describe("TerminalTransport control mode", () => {
       "paste",
       "focus",
     ]);
+    transport.dispose();
+  });
+
+  it("pauses data-plane frames while preserving heartbeat and controller state", () => {
+    const transport = new TerminalTransport({
+      endpoint,
+      runGeneration: 1,
+      viewerId: "viewer-one",
+      requestedRole: "controller",
+      cols: 100,
+      rows: 30,
+      onFrame: vi.fn(),
+      onState: vi.fn(),
+    });
+
+    transport.connect();
+    hello(sockets[0]!);
+    welcome(sockets[0]!, "controller");
+    sockets[0]!.emit("message", {
+      data: JSON.stringify({ type: "baseline", sequence: 0, data: "ready", truncated: false }),
+    });
+    transport.focus(true);
+    sockets[0]!.emit("message", {
+      data: JSON.stringify({ type: "input-state", state: "automated" }),
+    });
+    const beforePause = sockets[0]!.sent.length;
+
+    transport.input("discarded input");
+    transport.paste("discarded paste");
+    transport.focus(false);
+    transport.resize(132, 44);
+    vi.advanceTimersByTime(2_500);
+
+    expect(sockets[0]!.sent.slice(beforePause).map((frame) => JSON.parse(frame).type)).toEqual([
+      "heartbeat",
+    ]);
+    expect(JSON.parse(sockets[0]!.sent.at(-1)!)).toMatchObject({
+      type: "heartbeat",
+      leaseId: "lease-one",
+    });
+
+    sockets[0]!.emit("message", {
+      data: JSON.stringify({ type: "input-state", state: "interactive" }),
+    });
+    expect(sockets[0]!.sent.slice(-2).map((frame) => JSON.parse(frame))).toEqual([
+      { type: "resize", leaseId: "lease-one", cols: 132, rows: 44 },
+      { type: "focus", leaseId: "lease-one", focused: false },
+    ]);
+    expect(sockets[0]!.sent.some((frame) => frame.includes("discarded input"))).toBe(false);
+    expect(sockets[0]!.sent.some((frame) => frame.includes("discarded paste"))).toBe(false);
     transport.dispose();
   });
 });

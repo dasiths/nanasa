@@ -5,6 +5,8 @@ export const TERMINAL_PROTOCOL = "nanasa-terminal.v1" as const;
 export const TERMINAL_PROTOCOL_VERSION = 1 as const;
 export const TerminalRoleSchema = z.enum(["controller", "observer"]);
 export type TerminalRole = z.infer<typeof TerminalRoleSchema>;
+export const TerminalInputStateSchema = z.enum(["interactive", "automated"]);
+export type TerminalInputState = z.infer<typeof TerminalInputStateSchema>;
 export const TerminalLeaseSchema = z
   .object({
     id: IdentifierSchema,
@@ -98,6 +100,7 @@ export const TerminalServerFrameSchema = z.discriminatedUnion("type", [
       runGeneration: z.number().int().positive(),
       binding: TerminalBindingSchema,
       role: TerminalRoleSchema,
+      inputState: TerminalInputStateSchema,
       lease: TerminalLeaseSchema.optional(),
       limits: TerminalLimitsSchema,
       capabilities: TerminalCapabilitiesSchema,
@@ -126,6 +129,7 @@ export const TerminalServerFrameSchema = z.discriminatedUnion("type", [
       reason: z.enum(["acquired", "taken-over", "released", "expired"]),
     })
     .strict(),
+  z.object({ type: z.literal("input-state"), state: TerminalInputStateSchema }).strict(),
   z
     .object({
       type: z.literal("reset"),

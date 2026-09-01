@@ -12,6 +12,7 @@ import type {
 } from "@nanasa/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  type AttentionItem,
   attentionActiveProgressCount,
   attentionCategoryCount,
   attentionCounts,
@@ -24,7 +25,6 @@ import {
   deriveAttentionItems,
   groupAttentionItems,
   repositoryAttentionItems,
-  type AttentionItem,
 } from "./attention-items.js";
 
 const timestamp = "2026-08-31T12:00:00.000Z";

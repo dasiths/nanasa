@@ -1,11 +1,14 @@
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanStalePortalPreferences,
   commitPortalPreferenceUpdate,
   defaultPortalPreferences,
   mergePortalPreferenceUpdate,
+  PORTAL_PREFERENCES_KEY,
   type PortalPreferences,
   parsePortalPreferences,
+  usePortalPreferences,
 } from "./use-portal-preferences.js";
 
 afterEach(() => {
@@ -187,5 +190,31 @@ describe("portal preferences v2", () => {
       terminalSplitRatioByGroup: { group: 65 },
       completionNotificationMemberIdsByGroup: { group: ["member-one"] },
     });
+  });
+
+  it("synchronizes a completion toggle written by another browser tab", async () => {
+    window.localStorage.setItem(PORTAL_PREFERENCES_KEY, JSON.stringify(defaultPortalPreferences));
+    const { result } = renderHook(() => usePortalPreferences());
+    const fromOtherTab = {
+      ...defaultPortalPreferences,
+      completionNotificationMemberIdsByGroup: { group: ["member-one"] },
+    };
+
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: PORTAL_PREFERENCES_KEY,
+          oldValue: JSON.stringify(defaultPortalPreferences),
+          newValue: JSON.stringify(fromOtherTab),
+          storageArea: window.localStorage,
+        }),
+      );
+    });
+
+    await waitFor(() =>
+      expect(result.current.preferences.completionNotificationMemberIdsByGroup).toEqual({
+        group: ["member-one"],
+      }),
+    );
   });
 });

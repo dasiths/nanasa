@@ -42,6 +42,7 @@ import {
   SubmitMessageCommandSchema,
   TerminalCheckpointSchema,
   TerminalEndpointStatusSchema,
+  TerminalServerFrameSchema,
   UpdateGroupAgentCommandSchema,
   UpdateGroupCommandSchema,
   WorktreeSchema,
@@ -428,6 +429,67 @@ describe("terminal endpoint status contracts", () => {
     ],
   ])("rejects %s", (_name, status) => {
     expect(TerminalEndpointStatusSchema.safeParse(status).success).toBe(false);
+  });
+});
+
+describe("terminal input state contracts", () => {
+  const welcome = {
+    type: "welcome",
+    version: 1,
+    daemonEpoch: 1,
+    streamId: "stream_1",
+    streamGeneration: 1,
+    runId: "run_1",
+    runGeneration: 1,
+    binding: { serverName: "nanasa", sessionId: "$1", windowId: "@1", paneId: "%1" },
+    role: "controller",
+    inputState: "automated",
+    limits: {
+      maxFrameBytes: 262_144,
+      maxInputBytes: 65_536,
+      maxPasteBytes: 196_608,
+      maxOutputQueueBytes: 1_048_576,
+      maxViewers: 4,
+      maxObservers: 3,
+      maxReadLines: 5_000,
+      maxReadBytes: 1_048_576,
+      heartbeatMs: 5_000,
+      leaseMs: 15_000,
+      reconnectHistoryFrames: 256,
+    },
+    capabilities: {
+      input: true,
+      paste: true,
+      focus: true,
+      resize: true,
+      effects: true,
+      read: true,
+      checkpoints: true,
+    },
+  } as const;
+
+  it("requires current input state during terminal handshake", () => {
+    expect(TerminalServerFrameSchema.parse(welcome)).toMatchObject({ inputState: "automated" });
+    expect(TerminalServerFrameSchema.safeParse({ ...welcome, inputState: undefined }).success).toBe(
+      false,
+    );
+  });
+
+  it("accepts only strict interactive and automated transition frames", () => {
+    expect(TerminalServerFrameSchema.parse({ type: "input-state", state: "interactive" })).toEqual({
+      type: "input-state",
+      state: "interactive",
+    });
+    expect(
+      TerminalServerFrameSchema.safeParse({ type: "input-state", state: "paused" }).success,
+    ).toBe(false);
+    expect(
+      TerminalServerFrameSchema.safeParse({
+        type: "input-state",
+        state: "automated",
+        messageId: "secret",
+      }).success,
+    ).toBe(false);
   });
 });
 

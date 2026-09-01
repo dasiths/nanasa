@@ -1,10 +1,11 @@
 import {
   TERMINAL_PROTOCOL,
-  TerminalServerFrameSchema,
   type TerminalEndpointStatus,
+  type TerminalInputState,
   type TerminalLease,
   type TerminalRole,
   type TerminalServerFrame,
+  TerminalServerFrameSchema,
 } from "@nanasa/contracts";
 
 export interface TerminalTransportOptions {
@@ -30,6 +31,10 @@ export class TerminalTransport {
   #requestedRole: TerminalRole;
   #cols: number;
   #rows: number;
+  #focused = false;
+  #focusKnown = false;
+  #inputState: TerminalInputState = "interactive";
+  #resumePending = false;
   #initialized = false;
 
   public constructor(private readonly options: TerminalTransportOptions) {
@@ -75,6 +80,7 @@ export class TerminalTransport {
         else this.#lease = frame.lease;
       }
       if (frame.type === "welcome") {
+        this.#setInputState(frame.inputState);
         this.#heartbeat = window.setInterval(
           () =>
             this.send({
@@ -84,9 +90,11 @@ export class TerminalTransport {
           Math.max(1_000, Math.floor(frame.limits.heartbeatMs / 2)),
         );
       }
+      if (frame.type === "input-state") this.#setInputState(frame.state);
       if (frame.type === "baseline" || frame.type === "reset") {
         this.#initialized = true;
         this.options.onState("connected");
+        if (this.#resumePending) this.#reconcileInputState();
       }
       this.options.onFrame(frame);
     });
@@ -112,24 +120,26 @@ export class TerminalTransport {
   }
 
   public input(data: string): void {
-    if (!this.#initialized || this.#lease === undefined) return;
+    if (!this.#initialized || this.#lease === undefined || this.#inputState === "automated") return;
     this.send({ type: "input", leaseId: this.#lease.id, sequence: this.#sequence++, data });
   }
 
   public paste(data: string): void {
-    if (!this.#initialized || this.#lease === undefined) return;
+    if (!this.#initialized || this.#lease === undefined || this.#inputState === "automated") return;
     this.send({ type: "paste", leaseId: this.#lease.id, data });
   }
 
   public focus(focused: boolean): void {
-    if (!this.#initialized || this.#lease === undefined) return;
+    this.#focused = focused;
+    this.#focusKnown = true;
+    if (!this.#initialized || this.#lease === undefined || this.#inputState === "automated") return;
     this.send({ type: "focus", leaseId: this.#lease.id, focused });
   }
 
   public resize(cols: number, rows: number): void {
     this.#cols = cols;
     this.#rows = rows;
-    if (this.#lease === undefined) return;
+    if (this.#lease === undefined || this.#inputState === "automated") return;
     this.send({ type: "resize", leaseId: this.#lease.id, cols, rows });
   }
 
@@ -168,6 +178,35 @@ export class TerminalTransport {
 
   private send(frame: unknown): void {
     this.#send(frame);
+  }
+
+  #setInputState(state: TerminalInputState): void {
+    const previous = this.#inputState;
+    this.#inputState = state;
+    if (state === "automated") {
+      this.#resumePending = false;
+      return;
+    }
+    if (previous !== "automated") return;
+    if (!this.#initialized) {
+      this.#resumePending = true;
+      return;
+    }
+    this.#reconcileInputState();
+  }
+
+  #reconcileInputState(): void {
+    this.#resumePending = false;
+    if (this.#lease === undefined || this.#inputState !== "interactive") return;
+    this.send({
+      type: "resize",
+      leaseId: this.#lease.id,
+      cols: this.#cols,
+      rows: this.#rows,
+    });
+    if (this.#focusKnown) {
+      this.send({ type: "focus", leaseId: this.#lease.id, focused: this.#focused });
+    }
   }
 
   private disposeSocket(): void {

@@ -1,6 +1,7 @@
 import type {
   TerminalCheckpoint,
   TerminalEndpointStatus,
+  TerminalInputState,
   TerminalRole,
   TerminalServerFrame,
 } from "@nanasa/contracts";
@@ -10,6 +11,7 @@ import {
   EllipsisVertical,
   Eraser,
   Info,
+  LoaderCircle,
   ScrollText,
   Search,
   TextSelect,
@@ -38,7 +40,6 @@ export function TerminalConsole({
   headerIdentity = null,
   memberIdentity = null,
   paneActions = null,
-  suspended = false,
   visible = true,
 }: {
   client: PortalClient;
@@ -49,7 +50,6 @@ export function TerminalConsole({
   headerIdentity?: ReactNode;
   memberIdentity?: ReactNode;
   paneActions?: ReactNode;
-  suspended?: boolean;
   visible?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -58,8 +58,10 @@ export function TerminalConsole({
   const xtermRef = useRef<XtermController | null>(null);
   const transportRef = useRef<TerminalTransport | null>(null);
   const visibleRef = useRef(visible);
+  const inputStateRef = useRef<TerminalInputState>("interactive");
   visibleRef.current = visible;
   const [role, setRole] = useState<TerminalRole>("observer");
+  const [inputState, setInputState] = useState<TerminalInputState>("interactive");
   const [state, setState] = useState<"connecting" | "connected" | "reconnecting" | "closed">(
     "connecting",
   );
@@ -110,6 +112,12 @@ export function TerminalConsole({
         if (frame.role !== "controller") setEffect(undefined);
         xtermRef.current?.setFitEnabled(frame.role === "controller");
       }
+      if (frame.type === "welcome" || frame.type === "input-state") {
+        const nextInputState = frame.type === "welcome" ? frame.inputState : frame.state;
+        inputStateRef.current = nextInputState;
+        setInputState(nextInputState);
+        if (nextInputState === "automated") setEffect(undefined);
+      }
       if (
         (frame.type === "welcome" || frame.type === "lease") &&
         frame.role === "controller" &&
@@ -124,7 +132,12 @@ export function TerminalConsole({
         xtermRef.current?.reset();
         setFeedback(`Terminal reset: ${frame.reason.replaceAll("_", " ")}.`);
       }
-      if (frame.type === "effect" && Date.parse(frame.expiresAt) > Date.now()) setEffect(frame);
+      if (
+        frame.type === "effect" &&
+        inputStateRef.current === "interactive" &&
+        Date.parse(frame.expiresAt) > Date.now()
+      )
+        setEffect(frame);
     };
     const xterm = new XtermController(host, {
       theme,
@@ -171,13 +184,6 @@ export function TerminalConsole({
   useEffect(() => {
     xtermRef.current?.setVisible(visible);
   }, [visible]);
-
-  useEffect(() => {
-    if (suspended) {
-      setEffect(undefined);
-      transportRef.current?.releaseController();
-    }
-  }, [suspended]);
 
   useEffect(() => setEffect(undefined), [endpoint.runId, runGeneration]);
 
@@ -275,7 +281,9 @@ export function TerminalConsole({
               className="icon-button"
               aria-label="Paste"
               title="Paste clipboard text"
-              disabled={role !== "controller" || state !== "connected"}
+              disabled={
+                role !== "controller" || state !== "connected" || inputState === "automated"
+              }
               onClick={() => void paste()}
             >
               <ClipboardPaste aria-hidden="true" size={15} />
@@ -366,6 +374,12 @@ export function TerminalConsole({
         )}
       </div>
       <div ref={hostRef} className="xterm-host" />
+      {inputState === "automated" && (
+        <div className="terminal-suspension-overlay" role="status">
+          <LoaderCircle className="spin" aria-hidden="true" size={22} />
+          <strong>Automated input in progress</strong>
+        </div>
+      )}
       <p className="terminal-feedback" role="status" aria-live="polite">
         {feedback}
       </p>

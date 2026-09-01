@@ -280,7 +280,8 @@ describe("projected status route panels", () => {
       ),
     };
 
-    const { container } = render(<PortalRoutePanel {...routeProps} />);
+    const view = render(<PortalRoutePanel {...routeProps} />);
+    const { container } = view;
 
     expect(
       [...container.querySelectorAll(".workflow-row strong")].map((item) => item.textContent),
@@ -308,6 +309,35 @@ describe("projected status route panels", () => {
     expect(screen.getByRole("button", { name: "Completions 0" })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Completion acknowledged for Builder.");
     expect(onRefresh).toHaveBeenCalledOnce();
+
+    const newerSnapshot = snapshot(
+      [doneMember, staleMember, approvalMember],
+      [doneRun, staleRun, approvalRun],
+      [
+        status(doneMember, doneRun, {
+          state: "idle",
+          phase: "settled",
+          outcome: "succeeded",
+          statusRevision: 4,
+          completionRevision: 3,
+          completionPending: true,
+        }),
+        status(staleMember, staleRun, {
+          state: "unknown",
+          phase: "startup",
+          attention: "reporter_stale",
+          staleAuthority: true,
+        }),
+        status(approvalMember, approvalRun, {
+          state: "blocked",
+          phase: "plan_approval",
+          attention: "decision_required",
+        }),
+      ],
+    );
+    view.rerender(<PortalRoutePanel {...routeProps} snapshot={newerSnapshot} />);
+    expect(screen.getByText("Completion revision 3 is ready for review.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Completions 1" })).toBeInTheDocument();
     resolveRefresh();
   });
 

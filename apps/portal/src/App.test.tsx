@@ -486,6 +486,32 @@ function completionAttentionSnapshot(
   };
 }
 
+function backendCompletionSnapshot(
+  completionMember?: GroupMembership,
+  sequence = snapshot.sequence,
+): PortalSnapshot {
+  const backendMembers = memberships.slice(0, 2);
+  const backendRuns = backendMembers.map((member) => activeRun(member));
+  return {
+    ...snapshot,
+    sequence,
+    runs: backendRuns,
+    agentStatuses: backendMembers.map((member) =>
+      statusSummary(member, {
+        ...(completionMember?.memberId === member.memberId
+          ? {
+              state: "idle",
+              phase: "settled",
+              statusRevision: 2,
+              completionRevision: 1,
+              completionPending: true,
+            }
+          : {}),
+      }),
+    ),
+  };
+}
+
 function actionWorkspace(groupId: string, openWaits: OpenWait[] = []): AgentActionWorkspace {
   return {
     groupId,
@@ -793,6 +819,7 @@ describe("portal application", () => {
       .mockResolvedValue(completionAttentionSnapshot(2, auditor));
     render(<App client={client} />);
     await screen.findByRole("heading", { name: "Backend" });
+    await waitFor(() => expect(client.createEventsSocket).toHaveBeenCalled());
 
     const emitStatusChange = async (sequence: number) => {
       const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
@@ -856,12 +883,14 @@ describe("portal application", () => {
   });
 
   it("shows enabled in-app notices on unrelated visible routes and opens their exact target", async () => {
+    window.history.replaceState({}, "", "/agents");
     const client = createClient();
     vi.mocked(client.loadSnapshot)
       .mockResolvedValueOnce(snapshot)
       .mockResolvedValue(requestAttentionSnapshot());
     render(<App client={client} />);
-    await screen.findByRole("heading", { name: "Backend" });
+    await screen.findByRole("heading", { name: "All agents", level: 1 });
+    await waitFor(() => expect(client.createEventsSocket).toHaveBeenCalled());
     const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
     await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
 
@@ -890,6 +919,99 @@ describe("portal application", () => {
     expect(window.location.pathname).toBe("/groups/group-backend/terminals/run-builder");
     expect(screen.queryByRole("complementary", { name: "Attention notifications" })).toBeNull();
   });
+
+  it.each([
+    {
+      name: "tab active run",
+      terminalLayout: "tabs" as const,
+      activeRunId: "run-builder",
+      maximizedRunId: undefined,
+      completionMember: memberships[0]!,
+      expectedToast: false,
+    },
+    {
+      name: "grid secondary pane",
+      terminalLayout: "grid" as const,
+      activeRunId: "run-builder",
+      maximizedRunId: undefined,
+      completionMember: memberships[1]!,
+      expectedToast: false,
+    },
+    {
+      name: "maximized grid pane",
+      terminalLayout: "grid" as const,
+      activeRunId: "run-builder",
+      maximizedRunId: "run-reviewer",
+      completionMember: memberships[1]!,
+      expectedToast: false,
+    },
+    {
+      name: "run hidden behind a maximized grid pane",
+      terminalLayout: "grid" as const,
+      activeRunId: "run-builder",
+      maximizedRunId: "run-builder",
+      completionMember: memberships[1]!,
+      expectedToast: true,
+    },
+  ])(
+    "uses actual terminal visibility for a completion on the $name",
+    async ({ terminalLayout, activeRunId, maximizedRunId, completionMember, expectedToast }) => {
+      window.history.replaceState({}, "", "/groups/group-backend/terminals");
+      window.localStorage.setItem(
+        PORTAL_PREFERENCES_KEY,
+        JSON.stringify({
+          ...defaultPortalPreferences,
+          terminalLayout,
+          activeRunByGroup: { "group-backend": activeRunId },
+          completionNotificationMemberIdsByGroup: {
+            "group-backend": [completionMember.memberId],
+          },
+          ...(maximizedRunId === undefined
+            ? {}
+            : { maximizedRunByGroup: { "group-backend": maximizedRunId } }),
+        }),
+      );
+      const client = createClient();
+      vi.mocked(client.loadSnapshot)
+        .mockResolvedValueOnce(backendCompletionSnapshot())
+        .mockResolvedValue(backendCompletionSnapshot(completionMember, 8));
+      render(<App client={client} />);
+      await screen.findByRole("heading", { name: "Backend" });
+      await waitFor(() => expect(client.createEventsSocket).toHaveBeenCalled());
+      const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
+      await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
+
+      await act(async () =>
+        socket!.onmessage!(
+          new MessageEvent("message", {
+            data: JSON.stringify({
+              type: "domain.event",
+              event: {
+                sequence: 8,
+                id: `visible-completion-${completionMember.memberId}`,
+                type: "status.changed",
+                aggregateType: "run",
+                aggregateId: `run-${completionMember.memberId}`,
+                occurredAt: timestamp,
+                payload: {},
+              },
+            }),
+          }),
+        ),
+      );
+
+      await waitFor(() => expect(client.loadSnapshot).toHaveBeenCalledTimes(2));
+      if (expectedToast) {
+        const notices = await screen.findByRole("complementary", {
+          name: "Attention notifications",
+        });
+        expect(within(notices).getByText("Reviewer · Completion ready")).toBeInTheDocument();
+      } else {
+        await act(async () => Promise.resolve());
+        expect(screen.queryByRole("complementary", { name: "Attention notifications" })).toBeNull();
+      }
+    },
+  );
 
   it("coalesces an event burst into one in-flight snapshot and one trailing invalidation", async () => {
     const client = createClient();

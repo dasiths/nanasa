@@ -34,6 +34,58 @@ test("two browser tabs enforce one controller and one bounded observer", async (
   await expect(observe).not.toContainText("Observe");
 });
 
+test("focused recipient retains control across agent MCP delivery", async ({ page, nanasa }) => {
+  const { group, agents } = await nanasa.seedGroup("Focused delivery", ["Sender", "Recipient"]);
+  await nanasa.startAll(group.id);
+  const snapshot = await nanasa.snapshot();
+  const sender = snapshot.runs.find((run) => run.memberId === agents[0]!.memberId)!;
+  const recipient = snapshot.runs.find((run) => run.memberId === agents[1]!.memberId)!;
+
+  await page.goto(nanasa.portalUrl);
+  await page.getByRole("button", { name: "Grid terminal layout" }).click();
+  const senderTerminal = page.getByLabel(`Sender (${agents[0]!.memberId}) terminal console`);
+  const terminal = page.getByLabel(`Recipient (${agents[1]!.memberId}) terminal console`);
+  await expect(senderTerminal.getByText("Control mode", { exact: true })).toBeVisible();
+  await expect(terminal.getByText("Control mode", { exact: true })).toBeVisible();
+  const input = terminal.locator(".xterm-helper-textarea");
+  await input.focus();
+  await expect(input).toBeFocused();
+  const mountId = await terminal.getAttribute("data-terminal-mount-id");
+
+  await nanasa.agentMcpRequest(
+    sender.terminal!.paneId,
+    "tools/call",
+    {
+      name: "nanasa.send_dm",
+      arguments: {
+        recipientMemberId: agents[1]!.memberId,
+        text: "focused-control-delivery",
+        intent: "inform",
+      },
+    },
+    "nanasa.send_dm",
+  );
+  await expect(terminal.getByText("Automated input in progress", { exact: true })).toBeVisible();
+  await expect(
+    senderTerminal.getByText("Automated input in progress", { exact: true }),
+  ).toHaveCount(0);
+  await page.keyboard.insertText("input-dropped-during-automation");
+  await nanasa.waitForPaneText(recipient.terminal!.paneId, "focused-control-delivery");
+
+  await expect(terminal.getByText("Automated input in progress", { exact: true })).toHaveCount(0);
+  await expect(terminal.getByText("Control mode", { exact: true })).toBeVisible();
+  await expect(terminal.getByText("connected", { exact: true })).toBeVisible();
+  await expect(terminal).toHaveAttribute("data-terminal-mount-id", mountId!);
+  await expect(input).toBeFocused();
+
+  await page.keyboard.insertText("control-still-focused");
+  await page.keyboard.press("Enter");
+  await nanasa.waitForPaneText(recipient.terminal!.paneId, "SAFE_ECHO:control-still-focused");
+  expect(nanasa.capturePane(recipient.terminal!.paneId)).not.toContain(
+    "input-dropped-during-automation",
+  );
+});
+
 test("owned terminal handles Unicode, resize, alternate screen, transcript, and reconnect", async ({
   browserName,
   context,

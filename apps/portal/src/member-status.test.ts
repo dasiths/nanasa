@@ -1,6 +1,6 @@
 import type { AgentRun, AgentStatusSummary, GroupMembership } from "@nanasa/contracts";
 import { describe, expect, it } from "vitest";
-import { currentMemberRun, memberStatusView, type MemberStatusKey } from "./member-status.js";
+import { currentMemberRun, type MemberStatusKey, memberStatusView } from "./member-status.js";
 
 const timestamp = "2026-08-31T12:00:00.000Z";
 

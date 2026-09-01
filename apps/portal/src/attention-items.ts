@@ -11,7 +11,7 @@ import type {
   OpenWait,
   PortalSnapshot,
 } from "@nanasa/contracts";
-import { memberStatusView, type MemberStatusView } from "./member-status.js";
+import { type MemberStatusView, memberStatusView } from "./member-status.js";
 
 export type AttentionReviewKind = "wait" | "response" | "health" | "completion" | "delivery";
 export type AttentionNeutralKind = "action" | "unread";

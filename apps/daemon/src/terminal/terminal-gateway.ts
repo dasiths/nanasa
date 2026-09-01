@@ -10,6 +10,7 @@ import {
 } from "@nanasa/contracts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type WebSocket from "ws";
+import { DomainError } from "../store.js";
 import { AttachmentPty } from "./attachment-pty.js";
 import { TerminalControlService, type TerminalViewer } from "./terminal-control-service.js";
 import { TerminalEffectPolicy } from "./terminal-effect-policy.js";
@@ -173,6 +174,7 @@ export class TerminalGateway {
     let pty: AttachmentPty | undefined;
     let dataSubscription: { dispose(): void } | undefined;
     let exitSubscription: { dispose(): void } | undefined;
+    let inputStateSubscription: { dispose(): void } | undefined;
     let sequence = 0;
     let windowStartedAt = Date.now();
     let windowBytes = 0;
@@ -189,6 +191,7 @@ export class TerminalGateway {
       closed = true;
       dataSubscription?.dispose();
       exitSubscription?.dispose();
+      inputStateSubscription?.dispose();
       pty?.close();
       if (viewer !== undefined) this.#control.disconnect(request.params.runId, viewer.streamId);
       if (socket.readyState === socket.OPEN) socket.close(code, reason.slice(0, 120));
@@ -278,6 +281,9 @@ export class TerminalGateway {
           });
           connectedRun = connected.run;
           viewer = connected.viewer;
+          inputStateSubscription = this.#arbiter.subscribe(connected.run.id, (state) => {
+            send({ type: "input-state", state });
+          });
           const welcome: TerminalServerFrame = {
             type: "welcome",
             version: 1,
@@ -288,6 +294,7 @@ export class TerminalGateway {
             runGeneration: connected.run.generation,
             binding: connected.run.terminal!,
             role: viewer.role,
+            inputState: this.#arbiter.inputState(connected.run.id),
             ...(viewer.lease === undefined ? {} : { lease: viewer.lease }),
             limits: TERMINAL_LIMITS,
             capabilities: {
@@ -369,15 +376,19 @@ export class TerminalGateway {
           return;
         }
         if (frame.type !== "ack") {
-          if (frame.type === "resize") attachmentSize = { cols: frame.cols, rows: frame.rows };
           this.#arbiter.dispatch(
             request.params.runId,
             viewer.streamId,
             pty as AttachmentPty,
             frame,
           );
+          if (frame.type === "resize") attachmentSize = { cols: frame.cols, rows: frame.rows };
         }
       } catch (error) {
+        if (error instanceof DomainError && error.code === "terminal_input_automation_active") {
+          send({ type: "input-state", state: "automated" });
+          return;
+        }
         close(1008, error instanceof Error ? error.message : "terminal_policy_rejected");
       }
     });

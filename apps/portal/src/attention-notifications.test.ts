@@ -4,6 +4,7 @@ import type { AttentionItem, AttentionItemKind } from "./attention-items.js";
 import {
   attentionNotificationTier,
   deliverAttentionDesktopNotification,
+  deriveVisibleTerminalRunIds,
   routeOwnsAttentionItem,
   useAttentionNotifications,
 } from "./attention-notifications.js";
@@ -70,6 +71,7 @@ function hookProps(items: readonly AttentionItem[], route: PortalRoute = agentDi
     ready: true,
     hydrationKey: "instance-one:1",
     route,
+    visibleTerminalRunIds: new Set<string>(),
     preferences,
     navigate: vi.fn(),
   };
@@ -101,9 +103,15 @@ describe("typed Attention notification policy", () => {
     const wait = item("wait");
     const health = item("health", "health", { healthType: "failed" });
     const delivery = item("delivery");
-    expect(routeOwnsAttentionItem({ kind: "global", destination: "attention" }, wait)).toBe(true);
     expect(
-      routeOwnsAttentionItem({ kind: "group", groupId: "group-one", section: "activity" }, wait),
+      routeOwnsAttentionItem({ kind: "global", destination: "attention" }, wait, new Set()),
+    ).toBe(true);
+    expect(
+      routeOwnsAttentionItem(
+        { kind: "group", groupId: "group-one", section: "activity" },
+        wait,
+        new Set(),
+      ),
     ).toBe(true);
     expect(
       routeOwnsAttentionItem(
@@ -114,17 +122,66 @@ describe("typed Attention notification policy", () => {
           runId: "run-one",
         },
         health,
+        new Set(["run-one"]),
       ),
     ).toBe(true);
     expect(
-      routeOwnsAttentionItem({ kind: "group", groupId: "group-one", section: "terminals" }, health),
-    ).toBe(false);
+      routeOwnsAttentionItem(
+        { kind: "group", groupId: "group-one", section: "terminals" },
+        health,
+        new Set(["run-one"]),
+      ),
+    ).toBe(true);
     expect(
       routeOwnsAttentionItem(
         { kind: "group", groupId: "group-one", section: "messages" },
         delivery,
+        new Set(),
       ),
     ).toBe(true);
+  });
+
+  it("derives terminal pane visibility exactly like tabbed and grid workspaces", () => {
+    const terminalRoute: PortalRoute = {
+      kind: "group",
+      groupId: "group-one",
+      section: "terminals",
+    };
+    const options = {
+      route: terminalRoute,
+      runIds: ["run-one", "run-two"],
+      activeRunByGroup: { "group-one": "run-two" },
+      maximizedRunByGroup: {},
+    } as const;
+
+    expect([...deriveVisibleTerminalRunIds({ ...options, terminalLayout: "tabs" })]).toEqual([
+      "run-two",
+    ]);
+    expect([
+      ...deriveVisibleTerminalRunIds({
+        ...options,
+        route: { ...terminalRoute, runId: "run-one" },
+        terminalLayout: "tabs",
+      }),
+    ]).toEqual(["run-one"]);
+    expect([...deriveVisibleTerminalRunIds({ ...options, terminalLayout: "grid" })]).toEqual([
+      "run-one",
+      "run-two",
+    ]);
+    expect([
+      ...deriveVisibleTerminalRunIds({
+        ...options,
+        terminalLayout: "grid",
+        maximizedRunByGroup: { "group-one": "run-two" },
+      }),
+    ]).toEqual(["run-two"]);
+    expect([
+      ...deriveVisibleTerminalRunIds({
+        ...options,
+        route: { kind: "global", destination: "agents" },
+        terminalLayout: "grid",
+      }),
+    ]).toEqual([]);
   });
 });
 
@@ -218,6 +275,36 @@ describe("Attention notification transitions", () => {
       preferences: enabledPreferences,
     });
     expect(result.current.toasts).toMatchObject([{ id: "completion-revision-two", tier: "quiet" }]);
+  });
+
+  it("suppresses a visible completion pane but not an unrelated run", () => {
+    const initial = {
+      ...hookProps([], {
+        kind: "group",
+        groupId: "group-one",
+        section: "terminals",
+      }),
+      visibleTerminalRunIds: new Set(["run-one"]),
+      preferences: {
+        ...preferences,
+        completionNotificationMemberIdsByGroup: { "group-one": ["member-one"] },
+      },
+    };
+    const { result, rerender } = renderHook(
+      (props: ReturnType<typeof hookProps>) => useAttentionNotifications(props),
+      { initialProps: initial },
+    );
+
+    const visibleCompletion = item("completion", "visible-completion");
+    rerender({ ...initial, items: [visibleCompletion] });
+    expect(result.current.toasts).toEqual([]);
+
+    const unrelatedCompletion = item("completion", "unrelated-completion", {
+      runId: "run-two",
+      targetPath: "/groups/group-one/terminals/run-two",
+    });
+    rerender({ ...initial, items: [visibleCompletion, unrelatedCompletion] });
+    expect(result.current.toasts).toMatchObject([{ id: "unrelated-completion", tier: "quiet" }]);
   });
 
   it("delivers hidden standard items to desktop and sounds only for urgent items", async () => {

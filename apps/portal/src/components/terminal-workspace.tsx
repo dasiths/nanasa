@@ -25,8 +25,8 @@ import { type CSSProperties, type ReactNode, useState } from "react";
 import type { PortalClient } from "../api.js";
 import { copyToClipboard } from "../copy-to-clipboard.js";
 import { usePortalPreferences } from "../hooks/use-portal-preferences.js";
-import { memberStatusView } from "../member-status.js";
 import { useTerminalEndpoint } from "../hooks/use-terminal-endpoint.js";
+import { memberStatusView } from "../member-status.js";
 import { TerminalConsole } from "../terminal/terminal-console.js";
 import { RoleIdentity, roleColorClass } from "./role-identity.js";
 
@@ -44,7 +44,6 @@ function TerminalPane({
   kind,
   role,
   connectionRevision,
-  suspended,
   visible,
   theme,
   completionNotificationsEnabled,
@@ -61,7 +60,6 @@ function TerminalPane({
   kind: AgentKind | undefined;
   role: RoleDefinition | undefined;
   connectionRevision: number;
-  suspended: boolean;
   visible: boolean;
   theme: "light" | "dark";
   completionNotificationsEnabled: boolean;
@@ -158,7 +156,6 @@ function TerminalPane({
           runGeneration={run.generation}
           theme={theme}
           label={`${alias} (${memberId}) terminal console`}
-          suspended={suspended}
           visible={visible}
           headerIdentity={identity}
           memberIdentity={memberIdentity}
@@ -194,12 +191,6 @@ function TerminalPane({
           </div>
         </>
       )}
-      {suspended && (
-        <div className="terminal-suspension-overlay" role="status">
-          <LoaderCircle className="spin" aria-hidden="true" size={22} />
-          <strong>Routing message</strong>
-        </div>
-      )}
     </section>
   );
 }
@@ -212,7 +203,6 @@ interface TerminalWorkspaceProps {
   runs: AgentRun[];
   agentStatuses?: AgentStatusSummary[];
   connectionRevision?: number;
-  suspended?: boolean;
   activeRunId?: string;
   onSelectRun?(runId: string): void;
   theme?: "light" | "dark";
@@ -226,7 +216,6 @@ export function TerminalWorkspace({
   runs,
   agentStatuses = [],
   connectionRevision = 0,
-  suspended = false,
   activeRunId: requestedActiveRunId,
   onSelectRun,
   theme = "dark",
@@ -435,7 +424,6 @@ export function TerminalWorkspace({
                 kind={memberKind(run)}
                 role={memberRole(run)}
                 connectionRevision={connectionRevision}
-                suspended={suspended}
                 visible={visible}
                 theme={theme}
                 completionNotificationsEnabled={completionNotificationMemberIdSet.has(run.memberId)}

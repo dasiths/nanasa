@@ -139,19 +139,34 @@ export const PI_STATUS_REPORTER_SOURCE = String.raw`function reporter() {
   let sessionId;
   let sourceSequence = 0;
   let heartbeat;
+  let disabled = false;
+  let delivery = Promise.resolve();
+  const heartbeatMs = Math.max(50, Number(process.env.NANASA_REPORTER_HEARTBEAT_MS) || 15000);
+  const disable = () => { disabled = true; clearInterval(heartbeat); heartbeat = undefined; };
   const send = (event, fields = {}) => {
-    if (!url || !token) return;
-    const envelope = { version: 2, eventId: crypto.randomUUID(), providerId: process.env.NANASA_REPORTER_PROVIDER_ID, adapterId: process.env.NANASA_REPORTER_ADAPTER_ID, reporterId: process.env.NANASA_REPORTER_ID, source: process.env.NANASA_REPORTER_SOURCE, protocolVersion: Number(process.env.NANASA_REPORTER_PROTOCOL_VERSION), reporterVersion: process.env.NANASA_REPORTER_VERSION, runId: process.env.NANASA_REPORTER_RUN_ID, generation: Number(process.env.NANASA_REPORTER_GENERATION), reporterEpoch: process.env.NANASA_REPORTER_EPOCH, sourceSequence: ++sourceSequence, event, occurredAt: new Date().toISOString(), ...(sessionId ? { nativeSessionId: sessionId } : {}), ...fields };
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 1000);
-    void fetch(url, { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify(envelope), signal: controller.signal }).catch(() => undefined).finally(() => clearTimeout(timeout));
+    if (!url || !token || disabled) return;
+    const eventSessionId = sessionId;
+    const envelope = { version: 2, eventId: crypto.randomUUID(), providerId: process.env.NANASA_REPORTER_PROVIDER_ID, adapterId: process.env.NANASA_REPORTER_ADAPTER_ID, reporterId: process.env.NANASA_REPORTER_ID, source: process.env.NANASA_REPORTER_SOURCE, protocolVersion: Number(process.env.NANASA_REPORTER_PROTOCOL_VERSION), reporterVersion: process.env.NANASA_REPORTER_VERSION, runId: process.env.NANASA_REPORTER_RUN_ID, generation: Number(process.env.NANASA_REPORTER_GENERATION), reporterEpoch: process.env.NANASA_REPORTER_EPOCH, sourceSequence: ++sourceSequence, event, occurredAt: new Date().toISOString(), ...(eventSessionId ? { nativeSessionId: eventSessionId } : {}), ...fields };
+    delivery = delivery.then(async () => {
+      if (disabled) return;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 1000);
+      try {
+        const response = await fetch(url, { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify(envelope), signal: controller.signal });
+        if (response.status !== 409) return;
+        const body = await response.json().catch(() => undefined);
+        if (body?.code === "status_reporter_identity_fenced" || body?.code === "status_native_session_fenced") disable();
+      } catch {}
+      finally { clearTimeout(timeout); }
+    });
   };
   return (pi) => {
     pi.on("session_start", (_event, ctx) => {
+      if (disabled) return;
       sessionId = ctx.sessionManager.getSessionId();
       send("session.ready");
       clearInterval(heartbeat);
-      heartbeat = setInterval(() => send("heartbeat"), 15000);
+      heartbeat = setInterval(() => send("heartbeat"), heartbeatMs);
       heartbeat.unref?.();
     });
     pi.on("agent_start", () => send("turn.started"));
@@ -171,17 +186,32 @@ export const OPENCODE_STATUS_REPORTER_SOURCE = String.raw`export const NanasaSta
   const token = process.env.NANASA_MCP_TOKEN;
   const sessions = new Set();
   let sourceSequence = 0;
+  let heartbeat;
+  let disabled = false;
+  let delivery = Promise.resolve();
+  const heartbeatMs = Math.max(50, Number(process.env.NANASA_REPORTER_HEARTBEAT_MS) || 15000);
+  const disable = () => { disabled = true; clearInterval(heartbeat); heartbeat = undefined; sessions.clear(); };
   const send = (event, sessionId, fields = {}) => {
-    if (!url || !token) return;
-    const envelope = { version: 2, eventId: crypto.randomUUID(), providerId: process.env.NANASA_REPORTER_PROVIDER_ID, adapterId: process.env.NANASA_REPORTER_ADAPTER_ID, reporterId: process.env.NANASA_REPORTER_ID, source: process.env.NANASA_REPORTER_SOURCE, protocolVersion: Number(process.env.NANASA_REPORTER_PROTOCOL_VERSION), reporterVersion: process.env.NANASA_REPORTER_VERSION, runId: process.env.NANASA_REPORTER_RUN_ID, generation: Number(process.env.NANASA_REPORTER_GENERATION), reporterEpoch: process.env.NANASA_REPORTER_EPOCH, sourceSequence: ++sourceSequence, event, occurredAt: new Date().toISOString(), ...(sessionId ? { nativeSessionId: sessionId } : {}), ...fields };
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 1000);
-    void fetch(url, { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify(envelope), signal: controller.signal }).catch(() => undefined).finally(() => clearTimeout(timeout));
+    if (!url || !token || disabled) return;
+    delivery = delivery.then(async () => {
+      if (disabled) return;
+      const envelope = { version: 2, eventId: crypto.randomUUID(), providerId: process.env.NANASA_REPORTER_PROVIDER_ID, adapterId: process.env.NANASA_REPORTER_ADAPTER_ID, reporterId: process.env.NANASA_REPORTER_ID, source: process.env.NANASA_REPORTER_SOURCE, protocolVersion: Number(process.env.NANASA_REPORTER_PROTOCOL_VERSION), reporterVersion: process.env.NANASA_REPORTER_VERSION, runId: process.env.NANASA_REPORTER_RUN_ID, generation: Number(process.env.NANASA_REPORTER_GENERATION), reporterEpoch: process.env.NANASA_REPORTER_EPOCH, sourceSequence: ++sourceSequence, event, occurredAt: new Date().toISOString(), ...(sessionId ? { nativeSessionId: sessionId } : {}), ...fields };
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 1000);
+      try {
+        const response = await fetch(url, { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify(envelope), signal: controller.signal });
+        if (response.status !== 409) return;
+        const body = await response.json().catch(() => undefined);
+        if (body?.code === "status_reporter_identity_fenced" || body?.code === "status_native_session_fenced") disable();
+      } catch {}
+      finally { clearTimeout(timeout); }
+    });
   };
-  const heartbeat = setInterval(() => { for (const sessionId of sessions) send("heartbeat", sessionId); }, 15000);
+  heartbeat = setInterval(() => { for (const sessionId of sessions) send("heartbeat", sessionId); }, heartbeatMs);
   heartbeat.unref?.();
   return {
     event: async ({ event }) => {
+      if (disabled) return;
       const properties = event.properties || {};
       const sessionId = properties.sessionID || properties.sessionId || properties.info?.id || properties.part?.sessionID;
       if (event.type === "session.created" || event.type === "server.connected") { if (sessionId) sessions.add(sessionId); send("session.ready", sessionId); }

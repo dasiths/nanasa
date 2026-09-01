@@ -15,15 +15,15 @@ import { Bell, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { PortalClient } from "../api.js";
 import {
+  type ActionAttentionItem,
   ATTENTION_CATEGORY_LABELS,
+  type AttentionItem,
+  type AttentionReviewCategory,
   attentionCategoryCount,
   attentionItemsForScope,
   attentionReviewCount,
-  deriveAttentionItems,
-  type ActionAttentionItem,
-  type AttentionItem,
-  type AttentionReviewCategory,
   type CompletionAttentionItem,
+  deriveAttentionItems,
   type WaitAttentionItem,
 } from "../attention-items.js";
 import { CheckoutWorkspace } from "../components/checkout-workspace.js";

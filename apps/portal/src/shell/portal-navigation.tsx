@@ -21,10 +21,10 @@ import { type MouseEvent, type ReactNode, useRef } from "react";
 import { Dialog } from "../a11y/primitives.js";
 import type { ThemePreference, WorkspaceSection } from "../hooks/use-portal-preferences.js";
 import {
-  globalDestinationDefinitions,
-  groupDestinations,
   type GlobalDestination,
   type GlobalDestinationDefinition,
+  globalDestinationDefinitions,
+  groupDestinations,
 } from "../router/portal-destinations.js";
 import { groupRoute, type PortalRoute } from "../router/portal-router.js";
 

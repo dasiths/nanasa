@@ -1,12 +1,12 @@
 import { type MouseEvent, useCallback, useEffect, useState } from "react";
 import type { WorkspaceSection } from "../hooks/use-portal-preferences.js";
 import {
+  type GlobalDestination,
   globalDestinations,
   groupDestinations,
-  type GlobalDestination,
 } from "./portal-destinations.js";
 
-export { globalDestinations, type GlobalDestination } from "./portal-destinations.js";
+export { type GlobalDestination, globalDestinations } from "./portal-destinations.js";
 
 export type PortalRoute =
   | { kind: "home" }

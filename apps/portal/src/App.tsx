@@ -15,7 +15,10 @@ import {
   attentionReviewCountsByGroup,
   deriveAttentionItems,
 } from "./attention-items.js";
-import { useAttentionNotifications } from "./attention-notifications.js";
+import {
+  deriveVisibleTerminalRunIds,
+  useAttentionNotifications,
+} from "./attention-notifications.js";
 import { AdHocConsoleDialog } from "./components/ad-hoc-console-dialog.js";
 import { type AddAgentInput, GroupTree } from "./components/group-tree.js";
 import { MessageWorkspace } from "./components/message-workspace.js";
@@ -74,7 +77,6 @@ export function App({ client = api }: AppProps) {
   const [startingAllGroupId, setStartingAllGroupId] = useState<string>();
   const [focusSelectedGroupAfterDelete, setFocusSelectedGroupAfterDelete] = useState(false);
   const [terminalConnectionRevision, setTerminalConnectionRevision] = useState(0);
-  const [portalSubmissionSuspended, setPortalSubmissionSuspended] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const startAllInFlight = useRef(new Map<string, Promise<void>>());
@@ -112,8 +114,6 @@ export function App({ client = api }: AppProps) {
   const selectedMessageState = snapshot?.messageGroups?.find(
     (state) => state.groupId === selectedGroupId,
   );
-  const deliveryInProgress = (selectedMessageState?.activeDeliveryCount ?? 0) > 0;
-  const terminalDeliverySuspended = portalSubmissionSuspended || deliveryInProgress;
   const { unreadCounts, markReadThrough } = useMessageReadCursors(
     snapshot?.configStatus?.repoRoot,
     snapshot?.groups ?? [],
@@ -148,6 +148,23 @@ export function App({ client = api }: AppProps) {
     selectedGroupId === undefined ? 0 : (attentionCountsByGroup.get(selectedGroupId) ?? 0);
   const globalAttentionCount = attentionReviewCount(attentionItems);
   const routeSection = route.kind === "group" ? route.section : undefined;
+  const visibleTerminalRunIds = useMemo(
+    () =>
+      deriveVisibleTerminalRunIds({
+        route,
+        runIds: memberStatusViews.flatMap(({ run }) => (run === undefined ? [] : [run.id])),
+        terminalLayout: preferences.terminalLayout,
+        activeRunByGroup: preferences.activeRunByGroup,
+        maximizedRunByGroup: preferences.maximizedRunByGroup,
+      }),
+    [
+      memberStatusViews,
+      preferences.activeRunByGroup,
+      preferences.maximizedRunByGroup,
+      preferences.terminalLayout,
+      route,
+    ],
+  );
   const routeLabel =
     route.kind === "global"
       ? globalDestinationDefinition(route.destination).heading
@@ -159,6 +176,7 @@ export function App({ client = api }: AppProps) {
     hydrationKey:
       snapshot === undefined ? undefined : `${snapshot.instanceId}:${snapshot.daemonEpoch}`,
     route,
+    visibleTerminalRunIds,
     preferences: {
       ...preferences.notifications,
       completionNotificationMemberIdsByGroup: preferences.completionNotificationMemberIdsByGroup,
@@ -356,16 +374,9 @@ export function App({ client = api }: AppProps) {
   };
   const submitMessage = async (command: SubmitMessageCommand) => {
     if (selectedGroup === undefined) throw new Error("Select a group before sending a message");
-    setPortalSubmissionSuspended(true);
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    try {
-      const result = await client.submitMessage(selectedGroup.id, command);
-      await refresh();
-      return result;
-    } finally {
-      setPortalSubmissionSuspended(false);
-      setTerminalConnectionRevision((current) => current + 1);
-    }
+    const result = await client.submitMessage(selectedGroup.id, command);
+    await refresh();
+    return result;
   };
 
   if (status === "loading") {
@@ -656,7 +667,6 @@ export function App({ client = api }: AppProps) {
                   runs={runs}
                   agentStatuses={snapshot.agentStatuses ?? []}
                   connectionRevision={terminalConnectionRevision}
-                  suspended={terminalDeliverySuspended}
                   theme={appliedTheme}
                   {...(() => {
                     const activeRunId =

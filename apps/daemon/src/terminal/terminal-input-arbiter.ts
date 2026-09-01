@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { TerminalClientFrame } from "@nanasa/contracts";
+import type { TerminalClientFrame, TerminalInputState } from "@nanasa/contracts";
 import { DomainError } from "../store.js";
 import type { AttachmentPty } from "./attachment-pty.js";
 import type { TerminalControlService } from "./terminal-control-service.js";
@@ -10,8 +10,9 @@ export function terminalViewSessionName(runId: string): string {
 }
 
 export class TerminalInputArbiter {
-  readonly #automated = new Set<string>();
+  readonly #pending = new Map<string, number>();
   readonly #queues = new Map<string, Promise<void>>();
+  readonly #listeners = new Map<string, Set<(state: TerminalInputState) => void>>();
 
   public constructor(private readonly control: TerminalControlService) {}
 
@@ -21,7 +22,7 @@ export class TerminalInputArbiter {
     pty: AttachmentPty,
     frame: Extract<TerminalClientFrame, { type: "input" | "paste" | "focus" | "resize" }>,
   ): void {
-    if (this.#automated.has(runId)) {
+    if (this.inputState(runId) === "automated") {
       throw new DomainError(
         "terminal_input_automation_active",
         "Automated terminal input is already in progress",
@@ -49,29 +50,61 @@ export class TerminalInputArbiter {
     pty.write(frame.data);
   }
 
+  public inputState(runId: string): TerminalInputState {
+    return (this.#pending.get(runId) ?? 0) > 0 ? "automated" : "interactive";
+  }
+
+  public subscribe(
+    runId: string,
+    listener: (state: TerminalInputState) => void,
+  ): { dispose(): void } {
+    const listeners = this.#listeners.get(runId) ?? new Set();
+    listeners.add(listener);
+    this.#listeners.set(runId, listeners);
+    return {
+      dispose: () => {
+        listeners.delete(listener);
+        if (listeners.size === 0) this.#listeners.delete(runId);
+      },
+    };
+  }
+
   public dispatchAutomated<T>(runId: string, operation: () => Promise<T>): Promise<T> {
+    this.#incrementPending(runId);
     const previous = this.#queues.get(runId) ?? Promise.resolve();
-    let result!: T;
-    let failure: unknown;
-    const queued = previous
-      .catch(() => undefined)
-      .then(async () => {
-        this.#automated.add(runId);
-        try {
-          result = await operation();
-        } catch (error) {
-          failure = error;
-        } finally {
-          this.#automated.delete(runId);
-        }
-      });
-    const settled = queued.finally(() => {
-      if (this.#queues.get(runId) === settled) this.#queues.delete(runId);
-    });
-    this.#queues.set(runId, settled);
-    return settled.then(() => {
-      if (failure !== undefined) throw failure;
-      return result;
-    });
+    const result = previous.catch(() => undefined).then(operation);
+    const settle = () => {
+      this.#decrementPending(runId);
+      if (this.#queues.get(runId) === barrier) this.#queues.delete(runId);
+    };
+    const barrier = result.then(settle, settle);
+    this.#queues.set(runId, barrier);
+    return result;
+  }
+
+  #incrementPending(runId: string): void {
+    const pending = this.#pending.get(runId) ?? 0;
+    this.#pending.set(runId, pending + 1);
+    if (pending === 0) this.#emit(runId, "automated");
+  }
+
+  #decrementPending(runId: string): void {
+    const pending = this.#pending.get(runId) ?? 0;
+    if (pending <= 1) {
+      this.#pending.delete(runId);
+      this.#emit(runId, "interactive");
+      return;
+    }
+    this.#pending.set(runId, pending - 1);
+  }
+
+  #emit(runId: string, state: TerminalInputState): void {
+    for (const listener of this.#listeners.get(runId) ?? []) {
+      try {
+        listener(state);
+      } catch {
+        // A viewer notification cannot interrupt terminal input arbitration.
+      }
+    }
   }
 }

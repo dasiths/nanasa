@@ -24,6 +24,7 @@ interface MockTransport {
     onState(state: "connecting" | "connected" | "reconnecting" | "closed"): void;
   };
   resize: ReturnType<typeof vi.fn>;
+  releaseController: ReturnType<typeof vi.fn>;
 }
 
 const mocks = vi.hoisted(() => ({
@@ -166,6 +167,7 @@ describe("TerminalConsole", () => {
         runGeneration: 1,
         binding: { serverName: "nanasa", sessionId: "$1", windowId: "@1", paneId: "%1" },
         role: "controller",
+        inputState: "interactive",
         lease: {
           id: "lease-one",
           runId: "run-one",
@@ -232,6 +234,7 @@ describe("TerminalConsole", () => {
         runGeneration: 1,
         binding: { serverName: "nanasa", sessionId: "$1", windowId: "@1", paneId: "%1" },
         role: "observer",
+        inputState: "interactive",
         limits: endpoint.limits,
         capabilities: {
           input: false,
@@ -288,6 +291,7 @@ describe("TerminalConsole", () => {
         runGeneration: 1,
         binding: { serverName: "nanasa", sessionId: "$1", windowId: "@1", paneId: "%1" },
         role: "controller",
+        inputState: "interactive",
         lease: {
           id: "lease-one",
           runId: "run-one",
@@ -359,6 +363,70 @@ describe("TerminalConsole", () => {
     });
 
     expect(screen.queryByRole("alertdialog", { name: "Terminal clipboard request" })).toBeNull();
+  });
+
+  it("preserves control and mount identity during automated input", () => {
+    const view = render(
+      <TerminalConsole
+        client={client}
+        endpoint={endpoint}
+        runGeneration={1}
+        theme="dark"
+        label="Test terminal"
+      />,
+    );
+    const console = screen.getByLabelText("Test terminal");
+    const mountId = console.getAttribute("data-terminal-mount-id");
+    const transport = mocks.transports[0]!;
+    act(() => {
+      transport.options.onFrame({
+        type: "welcome",
+        version: 1,
+        daemonEpoch: 1,
+        streamId: "stream-one",
+        streamGeneration: 1,
+        runId: "run-one",
+        runGeneration: 1,
+        binding: { serverName: "nanasa", sessionId: "$1", windowId: "@1", paneId: "%1" },
+        role: "controller",
+        inputState: "interactive",
+        lease: {
+          id: "lease-one",
+          runId: "run-one",
+          viewerId: "viewer-one",
+          role: "controller",
+          runGeneration: 1,
+          streamGeneration: 1,
+          acquiredAt: "2026-08-30T00:00:00.000Z",
+          expiresAt: "2026-09-01T00:00:00.000Z",
+        },
+        limits: endpoint.limits,
+        capabilities: {
+          input: true,
+          paste: true,
+          focus: true,
+          resize: true,
+          effects: true,
+          read: true,
+          checkpoints: true,
+        },
+      });
+      transport.options.onState("connected");
+      transport.options.onFrame({ type: "input-state", state: "automated" });
+    });
+
+    expect(screen.getByText("Control mode", { exact: true })).toBeInTheDocument();
+    expect(screen.getByText("Automated input in progress")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Paste" })).toBeDisabled();
+    expect(transport.releaseController).not.toHaveBeenCalled();
+    expect(console).toHaveAttribute("data-terminal-mount-id", mountId);
+
+    act(() => transport.options.onFrame({ type: "input-state", state: "interactive" }));
+    expect(screen.queryByText("Automated input in progress")).toBeNull();
+    expect(screen.getByRole("button", { name: "Paste" })).toBeEnabled();
+    expect(mocks.controllers).toHaveLength(1);
+    expect(mocks.transports).toEqual([transport]);
+    view.unmount();
   });
 
   it("updates rendering visibility without recreating the terminal transport", () => {

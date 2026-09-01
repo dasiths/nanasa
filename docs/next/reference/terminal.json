@@ -336,6 +336,13 @@
               "observer"
             ]
           },
+          "inputState": {
+            "type": "string",
+            "enum": [
+              "interactive",
+              "automated"
+            ]
+          },
           "lease": {
             "type": "object",
             "properties": {
@@ -513,6 +520,7 @@
           "runGeneration",
           "binding",
           "role",
+          "inputState",
           "limits",
           "capabilities"
         ],
@@ -651,6 +659,27 @@
           "type",
           "role",
           "reason"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "input-state"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "interactive",
+              "automated"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "state"
         ],
         "additionalProperties": false
       },
