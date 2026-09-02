@@ -1,4 +1,4 @@
-import { constants, fstatSync, lstatSync, openSync, readFileSync, closeSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { NanasaControlClient, NanasaControlResources } from "@nanasa/control-client";
 import { loadNanasaConfig } from "../config-loader.js";

@@ -3,12 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { loadNanasaConfig } from "../src/config-loader.js";
+import { ConfigRepository } from "../src/config-repository.js";
 import { CheckoutService } from "../src/git/checkout-service.js";
 import { GitCommandAdapter } from "../src/git/git-command-adapter.js";
 import { GitStatusService } from "../src/git/git-status-service.js";
 import { RepositoryDiscoveryService } from "../src/git/repository-discovery-service.js";
-import { ConfigRepository } from "../src/config-repository.js";
-import { loadNanasaConfig } from "../src/config-loader.js";
 import { NanasaStore } from "../src/store.js";
 import { TopologyOrderService } from "../src/topology-order-service.js";
 

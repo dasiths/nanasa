@@ -10,8 +10,8 @@ import {
   piMcpAdapterAssetDigest,
   type TrustedBuiltInProviderPackage,
 } from "../src/providers/builtin-provider-packages.js";
-import { ProviderRuntimeIndex } from "../src/providers/provider-runtime-index.js";
 import { resolveBuiltInProviderEvaluatorOptions } from "../src/providers/provider-runtime-assets.js";
+import { ProviderRuntimeIndex } from "../src/providers/provider-runtime-index.js";
 import { ProviderSnapshotEvaluator } from "../src/providers/provider-snapshot-evaluator.js";
 import { ProviderSnapshotRepository } from "../src/providers/provider-snapshot-repository.js";
 import { providerStatusPolicy } from "../src/providers/provider-status-policy.js";
