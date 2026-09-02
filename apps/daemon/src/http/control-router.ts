@@ -21,10 +21,8 @@ import {
   ExtensionLifecycleCommandSchema,
   InstallProviderExtensionCommandSchema,
   InterruptAgentRunCommandSchema,
-  MAX_MESSAGE_TEXT_BYTES,
   OpenCheckoutCommandSchema,
   OpenWaitSchema,
-  OVERSIZED_MESSAGE_GUIDANCE,
   ProviderStateBindingSchema,
   type RemoteDescriptor,
   RemoteDescriptorSchema,
@@ -93,6 +91,7 @@ import {
   controlRoute,
   generateControlOpenApi,
 } from "./route-registry.js";
+import { isValidationError, toPublicErrorResponse } from "./error-response.js";
 
 export interface ControlRouterServices {
   metadata(): ControlMetadata;
@@ -144,37 +143,16 @@ function deterministicError(error: unknown): { statusCode: number; response: unk
     error.statusCode < 500 &&
     STABLE_IDEMPOTENCY_DOMAIN_ERROR_CODES.has(error.code)
   ) {
-    return { statusCode: error.statusCode, response: { code: error.code, message: error.message } };
+    const response = toPublicErrorResponse(error);
+    return response === undefined
+      ? undefined
+      : { statusCode: response.statusCode, response: response.payload };
   }
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "issues" in error &&
-    Array.isArray(error.issues)
-  ) {
-    const oversized = error.issues.some(
-      (issue) =>
-        typeof issue === "object" &&
-        issue !== null &&
-        "message" in issue &&
-        String(issue.message).includes(`${MAX_MESSAGE_TEXT_BYTES}-byte UTF-8 limit`),
-    );
-    return oversized
-      ? {
-          statusCode: 413,
-          response: {
-            code: "message_body_too_large",
-            message: `Message text exceeds the ${MAX_MESSAGE_TEXT_BYTES}-byte UTF-8 limit. ${OVERSIZED_MESSAGE_GUIDANCE}`,
-          },
-        }
-      : {
-          statusCode: 400,
-          response: {
-            code: "validation_error",
-            message: "Request validation failed",
-            issues: error.issues,
-          },
-        };
+  if (isValidationError(error)) {
+    const response = toPublicErrorResponse(error);
+    return response === undefined
+      ? undefined
+      : { statusCode: response.statusCode, response: response.payload };
   }
   return undefined;
 }

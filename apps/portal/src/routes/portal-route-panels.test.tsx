@@ -412,7 +412,16 @@ describe("projected status route panels", () => {
       members: [owner],
       attentionItems: deriveAttentionItems(input, [workspace]),
       attentionWorkspaceLoading: new Set<string>(),
-      attentionWorkspaceErrors: new Map([[owner.groupId, "temporarily unavailable"]]),
+      attentionWorkspaceErrors: new Map([
+        [
+          owner.groupId,
+          {
+            message: "Unable to load Attention details",
+            details: { cause: "temporarily unavailable" },
+            code: "portal_operation_failed",
+          },
+        ],
+      ]),
       onReloadAttentionWorkspace: reload,
     };
     window.history.replaceState({}, "", `/groups/${owner.groupId}/activity#action-action-1`);
@@ -423,7 +432,8 @@ describe("projected status route panels", () => {
     expect(screen.getByRole("button", { name: "All 1" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Requires response 1" })).toBeInTheDocument();
     expect(screen.getByText("1 active action")).toBeInTheDocument();
-    expect(screen.getByText(/temporarily unavailable/)).toBeInTheDocument();
+    expect(screen.getByText("Unable to load Attention details")).toBeInTheDocument();
+    expect(screen.getByText("portal_operation_failed")).toBeInTheDocument();
     await waitFor(() => expect(document.getElementById("action-action-1")).toHaveFocus());
 
     screen.getByRole("button", { name: "Allow once" }).click();

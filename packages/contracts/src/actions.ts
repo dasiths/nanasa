@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IdentifierSchema, TimestampSchema } from "./control.js";
+import { ErrorPayloadSchema, IdentifierSchema, TimestampSchema } from "./control.js";
 import { AgentWaitKindSchema } from "./status.js";
 
 export const MAX_MESSAGE_TEXT_BYTES = 1_048_576;
@@ -25,6 +25,7 @@ export const StartGroupRunOutcomeSchema = z
     status: z.enum(["started", "already-running", "failed"]),
     runId: IdentifierSchema.optional(),
     reason: z.string().min(1).optional(),
+    error: ErrorPayloadSchema.optional(),
   })
   .strict();
 export const StartGroupRunsResultSchema = z

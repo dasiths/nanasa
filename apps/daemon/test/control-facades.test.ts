@@ -222,7 +222,11 @@ describe("typed control facade registries", () => {
       }),
     ).resolves.toBe(2);
     expect(usageOut.value()).toBe("");
-    expect(usageErr.value()).toContain("Unknown command");
+    expect(JSON.parse(usageErr.value())).toEqual({
+      message: expect.stringContaining("Unknown command"),
+      details: {},
+      code: "cli_usage_error",
+    });
 
     const failureOut = capture();
     const failureErr = capture();
@@ -233,9 +237,10 @@ describe("typed control facade registries", () => {
       }),
     ).resolves.toBe(1);
     expect(failureOut.value()).toBe("");
-    expect(JSON.parse(failureErr.value())).toMatchObject({
-      version: 1,
-      error: { code: "control_request_failed" },
+    expect(JSON.parse(failureErr.value())).toEqual({
+      message: expect.any(String),
+      details: {},
+      code: "control_request_failed",
     });
   });
 

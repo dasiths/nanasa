@@ -443,6 +443,7 @@ export class DomainError extends Error {
     public readonly code: string,
     message: string,
     public readonly statusCode: number,
+    public readonly details: Readonly<Record<string, unknown>> = {},
   ) {
     super(message);
     this.name = "DomainError";

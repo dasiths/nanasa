@@ -42,6 +42,14 @@ Options:
 
 class UsageError extends Error {}
 
+function failurePayload(error) {
+  return {
+    message: error instanceof Error ? error.message : "Nanasa command failed",
+    details: {},
+    code: error instanceof UsageError ? "cli_usage_error" : "nanasa_command_failed",
+  };
+}
+
 function ensureNanasaIgnore(root) {
   const path = join(root, ".nanasa", ".gitignore");
   const required = ["/integrations/", "/runtime/", "/state/"];
@@ -277,7 +285,7 @@ if (
   fileURLToPath(import.meta.url) === realpathSync(resolve(process.argv[1]))
 ) {
   main().catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`${JSON.stringify(failurePayload(error))}\n`);
     process.exitCode = error instanceof UsageError ? 2 : 1;
   });
 }

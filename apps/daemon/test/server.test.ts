@@ -696,7 +696,13 @@ describe("daemon REST API", () => {
     const stableFailure = await daemon.app.inject(stableRequest);
     const stableReplay = await daemon.app.inject(stableRequest);
     expect(stableFailure.statusCode).toBe(400);
-    expect(stableFailure.json()).toMatchObject({ code: "validation_error" });
+    const stableFailurePayload = stableFailure.json();
+    expect(Object.keys(stableFailurePayload).sort()).toEqual(["code", "details", "message"]);
+    expect(stableFailurePayload).toMatchObject({
+      message: "Request validation failed",
+      details: { issues: expect.any(Array) },
+      code: "validation_error",
+    });
     expect(stableReplay.statusCode).toBe(400);
     expect(stableReplay.headers["idempotency-replayed"]).toBe("true");
     expect(stableReplay.json()).toEqual(stableFailure.json());
@@ -931,7 +937,10 @@ describe("portal static assets", () => {
 
     const oversized = await submit("x".repeat(MAX_MESSAGE_TEXT_BYTES + 1));
     expect(oversized.statusCode).toBe(413);
-    expect(oversized.json()).toMatchObject({ code: "message_body_too_large" });
+    expect(oversized.json()).toMatchObject({
+      details: {},
+      code: "message_body_too_large",
+    });
     expect(oversized.json().message).toContain("repository-relative path");
 
     const cleared = await daemon.app.inject({

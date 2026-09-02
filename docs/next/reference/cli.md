@@ -17,6 +17,11 @@ means an operational failure, and 2 means invalid command usage. Commands that
 mutate through the control API may require `--body <json>` with fields from the
 [generated CLI registry](cli.json).
 
+Every failure writes one compact JSON object to standard error with `message`,
+`details`, and `code` fields. The message is suitable for people, the code is a
+stable machine-readable identifier, and details contain optional diagnostics.
+Usage failures use the same shape and retain exit code 2.
+
 ## Bootstrap and local lifecycle
 
 ```text

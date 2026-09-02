@@ -50,6 +50,7 @@ import {
 import { createPortal } from "react-dom";
 
 import { copyToClipboard } from "../copy-to-clipboard.js";
+import { ErrorNotice, portalErrorFromCode, type PortalError, toPortalError } from "../errors.js";
 import { memberStatusView } from "../member-status.js";
 import { RoleIdentity } from "./role-identity.js";
 
@@ -475,7 +476,7 @@ function CreateGroupForm({
 }) {
   const [name, setName] = useState("");
   const [instructions, setInstructions] = useState("");
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -485,7 +486,7 @@ function CreateGroupForm({
       setInstructions("");
       setError(undefined);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to create group");
+      setError(toPortalError(cause, "Unable to create group"));
     }
   };
 
@@ -517,7 +518,7 @@ function CreateGroupForm({
         rows={3}
         placeholder=".nanasa/instructions/groups/backend.md"
       />
-      {error !== undefined && <p className="form-error">{error}</p>}
+      {error !== undefined && <ErrorNotice error={error} className="form-error" />}
     </form>
   );
 }
@@ -537,7 +538,7 @@ function GroupSettingsDialog({
   const [name, setName] = useState(group.name);
   const [instructionText, setInstructionText] = useState(instructionPathText(instructions));
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -556,7 +557,7 @@ function GroupSettingsDialog({
     try {
       await onUpdate({ name, instructions: parseInstructionPaths(instructionText) });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to update group settings");
+      setError(toPortalError(cause, "Unable to update group settings"));
     } finally {
       setBusy(false);
     }
@@ -600,7 +601,7 @@ function GroupSettingsDialog({
             placeholder=".nanasa/instructions/groups/backend.md"
           />
         </label>
-        {error !== undefined && <p className="form-error">{error}</p>}
+        {error !== undefined && <ErrorNotice error={error} className="form-error" />}
         <button type="submit" className="compact-button" disabled={busy}>
           <Check aria-hidden="true" size={15} />
           {busy ? "Saving..." : "Save group"}
@@ -623,7 +624,7 @@ function RolePresentationSection({
   const [color, setColor] = useState(role.presentation?.color ?? "slate");
   const [shortName, setShortName] = useState(role.presentation?.shortName ?? "");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -636,7 +637,7 @@ function RolePresentationSection({
         ...(shortName.trim() === "" ? {} : { shortName: shortName.trim() }),
       });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to update role presentation");
+      setError(toPortalError(cause, "Unable to update role presentation"));
     } finally {
       setBusy(false);
     }
@@ -700,7 +701,7 @@ function RolePresentationSection({
           />
         </label>
       </div>
-      {error !== undefined && <p className="form-error">{error}</p>}
+      {error !== undefined && <ErrorNotice error={error} className="form-error" />}
       <button type="submit" className="compact-button" disabled={busy}>
         <Check aria-hidden="true" size={15} />
         {busy ? "Saving..." : `Save ${role.name}`}
@@ -789,7 +790,7 @@ function AgentSettingsDialog({
   const [roleId, setRoleId] = useState(agent.roleId ?? "");
   const [instructions, setInstructions] = useState(instructionPathText(agent.instructions));
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   const inheritedInstructions = [
     ...config.instructions.map((path) => ({ source: "Global", path })),
     ...(config.groups[groupId]?.instructions ?? []).map((path) => ({
@@ -824,7 +825,7 @@ function AgentSettingsDialog({
         instructions: parseInstructionPaths(instructions),
       });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to update agent settings");
+      setError(toPortalError(cause, "Unable to update agent settings"));
     } finally {
       setBusy(false);
     }
@@ -923,7 +924,7 @@ function AgentSettingsDialog({
               </dd>
             </div>
           </dl>
-          {error !== undefined && <p className="form-error">{error}</p>}
+          {error !== undefined && <ErrorNotice error={error} className="form-error" />}
           <button type="submit" className="compact-button" disabled={busy}>
             <Check aria-hidden="true" size={15} />
             {busy ? "Saving..." : "Save agent"}
@@ -952,7 +953,7 @@ function AddAgentDialog({
   const [roleId, setRoleId] = useState("");
   const [instructions, setInstructions] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -978,7 +979,7 @@ function AddAgentDialog({
       });
       onClose();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to add agent");
+      setError(toPortalError(cause, "Unable to add agent"));
     } finally {
       setBusy(false);
     }
@@ -1048,7 +1049,7 @@ function AddAgentDialog({
           <UserPlus aria-hidden="true" size={15} />
           {busy ? "Adding..." : "Add agent"}
         </button>
-        {error !== undefined && <p className="form-error">{error}</p>}
+        {error !== undefined && <ErrorNotice error={error} className="form-error" />}
       </form>
     </dialog>
   );
@@ -1388,9 +1389,13 @@ export function GroupTree({
                     );
                     const role =
                       agent.roleId === undefined ? undefined : config.roles[agent.roleId];
-                    const recoveryDetail = run?.recoveryReason;
+                    const recoveryCode =
+                      run?.recoveryReason !== undefined &&
+                      /^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(run.recoveryReason)
+                        ? run.recoveryReason
+                        : undefined;
                     const statusTitle = [
-                      recoveryDetail,
+                      recoveryCode,
                       agentStatus?.blocker,
                       agentStatus?.lastProgressSummary,
                     ]
@@ -1608,7 +1613,20 @@ export function GroupTree({
                                     {run.recoveryReason !== undefined && (
                                       <div>
                                         <dt>Recovery reason</dt>
-                                        <dd>{run.recoveryReason}</dd>
+                                        <dd>
+                                          {statusKey === "failed" ? (
+                                            <ErrorNotice
+                                              announce={false}
+                                              className="member-runtime-error"
+                                              error={portalErrorFromCode(
+                                                run.recoveryReason,
+                                                "The agent runtime failed.",
+                                              )}
+                                            />
+                                          ) : (
+                                            run.recoveryReason.replaceAll("_", " ")
+                                          )}
+                                        </dd>
                                       </div>
                                     )}
                                   </>

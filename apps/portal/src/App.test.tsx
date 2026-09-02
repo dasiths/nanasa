@@ -1533,7 +1533,10 @@ describe("portal application", () => {
     render(<App client={client} />);
 
     expect(await screen.findByText("Repository configuration unavailable")).toBeInTheDocument();
-    expect(screen.getByText("integrations is invalid")).toBeInTheDocument();
+    const alert = screen.getByRole("alert");
+    expect(within(alert).getByText("Unable to load repository configuration")).toBeInTheDocument();
+    expect(within(alert).getByText("portal_operation_failed")).toBeInTheDocument();
+    expect(within(alert).getByText(/integrations is invalid/)).toBeInTheDocument();
   });
 
   it("deduplicates Start all while pending and announces per-member outcomes", async () => {
@@ -2350,7 +2353,11 @@ describe("portal application", () => {
     expect(await screen.findByText("Approve repository check?")).toBeInTheDocument();
     expect(client.loadActionWorkspace).toHaveBeenCalledWith("group-backend");
     expect(client.loadActionWorkspace).toHaveBeenCalledWith("group-review");
-    expect(screen.getByText("Review: unavailable")).toBeInTheDocument();
+    const partialError = screen.getByRole("region", { name: "Unavailable Attention details" });
+    expect(within(partialError).getByText("Review")).toBeInTheDocument();
+    expect(within(partialError).getByText("Unable to load Attention details")).toBeInTheDocument();
+    expect(within(partialError).getByText("portal_operation_failed")).toBeInTheDocument();
+    expect(within(partialError).getByText(/unavailable/)).toBeInTheDocument();
     expect(
       screen.getByLabelText("1 review item requires attention across all groups"),
     ).toBeInTheDocument();

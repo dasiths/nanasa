@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { ErrorPayloadSchema, type ErrorPayload } from "@nanasa/contracts";
 import { ControlClientError } from "@nanasa/control-client";
 import WebSocket from "ws";
-import { authenticateAgent, doctorIntegrations } from "../cli-admin.js";
+import { authenticateAgent, CliAdminError, doctorIntegrations } from "../cli-admin.js";
 import { matchControlRoute } from "../http/route-registry.js";
 import { repositoryIdentity } from "../protocol-metadata.js";
 import { loadBuildIdentity } from "../release/build-identity.js";
@@ -173,31 +174,31 @@ export function portalBootstrapUrl(apiUrl: string, fragment: string): string {
   return url.toString();
 }
 
-function failurePayload(error: unknown): unknown {
-  if (error instanceof ControlClientError && error.payload !== undefined) return error.payload;
-  if (error instanceof Error && "cause" in error && error.cause !== undefined) {
-    return {
-      version: 1,
-      requestId: `cli_${randomUUID()}`,
-      error: {
-        code: "daemon_not_running",
-        message: "The repository daemon is not reachable",
-        retryable: true,
-      },
-    };
+function failurePayload(error: unknown): ErrorPayload {
+  if (error instanceof ControlClientError) return error.toPayload();
+  if (error instanceof CliUsageError) {
+    return ErrorPayloadSchema.parse({
+      message: error.message,
+      code: "cli_usage_error",
+    });
   }
-  return {
-    version: 1,
-    requestId: `cli_${randomUUID()}`,
-    error: {
-      code:
-        error instanceof ControlClientError
-          ? (error.code ?? "control_request_failed")
-          : "control_request_failed",
-      message: error instanceof Error ? error.message : "Control request failed",
-      retryable: false,
-    },
-  };
+  if (error instanceof CliAdminError) {
+    return ErrorPayloadSchema.parse({
+      message: error.message,
+      details: error.details,
+      code: error.code,
+    });
+  }
+  if (error instanceof Error && "cause" in error && error.cause !== undefined) {
+    return ErrorPayloadSchema.parse({
+      message: "The repository daemon is not reachable",
+      code: "daemon_not_running",
+    });
+  }
+  return ErrorPayloadSchema.parse({
+    message: error instanceof Error ? error.message : "Control request failed",
+    code: "control_request_failed",
+  });
 }
 
 async function watchEvents(
@@ -367,11 +368,7 @@ export async function runControlCli(
       clearTimeout(timer);
     }
   } catch (error) {
-    if (error instanceof CliUsageError) {
-      stderr.write(`${error.message}\n`);
-      return 2;
-    }
     stderr.write(`${JSON.stringify(failurePayload(error))}\n`);
-    return 1;
+    return error instanceof CliUsageError ? 2 : 1;
   }
 }

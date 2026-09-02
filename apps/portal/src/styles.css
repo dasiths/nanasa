@@ -1501,6 +1501,55 @@ textarea {
   font-size: 1.1rem;
 }
 
+.error-notice {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.error-notice > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.error-notice-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.error-notice-body > span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.error-notice details {
+  margin-top: 3px;
+  font-size: 0.78rem;
+}
+
+.error-notice summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-family: ui-monospace, monospace;
+}
+
+.error-notice pre {
+  max-width: min(100%, 72ch);
+  margin: 6px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--danger-border);
+  background: var(--surface-muted);
+  color: var(--text);
+  font:
+    0.75rem / 1.4 ui-monospace,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .attention-toast-region {
   position: fixed;
   z-index: 120;
@@ -1644,6 +1693,15 @@ textarea {
 
 .start-all-results .start-all-failed strong {
   color: var(--red);
+}
+
+.start-all-error {
+  flex-basis: 100%;
+  color: var(--danger-text);
+}
+
+.member-runtime-error {
+  color: var(--danger-text);
 }
 
 .empty-state {

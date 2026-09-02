@@ -2,11 +2,12 @@ import type { TerminalEndpointStatus } from "@nanasa/contracts";
 import { useCallback, useEffect, useState } from "react";
 
 import type { PortalClient } from "../api.js";
+import { type PortalError, toPortalError } from "../errors.js";
 
 interface TerminalEndpointResult {
   status?: TerminalEndpointStatus;
   loading: boolean;
-  error?: string;
+  error?: PortalError;
   retry(): void;
 }
 
@@ -27,7 +28,7 @@ export function useTerminalEndpoint(
 ): TerminalEndpointResult {
   const [status, setStatus] = useState<TerminalEndpointStatus>();
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   const [requestVersion, setRequestVersion] = useState(0);
 
   useEffect(() => {
@@ -50,7 +51,7 @@ export function useTerminalEndpoint(
       } catch (cause) {
         if (cancelled) return;
         setLoading(false);
-        setError(cause instanceof Error ? cause.message : "Unable to load terminal status");
+        setError(toPortalError(cause, "Unable to load terminal status"));
         const delay = retryDelay(undefined, attempt);
         attempt += 1;
         retryTimer = window.setTimeout(() => void load(), delay);

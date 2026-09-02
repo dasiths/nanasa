@@ -19,6 +19,7 @@ import {
   CredentialProfileReferenceSchema,
   DeleteGroupResultSchema,
   DeliveryOutcomeSchema,
+  ErrorPayloadSchema,
   EventServerFrameSchema,
   ExtensionLockSchema,
   InstructionPathSchema,
@@ -49,6 +50,26 @@ import {
 } from "../src/index.js";
 
 describe("versioned control-plane contracts", () => {
+  it("normalizes public errors to message, details, and code", () => {
+    expect(
+      ErrorPayloadSchema.parse({
+        message: "The configured command is unsupported",
+        code: "provider_command_unrecognized",
+      }),
+    ).toEqual({
+      message: "The configured command is unsupported",
+      details: {},
+      code: "provider_command_unrecognized",
+    });
+    expect(
+      ErrorPayloadSchema.safeParse({
+        message: "Invalid error code",
+        details: {},
+        code: "Invalid Code",
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires daemon identity, epoch, versions, and explicit loopback-only metadata", () => {
     expect(
       ControlMetadataSchema.parse({

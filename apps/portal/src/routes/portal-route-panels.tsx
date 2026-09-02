@@ -28,6 +28,7 @@ import {
 } from "../attention-items.js";
 import { CheckoutWorkspace } from "../components/checkout-workspace.js";
 import { ExtensionsWorkspace } from "../components/extensions-workspace.js";
+import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 import { generatedOfflineHelp } from "../help/generated-offline-help.js";
 import type { PortalPreferences } from "../hooks/use-portal-preferences.js";
 import { memberStatusView } from "../member-status.js";
@@ -45,7 +46,7 @@ interface PortalRoutePanelProps {
   commands: PortalCommand[];
   attentionItems?: readonly AttentionItem[];
   attentionWorkspaceLoading?: ReadonlySet<string>;
-  attentionWorkspaceErrors?: ReadonlyMap<string, string>;
+  attentionWorkspaceErrors?: ReadonlyMap<string, PortalError>;
   onNavigate(path: string): void;
   onRefresh(): Promise<void>;
   onReloadAttentionWorkspace?(groupId: string): Promise<void>;
@@ -67,7 +68,7 @@ function WaitReply({
   const [answer, setAnswer] = useState("");
   const [busy, setBusy] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   const submit = async (reply: Parameters<PortalClient["replyOpenWait"]>[1]["reply"]) => {
     setBusy(true);
     setError(undefined);
@@ -82,7 +83,7 @@ function WaitReply({
       setSubmitted(true);
       await onChanged();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to send the exact wait reply");
+      setError(toPortalError(cause, "Unable to send the exact wait reply"));
     } finally {
       setBusy(false);
     }
@@ -143,7 +144,7 @@ function WaitReply({
       {(submitted || wait.state === "replying") && (
         <small role="status">Reply submitted. Waiting for the reporter to close this wait.</small>
       )}
-      {error !== undefined && <small role="alert">{error}</small>}
+      {error !== undefined && <ErrorNotice error={error} className="attention-control-error" />}
     </div>
   );
 }
@@ -163,7 +164,7 @@ function CompletionControls({
 }) {
   const [busy, setBusy] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   const acknowledge = async () => {
     setBusy(true);
     setError(undefined);
@@ -173,7 +174,7 @@ function CompletionControls({
       onAcknowledged(item);
       await onRefresh();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to acknowledge completion");
+      setError(toPortalError(cause, "Unable to acknowledge completion"));
     } finally {
       setBusy(false);
     }
@@ -188,7 +189,7 @@ function CompletionControls({
           Open agent
         </button>
       </div>
-      {error !== undefined && <small role="alert">{error}</small>}
+      {error !== undefined && <ErrorNotice error={error} className="attention-control-error" />}
     </div>
   );
 }
@@ -204,7 +205,7 @@ function ActionControls({
 }) {
   const [busy, setBusy] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   const cancel = async () => {
     setBusy(true);
     setError(undefined);
@@ -213,7 +214,7 @@ function ActionControls({
       setSubmitted(true);
       await onChanged();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to cancel this action");
+      setError(toPortalError(cause, "Unable to cancel this action"));
     } finally {
       setBusy(false);
     }
@@ -224,7 +225,7 @@ function ActionControls({
       <button type="button" disabled={busy || submitted} onClick={() => void cancel()}>
         {submitted ? "Cancellation requested" : "Cancel"}
       </button>
-      {error !== undefined && <small role="alert">{error}</small>}
+      {error !== undefined && <ErrorNotice error={error} className="attention-control-error" />}
     </div>
   );
 }
@@ -440,9 +441,9 @@ function AttentionPanel({
           {failures.map(({ groupId, error }) => (
             <div key={groupId}>
               <span>
-                {snapshot.groups.find((candidate) => candidate.id === groupId)?.name ?? groupId}:{" "}
-                {error}
+                {snapshot.groups.find((candidate) => candidate.id === groupId)?.name ?? groupId}
               </span>
+              <ErrorNotice error={error} className="attention-workspace-error" />
               <button type="button" onClick={() => void reload(groupId)}>
                 Retry
               </button>
@@ -594,7 +595,7 @@ function DiagnosticsPanel({
   const [status, setStatus] = useState<ConfigStatus>();
   const [states, setStates] = useState<ProviderStateBinding[]>([]);
   const [checkpoints, setCheckpoints] = useState<TerminalCheckpoint[]>([]);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   const load = () =>
     void Promise.all([
       client.loadMetadata(),
@@ -609,8 +610,7 @@ function DiagnosticsPanel({
         setCheckpoints(nextCheckpoints);
         setError(undefined);
       },
-      (cause: unknown) =>
-        setError(cause instanceof Error ? cause.message : "Unable to load diagnostics"),
+      (cause: unknown) => setError(toPortalError(cause, "Unable to load diagnostics")),
     );
   useEffect(load, [client, snapshot.sequence]);
   const lifecycle = async (bindingId: string, action: "retain" | "delete") => {
@@ -626,11 +626,7 @@ function DiagnosticsPanel({
       eyebrow="Control plane"
       description="Structured configuration, provider-state, terminal retention, and daemon metadata."
     >
-      {error !== undefined && (
-        <p className="route-error" role="alert">
-          {error}
-        </p>
-      )}
+      {error !== undefined && <ErrorNotice error={error} className="route-error" />}
       <div className="workflow-grid">
         <section className="workflow-card">
           <h3>Daemon</h3>
@@ -878,12 +874,12 @@ function HelpPanel({ commands }: Pick<PortalRoutePanelProps, "commands">) {
 function ServicePanel({ client }: Pick<PortalRoutePanelProps, "client">) {
   const [service, setService] = useState<ServiceDescriptor>();
   const [restart, setRestart] = useState<BrowserRestartFrame>();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   useEffect(() => {
     void client
       .loadServiceStatus()
       .then(setService, (cause: unknown) =>
-        setError(cause instanceof Error ? cause.message : "Unable to load service status"),
+        setError(toPortalError(cause, "Unable to load service status")),
       );
   }, [client]);
   return (
@@ -892,11 +888,7 @@ function ServicePanel({ client }: Pick<PortalRoutePanelProps, "client">) {
       eyebrow="Project-local systemd user service"
       description="The daemon restarts independently while tmux-owned agent processes continue running."
     >
-      {error !== undefined && (
-        <p className="route-error" role="alert">
-          {error}
-        </p>
-      )}
+      {error !== undefined && <ErrorNotice error={error} className="route-error" />}
       <section className="workflow-card">
         <h3>{service?.state ?? "loading"}</h3>
         <p>{service?.detail ?? "Reading service health."}</p>
@@ -940,12 +932,12 @@ function ServicePanel({ client }: Pick<PortalRoutePanelProps, "client">) {
 
 function RemotePanel({ client }: Pick<PortalRoutePanelProps, "client">) {
   const [remote, setRemote] = useState<RemoteDescriptor>();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   useEffect(() => {
     void client
       .loadRemoteStatus()
       .then(setRemote, (cause: unknown) =>
-        setError(cause instanceof Error ? cause.message : "Unable to load remote status"),
+        setError(toPortalError(cause, "Unable to load remote status")),
       );
   }, [client]);
   return (
@@ -954,11 +946,7 @@ function RemotePanel({ client }: Pick<PortalRoutePanelProps, "client">) {
       eyebrow="OpenSSH loopback forwarding"
       description="Remote operation keeps every daemon and terminal listener on loopback."
     >
-      {error !== undefined && (
-        <p className="route-error" role="alert">
-          {error}
-        </p>
-      )}
+      {error !== undefined && <ErrorNotice error={error} className="route-error" />}
       <section className="workflow-card">
         <h3>{remote?.service.state ?? "loading"}</h3>
         <p>No browser-managed tunnel is active. Start a verified tunnel from the operator CLI.</p>

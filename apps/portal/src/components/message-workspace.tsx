@@ -25,6 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
+import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 import { api, type PortalClient } from "../api.js";
 
 type AudienceKind = Audience["kind"];
@@ -315,7 +316,7 @@ export function MessageWorkspace({
   const [deliveryOutcomes, setDeliveryOutcomes] = useState<DeliveryOutcome[]>([]);
   const [hasOlder, setHasOlder] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   const [submitting, setSubmitting] = useState(false);
   const [promptWhenReady, setPromptWhenReady] = useState(false);
   const [confirmingClear, setConfirmingClear] = useState(false);
@@ -398,8 +399,7 @@ export function MessageWorkspace({
         setHasOlder(page.pageInfo.hasOlder);
       })
       .catch((cause: unknown) => {
-        if (!cancelled)
-          setError(cause instanceof Error ? cause.message : "Unable to load messages");
+        if (!cancelled) setError(toPortalError(cause, "Unable to load messages"));
       });
     return () => {
       cancelled = true;
@@ -534,9 +534,7 @@ export function MessageWorkspace({
             }
           });
         })
-        .catch((cause: unknown) =>
-          setError(cause instanceof Error ? cause.message : "Unable to load older messages"),
-        )
+        .catch((cause: unknown) => setError(toPortalError(cause, "Unable to load older messages")))
         .finally(() => setLoadingOlder(false));
     }
   };
@@ -614,7 +612,11 @@ export function MessageWorkspace({
         const failures = outcomes.filter((outcome) => outcome.status === "rejected");
         if (failures.length > 0) {
           setError(
-            `${failures.length} prompt action${failures.length === 1 ? "" : "s"} could not be created`,
+            toPortalError(
+              failures[0]?.reason,
+              `${failures.length} prompt action${failures.length === 1 ? "" : "s"} could not be created`,
+              "prompt_action_creation_failed",
+            ),
           );
         } else {
           setError(undefined);
@@ -626,7 +628,7 @@ export function MessageWorkspace({
       setComposing(false);
     } catch (cause) {
       if (contextVersionRef.current !== submittedContextVersion) return;
-      setError(cause instanceof Error ? cause.message : "Unable to send message");
+      setError(toPortalError(cause, "Unable to send message"));
     } finally {
       if (contextVersionRef.current === submittedContextVersion) setSubmitting(false);
     }
@@ -642,7 +644,7 @@ export function MessageWorkspace({
       setHasOlder(false);
       setError(undefined);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to clear message history");
+      setError(toPortalError(cause, "Unable to clear message history"));
       throw cause;
     }
   };
@@ -866,11 +868,7 @@ export function MessageWorkspace({
               </p>
             )}
             <div className="composer-actions">
-              {error !== undefined && (
-                <p className="form-error" role="alert">
-                  {error}
-                </p>
-              )}
+              {error !== undefined && <ErrorNotice error={error} className="form-error" />}
               <button
                 type="button"
                 className="compact-button"

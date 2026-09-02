@@ -8,6 +8,7 @@ import type {
 } from "@nanasa/contracts";
 
 import { DeliveryDispatcher } from "./delivery-dispatcher.js";
+import { errorPayloadFromUnknown } from "./http/error-response.js";
 import { NativeSessionService } from "./native-session-service.js";
 import type { RuntimeObservation } from "./runtime-observation.js";
 import { DomainError, NanasaStore } from "./store.js";
@@ -123,17 +124,18 @@ export class RunRuntimeCoordinator {
           });
         } catch (error) {
           const failedRun = this.#store.getLatestRunForMembership(groupId, membership.memberId);
+          const failure = errorPayloadFromUnknown(
+            error,
+            "run_start_failed",
+            "The agent could not be started",
+          );
           outcomes.push({
             groupId,
             memberId: membership.memberId,
             status: "failed",
             ...(failedRun === undefined ? {} : { runId: failedRun.id }),
-            reason:
-              error instanceof DomainError
-                ? error.code
-                : error instanceof Error
-                  ? error.message
-                  : "run_start_failed",
+            reason: failure.code,
+            error: failure,
           });
         }
       }
@@ -484,10 +486,14 @@ export class RunRuntimeCoordinator {
       }
       return replacement;
     } catch (error) {
-      const reason = error instanceof Error ? error.message : "recovery_launch_failed";
+      const failure = errorPayloadFromUnknown(
+        error,
+        "recovery_launch_failed",
+        "The agent could not be restarted",
+      );
       this.#store.recordRuntimeEvent("run.recovery-failed", "run", current.id, {
         generation: current.generation,
-        reason,
+        error: failure,
       });
       const latest = this.#store
         .listDesiredRunningRuns()
@@ -501,7 +507,7 @@ export class RunRuntimeCoordinator {
           latest.generation,
           latest.recoveryAttempts >= this.#recoveryMaxAttempts ? "failed" : "reconciling",
           {
-            reason,
+            reason: failure.code,
           },
         );
       }

@@ -10,7 +10,6 @@ import {
   ArrowLeft,
   Bell,
   Cable,
-  CircleAlert,
   Command,
   Grid2X2,
   Menu,
@@ -34,6 +33,7 @@ import {
 import { AdHocConsoleDialog } from "./components/ad-hoc-console-dialog.js";
 import { type AddAgentInput, GroupTree } from "./components/group-tree.js";
 import { MessageWorkspace } from "./components/message-workspace.js";
+import { ErrorNotice, portalErrorFromCode, type PortalError, toPortalError } from "./errors.js";
 import { useAttentionWorkspaces } from "./hooks/use-attention-workspaces.js";
 import { useMessageReadCursors } from "./hooks/use-message-read-cursors.js";
 import {
@@ -142,7 +142,7 @@ export function App({ client = api }: AppProps) {
   const { route, navigate, link } = usePortalRouter();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [busyAction, setBusyAction] = useState<string>();
-  const [actionError, setActionError] = useState<string>();
+  const [actionError, setActionError] = useState<PortalError>();
   const [startAllResult, setStartAllResult] = useState<StartGroupRunsResult>();
   const [startingAllGroupId, setStartingAllGroupId] = useState<string>();
   const [focusSelectedGroupAfterDelete, setFocusSelectedGroupAfterDelete] = useState(false);
@@ -350,7 +350,7 @@ export function App({ client = api }: AppProps) {
       await operation();
       await refresh();
     } catch (cause) {
-      setActionError(cause instanceof Error ? cause.message : "The operation failed");
+      setActionError(toPortalError(cause, "The operation failed"));
       throw cause;
     } finally {
       setBusyAction(undefined);
@@ -463,14 +463,13 @@ export function App({ client = api }: AppProps) {
   if (status === "error") {
     return (
       <main className="portal-shell portal-state-shell">
-        <div className="loading-state error-state" role="alert">
-          <CircleAlert aria-hidden="true" size={24} />
+        <div className="loading-state error-state">
           <strong>
             {errorSource === "config"
               ? "Repository configuration unavailable"
               : "Portal state unavailable"}
           </strong>
-          <span>{error}</span>
+          {error !== undefined && <ErrorNotice error={error} className="portal-load-error" />}
           <button type="button" onClick={() => void refresh()}>
             <RefreshCw aria-hidden="true" size={16} />
             Retry
@@ -675,17 +674,11 @@ export function App({ client = api }: AppProps) {
         </div>
       </header>
       {actionError !== undefined && (
-        <div className="action-banner" role="alert">
-          <CircleAlert aria-hidden="true" size={16} />
-          <span>{actionError}</span>
-          <button
-            type="button"
-            aria-label="Dismiss error"
-            onClick={() => setActionError(undefined)}
-          >
-            <X aria-hidden="true" size={16} />
-          </button>
-        </div>
+        <ErrorNotice
+          className="action-banner"
+          error={actionError}
+          onDismiss={() => setActionError(undefined)}
+        />
       )}
       {startAllResult !== undefined && startAllResult.groupId === selectedGroupId && (
         <section className="start-all-results" role="status" aria-live="polite">
@@ -711,7 +704,19 @@ export function App({ client = api }: AppProps) {
                     outcome.memberId}
                 </span>
                 <strong>{outcome.status.replace("-", " ")}</strong>
-                {outcome.reason !== undefined && <small>{outcome.reason}</small>}
+                {outcome.status === "failed" && (
+                  <ErrorNotice
+                    announce={false}
+                    className="start-all-error"
+                    error={
+                      outcome.error ??
+                      portalErrorFromCode(
+                        outcome.reason ?? "run_start_failed",
+                        "The agent could not be started.",
+                      )
+                    }
+                  />
+                )}
               </li>
             ))}
           </ul>

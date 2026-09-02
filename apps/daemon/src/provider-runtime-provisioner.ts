@@ -30,6 +30,7 @@ import {
   type RepositoryLaunchManifest,
   RepositoryTrustService,
 } from "./repository-trust-service.js";
+import { DomainError } from "./store.js";
 import { UserCredentialBroker } from "./user-credential-broker.js";
 
 export interface ProviderIntegrationPolicy {
@@ -99,7 +100,12 @@ export class AgentRuntimeProvisioner {
     const evaluator = this.#evaluator(snapshot);
     const configuredCommand = Object.freeze([profile.command, ...profile.args]);
     if (!evaluator.matchesConfiguredCommand(configuredCommand)) {
-      throw new Error(`Configured command is not recognized by snapshot ${snapshot.digest}`);
+      throw new DomainError(
+        "provider_command_unrecognized",
+        "The configured command is not supported by the active provider",
+        409,
+        { configuredCommand, snapshotDigest: snapshot.digest },
+      );
     }
     const stateBinding = this.#states.resolve({
       membershipId: membership.id,

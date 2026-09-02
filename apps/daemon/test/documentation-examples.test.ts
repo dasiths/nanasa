@@ -21,6 +21,8 @@ import { ProviderStateRepository } from "../src/provider-state-repository.js";
 import { UserCredentialBroker } from "../src/user-credential-broker.js";
 
 const examplesRoot = fileURLToPath(new URL("../../../docs/next/examples/", import.meta.url));
+const productRoot = fileURLToPath(new URL("../../../", import.meta.url));
+const multiCodingAgentsRoot = join(productRoot, "examples", "multi-coding-agents");
 const temporaryDirectories: string[] = [];
 
 function temporaryGitRepository(): string {
@@ -151,6 +153,55 @@ describe("tested documentation examples", () => {
     ]) {
       expect(readFileSync(join(repository, reference), "utf8")).not.toMatch(/^---/);
     }
+  });
+
+  it("loads the nested multi-coding-agents example with scoped prompts", () => {
+    const loaded = loadNanasaConfig(multiCodingAgentsRoot);
+    const groupId = "grp_852f1819-0614-49b4-b193-71bf5e98becf";
+    const expectedRolePaths = {
+      "agent_318f514e-2347-4d87-8c64-aef0752e7bfb": ".nanasa/instructions/project-manager.md",
+      "agent_0ae65cd2-985d-498c-9399-0978bae77827": ".nanasa/instructions/implementor.md",
+      "agent_e0f1b592-5fb2-4fe2-93e4-ac9da40dedf1": ".nanasa/instructions/implementor.md",
+      "agent_9e2cdefb-cc96-4b4e-865f-b4ac17f6c4f9": ".nanasa/instructions/reviewer.md",
+    } as const;
+
+    expect(loaded.repoRoot).toBe(multiCodingAgentsRoot);
+    expect(loaded.config.integrations["claude-copilot"]?.command).toEqual([
+      "make",
+      "claude-copilot",
+    ]);
+    for (const [agentId, rolePath] of Object.entries(expectedRolePaths)) {
+      const prompt = resolveEffectiveAgentPrompt({
+        repoRoot: loaded.repoRoot,
+        config: loaded.config,
+        groupId,
+        agentId,
+      });
+      expect(prompt.sources).toEqual([
+        { scope: "builtin", reference: "builtin:nanasa-coordination-v1" },
+        { scope: "builtin", reference: "builtin:nanasa-assignment-v1" },
+        { scope: "global", reference: ".nanasa/instructions/nanasa-mcp.md" },
+        { scope: "global", reference: ".nanasa/instructions/team.md" },
+        { scope: "group", reference: ".nanasa/instructions/groups/agent-team.md" },
+        { scope: "role", reference: rolePath },
+      ]);
+    }
+
+    const reviewer =
+      loaded.config.groups[groupId]?.agents["agent_9e2cdefb-cc96-4b4e-865f-b4ac17f6c4f9"];
+    expect(reviewer?.name).toBe("Reviewer");
+    expect(loaded.config.roles[reviewer!.roleId!]?.permissionPolicy).toBe("read-only");
+
+    const trackedExampleFiles = execFileSync(
+      "git",
+      ["-C", productRoot, "ls-files", "--", "examples/multi-coding-agents/.nanasa"],
+      { encoding: "utf8" },
+    ).split("\n");
+    expect(
+      trackedExampleFiles.filter((path) =>
+        /\.nanasa\/(?:agents|backups|integrations|runtime|state)\//u.test(path),
+      ),
+    ).toEqual([]);
   });
 
   it.each([

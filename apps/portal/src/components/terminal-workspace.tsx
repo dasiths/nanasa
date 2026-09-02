@@ -22,6 +22,7 @@ import { type ReactNode, useEffect, useRef } from "react";
 
 import type { PortalClient } from "../api.js";
 import { copyToClipboard } from "../copy-to-clipboard.js";
+import { ErrorNotice } from "../errors.js";
 import {
   type TerminalColumnsPreference,
   usePortalPreferences,
@@ -77,7 +78,7 @@ function TerminalPane({
   const runRevision = `${run.generation}:${run.status}:${run.terminal?.paneId ?? "pending"}:${connectionRevision}`;
   const { status, loading, error, retry } = useTerminalEndpoint(client, run.id, runRevision);
   const endpointState = status?.state;
-  const detail = status?.error?.message ?? error;
+  const detail = status?.error?.message;
   const stateLabel =
     endpointState === undefined || endpointState === "ready"
       ? "Loading terminal"
@@ -183,7 +184,9 @@ function TerminalPane({
           </div>
           <div
             className="terminal-state"
-            role={endpointState === "unavailable" || error !== undefined ? "alert" : "status"}
+            {...(error === undefined
+              ? { role: endpointState === "unavailable" ? "alert" : "status" }
+              : {})}
           >
             {loading || endpointState === "starting" ? (
               <LoaderCircle className="spin" aria-hidden="true" size={22} />
@@ -191,7 +194,11 @@ function TerminalPane({
               <CircleAlert aria-hidden="true" size={22} />
             )}
             <strong>{stateLabel}</strong>
-            {detail !== undefined && <span>{detail}</span>}
+            {error !== undefined ? (
+              <ErrorNotice error={error} className="terminal-endpoint-error" />
+            ) : (
+              detail !== undefined && <span>{detail}</span>
+            )}
             {(endpointState === "unavailable" || error !== undefined) && (
               <button type="button" onClick={retry}>
                 <RefreshCw aria-hidden="true" size={15} />

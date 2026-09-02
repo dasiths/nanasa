@@ -2,11 +2,6 @@ import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
-import {
-  MAX_MESSAGE_REQUEST_BYTES,
-  MAX_MESSAGE_TEXT_BYTES,
-  OVERSIZED_MESSAGE_GUIDANCE,
-} from "@nanasa/contracts";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 import { AgentActionAckService } from "./actions/agent-action-ack-service.js";
 import { AgentActionScheduler } from "./actions/agent-action-scheduler.js";
@@ -40,6 +35,12 @@ import { GitStatusService } from "./git/git-status-service.js";
 import { RepositoryDiscoveryService } from "./git/repository-discovery-service.js";
 import { WorktreeService } from "./git/worktree-service.js";
 import { registerControlRouter } from "./http/control-router.js";
+import {
+  errorPayload,
+  hasErrorCode,
+  internalErrorPayload,
+  toPublicErrorResponse,
+} from "./http/error-response.js";
 import { matchControlRoute } from "./http/route-registry.js";
 import { resolveEffectiveAgentPrompt } from "./instruction-resolver.js";
 import { McpCredentialIssuer } from "./mcp-auth.js";
@@ -141,20 +142,6 @@ export interface DaemonContext {
   providerStates: ProviderStateRepository;
   nativeSessions: NativeSessionService;
   extensions: ProviderExtensionService;
-}
-
-interface ErrorWithIssues {
-  issues: unknown[];
-}
-
-function isValidationError(error: unknown): error is ErrorWithIssues {
-  return (
-    typeof error === "object" && error !== null && "issues" in error && Array.isArray(error.issues)
-  );
-}
-
-function hasErrorCode(error: unknown, code: string): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === code;
 }
 
 function requestPath(url: string): string {
@@ -463,58 +450,20 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     });
 
     app.setErrorHandler((error, request, reply) => {
-      if (error instanceof DomainError) {
-        return reply.status(error.statusCode).send({ code: error.code, message: error.message });
-      }
-      if (error instanceof ExtensionPackageError) {
-        const statusCode = error.code.includes("not_found")
-          ? 404
-          : error.code.includes("trust_required") || error.code.includes("signature_untrusted")
-            ? 403
-            : error.code.includes("stale") ||
-                error.code.includes("busy") ||
-                error.code.includes("active_runs") ||
-                error.code.includes("referenced")
-              ? 409
-              : 400;
-        return reply.status(statusCode).send({ code: error.code, message: error.message });
-      }
-      if (isValidationError(error)) {
-        const oversized = error.issues.some(
-          (issue) =>
-            typeof issue === "object" &&
-            issue !== null &&
-            "message" in issue &&
-            String(issue.message).includes(`${MAX_MESSAGE_TEXT_BYTES}-byte UTF-8 limit`),
-        );
-        if (oversized) {
-          return reply.status(413).send({
-            code: "message_body_too_large",
-            message: `Message text exceeds the ${MAX_MESSAGE_TEXT_BYTES}-byte UTF-8 limit. ${OVERSIZED_MESSAGE_GUIDANCE}`,
-          });
-        }
-        return reply.status(400).send({
-          code: "validation_error",
-          message: "Request validation failed",
-          issues: error.issues,
-        });
-      }
-      if (hasErrorCode(error, "FST_ERR_CTP_BODY_TOO_LARGE")) {
-        const payload = {
-          code: "request_too_large",
-          message: `Request exceeds the ${MAX_MESSAGE_REQUEST_BYTES}-byte message request limit. Message text is limited to ${MAX_MESSAGE_TEXT_BYTES} UTF-8 bytes. ${OVERSIZED_MESSAGE_GUIDANCE}`,
-        };
-        if (request.url === mcpPath) {
-          return reply.status(413).send({
+      const publicError = toPublicErrorResponse(error);
+      if (publicError !== undefined) {
+        const { statusCode, payload } = publicError;
+        if (request.url === mcpPath && hasErrorCode(error, "FST_ERR_CTP_BODY_TOO_LARGE")) {
+          return reply.status(statusCode).send({
             jsonrpc: "2.0",
             error: { code: -32_000, message: payload.message },
             id: null,
           });
         }
-        return reply.status(413).send(payload);
+        return reply.status(statusCode).send(payload);
       }
       request.log.error(error);
-      return reply.status(500).send({ code: "internal_error", message: "Internal server error" });
+      return reply.status(500).send(internalErrorPayload());
     });
 
     app.addHook("preClose", async () => {
@@ -659,7 +608,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         ) {
           return reply.sendFile("index.html", { cacheControl: false });
         }
-        return reply.status(404).send({ code: "not_found", message: "Route not found" });
+        return reply.status(404).send(errorPayload("not_found", "Route not found"));
       });
     }
 

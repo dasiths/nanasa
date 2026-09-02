@@ -1,8 +1,10 @@
 import {
   ControlMetadataSchema,
+  ErrorPayloadSchema,
   EventServerFrameSchema,
   OperatorSessionSchema,
   type ControlMetadata,
+  type ErrorPayload,
   type EventServerFrame,
   type OperatorSession,
 } from "@nanasa/contracts";
@@ -25,14 +27,24 @@ export interface Schema<T> {
 }
 
 export class ControlClientError extends Error {
+  public readonly code: string;
+  public readonly details: ErrorPayload["details"];
+
   public constructor(
     message: string,
     public readonly status: number,
-    public readonly code?: string,
+    code = "control_request_failed",
     public readonly payload?: unknown,
+    details: ErrorPayload["details"] = {},
   ) {
     super(message);
     this.name = "ControlClientError";
+    this.code = code;
+    this.details = details;
+  }
+
+  public toPayload(): ErrorPayload {
+    return { message: this.message, details: this.details, code: this.code };
   }
 }
 
@@ -45,20 +57,27 @@ export interface ControlClientOptions {
   operatorToken?: string;
 }
 
-function errorFields(payload: unknown): { code?: string; message?: string } {
-  if (typeof payload !== "object" || payload === null) return {};
-  if ("error" in payload && typeof payload.error === "object" && payload.error !== null) {
-    const error = payload.error as Record<string, unknown>;
-    return {
-      ...(typeof error.code === "string" ? { code: error.code } : {}),
-      ...(typeof error.message === "string" ? { message: error.message } : {}),
-    };
+function errorPayloadFromResponse(payload: unknown, fallbackMessage: string): ErrorPayload {
+  const parsed = ErrorPayloadSchema.safeParse(payload);
+  if (parsed.success) return parsed.data;
+  if (typeof payload === "object" && payload !== null) {
+    const value = payload as Record<string, unknown>;
+    const candidate =
+      typeof value.error === "object" && value.error !== null
+        ? (value.error as Record<string, unknown>)
+        : value;
+    const legacy = ErrorPayloadSchema.safeParse({
+      message: candidate.message,
+      code: candidate.code,
+      details:
+        candidate.details ?? (Array.isArray(value.issues) ? { issues: value.issues } : undefined),
+    });
+    if (legacy.success) return legacy.data;
   }
-  const value = payload as Record<string, unknown>;
-  return {
-    ...(typeof value.code === "string" ? { code: value.code } : {}),
-    ...(typeof value.message === "string" ? { message: value.message } : {}),
-  };
+  return ErrorPayloadSchema.parse({
+    message: fallbackMessage,
+    code: "control_request_failed",
+  });
 }
 
 export class NanasaControlClient {
@@ -116,12 +135,16 @@ export class NanasaControlClient {
     const response = await this.#fetch(this.#url(path), init);
     const payload: unknown = response.status === 204 ? undefined : await response.json();
     if (!response.ok) {
-      const fields = errorFields(payload);
-      throw new ControlClientError(
-        fields.message ?? `Request failed with status ${response.status}`,
-        response.status,
-        fields.code,
+      const error = errorPayloadFromResponse(
         payload,
+        `Request failed with status ${response.status}`,
+      );
+      throw new ControlClientError(
+        error.message,
+        response.status,
+        error.code,
+        payload,
+        error.details,
       );
     }
     return schema.parse(payload);
@@ -132,12 +155,16 @@ export class NanasaControlClient {
     const response = await this.#fetch(this.#url(path), this.#authorizedInit(init, true));
     if (response.ok) return;
     const payload: unknown = await response.json();
-    const fields = errorFields(payload);
-    throw new ControlClientError(
-      fields.message ?? `Request failed with status ${response.status}`,
-      response.status,
-      fields.code,
+    const error = errorPayloadFromResponse(
       payload,
+      `Request failed with status ${response.status}`,
+    );
+    throw new ControlClientError(
+      error.message,
+      response.status,
+      error.code,
+      payload,
+      error.details,
     );
   }
 
@@ -176,11 +203,13 @@ export class NanasaControlClient {
     );
     const payload: unknown = await response.json();
     if (!response.ok) {
-      const fields = errorFields(payload);
+      const error = errorPayloadFromResponse(payload, "Unable to establish an operator session");
       throw new ControlClientError(
-        fields.message ?? "Unable to establish an operator session",
+        error.message,
         response.status,
-        fields.code,
+        error.code,
+        payload,
+        error.details,
       );
     }
     const session = OperatorSessionSchema.parse(payload);

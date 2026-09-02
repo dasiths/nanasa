@@ -324,7 +324,16 @@ describe("RunRuntimeCoordinator", () => {
       expect(first.outcomes).toMatchObject([
         { memberId: "alpha", status: "already-running", runId: "run-alpha" },
         { memberId: "beta", status: "started", runId: "run-beta" },
-        { memberId: "gamma", status: "failed", reason: "launch_failed" },
+        {
+          memberId: "gamma",
+          status: "failed",
+          reason: "launch_failed",
+          error: {
+            message: "The agent could not be started",
+            details: {},
+            code: "launch_failed",
+          },
+        },
       ]);
       expect(runtime.startRun).toHaveBeenCalledTimes(2);
       expect(store.recordGroupStartAllResult).toHaveBeenCalledTimes(1);

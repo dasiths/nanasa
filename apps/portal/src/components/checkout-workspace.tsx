@@ -2,6 +2,7 @@ import type { NanasaConfig, PortalSnapshot } from "@nanasa/contracts";
 import { GitBranch, RefreshCw, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import type { PortalClient } from "../api.js";
+import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 
 export function CheckoutWorkspace({
   client,
@@ -22,7 +23,7 @@ export function CheckoutWorkspace({
   const [base, setBase] = useState("HEAD");
   const [openPath, setOpenPath] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   const [forceWorktreeId, setForceWorktreeId] = useState<string>();
 
   const execute = async (operation: () => Promise<unknown>) => {
@@ -32,7 +33,7 @@ export function CheckoutWorkspace({
       await operation();
       await onChanged();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Git operation failed");
+      setError(toPortalError(cause, "Git operation failed"));
       throw cause;
     } finally {
       setBusy(false);
@@ -242,11 +243,7 @@ export function CheckoutWorkspace({
           <RefreshCw className="spin" aria-hidden="true" size={14} /> Git operation in progress
         </p>
       )}
-      {error !== undefined && (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      )}
+      {error !== undefined && <ErrorNotice error={error} className="form-error" />}
     </div>
   );
 }
