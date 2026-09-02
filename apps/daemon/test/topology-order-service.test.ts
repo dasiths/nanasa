@@ -8,7 +8,7 @@ import { GitCommandAdapter } from "../src/git/git-command-adapter.js";
 import { GitStatusService } from "../src/git/git-status-service.js";
 import { RepositoryDiscoveryService } from "../src/git/repository-discovery-service.js";
 import { ConfigRepository } from "../src/config-repository.js";
-import { loadNanasaConfig } from "../src/config-v2.js";
+import { loadNanasaConfig } from "../src/config-loader.js";
 import { NanasaStore } from "../src/store.js";
 import { TopologyOrderService } from "../src/topology-order-service.js";
 

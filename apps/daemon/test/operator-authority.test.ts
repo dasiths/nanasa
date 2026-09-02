@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadNanasaConfig } from "../src/config-v2.js";
+import { loadNanasaConfig } from "../src/config-loader.js";
 import { OperatorAuth } from "../src/operator-auth.js";
 import { createDaemon } from "../src/server.js";
 

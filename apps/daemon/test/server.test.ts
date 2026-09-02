@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { MAX_MESSAGE_TEXT_BYTES } from "@nanasa/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { loadNanasaConfig } from "../src/config-v2.js";
+import { loadNanasaConfig } from "../src/config-loader.js";
 import { createDaemon as createDaemonBase, type DaemonOptions } from "../src/server.js";
 
 const temporaryDirectories: string[] = [];

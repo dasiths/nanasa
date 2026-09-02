@@ -30,7 +30,28 @@ import {
 } from "./hooks/use-portal-preferences.js";
 
 vi.mock("./components/terminal-workspace.js", () => ({
-  TerminalWorkspace: () => <div data-testid="terminal-surface">terminal-surface</div>,
+  TerminalWorkspace: ({
+    members,
+    runs,
+    onSetFocusedRun,
+  }: {
+    members: GroupMembership[];
+    runs: AgentRun[];
+    onSetFocusedRun(runId: string | undefined): void;
+  }) => (
+    <div data-testid="terminal-surface">
+      terminal-surface
+      {runs.map((run) => {
+        const alias =
+          members.find((member) => member.memberId === run.memberId)?.alias ?? run.memberId;
+        return (
+          <button type="button" key={run.id} onClick={() => onSetFocusedRun(run.id)}>
+            Focus {alias} terminal
+          </button>
+        );
+      })}
+    </div>
+  ),
 }));
 
 const timestamp = "2026-08-09T12:00:00.000Z";
@@ -922,53 +943,38 @@ describe("portal application", () => {
 
   it.each([
     {
-      name: "tab active run",
-      terminalLayout: "tabs" as const,
+      name: "canvas secondary pane",
       activeRunId: "run-builder",
-      maximizedRunId: undefined,
-      completionMember: memberships[0]!,
-      expectedToast: false,
-    },
-    {
-      name: "grid secondary pane",
-      terminalLayout: "grid" as const,
-      activeRunId: "run-builder",
-      maximizedRunId: undefined,
+      focusAlias: undefined,
       completionMember: memberships[1]!,
       expectedToast: false,
     },
     {
-      name: "maximized grid pane",
-      terminalLayout: "grid" as const,
+      name: "focused completion pane",
       activeRunId: "run-builder",
-      maximizedRunId: "run-reviewer",
+      focusAlias: "Reviewer",
       completionMember: memberships[1]!,
       expectedToast: false,
     },
     {
-      name: "run hidden behind a maximized grid pane",
-      terminalLayout: "grid" as const,
+      name: "run hidden by Focus mode",
       activeRunId: "run-builder",
-      maximizedRunId: "run-builder",
+      focusAlias: "Builder",
       completionMember: memberships[1]!,
       expectedToast: true,
     },
   ])(
     "uses actual terminal visibility for a completion on the $name",
-    async ({ terminalLayout, activeRunId, maximizedRunId, completionMember, expectedToast }) => {
+    async ({ activeRunId, focusAlias, completionMember, expectedToast }) => {
       window.history.replaceState({}, "", "/groups/group-backend/terminals");
       window.localStorage.setItem(
         PORTAL_PREFERENCES_KEY,
         JSON.stringify({
           ...defaultPortalPreferences,
-          terminalLayout,
           activeRunByGroup: { "group-backend": activeRunId },
           completionNotificationMemberIdsByGroup: {
             "group-backend": [completionMember.memberId],
           },
-          ...(maximizedRunId === undefined
-            ? {}
-            : { maximizedRunByGroup: { "group-backend": maximizedRunId } }),
         }),
       );
       const client = createClient();
@@ -977,6 +983,12 @@ describe("portal application", () => {
         .mockResolvedValue(backendCompletionSnapshot(completionMember, 8));
       render(<App client={client} />);
       await screen.findByRole("heading", { name: "Backend" });
+      if (focusAlias !== undefined) {
+        fireEvent.click(
+          await screen.findByRole("button", { name: `Focus ${focusAlias} terminal` }),
+        );
+        await screen.findByRole("button", { name: "All terminals" });
+      }
       await waitFor(() => expect(client.createEventsSocket).toHaveBeenCalled());
       const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
       await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
@@ -1626,6 +1638,7 @@ describe("portal application", () => {
 
   it("renders semantic status, progress context, and attention independently of run controls", async () => {
     const user = userEvent.setup();
+    const onSelectTerminal = vi.fn();
     const run: AgentRun = {
       id: "run-waiting",
       groupId: "group-backend",
@@ -1681,6 +1694,7 @@ describe("portal application", () => {
         selectedGroupId="group-backend"
         unreadCounts={new Map()}
         onSelectGroup={vi.fn()}
+        onSelectTerminal={onSelectTerminal}
         onCreateGroup={vi.fn()}
         onRenameGroup={vi.fn()}
         onDeleteGroup={vi.fn()}
@@ -1699,6 +1713,12 @@ describe("portal application", () => {
         name: "View details for Builder, status Needs approval",
       }),
     ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open terminal for Builder, status Needs approval",
+      }),
+    );
+    expect(onSelectTerminal).toHaveBeenCalledWith("group-backend", "run-waiting");
     await user.click(screen.getByRole("button", { name: "Actions for agent Builder" }));
     expect(
       within(screen.getByRole("menu", { name: "Actions for agent Builder" })).getByRole(
@@ -1928,7 +1948,7 @@ describe("portal application", () => {
     window.dispatchEvent(
       new StorageEvent("storage", {
         key: PORTAL_PREFERENCES_KEY,
-        newValue: JSON.stringify({ version: 2, theme: "light", terminalLayout: "grid" }),
+        newValue: JSON.stringify({ version: 2, theme: "light" }),
       }),
     );
     await waitFor(() =>
@@ -1938,6 +1958,20 @@ describe("portal application", () => {
       ),
     );
     await waitFor(() => expect(document.documentElement).toHaveAttribute("data-theme", "light"));
+  });
+
+  it("persists terminal columns from the group navigation row", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState({}, "", "/groups/group-backend/terminals");
+    render(<App client={createClient()} />);
+    await screen.findByRole("heading", { name: "Backend" });
+
+    const columns = screen.getByRole("button", { name: "3 terminal columns" });
+    await user.click(columns);
+    await waitFor(() => expect(columns).toHaveAttribute("aria-pressed", "true"));
+    expect(JSON.parse(window.localStorage.getItem(PORTAL_PREFERENCES_KEY) ?? "{}")).toMatchObject({
+      terminalColumnsByGroup: { "group-backend": 3 },
+    });
   });
 
   it("separates group, repository, system, and mobile navigation", async () => {

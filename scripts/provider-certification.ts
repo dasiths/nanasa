@@ -12,7 +12,7 @@ import {
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { loadNanasaConfig } from "../apps/daemon/src/config-v2.js";
+import { loadNanasaConfig } from "../apps/daemon/src/config-loader.js";
 import { ProviderAdapterRegistry } from "../apps/daemon/src/providers/provider-adapter-registry.js";
 import { createDaemon } from "../apps/daemon/src/server.js";
 import {

@@ -59,8 +59,6 @@ test("graceful daemon restart reconnects the portal and preserves tmux panes", a
     expect(endpoint.streamUrl).toBe(original!.endpointPath);
     expect(nanasa.capturePane(recovered!.terminal!.paneId)).toContain("SAFE_ECHO_READY:");
   }
-  await expect(page.getByRole("tab", { name: /Survivor/ })).toHaveCount(2);
-  await page.getByRole("button", { name: "Grid terminal layout" }).click();
   await expect(page.getByRole("region", { name: /terminal$/ })).toHaveCount(2);
 
   for (const member of members) {

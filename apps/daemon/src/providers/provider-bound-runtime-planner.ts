@@ -5,7 +5,6 @@ import {
   type RunProviderLaunchSelection,
   RunProviderLaunchSelectionSchema,
 } from "@nanasa/contracts";
-import type { GeneratedOverlayFile } from "./provider-runtime-types.js";
 import {
   ProviderOverlayRepository,
   type RecoveredProviderOverlay,
@@ -15,6 +14,7 @@ import {
   ProviderRunBindingRepository,
   type RecoveredRunProviderBinding,
 } from "./provider-run-binding-repository.js";
+import type { GeneratedOverlayFile } from "./provider-runtime-types.js";
 import {
   ProviderSnapshotEvaluator,
   type ProviderSnapshotEvaluatorOptions,

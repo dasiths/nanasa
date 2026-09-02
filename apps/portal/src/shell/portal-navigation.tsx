@@ -219,12 +219,14 @@ export function GroupNavigation({
   route,
   unreadCount,
   attentionCount,
+  actions,
   onLink,
 }: {
   group: Group;
   route: PortalRoute;
   unreadCount: number;
   attentionCount: number;
+  actions?: ReactNode;
   onLink: PortalLinkHandler;
 }) {
   return (
@@ -261,6 +263,7 @@ export function GroupNavigation({
           </a>
         );
       })}
+      {actions !== undefined && <div className="route-navigation-actions">{actions}</div>}
     </nav>
   );
 }

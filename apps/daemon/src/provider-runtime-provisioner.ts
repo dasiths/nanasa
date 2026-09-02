@@ -13,7 +13,7 @@ import type {
 } from "@nanasa/contracts";
 import { AgentKindSchema } from "@nanasa/contracts";
 import type { EffectiveAgentPrompt } from "./instruction-resolver.js";
-import { providerOverlayBindingId, ProviderStateRepository } from "./provider-state-repository.js";
+import { ProviderStateRepository, providerOverlayBindingId } from "./provider-state-repository.js";
 import {
   ProviderBoundRuntimePlanner,
   type RecoveredProviderRuntime,

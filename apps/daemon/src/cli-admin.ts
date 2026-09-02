@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync } from "node:fs";
 import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { IntegrationConfig } from "@nanasa/contracts";
-import { loadNanasaConfig } from "./config-v2.js";
+import { loadNanasaConfig } from "./config-loader.js";
 import {
   formatRedactedResetInventory,
   inventoryAlphaResources,

@@ -1,0 +1,21 @@
+version: 2
+repository:
+  path: .
+  checkout: { kind: current }
+integrations:
+  claude-code:
+    name: Claude Code
+    kind: claude-code
+    command: [claude]
+    providerState:
+      scope: custom
+      path: team-homes/{integrationId}/{agentId}
+    credentials: { kind: provider-managed }
+groups:
+  auth-example:
+    name: Custom state example
+    agents:
+      agent_reviewer:
+        memberId: claude.reviewer
+        name: Reviewer
+        integrationId: claude-code

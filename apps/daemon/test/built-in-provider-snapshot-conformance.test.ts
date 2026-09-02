@@ -11,6 +11,7 @@ import {
   type TrustedBuiltInProviderPackage,
 } from "../src/providers/builtin-provider-packages.js";
 import { ProviderRuntimeIndex } from "../src/providers/provider-runtime-index.js";
+import { resolveBuiltInProviderEvaluatorOptions } from "../src/providers/provider-runtime-assets.js";
 import { ProviderSnapshotEvaluator } from "../src/providers/provider-snapshot-evaluator.js";
 import { ProviderSnapshotRepository } from "../src/providers/provider-snapshot-repository.js";
 import { providerStatusPolicy } from "../src/providers/provider-status-policy.js";
@@ -280,6 +281,17 @@ describe("built-in provider snapshot conformance", () => {
         overlayContext("pi"),
       ),
     ).toThrow(/runtime asset path is unavailable/);
+    const evaluatorOptions = resolveBuiltInProviderEvaluatorOptions(
+      subjects.map((subject) => subject.package),
+      (packageName) => `/runtime/${packageName}/index.ts`,
+    );
+    expect(
+      new ProviderSnapshotEvaluator(
+        pi.package.resolved,
+        pi.package.reporterDrivers,
+        evaluatorOptions,
+      ).planOverlay(overlayContext("pi")).commandArguments,
+    ).toEqual(expect.arrayContaining(["--extension", PI_MCP_ADAPTER_PATH]));
   });
 
   it("publishes provider-specific reporter and Herdr-adapted status policies as immutable data", () => {

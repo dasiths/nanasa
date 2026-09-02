@@ -1,10 +1,4 @@
----
-title: Nanasa portal
-description: Development and production build notes for the Nanasa operational portal
-author: Nanasa
-ms.date: 2026-08-31
-ms.topic: reference
----
+# Nanasa portal development
 
 ## Development
 

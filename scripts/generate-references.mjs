@@ -14,6 +14,9 @@ const { CONTROL_ROUTE_REGISTRY } = await import(
 const { CLI_COMMAND_REGISTRY } = await import(
   join(root, "apps", "daemon", "dist", "cli", "command-registry.js")
 );
+const { AuthoredNanasaConfigSchema } = await import(
+  join(root, "apps", "daemon", "dist", "config-loader.js")
+);
 const { MCP_TOOL_REGISTRY } = await import(
   join(root, "apps", "daemon", "dist", "mcp", "tool-registry.js")
 );
@@ -26,7 +29,7 @@ const { generatedOfflineHelp } = await import(
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
 const header = { generatorVersion: 1, packageVersion: packageJson.version };
-const schema = (value) => z.toJSONSchema(value, { unrepresentable: "any" });
+const schema = (value, io = "output") => z.toJSONSchema(value, { io, unrepresentable: "any" });
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
 const openApiPaths = {};
 for (const route of CONTROL_ROUTE_REGISTRY) {
@@ -48,7 +51,7 @@ const references = {
   "config.schema.json": {
     ...header,
     schemaVersion: contracts.CONFIG_VERSION,
-    schema: schema(contracts.NanasaConfigSchema),
+    schema: schema(AuthoredNanasaConfigSchema, "input"),
   },
   "openapi.json": {
     openapi: "3.1.0",

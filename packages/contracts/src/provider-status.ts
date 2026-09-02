@@ -1,10 +1,10 @@
 import { z } from "zod";
 import {
   AdapterIdSchema,
-  ProviderIntegrationIdSchema,
   ProcessIncarnationDigestSchema,
   ProviderAuthorityFenceSchema,
   ProviderIdSchema,
+  ProviderIntegrationIdSchema,
   ReporterSourceIdSchema,
   SnapshotDigestSchema,
   StatusPolicyDigestSchema,

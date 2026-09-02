@@ -8,7 +8,7 @@ import {
   discoverRepositoryRoot,
   loadNanasaConfig,
   nanasaPaths,
-} from "../src/config-v2.js";
+} from "../src/config-loader.js";
 import { resolveEffectiveAgentPrompt } from "../src/instruction-resolver.js";
 
 const temporaryDirectories: string[] = [];

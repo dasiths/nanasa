@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ConfiguredAgentIdSchema, IdentifierSchema, RoleIdSchema } from "./control.js";
+import { ExtensionIdSchema, SemanticVersionSchema } from "./extensions.js";
 import {
   AgentKindSchema,
   CredentialProfileReferenceSchema,
@@ -8,7 +9,6 @@ import {
   NativeRecoveryPolicySchema,
   ProviderStatePolicySchema,
 } from "./provider.js";
-import { ExtensionIdSchema, SemanticVersionSchema } from "./extensions.js";
 
 export const CONFIG_VERSION = 2 as const;
 export const DEFAULT_MESSAGE_RETENTION_PER_GROUP = 1_000;

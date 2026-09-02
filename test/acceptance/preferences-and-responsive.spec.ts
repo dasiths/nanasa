@@ -1,6 +1,6 @@
 import { expect, test } from "./fixtures/package-fixture.js";
 
-test("theme and terminal layout persist and synchronize across tabs", async ({
+test("theme and terminal columns persist and synchronize across tabs", async ({
   context,
   page,
   nanasa,
@@ -16,12 +16,12 @@ test("theme and terminal layout persist and synchronize across tabs", async ({
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(secondPage.locator("html")).toHaveAttribute("data-theme", "dark");
 
-  await page.getByRole("button", { name: "Grid terminal layout" }).click();
-  await expect(page.getByRole("button", { name: "Grid terminal layout" })).toHaveAttribute(
+  await page.getByRole("button", { name: "2 terminal columns" }).click();
+  await expect(page.getByRole("button", { name: "2 terminal columns" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
-  await expect(secondPage.getByRole("button", { name: "Grid terminal layout" })).toHaveAttribute(
+  await expect(secondPage.getByRole("button", { name: "2 terminal columns" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
@@ -39,14 +39,14 @@ test("theme and terminal layout persist and synchronize across tabs", async ({
     "true",
   );
   await Promise.all([
-    page.getByRole("slider", { name: "Terminal split ratio" }).fill("65"),
-    secondPage.getByRole("button", { name: "Maximize One terminal" }).click(),
+    page.getByRole("button", { name: "3 terminal columns" }).click(),
+    secondPage.getByRole("button", { name: "Focus One terminal" }).click(),
   ]);
   await expect(page.getByRole("button", { name: "Unpin One terminal" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
-  await expect(page.getByRole("button", { name: "Restore One terminal" })).toHaveAttribute(
+  await expect(page.getByRole("button", { name: "3 terminal columns" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
@@ -58,15 +58,11 @@ test("theme and terminal layout persist and synchronize across tabs", async ({
       return Object.values(stored.pinnedRunIdsByGroup ?? {})[0]?.length;
     }),
   ).toBe(2);
-  await expect(page.getByRole("slider", { name: "Terminal split ratio" })).toHaveValue("65");
-  await expect(secondPage.getByRole("button", { name: "Restore One terminal" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  await expect(secondPage.getByRole("button", { name: "All terminals" })).toBeVisible();
 
   await secondPage.reload();
   await expect(secondPage.locator("html")).toHaveAttribute("data-theme", "dark");
-  await expect(secondPage.getByRole("button", { name: "Grid terminal layout" })).toHaveAttribute(
+  await expect(secondPage.getByRole("button", { name: "3 terminal columns" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
@@ -74,7 +70,7 @@ test("theme and terminal layout persist and synchronize across tabs", async ({
     "aria-pressed",
     "true",
   );
-  await expect(secondPage.getByRole("slider", { name: "Terminal split ratio" })).toHaveValue("65");
+  await expect(secondPage.getByRole("button", { name: "All terminals" })).toHaveCount(0);
 });
 
 test("desktop and mobile layouts remain usable without horizontal overflow", async ({
@@ -154,16 +150,26 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
 
   const memberRow = page.locator(".member-row").filter({ hasText: "Narrow" });
   const memberLabelBounds = await memberRow
+    .getByRole("button", { name: "Open terminal for Narrow" })
+    .boundingBox();
+  const memberInfoBounds = await memberRow
     .getByRole("button", { name: "View details for Narrow" })
     .boundingBox();
   const memberActionBounds = await memberRow
     .getByRole("button", { name: "Actions for agent Narrow" })
     .boundingBox();
   expect(memberLabelBounds).not.toBeNull();
+  expect(memberInfoBounds).not.toBeNull();
   expect(memberActionBounds).not.toBeNull();
-  expect(memberLabelBounds!.x + memberLabelBounds!.width).toBeLessThanOrEqual(
-    memberActionBounds!.x,
-  );
+  expect(memberLabelBounds!.x + memberLabelBounds!.width).toBeLessThanOrEqual(memberInfoBounds!.x);
+  expect(memberInfoBounds!.x + memberInfoBounds!.width).toBeLessThanOrEqual(memberActionBounds!.x);
+  expect(
+    Math.abs(
+      groupActionBounds!.x +
+        groupActionBounds!.width -
+        (memberActionBounds!.x + memberActionBounds!.width),
+    ),
+  ).toBeLessThanOrEqual(1);
 
   await memberRow.getByRole("button", { name: "View details for Narrow" }).click();
   const details = page.getByRole("dialog", { name: "Agent details for Narrow" });

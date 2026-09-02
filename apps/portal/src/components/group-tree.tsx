@@ -24,6 +24,7 @@ import {
   CircleStop,
   Copy,
   EllipsisVertical,
+  Info,
   MailWarning,
   MoveRight,
   Palette,
@@ -69,6 +70,7 @@ interface GroupTreeProps {
   unreadCounts: ReadonlyMap<string, number>;
   busyAction?: string;
   onSelectGroup(groupId: string): void;
+  onSelectTerminal?(groupId: string, runId?: string): void;
   onOpenMessages?(groupId: string): void;
   onCreateGroup(name: string, instructions: string[]): Promise<void>;
   onRenameGroup(groupId: string, name: string): Promise<void>;
@@ -1060,6 +1062,7 @@ export function GroupTree({
   selectedGroupId,
   busyAction,
   onSelectGroup,
+  onSelectTerminal,
   onOpenMessages,
   onCreateGroup,
   onRenameGroup,
@@ -1414,17 +1417,14 @@ export function GroupTree({
                           />
                         ) : (
                           <button
-                            id={`member-status-trigger-${member.id}`}
                             type="button"
                             className="member-select"
-                            aria-label={`View details for ${agent.name}, status ${statusLabel}`}
-                            aria-haspopup="dialog"
-                            aria-expanded={popoverVisible}
-                            aria-controls={popoverVisible ? popoverId : undefined}
-                            onClick={(event) => {
-                              onSelectGroup(group.id);
-                              toggleStatusPopover(member.id, event.currentTarget);
-                            }}
+                            aria-label={`Open terminal for ${agent.name}, status ${statusLabel}`}
+                            onClick={() =>
+                              onSelectTerminal === undefined
+                                ? onSelectGroup(group.id)
+                                : onSelectTerminal(group.id, run?.id)
+                            }
                           >
                             <span>{agent.name}</span>
                             <RoleIdentity role={role} />
@@ -1435,6 +1435,19 @@ export function GroupTree({
                             </small>
                           </button>
                         )}
+                        <button
+                          id={`member-status-trigger-${member.id}`}
+                          type="button"
+                          className="icon-button member-info-button"
+                          aria-label={`View details for ${agent.name}, status ${statusLabel}`}
+                          aria-haspopup="dialog"
+                          aria-expanded={popoverVisible}
+                          aria-controls={popoverVisible ? popoverId : undefined}
+                          title={`View details for ${agent.name}`}
+                          onClick={(event) => toggleStatusPopover(member.id, event.currentTarget)}
+                        >
+                          <Info aria-hidden="true" size={15} />
+                        </button>
                         {popoverVisible &&
                           createPortal(
                             <div

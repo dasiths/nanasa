@@ -2,12 +2,12 @@ import { createHash } from "node:crypto";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { OpenWaitReply } from "@nanasa/contracts";
 import type { EffectiveAgentPrompt } from "../instruction-resolver.js";
+import type { ProviderReporterDriverRegistry } from "./provider-reporter-driver-registry.js";
 import type {
   GeneratedOverlayFile,
   ProviderOverlayContext,
   ProviderOverlayPlan,
 } from "./provider-runtime-types.js";
-import type { ProviderReporterDriverRegistry } from "./provider-reporter-driver-registry.js";
 import type { ResolvedProviderAdapter } from "./resolved-provider-adapter.js";
 
 interface Matcher {

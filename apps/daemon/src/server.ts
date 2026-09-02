@@ -20,7 +20,7 @@ import { registerAgentStatusRoutes } from "./agent-status-routes.js";
 import { AgentStatusService } from "./agent-status-service.js";
 import { AuthorityPolicy } from "./authority-policy.js";
 import { ConfigRepository } from "./config-repository.js";
-import { discoverAndLoadNanasaConfig, type LoadedNanasaConfig } from "./config-v2.js";
+import { discoverAndLoadNanasaConfig, type LoadedNanasaConfig } from "./config-loader.js";
 import { DaemonInstanceGuard } from "./daemon-instance-guard.js";
 import { DaemonLifecycle } from "./daemon-lifecycle.js";
 import { DeliveryDispatcher } from "./delivery-dispatcher.js";
@@ -61,6 +61,7 @@ import { ProviderBoundRuntimePlanner } from "./providers/provider-bound-runtime-
 import { ProviderOverlayRepository } from "./providers/provider-overlay-repository.js";
 import { ProviderRunBindingRepository } from "./providers/provider-run-binding-repository.js";
 import { ProviderRuntimeIndex } from "./providers/provider-runtime-index.js";
+import { resolveBuiltInProviderEvaluatorOptions } from "./providers/provider-runtime-assets.js";
 import { ProviderSnapshotRepository } from "./providers/provider-snapshot-repository.js";
 import { ActivationService } from "./release/activation-service.js";
 import { createRemoteDescriptorFromMetadata } from "./remote/remote-descriptor.js";
@@ -294,14 +295,16 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     extensions.initializeBuiltIns();
     const providerSnapshots = new ProviderSnapshotRepository(store.database);
     const providerRuntimeIndex = new ProviderRuntimeIndex(store.database, providerSnapshots);
-    for (const buildPackage of [
-      buildTrustedBuiltinCopilotPackage,
-      buildTrustedBuiltinPiPackage,
-      buildTrustedBuiltinOpenCodePackage,
-      buildTrustedBuiltinClaudeCodePackage,
-    ]) {
-      await providerRuntimeIndex.registerTrustedBuiltin(await buildPackage());
+    const builtInProviderPackages = await Promise.all([
+      buildTrustedBuiltinCopilotPackage(),
+      buildTrustedBuiltinPiPackage(),
+      buildTrustedBuiltinOpenCodePackage(),
+      buildTrustedBuiltinClaudeCodePackage(),
+    ]);
+    for (const builtInProviderPackage of builtInProviderPackages) {
+      await providerRuntimeIndex.registerTrustedBuiltin(builtInProviderPackage);
     }
+    const evaluatorOptions = resolveBuiltInProviderEvaluatorOptions(builtInProviderPackages);
     const providerBindings = new ProviderRunBindingRepository(
       store.database,
       providerRuntimeIndex,
@@ -316,6 +319,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     const providerRuntimePlanner = new ProviderBoundRuntimePlanner(
       providerBindings,
       providerOverlays,
+      evaluatorOptions,
     );
     const credentialBroker = new UserCredentialBroker();
     const repositoryTrust = new RepositoryTrustService(store);
@@ -344,6 +348,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       repositoryIdentity,
       planner: providerRuntimePlanner,
       bindings: providerBindings,
+      evaluatorOptions,
       stateRepository: providerStates,
       credentialBroker,
       trustService: repositoryTrust,

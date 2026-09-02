@@ -12,17 +12,19 @@ function usage() {
   return `Usage: nanasa [start] [options]
        nanasa init
        nanasa setup
-  nanasa doctor
-  nanasa auth login <integration> [--agent <agent-id>]
-  nanasa auth portal
-      nanasa reset --from-alpha --confirm <repository-root>
-  nanasa <family> <command> [arguments] [--body <json>]
+       nanasa doctor
+       nanasa docs
+       nanasa auth login <integration> [--agent <agent-id>]
+       nanasa auth portal
+         nanasa reset --from-alpha --confirm <repository-root>
+         nanasa <family> <command> [arguments] [--body <json>]
 
 Commands:
   start              Start the daemon and portal (default)
   init               Create .nanasa/config.yaml when absent
   setup              Prepare repository-local integration configuration homes
   doctor             Validate configuration, commands, and integration homes
+  docs               Print the absolute path to the packaged documentation index
   auth               Authenticate locally or inspect daemon auth state
   reset              Back up and destructively reset alpha config, state, and owned runtimes
 
@@ -156,6 +158,12 @@ function packageBuild() {
   return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : undefined;
 }
 
+function documentationIndex() {
+  const path = join(packageRoot, "dist", "help", "index.md");
+  if (!existsSync(path)) throw new Error("Packaged documentation is missing");
+  return path;
+}
+
 async function start(startPath, args) {
   const repositoryRoot = findConfigRoot(startPath);
   if (repositoryRoot === undefined) {
@@ -211,6 +219,11 @@ export async function main(args = process.argv.slice(2), startPath = process.cwd
   if (command === "init") {
     if (rest.length > 0) throw new UsageError("nanasa init does not accept options");
     initialize(startPath);
+    return;
+  }
+  if (command === "docs") {
+    if (rest.length > 0) throw new UsageError("nanasa docs does not accept options");
+    process.stdout.write(`${documentationIndex()}\n`);
     return;
   }
   if (["setup", "reset"].includes(command)) {

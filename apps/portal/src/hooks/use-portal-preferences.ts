@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 export type ThemePreference = "light" | "dark" | "system";
-export type TerminalLayout = "tabs" | "grid";
+export type TerminalColumnsPreference = "auto" | 1 | 2 | 3;
 export type WorkspaceSection = "terminals" | "messages" | "activity" | "settings";
 export type MotionPreference = "system" | "reduce" | "full";
 export type ContrastPreference = "system" | "forced" | "standard";
@@ -9,15 +9,13 @@ export type ContrastPreference = "system" | "forced" | "standard";
 export interface PortalPreferences {
   version: 2;
   theme: ThemePreference;
-  terminalLayout: TerminalLayout;
   selectedGroupId?: string;
   expandedGroupIds: string[];
   lastSectionByGroup: Record<string, WorkspaceSection>;
   activeRunByGroup: Record<string, string>;
   pinnedRunIdsByGroup: Record<string, string[]>;
   completionNotificationMemberIdsByGroup: Record<string, string[]>;
-  maximizedRunByGroup: Record<string, string>;
-  terminalSplitRatioByGroup: Record<string, number>;
+  terminalColumnsByGroup: Record<string, TerminalColumnsPreference>;
   railCollapsed: boolean;
   density: "comfortable" | "compact";
   motion: MotionPreference;
@@ -33,14 +31,12 @@ const preferencesEvent = "nanasa:portal-preferences-v2";
 export const defaultPortalPreferences: PortalPreferences = {
   version: 2,
   theme: "system",
-  terminalLayout: "tabs",
   expandedGroupIds: [],
   lastSectionByGroup: {},
   activeRunByGroup: {},
   pinnedRunIdsByGroup: {},
   completionNotificationMemberIdsByGroup: {},
-  maximizedRunByGroup: {},
-  terminalSplitRatioByGroup: {},
+  terminalColumnsByGroup: {},
   railCollapsed: false,
   density: "comfortable",
   motion: "system",
@@ -86,15 +82,13 @@ function stringArrayRecord(value: unknown): Record<string, string[]> {
   );
 }
 
-function splitRatioRecord(value: unknown): Record<string, number> {
+function terminalColumnsRecord(value: unknown): Record<string, TerminalColumnsPreference> {
   if (!isRecord(value)) return {};
   return Object.fromEntries(
     Object.entries(value).filter(
-      (entry): entry is [string, number] =>
-        typeof entry[1] === "number" &&
-        Number.isFinite(entry[1]) &&
-        entry[1] >= 25 &&
-        entry[1] <= 75,
+      (entry): entry is [string, TerminalColumnsPreference] =>
+        entry[0].length > 0 &&
+        (entry[1] === "auto" || entry[1] === 1 || entry[1] === 2 || entry[1] === 3),
     ),
   );
 }
@@ -109,13 +103,9 @@ export function parsePortalPreferences(value: string | null): PortalPreferences 
     const theme = ["light", "dark", "system"].includes(String(parsed.theme))
       ? (parsed.theme as ThemePreference)
       : defaultPortalPreferences.theme;
-    const terminalLayout = ["tabs", "grid"].includes(String(parsed.terminalLayout))
-      ? (parsed.terminalLayout as TerminalLayout)
-      : defaultPortalPreferences.terminalLayout;
     return {
       version: 2,
       theme,
-      terminalLayout,
       ...(typeof parsed.selectedGroupId === "string" && parsed.selectedGroupId.length > 0
         ? { selectedGroupId: parsed.selectedGroupId }
         : {}),
@@ -139,8 +129,7 @@ export function parsePortalPreferences(value: string | null): PortalPreferences 
       completionNotificationMemberIdsByGroup: stringArrayRecord(
         parsed.completionNotificationMemberIdsByGroup,
       ),
-      maximizedRunByGroup: stringRecord(parsed.maximizedRunByGroup),
-      terminalSplitRatioByGroup: splitRatioRecord(parsed.terminalSplitRatioByGroup),
+      terminalColumnsByGroup: terminalColumnsRecord(parsed.terminalColumnsByGroup),
       railCollapsed: parsed.railCollapsed === true,
       density: parsed.density === "compact" ? "compact" : "comfortable",
       motion: ["system", "reduce", "full"].includes(String(parsed.motion))
@@ -209,8 +198,7 @@ const RESOURCE_RECORD_FIELDS = [
   "activeRunByGroup",
   "pinnedRunIdsByGroup",
   "completionNotificationMemberIdsByGroup",
-  "maximizedRunByGroup",
-  "terminalSplitRatioByGroup",
+  "terminalColumnsByGroup",
 ] as const;
 
 function equal(left: unknown, right: unknown): boolean {
@@ -317,13 +305,8 @@ export function cleanStalePortalPreferences(
             : memberIds.filter((memberId) => membersByGroup.get(groupId)?.has(memberId) === true),
         ]),
     ),
-    maximizedRunByGroup: Object.fromEntries(
-      Object.entries(preferences.maximizedRunByGroup).filter(
-        ([groupId, runId]) => groups.get(groupId)?.has(runId) === true,
-      ),
-    ),
-    terminalSplitRatioByGroup: Object.fromEntries(
-      Object.entries(preferences.terminalSplitRatioByGroup).filter(([groupId]) =>
+    terminalColumnsByGroup: Object.fromEntries(
+      Object.entries(preferences.terminalColumnsByGroup).filter(([groupId]) =>
         groupIds.has(groupId),
       ),
     ),
@@ -414,15 +397,26 @@ export function usePortalPreferences() {
       })),
     [updatePreferences],
   );
+  const setTerminalColumns = useCallback(
+    (groupId: string, columns: TerminalColumnsPreference) =>
+      updatePreferences((current) => ({
+        ...current,
+        terminalColumnsByGroup: {
+          ...current.terminalColumnsByGroup,
+          [groupId]: columns,
+        },
+      })),
+    [updatePreferences],
+  );
 
   return {
     preferences,
     updatePreferences,
     reconcileResources,
     setTheme: (theme: ThemePreference) => patchPreferences({ theme }),
-    setTerminalLayout: (terminalLayout: TerminalLayout) => patchPreferences({ terminalLayout }),
     setSelectedGroup,
     setActiveRun,
+    setTerminalColumns,
     patchPreferences,
   };
 }

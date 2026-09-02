@@ -2,12 +2,12 @@ import { z } from "zod";
 import {
   AssetDigestSchema,
   CapabilityDeclarationSchema,
-  ProviderExtensionIdSchema,
   ImmutableAssetReferenceSchema,
   OpenIdentitySchema,
+  ProviderExtensionIdSchema,
   ProviderGrantSchema,
-  ProviderRuntimeHealthSchema,
   ProviderIdSchema,
+  ProviderRuntimeHealthSchema,
   SnapshotDigestSchema,
 } from "./provider-runtime.js";
 

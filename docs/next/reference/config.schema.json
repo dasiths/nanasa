@@ -65,10 +65,6 @@
             ]
           }
         },
-        "required": [
-          "path",
-          "checkout"
-        ],
         "additionalProperties": false
       },
       "terminal": {
@@ -124,19 +120,9 @@
                 ]
               }
             },
-            "required": [
-              "enabled",
-              "maxLines",
-              "maxBytes",
-              "retentionSeconds",
-              "sensitivity"
-            ],
             "additionalProperties": false
           }
         },
-        "required": [
-          "checkpoints"
-        ],
         "additionalProperties": false
       },
       "instructions": {
@@ -160,12 +146,6 @@
         "additionalProperties": {
           "type": "object",
           "properties": {
-            "id": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 64,
-              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
-            },
             "name": {
               "type": "string",
               "minLength": 1,
@@ -306,9 +286,6 @@
                   ]
                 }
               },
-              "required": [
-                "resumePolicy"
-              ],
               "additionalProperties": false
             },
             "nativeRecovery": {
@@ -334,8 +311,7 @@
                 }
               },
               "required": [
-                "mode",
-                "confirmationTimeoutSeconds"
+                "mode"
               ],
               "additionalProperties": false
             },
@@ -364,16 +340,9 @@
             }
           },
           "required": [
-            "id",
             "name",
             "kind",
-            "command",
-            "providerState",
-            "credentials",
-            "model",
-            "nativeRecovery",
-            "extensions",
-            "environment"
+            "command"
           ],
           "additionalProperties": false
         }
@@ -483,9 +452,7 @@
             }
           },
           "required": [
-            "name",
-            "instructions",
-            "permissionPolicy"
+            "name"
           ],
           "additionalProperties": false
         }
@@ -584,17 +551,14 @@
                 "required": [
                   "memberId",
                   "name",
-                  "integrationId",
-                  "instructions"
+                  "integrationId"
                 ],
                 "additionalProperties": false
               }
             }
           },
           "required": [
-            "name",
-            "instructions",
-            "agents"
+            "name"
           ],
           "additionalProperties": false
         }
@@ -612,22 +576,12 @@
             "maximum": 100000
           }
         },
-        "required": [
-          "retentionPerGroup"
-        ],
         "additionalProperties": false
       }
     },
     "required": [
       "version",
-      "repository",
-      "terminal",
-      "instructions",
-      "integrations",
-      "extensions",
-      "roles",
-      "groups",
-      "messages"
+      "integrations"
     ],
     "additionalProperties": false
   }

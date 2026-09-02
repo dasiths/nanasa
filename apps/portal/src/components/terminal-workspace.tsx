@@ -11,20 +11,21 @@ import {
   BellOff,
   BellRing,
   CircleAlert,
-  Grid2X2,
   LoaderCircle,
   Maximize2,
   Minimize2,
   Monitor,
   Pin,
   RefreshCw,
-  Rows3,
 } from "lucide-react";
-import { type CSSProperties, type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 
 import type { PortalClient } from "../api.js";
 import { copyToClipboard } from "../copy-to-clipboard.js";
-import { usePortalPreferences } from "../hooks/use-portal-preferences.js";
+import {
+  type TerminalColumnsPreference,
+  usePortalPreferences,
+} from "../hooks/use-portal-preferences.js";
 import { useTerminalEndpoint } from "../hooks/use-terminal-endpoint.js";
 import { memberStatusView } from "../member-status.js";
 import { TerminalConsole } from "../terminal/terminal-console.js";
@@ -48,10 +49,12 @@ function TerminalPane({
   theme,
   completionNotificationsEnabled,
   pinned,
-  maximized,
+  focused,
+  statusKey,
+  statusLabel,
   onToggleCompletionNotifications,
   onTogglePinned,
-  onToggleMaximized,
+  onToggleFocus,
 }: {
   client: PortalClient;
   run: AgentRun;
@@ -64,10 +67,12 @@ function TerminalPane({
   theme: "light" | "dark";
   completionNotificationsEnabled: boolean;
   pinned: boolean;
-  maximized: boolean;
+  focused: boolean;
+  statusKey: string;
+  statusLabel: string;
   onToggleCompletionNotifications(): void;
   onTogglePinned(): void;
-  onToggleMaximized(): void;
+  onToggleFocus(): void;
 }) {
   const runRevision = `${run.generation}:${run.status}:${run.terminal?.paneId ?? "pending"}:${connectionRevision}`;
   const { status, loading, error, retry } = useTerminalEndpoint(client, run.id, runRevision);
@@ -79,6 +84,11 @@ function TerminalPane({
       : endpointLabels[endpointState];
   const identity: ReactNode = (
     <>
+      <span
+        className={`status-dot status-${statusKey}`}
+        title={statusLabel}
+        aria-label={`${statusLabel} agent status`}
+      />
       <span
         className={`connection-dot connection-${endpointState ?? "starting"}`}
         aria-hidden="true"
@@ -131,11 +141,11 @@ function TerminalPane({
       <button
         type="button"
         className="icon-button"
-        aria-label={`${maximized ? "Restore" : "Maximize"} ${alias} terminal`}
-        aria-pressed={maximized}
-        onClick={onToggleMaximized}
+        aria-label={`${focused ? "Show all terminals from" : "Focus"} ${alias} terminal`}
+        aria-pressed={focused}
+        onClick={onToggleFocus}
       >
-        {maximized ? (
+        {focused ? (
           <Minimize2 aria-hidden="true" size={12} />
         ) : (
           <Maximize2 aria-hidden="true" size={12} />
@@ -204,7 +214,9 @@ interface TerminalWorkspaceProps {
   agentStatuses?: AgentStatusSummary[];
   connectionRevision?: number;
   activeRunId?: string;
-  onSelectRun?(runId: string): void;
+  focusedRunId?: string;
+  columns?: TerminalColumnsPreference;
+  onSetFocusedRun?(runId: string | undefined): void;
   theme?: "light" | "dark";
 }
 
@@ -217,7 +229,9 @@ export function TerminalWorkspace({
   agentStatuses = [],
   connectionRevision = 0,
   activeRunId: requestedActiveRunId,
-  onSelectRun,
+  focusedRunId: requestedFocusedRunId,
+  columns = "auto",
+  onSetFocusedRun,
   theme = "dark",
 }: TerminalWorkspaceProps) {
   const memberViews = members.map((member) => ({
@@ -233,8 +247,7 @@ export function TerminalWorkspace({
     ),
   );
   const groupId = availableRuns[0]?.groupId;
-  const { preferences, setTerminalLayout, updatePreferences } = usePortalPreferences();
-  const layout = preferences.terminalLayout;
+  const { preferences, updatePreferences } = usePortalPreferences();
   const pinnedRunIds =
     groupId === undefined ? [] : (preferences.pinnedRunIdsByGroup[groupId] ?? []);
   const pinnedSet = new Set(pinnedRunIds);
@@ -249,27 +262,35 @@ export function TerminalWorkspace({
         left.index - right.index,
     )
     .map(({ run }) => run);
-  const requestedMaximizedRunId =
-    groupId === undefined ? undefined : preferences.maximizedRunByGroup[groupId];
-  const maximizedRunId = availableRuns.some((run) => run.id === requestedMaximizedRunId)
-    ? requestedMaximizedRunId
+  const focusedRunId = availableRuns.some((run) => run.id === requestedFocusedRunId)
+    ? requestedFocusedRunId
     : undefined;
-  const splitRatio =
-    groupId === undefined ? 50 : (preferences.terminalSplitRatioByGroup[groupId] ?? 50);
   const completionNotificationMemberIds =
     groupId === undefined
       ? []
       : (preferences.completionNotificationMemberIdsByGroup[groupId] ?? []);
   const completionNotificationMemberIdSet = new Set(completionNotificationMemberIds);
-  const [selectedRunId, setSelectedRunId] = useState<string>();
-  const selectedCandidate = requestedActiveRunId ?? selectedRunId;
-  const activeRunId = availableRuns.some((run) => run.id === selectedCandidate)
-    ? selectedCandidate
-    : availableRuns[0]?.id;
-  const selectRun = (runId: string) => {
-    setSelectedRunId(runId);
-    onSelectRun?.(runId);
-  };
+  const activeRunId = availableRuns.some((run) => run.id === requestedActiveRunId)
+    ? requestedActiveRunId
+    : undefined;
+  const paneElements = useRef(new Map<string, HTMLDivElement>());
+  useEffect(() => {
+    if (activeRunId === undefined || focusedRunId !== undefined) return;
+    const frame = requestAnimationFrame(() =>
+      paneElements.current.get(activeRunId)?.scrollIntoView?.({ block: "nearest" }),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [activeRunId, focusedRunId]);
+  useEffect(() => {
+    if (focusedRunId === undefined) return;
+    const restoreOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      onSetFocusedRun?.(undefined);
+    };
+    document.addEventListener("keydown", restoreOnEscape);
+    return () => document.removeEventListener("keydown", restoreOnEscape);
+  }, [focusedRunId, onSetFocusedRun]);
   const togglePinned = (runId: string) => {
     if (groupId === undefined) return;
     updatePreferences((current) => {
@@ -297,15 +318,6 @@ export function TerminalWorkspace({
           [groupId]: next,
         },
       };
-    });
-  };
-  const toggleMaximized = (runId: string) => {
-    if (groupId === undefined) return;
-    updatePreferences((current) => {
-      const maximizedRunByGroup = { ...current.maximizedRunByGroup };
-      if (maximizedRunByGroup[groupId] === runId) delete maximizedRunByGroup[groupId];
-      else maximizedRunByGroup[groupId] = runId;
-      return { ...current, maximizedRunByGroup };
     });
   };
   const memberForRun = (run: AgentRun) =>
@@ -336,86 +348,22 @@ export function TerminalWorkspace({
 
   return (
     <div className="terminal-workspace">
-      <div className="terminal-toolbar">
-        <div className="terminal-tabs" role="tablist" aria-label="Agent terminals">
-          {orderedRuns.map((run) => {
-            const status = statusByRunId.get(run.id);
-            return (
-              <div className="terminal-tab-item" role="presentation" key={run.id}>
-                <button
-                  type="button"
-                  className={`terminal-tab-select ${roleColorClass(memberRole(run))}`}
-                  role="tab"
-                  aria-selected={run.id === activeRunId}
-                  onClick={() => selectRun(run.id)}
-                >
-                  <span
-                    className={`status-dot status-${status?.key ?? "unknown"}`}
-                    title={status?.label ?? "Unknown"}
-                    aria-label={`${status?.label ?? "Unknown"} agent status`}
-                  />
-                  <span>{memberAlias(run)}</span>
-                  <RoleIdentity role={memberRole(run)} compact />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-        <div className="segmented-control" role="group" aria-label="Terminal layout">
-          <button
-            type="button"
-            aria-label="Tabbed terminal layout"
-            title="Tabbed terminal layout"
-            aria-pressed={layout === "tabs"}
-            onClick={() => setTerminalLayout("tabs")}
-          >
-            <Rows3 aria-hidden="true" size={16} />
-          </button>
-          <button
-            type="button"
-            aria-label="Grid terminal layout"
-            title="Grid terminal layout"
-            aria-pressed={layout === "grid"}
-            onClick={() => setTerminalLayout("grid")}
-          >
-            <Grid2X2 aria-hidden="true" size={16} />
-          </button>
-        </div>
-        {layout === "grid" && availableRuns.length > 1 && groupId !== undefined && (
-          <label className="terminal-split-control">
-            Split
-            <input
-              type="range"
-              aria-label="Terminal split ratio"
-              min="25"
-              max="75"
-              value={splitRatio}
-              onChange={(event) => {
-                const ratio = Number(event.target.value);
-                updatePreferences((current) => ({
-                  ...current,
-                  terminalSplitRatioByGroup: {
-                    ...current.terminalSplitRatioByGroup,
-                    [groupId]: ratio,
-                  },
-                }));
-              }}
-            />
-            <span>{splitRatio}%</span>
-          </label>
-        )}
-      </div>
       <div
-        className={`terminal-layout terminal-layout-${layout}${maximizedRunId === undefined ? "" : " terminal-layout-maximized"}`}
-        style={{ "--terminal-first-ratio": `${splitRatio}%` } as CSSProperties}
+        className={`terminal-layout terminal-layout-${focusedRunId === undefined ? columns : "focused"}`}
       >
         {orderedRuns.map((run) => {
-          const visible = !(
-            (maximizedRunId !== undefined && run.id !== maximizedRunId) ||
-            (maximizedRunId === undefined && layout === "tabs" && run.id !== activeRunId)
-          );
+          const visible = focusedRunId === undefined || run.id === focusedRunId;
+          const status = statusByRunId.get(run.id);
           return (
-            <div className="terminal-pane-slot" key={run.id} hidden={!visible}>
+            <div
+              className={`terminal-pane-slot${run.id === activeRunId ? " terminal-pane-slot-active" : ""}`}
+              key={run.id}
+              hidden={!visible}
+              ref={(element) => {
+                if (element === null) paneElements.current.delete(run.id);
+                else paneElements.current.set(run.id, element);
+              }}
+            >
               <TerminalPane
                 client={client}
                 run={run}
@@ -428,10 +376,14 @@ export function TerminalWorkspace({
                 theme={theme}
                 completionNotificationsEnabled={completionNotificationMemberIdSet.has(run.memberId)}
                 pinned={pinnedSet.has(run.id)}
-                maximized={maximizedRunId === run.id}
+                focused={focusedRunId === run.id}
+                statusKey={status?.key ?? "unknown"}
+                statusLabel={status?.label ?? "Unknown"}
                 onToggleCompletionNotifications={() => toggleCompletionNotifications(run.memberId)}
                 onTogglePinned={() => togglePinned(run.id)}
-                onToggleMaximized={() => toggleMaximized(run.id)}
+                onToggleFocus={() =>
+                  onSetFocusedRun?.(focusedRunId === run.id ? undefined : run.id)
+                }
               />
             </div>
           );

@@ -42,7 +42,6 @@ test("focused recipient retains control across agent MCP delivery", async ({ pag
   const recipient = snapshot.runs.find((run) => run.memberId === agents[1]!.memberId)!;
 
   await page.goto(nanasa.portalUrl);
-  await page.getByRole("button", { name: "Grid terminal layout" }).click();
   const senderTerminal = page.getByLabel(`Sender (${agents[0]!.memberId}) terminal console`);
   const terminal = page.getByLabel(`Recipient (${agents[1]!.memberId}) terminal console`);
   await expect(senderTerminal.getByText("Control mode", { exact: true })).toBeVisible();
@@ -117,7 +116,7 @@ test("owned terminal handles Unicode, resize, alternate screen, transcript, and 
   const actionStrip = modeBar.locator(".terminal-banner-actions");
   await expect(actionStrip.getByRole("button", { name: /Copy member ID/ })).toHaveCount(0);
   await expect(actionStrip.getByRole("button", { name: "Pin Parity terminal" })).toBeVisible();
-  await expect(actionStrip.getByRole("button", { name: "Maximize Parity terminal" })).toBeVisible();
+  await expect(actionStrip.getByRole("button", { name: "Focus Parity terminal" })).toBeVisible();
   const terminalActions = modeBar.getByRole("toolbar", { name: "Terminal actions" });
   for (const name of ["Copy", "Paste", "Search", "Transcript", "More terminal actions"]) {
     const button = terminalActions.getByRole("button", { name });
@@ -153,7 +152,7 @@ test("owned terminal handles Unicode, resize, alternate screen, transcript, and 
     .poll(() => modeBar.evaluate((element) => element.scrollWidth <= element.clientWidth))
     .toBe(true);
   await expect(actionStrip.getByRole("button", { name: "Pin Parity terminal" })).toBeVisible();
-  await expect(actionStrip.getByRole("button", { name: "Maximize Parity terminal" })).toBeVisible();
+  await expect(actionStrip.getByRole("button", { name: "Focus Parity terminal" })).toBeVisible();
   const expectRenderer = async (console: typeof terminal) => {
     const host = console.locator(".xterm-host");
     await expect(host).toHaveAttribute(

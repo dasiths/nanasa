@@ -4,21 +4,21 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   AgentKindSchema,
   CONFIG_VERSION,
+  type ConfigDiagnostic,
+  type ConfigStatus,
   ConfigStatusSchema,
   ConfiguredGroupSchema,
-  CredentialProfileReferenceSchema,
   ConfiguredProviderExtensionSchema,
+  CredentialProfileReferenceSchema,
   DesiredModelPolicySchema,
+  ExtensionIdSchema,
   InstructionPathSchema,
   IntegrationConfigSchema,
   IntegrationIdSchema,
-  ExtensionIdSchema,
   MessageConfigSchema,
-  NativeRecoveryPolicySchema,
-  type ConfigDiagnostic,
-  type ConfigStatus,
   type NanasaConfig,
   NanasaConfigSchema,
+  NativeRecoveryPolicySchema,
   ProviderStatePolicySchema,
   RepositoryIntentSchema,
   RoleDefinitionSchema,
@@ -57,7 +57,7 @@ const RawIntegrationConfigSchema = z
   .strict();
 type RawIntegrationConfig = z.infer<typeof RawIntegrationConfigSchema>;
 
-const RawNanasaConfigSchema = z
+export const AuthoredNanasaConfigSchema = z
   .object({
     version: z.literal(CONFIG_VERSION),
     repository: RepositoryIntentSchema.default({ path: ".", checkout: { kind: "current" } }),
@@ -252,7 +252,7 @@ export function parseNanasaConfigSource(
     },
   });
   if (astDiagnostics.length > 0) throw new ConfigLoadError(errorStatus(paths, astDiagnostics));
-  const parsed = RawNanasaConfigSchema.safeParse(document.toJS({ maxAliasCount: 0 }));
+  const parsed = AuthoredNanasaConfigSchema.safeParse(document.toJS({ maxAliasCount: 0 }));
   if (!parsed.success) {
     throw new ConfigLoadError(
       errorStatus(

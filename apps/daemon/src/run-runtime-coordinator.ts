@@ -9,10 +9,10 @@ import type {
 
 import { DeliveryDispatcher } from "./delivery-dispatcher.js";
 import { NativeSessionService } from "./native-session-service.js";
-import { DomainError, NanasaStore } from "./store.js";
-import { TmuxRuntime } from "./tmux-runtime.js";
-import { TerminalGateway } from "./terminal/terminal-gateway.js";
 import type { RuntimeObservation } from "./runtime-observation.js";
+import { DomainError, NanasaStore } from "./store.js";
+import { TerminalGateway } from "./terminal/terminal-gateway.js";
+import { TmuxRuntime } from "./tmux-runtime.js";
 
 export interface RunRuntimeCoordinatorOptions {
   reconcileIntervalMs?: number;

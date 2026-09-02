@@ -4,25 +4,9 @@ import { dirname, extname, join, relative, resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const docsRoot = join(root, "docs", "next");
 const required = [
-  "index.md",
-  "installation.md",
-  "concepts.md",
-  "continuity.md",
-  "providers.md",
-  "state-and-models.md",
-  "configuration.md",
-  "cli.md",
-  "api-events-terminal-mcp.md",
-  "git-worktrees.md",
-  "extensions.md",
-  "remote.md",
-  "security.md",
-  "troubleshooting.md",
-  "accessibility.md",
-  "testing.md",
-  "support.md",
-  "contributing.md",
-  "release.md",
+  join(root, "README.md"),
+  join(root, "apps", "portal", "README.md"),
+  join(docsRoot, "index.md"),
 ];
 const errors = [];
 
@@ -33,41 +17,79 @@ function files(directory) {
   });
 }
 
-for (const requiredPath of required) {
-  if (!existsSync(join(docsRoot, requiredPath)))
-    errors.push(`missing required page ${requiredPath}`);
+function contentOutsideFences(source) {
+  let fence;
+  return source
+    .split(/\r?\n/)
+    .filter((line) => {
+      const marker = line.match(/^\s*(`{3,}|~{3,})/u)?.[1];
+      if (marker === undefined) return fence === undefined;
+      if (fence === undefined) fence = marker[0];
+      else if (marker[0] === fence) fence = undefined;
+      return false;
+    })
+    .join("\n");
 }
 
-for (const path of files(docsRoot).filter((item) => extname(item) === ".md")) {
+function localLinkTarget(rawTarget) {
+  const target =
+    rawTarget.startsWith("<") && rawTarget.endsWith(">") ? rawTarget.slice(1, -1) : rawTarget;
+  if (
+    target.startsWith("#") ||
+    target.startsWith("/") ||
+    target.startsWith("//") ||
+    /^[a-z][a-z\d+.-]*:/iu.test(target)
+  ) {
+    return undefined;
+  }
+  return target.split(/[?#]/u, 1)[0];
+}
+
+for (const path of required) {
+  if (!existsSync(path)) errors.push(`missing required page ${relative(root, path)}`);
+}
+
+const documentationPaths = existsSync(docsRoot)
+  ? [
+      join(root, "README.md"),
+      join(root, "apps", "portal", "README.md"),
+      ...files(docsRoot).filter((item) => extname(item) === ".md"),
+    ]
+  : [join(root, "README.md"), join(root, "apps", "portal", "README.md")];
+
+for (const path of documentationPaths.filter((item) => existsSync(item))) {
   const source = readFileSync(path, "utf8");
   const label = relative(root, path);
-  if (!source.startsWith("---\n")) errors.push(`${label}: missing YAML frontmatter`);
-  const frontmatterEnd = source.indexOf("\n---\n", 4);
-  if (frontmatterEnd < 0) errors.push(`${label}: unterminated YAML frontmatter`);
-  const frontmatter = frontmatterEnd < 0 ? "" : source.slice(4, frontmatterEnd);
-  if (!/^title:\s+.+$/m.test(frontmatter)) errors.push(`${label}: missing title`);
-  if (!/^description:\s+.+$/m.test(frontmatter)) errors.push(`${label}: missing description`);
-  if (/^#\s+/m.test(source.slice(frontmatterEnd + 5)))
-    errors.push(`${label}: H1 is forbidden with title frontmatter`);
+  const markdown = contentOutsideFences(source.replace(/^\uFEFF/u, ""));
+  if (/^---\s*$/u.test(markdown.split("\n", 1)[0]))
+    errors.push(`${label}: YAML frontmatter is forbidden`);
+  const h1Headings = [...markdown.matchAll(/^#\s+(.+)$/gmu)];
+  if (h1Headings.length !== 1)
+    errors.push(`${label}: expected exactly one H1, found ${h1Headings.length}`);
   if (/—/.test(source)) errors.push(`${label}: em dash is forbidden`);
-  const headings = [...source.matchAll(/^#{2,6}\s+(.+)$/gm)].map((match) =>
-    match[1].trim().toLowerCase(),
+  const headings = [...markdown.matchAll(/^#{2,6}\s+(.+)$/gmu)].map((match) =>
+    match[1]
+      .replace(/\s+#+\s*$/u, "")
+      .trim()
+      .toLowerCase(),
   );
   const duplicates = headings.filter((heading, index) => headings.indexOf(heading) !== index);
   if (duplicates.length > 0) errors.push(`${label}: duplicate heading ${duplicates[0]}`);
-  for (const match of source.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
+  for (const match of markdown.matchAll(/!?\[[^\]]*\]\((<?[^\s)>]+>?)(?:\s+[^)]*)?\)/gu)) {
     const target = match[1];
-    if (target.startsWith("http:") || target.startsWith("https:") || target.startsWith("#"))
+    const file = localLinkTarget(target);
+    if (file === undefined || file.length === 0) continue;
+    let decoded;
+    try {
+      decoded = decodeURIComponent(file);
+    } catch {
+      errors.push(`${label}: invalid link ${target}`);
       continue;
-    const [file] = target.split("#", 1);
-    if (file.length === 0) continue;
-    const decoded = decodeURIComponent(file);
+    }
     if (!existsSync(resolve(dirname(path), decoded)))
       errors.push(`${label}: broken link ${target}`);
   }
 }
 
 if (errors.length > 0) throw new Error(`Documentation validation failed:\n${errors.join("\n")}`);
-console.log(
-  `Verified ${files(docsRoot).filter((item) => extname(item) === ".md").length} documentation pages and local links`,
-);
+console.log(`Verified ${documentationPaths.length} public documentation pages and local links`);

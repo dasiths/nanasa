@@ -3,8 +3,8 @@ import { AgentStatusEventInputSchema } from "@nanasa/contracts";
 import type { FastifyInstance } from "fastify";
 
 import type { AgentActionAckService } from "./actions/agent-action-ack-service.js";
-import { AgentStatusService } from "./agent-status-service.js";
 import type { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
+import { AgentStatusService } from "./agent-status-service.js";
 import { McpCredentialIssuer } from "./mcp-auth.js";
 import { NativeSessionService } from "./native-session-service.js";
 import { DomainError, NanasaStore } from "./store.js";

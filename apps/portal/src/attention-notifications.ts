@@ -32,9 +32,7 @@ interface UseAttentionNotificationsOptions {
 interface VisibleTerminalRunOptions {
   route: PortalRoute;
   runIds: readonly string[];
-  terminalLayout: "tabs" | "grid";
-  activeRunByGroup: Readonly<Record<string, string>>;
-  maximizedRunByGroup: Readonly<Record<string, string>>;
+  focusedRunId?: string;
 }
 
 const TOAST_LIMIT = 3;
@@ -70,25 +68,16 @@ export function attentionNotificationTier(item: AttentionItem): AttentionNotific
 export function deriveVisibleTerminalRunIds({
   route,
   runIds,
-  terminalLayout,
-  activeRunByGroup,
-  maximizedRunByGroup,
+  focusedRunId,
 }: VisibleTerminalRunOptions): ReadonlySet<string> {
   if (route.kind !== "group" || route.section !== "terminals" || runIds.length === 0) {
     return new Set();
   }
   const availableRunIds = new Set(runIds);
-  const requestedMaximizedRunId = maximizedRunByGroup[route.groupId];
-  if (requestedMaximizedRunId !== undefined && availableRunIds.has(requestedMaximizedRunId)) {
-    return new Set([requestedMaximizedRunId]);
+  if (focusedRunId !== undefined && availableRunIds.has(focusedRunId)) {
+    return new Set([focusedRunId]);
   }
-  if (terminalLayout === "grid") return availableRunIds;
-  const selectedCandidate = route.runId ?? activeRunByGroup[route.groupId];
-  const activeRunId =
-    selectedCandidate !== undefined && availableRunIds.has(selectedCandidate)
-      ? selectedCandidate
-      : runIds[0];
-  return activeRunId === undefined ? new Set() : new Set([activeRunId]);
+  return availableRunIds;
 }
 
 export function routeOwnsAttentionItem(

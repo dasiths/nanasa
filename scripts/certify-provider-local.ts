@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync } from "node:fs";
 import { resolve } from "node:path";
-import { loadNanasaConfig } from "../apps/daemon/src/config-v2.js";
+import { loadNanasaConfig } from "../apps/daemon/src/config-loader.js";
 import { resolveProviderStateHome } from "../apps/daemon/src/provider-state-home.js";
 
 const supportedProviders = new Set(["copilot", "claude-code", "pi", "opencode"]);

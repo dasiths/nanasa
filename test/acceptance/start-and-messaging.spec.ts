@@ -17,13 +17,11 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
   await expect(page.getByRole("status").filter({ hasText: "Start all complete" })).toContainText(
     "3 started",
   );
-  await expect(page.getByRole("region", { name: /terminal$/ })).toHaveCount(1);
+  await expect(page.getByRole("region", { name: /terminal$/ })).toHaveCount(3);
   await expect(page.getByRole("link", { name: "Messages", exact: true })).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Compose message to Acceptance team" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Grid terminal layout" }).click();
-  await expect(page.getByRole("region", { name: /terminal$/ })).toHaveCount(3);
   await expect(page.getByRole("region", { name: "Agent terminals" })).toBeVisible();
   await expect(page.getByRole("group", { name: "Workspace input mode" })).toHaveCount(0);
 

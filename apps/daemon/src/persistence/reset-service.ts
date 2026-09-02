@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
-import { nanasaPaths } from "../config-v2.js";
+import { nanasaPaths } from "../config-loader.js";
 import { openNanasaDatabase, verifyDatabaseIntegrity } from "./database.js";
 
 export interface AlphaResetInventory {

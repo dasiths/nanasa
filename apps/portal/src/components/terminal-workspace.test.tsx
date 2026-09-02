@@ -168,7 +168,7 @@ describe("TerminalWorkspace", () => {
     expect(container.querySelector("iframe")).toBeNull();
   });
 
-  it("projects semantic, completion, and recovery states in terminal tabs", async () => {
+  it("projects semantic, completion, and recovery states in terminal panes", async () => {
     const members: GroupMembership[] = [
       {
         id: "agent-working",
@@ -290,7 +290,7 @@ describe("TerminalWorkspace", () => {
     expect(screen.getByLabelText("Starting agent status")).toHaveClass("status-starting");
   });
 
-  it("persists pinning, maximize, and a browser-local grid split without remounting terminals", async () => {
+  it("keeps explicit columns while pinning and focusing without remounting terminals", async () => {
     const members = ["one", "two"].map((id, order) => ({
       id: `agent-${id}`,
       groupId: "group-one",
@@ -321,32 +321,38 @@ describe("TerminalWorkspace", () => {
       },
       startedAt: timestamp,
     }));
-    const { container } = render(
-      <TerminalWorkspace client={client()} members={members} runs={runs} />,
+    const portalClient = client();
+    const setFocusedRun = vi.fn();
+    const view = render(
+      <TerminalWorkspace
+        client={portalClient}
+        members={members}
+        runs={runs}
+        columns={3}
+        onSetFocusedRun={setFocusedRun}
+      />,
     );
+    const { container } = view;
     const initialMounts = await screen.findAllByTestId("owned-xterm");
     expect(initialMounts).toHaveLength(2);
     expect(initialMounts.map((terminal) => terminal.dataset.terminalVisible)).toEqual([
       "true",
-      "false",
-    ]);
-
-    fireEvent.click(screen.getByRole("button", { name: "Grid terminal layout" }));
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Grid terminal layout" })).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      ),
-    );
-    expect(initialMounts.map((terminal) => terminal.dataset.terminalVisible)).toEqual([
-      "true",
       "true",
     ]);
+    expect(container.querySelector(".terminal-layout")).toHaveClass("terminal-layout-3");
     fireEvent.click(screen.getByRole("button", { name: "Pin Reviewer terminal" }));
-    fireEvent.change(screen.getByRole("slider", { name: "Terminal split ratio" }), {
-      target: { value: "65" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Maximize Builder terminal" }));
+    fireEvent.click(screen.getByRole("button", { name: "Focus Builder terminal" }));
+    expect(setFocusedRun).toHaveBeenLastCalledWith("run-1");
+    view.rerender(
+      <TerminalWorkspace
+        client={portalClient}
+        members={members}
+        runs={runs}
+        focusedRunId="run-1"
+        columns={3}
+        onSetFocusedRun={setFocusedRun}
+      />,
+    );
 
     await waitFor(() =>
       expect(
@@ -354,30 +360,28 @@ describe("TerminalWorkspace", () => {
       ).toHaveAttribute("aria-pressed", "true"),
     );
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Restore Builder terminal" })).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      ),
+      expect(
+        screen.getByRole("button", { name: "Show all terminals from Builder terminal" }),
+      ).toHaveAttribute("aria-pressed", "true"),
     );
     expect(container.querySelector(".terminal-pane-slot[hidden]")).not.toBeNull();
-    expect(container.querySelector(".terminal-layout")).toHaveStyle({
-      "--terminal-first-ratio": "65%",
-    });
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
-      expect.stringContaining("Reviewer"),
-      expect.stringContaining("Builder"),
-    ]);
+    expect(container.querySelector(".terminal-layout")).toHaveClass("terminal-layout-focused");
     expect(screen.getAllByTestId("owned-xterm")).toEqual([initialMounts[1], initialMounts[0]]);
     expect(initialMounts.map((terminal) => terminal.dataset.terminalVisible)).toEqual([
       "true",
       "false",
     ]);
+    setFocusedRun.mockClear();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(setFocusedRun).toHaveBeenLastCalledWith(undefined);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show all terminals from Builder terminal" }),
+    );
+    expect(setFocusedRun).toHaveBeenLastCalledWith(undefined);
     expect(
       JSON.parse(window.localStorage.getItem("nanasa.portal.preferences.v2") ?? "{}"),
     ).toMatchObject({
       pinnedRunIdsByGroup: { "group-one": ["run-2"] },
-      maximizedRunByGroup: { "group-one": "run-1" },
-      terminalSplitRatioByGroup: { "group-one": 65 },
     });
   });
 
@@ -425,7 +429,7 @@ describe("TerminalWorkspace", () => {
     ).toEqual([
       "Enable completion notifications for Builder",
       "Pin Builder terminal",
-      "Maximize Builder terminal",
+      "Focus Builder terminal",
     ]);
 
     fireEvent.click(enable);

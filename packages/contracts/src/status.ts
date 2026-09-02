@@ -1,8 +1,7 @@
 import { z } from "zod";
-import { IdentifierSchema, RunStatusSchema, TimestampSchema } from "./control.js";
+import { IdentifierSchema, RoleIdSchema, RunStatusSchema, TimestampSchema } from "./control.js";
 import { AgentTypeKeySchema, IntegrationIdSchema } from "./provider.js";
 import { AdapterIdSchema } from "./provider-runtime.js";
-import { RoleIdSchema } from "./control.js";
 
 export const STATUS_PROTOCOL_VERSION = 2 as const;
 export const REPORTER_LEASE_MS = 45_000 as const;

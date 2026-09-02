@@ -8,9 +8,9 @@ import {
   IdentifierSchema,
   TimestampSchema,
 } from "./control.js";
+import { CheckoutSchema, RepositorySchema, WorktreeSchema } from "./git.js";
 import { AgentProfileSchema } from "./provider.js";
 import { AgentStatusSummarySchema } from "./status.js";
-import { CheckoutSchema, RepositorySchema, WorktreeSchema } from "./git.js";
 
 export const EVENT_PROTOCOL_VERSION = 1 as const;
 export const EventCursorSchema = z.number().int().nonnegative();

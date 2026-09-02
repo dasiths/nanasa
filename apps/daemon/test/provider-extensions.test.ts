@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NanasaConfig } from "@nanasa/contracts";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadNanasaConfig } from "../src/config-v2.js";
+import { loadNanasaConfig } from "../src/config-loader.js";
 import { ExtensionLockRepository } from "../src/extensions/extension-lock-repository.js";
 import { descriptorDigest } from "../src/extensions/extension-package-loader.js";
 import { ProviderCatalogService } from "../src/extensions/provider-catalog-service.js";

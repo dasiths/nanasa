@@ -141,7 +141,7 @@ describe("typed Attention notification policy", () => {
     ).toBe(true);
   });
 
-  it("derives terminal pane visibility exactly like tabbed and grid workspaces", () => {
+  it("derives terminal pane visibility for the canvas and Focus mode", () => {
     const terminalRoute: PortalRoute = {
       kind: "group",
       groupId: "group-one",
@@ -150,36 +150,25 @@ describe("typed Attention notification policy", () => {
     const options = {
       route: terminalRoute,
       runIds: ["run-one", "run-two"],
-      activeRunByGroup: { "group-one": "run-two" },
-      maximizedRunByGroup: {},
     } as const;
 
-    expect([...deriveVisibleTerminalRunIds({ ...options, terminalLayout: "tabs" })]).toEqual([
-      "run-two",
-    ]);
+    expect([...deriveVisibleTerminalRunIds(options)]).toEqual(["run-one", "run-two"]);
     expect([
       ...deriveVisibleTerminalRunIds({
         ...options,
         route: { ...terminalRoute, runId: "run-one" },
-        terminalLayout: "tabs",
       }),
-    ]).toEqual(["run-one"]);
-    expect([...deriveVisibleTerminalRunIds({ ...options, terminalLayout: "grid" })]).toEqual([
-      "run-one",
-      "run-two",
-    ]);
+    ]).toEqual(["run-one", "run-two"]);
     expect([
       ...deriveVisibleTerminalRunIds({
         ...options,
-        terminalLayout: "grid",
-        maximizedRunByGroup: { "group-one": "run-two" },
+        focusedRunId: "run-two",
       }),
     ]).toEqual(["run-two"]);
     expect([
       ...deriveVisibleTerminalRunIds({
         ...options,
         route: { kind: "global", destination: "agents" },
-        terminalLayout: "grid",
       }),
     ]).toEqual([]);
   });

@@ -2,7 +2,7 @@
   "version": 1,
   "producer": "nanasa-0.1.0-next.11.0",
   "fixtures": {
-    "config-v2.yaml": "6e3a67d2a8a1b39b814aad71830bcd8f0dc64a6d01f11023a14c9369f19769be",
+    "config.yaml": "6e3a67d2a8a1b39b814aad71830bcd8f0dc64a6d01f11023a14c9369f19769be",
     "control-meta.v1.json": "d88a8811c987f90c46ff3bb58924dda35addf779fa1b19264a0e4dc57b786815",
     "event-frame.v1.json": "44f7965fc580deb9ed86c939606ba7ba453c0a6657e58905f5601edbd10cebc1",
     "reporter-event.v2.json": "b0ef8e5c3e8269b85cebfe1c281f353eba4eb58d22750e233141470f43f4b80a",

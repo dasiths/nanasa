@@ -6,7 +6,19 @@ import type {
   UpdateGroupCommand,
   UpdateRolePresentationCommand,
 } from "@nanasa/contracts";
-import { Bell, Cable, CircleAlert, Command, Menu, Play, RefreshCw, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Bell,
+  Cable,
+  CircleAlert,
+  Command,
+  Grid2X2,
+  Menu,
+  Play,
+  RefreshCw,
+  Users,
+  X,
+} from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, type PortalClient } from "./api.js";
@@ -24,7 +36,11 @@ import { type AddAgentInput, GroupTree } from "./components/group-tree.js";
 import { MessageWorkspace } from "./components/message-workspace.js";
 import { useAttentionWorkspaces } from "./hooks/use-attention-workspaces.js";
 import { useMessageReadCursors } from "./hooks/use-message-read-cursors.js";
-import { useAppliedTheme, usePortalPreferences } from "./hooks/use-portal-preferences.js";
+import {
+  type TerminalColumnsPreference,
+  useAppliedTheme,
+  usePortalPreferences,
+} from "./hooks/use-portal-preferences.js";
 import { useDomainEvents, usePortalSnapshot } from "./hooks/use-portal-snapshot.js";
 import { memberStatusView } from "./member-status.js";
 import {
@@ -57,6 +73,59 @@ export interface AppProps {
   client?: PortalClient;
 }
 
+function TerminalNavigationActions({
+  columns,
+  focused,
+  onSetColumns,
+  onRestore,
+}: {
+  columns: TerminalColumnsPreference;
+  focused: boolean;
+  onSetColumns(columns: TerminalColumnsPreference): void;
+  onRestore(): void;
+}) {
+  if (focused) {
+    return (
+      <button
+        type="button"
+        className="compact-button terminal-restore-button"
+        aria-label="All terminals"
+        onClick={onRestore}
+      >
+        <ArrowLeft aria-hidden="true" size={14} />
+        All terminals
+        <span>Esc</span>
+      </button>
+    );
+  }
+  return (
+    <div className="terminal-column-control">
+      <span className="terminal-column-label">
+        <Grid2X2 aria-hidden="true" size={13} />
+        <span>Layout</span>
+      </span>
+      <div className="segmented-control" role="group" aria-label="Terminal columns">
+        {(["auto", 1, 2, 3] as const).map((value) => (
+          <button
+            type="button"
+            key={value}
+            aria-label={
+              value === "auto"
+                ? "Automatic terminal columns"
+                : `${value} terminal ${value === 1 ? "column" : "columns"}`
+            }
+            title={value === "auto" ? "Automatic terminal columns" : `${value} columns`}
+            aria-pressed={columns === value}
+            onClick={() => onSetColumns(value)}
+          >
+            {value === "auto" ? "Auto" : value}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function App({ client = api }: AppProps) {
   const { snapshot, config, status, error, errorSource, refresh } = usePortalSnapshot(client);
   const eventStatus = useDomainEvents(client, snapshot, () => void refresh());
@@ -65,6 +134,7 @@ export function App({ client = api }: AppProps) {
     setTheme,
     setSelectedGroup,
     setActiveRun,
+    setTerminalColumns,
     patchPreferences,
     reconcileResources,
   } = usePortalPreferences();
@@ -76,6 +146,7 @@ export function App({ client = api }: AppProps) {
   const [startAllResult, setStartAllResult] = useState<StartGroupRunsResult>();
   const [startingAllGroupId, setStartingAllGroupId] = useState<string>();
   const [focusSelectedGroupAfterDelete, setFocusSelectedGroupAfterDelete] = useState(false);
+  const [focusedTerminalGroupId, setFocusedTerminalGroupId] = useState<string>();
   const [terminalConnectionRevision, setTerminalConnectionRevision] = useState(0);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
@@ -148,22 +219,20 @@ export function App({ client = api }: AppProps) {
     selectedGroupId === undefined ? 0 : (attentionCountsByGroup.get(selectedGroupId) ?? 0);
   const globalAttentionCount = attentionReviewCount(attentionItems);
   const routeSection = route.kind === "group" ? route.section : undefined;
+  const focusedTerminalRunId =
+    route.kind === "group" &&
+    route.section === "terminals" &&
+    focusedTerminalGroupId === route.groupId
+      ? (route.runId ?? preferences.activeRunByGroup[route.groupId])
+      : undefined;
   const visibleTerminalRunIds = useMemo(
     () =>
       deriveVisibleTerminalRunIds({
         route,
         runIds: memberStatusViews.flatMap(({ run }) => (run === undefined ? [] : [run.id])),
-        terminalLayout: preferences.terminalLayout,
-        activeRunByGroup: preferences.activeRunByGroup,
-        maximizedRunByGroup: preferences.maximizedRunByGroup,
+        ...(focusedTerminalRunId === undefined ? {} : { focusedRunId: focusedTerminalRunId }),
       }),
-    [
-      memberStatusViews,
-      preferences.activeRunByGroup,
-      preferences.maximizedRunByGroup,
-      preferences.terminalLayout,
-      route,
-    ],
+    [focusedTerminalRunId, memberStatusViews, route],
   );
   const routeLabel =
     route.kind === "global"
@@ -449,8 +518,17 @@ export function App({ client = api }: AppProps) {
             {...(busyAction === undefined ? {} : { busyAction })}
             onSelectGroup={(groupId) => {
               const section = preferences.lastSectionByGroup[groupId] ?? "terminals";
+              if (focusedTerminalGroupId !== groupId) setFocusedTerminalGroupId(undefined);
               setSelectedGroup(groupId, section);
               navigate(groupRoute(groupId, section));
+            }}
+            onSelectTerminal={(groupId, runId) => {
+              if (runId === undefined || focusedTerminalGroupId !== groupId) {
+                setFocusedTerminalGroupId(undefined);
+              }
+              setSelectedGroup(groupId, "terminals");
+              if (runId !== undefined) setActiveRun(groupId, runId);
+              navigate(groupRoute(groupId, "terminals", runId));
             }}
             onOpenMessages={(groupId) => {
               setSelectedGroup(groupId, "messages");
@@ -475,24 +553,69 @@ export function App({ client = api }: AppProps) {
         </aside>
       }
     >
-      <header className="workspace-header">
+      <header
+        className={`workspace-header${route.kind === "group" && selectedGroup !== undefined ? " workspace-header-group" : ""}`}
+      >
         <div className="workspace-identity">
-          <span className="eyebrow">
-            {route.kind === "global" ? "Global operations" : "Group workspace"}
-          </span>
-          <h1 ref={workspaceHeadingRef} tabIndex={-1} data-route-heading>
-            {route.kind === "global"
-              ? globalDestinationDefinition(route.destination).heading
-              : (selectedGroup?.name ?? "No group selected")}
-          </h1>
-          {selectedGroup !== undefined && (
-            <p className="group-status-summary">
-              <span>{members.length} agents</span>
-              <span>{runningCount} terminals</span>
-              {memberStatusViews.length > 0 && <span>{workingCount} working</span>}
-            </p>
+          {route.kind === "group" && selectedGroup !== undefined ? (
+            <>
+              <span className="workspace-identity-mark" aria-hidden="true">
+                <Users size={18} />
+              </span>
+              <div className="workspace-identity-copy">
+                <h1 ref={workspaceHeadingRef} tabIndex={-1} data-route-heading>
+                  {selectedGroup.name}
+                </h1>
+                <p
+                  className="group-status-summary"
+                  aria-label={`${members.length} agents, ${runningCount} live terminals, ${workingCount} working`}
+                >
+                  <span className="group-status-agents">{members.length} agents</span>
+                  <span
+                    className={`group-status-live${runningCount === 0 ? " group-status-empty" : ""}`}
+                  >
+                    {runningCount} live
+                  </span>
+                  <span
+                    className={`group-status-working${workingCount === 0 ? " group-status-empty" : ""}`}
+                  >
+                    {workingCount} working
+                  </span>
+                </p>
+              </div>
+            </>
+          ) : (
+            <div className="workspace-identity-copy">
+              <span className="eyebrow">Global operations</span>
+              <h1 ref={workspaceHeadingRef} tabIndex={-1} data-route-heading>
+                {route.kind === "global"
+                  ? globalDestinationDefinition(route.destination).heading
+                  : "No group selected"}
+              </h1>
+            </div>
           )}
         </div>
+        {route.kind === "group" && selectedGroup !== undefined && (
+          <GroupNavigation
+            group={selectedGroup}
+            route={route}
+            unreadCount={unreadCounts.get(selectedGroup.id) ?? 0}
+            attentionCount={groupAttentionCount}
+            {...(route.kind === "group" && route.section === "terminals"
+              ? {
+                  actions: (
+                    <TerminalNavigationActions
+                      columns={preferences.terminalColumnsByGroup[selectedGroup.id] ?? "auto"}
+                      focused={focusedTerminalRunId !== undefined}
+                      onSetColumns={(columns) => setTerminalColumns(selectedGroup.id, columns)}
+                      onRestore={() => setFocusedTerminalGroupId(undefined)}
+                    />
+                  ),
+                }
+              : {})}
+            onLink={link}
+          />
+        )}
         <div className="header-actions">
           <button
             type="button"
@@ -551,15 +674,6 @@ export function App({ client = api }: AppProps) {
           </span>
         </div>
       </header>
-      {selectedGroup !== undefined && (
-        <GroupNavigation
-          group={selectedGroup}
-          route={route}
-          unreadCount={unreadCounts.get(selectedGroup.id) ?? 0}
-          attentionCount={groupAttentionCount}
-          onLink={link}
-        />
-      )}
       {actionError !== undefined && (
         <div className="action-banner" role="alert">
           <CircleAlert aria-hidden="true" size={16} />
@@ -668,6 +782,7 @@ export function App({ client = api }: AppProps) {
                   agentStatuses={snapshot.agentStatuses ?? []}
                   connectionRevision={terminalConnectionRevision}
                   theme={appliedTheme}
+                  columns={preferences.terminalColumnsByGroup[selectedGroup.id] ?? "auto"}
                   {...(() => {
                     const activeRunId =
                       route.kind === "group" && route.runId !== undefined
@@ -675,7 +790,15 @@ export function App({ client = api }: AppProps) {
                         : preferences.activeRunByGroup[selectedGroup.id];
                     return activeRunId === undefined ? {} : { activeRunId };
                   })()}
-                  onSelectRun={(runId) => {
+                  {...(focusedTerminalRunId === undefined
+                    ? {}
+                    : { focusedRunId: focusedTerminalRunId })}
+                  onSetFocusedRun={(runId) => {
+                    if (runId === undefined) {
+                      setFocusedTerminalGroupId(undefined);
+                      return;
+                    }
+                    setFocusedTerminalGroupId(selectedGroup.id);
                     setActiveRun(selectedGroup.id, runId);
                     navigate(groupRoute(selectedGroup.id, "terminals", runId));
                   }}

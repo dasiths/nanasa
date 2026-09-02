@@ -124,6 +124,18 @@ test("help documents authenticated MCP enablement", () => {
   assert.match(result.stdout, /setup\s+Prepare repository-local integration configuration homes/);
   assert.match(result.stdout, /auth\s+Authenticate locally or inspect daemon auth state/);
   assert.match(result.stdout, /doctor\s+Validate configuration, commands, and integration homes/);
+  assert.match(result.stdout, /docs\s+Print the absolute path to the packaged documentation index/);
+});
+
+test("docs locates packaged help without a repository or daemon", () => {
+  const directory = mkdtempSync(join(tmpdir(), "nanasa-docs-"));
+  temporaryDirectories.push(directory);
+
+  const result = runCli(directory, ["docs"]);
+  const helpIndex = join(root, "dist", "help", "index.md");
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, `${helpIndex}\n`);
+  assert.equal(existsSync(helpIndex), true);
 });
 
 test("setup and doctor prepare private repository-local integrations", () => {
@@ -266,7 +278,8 @@ test("completion is daemon-free and grammar failures use exit 2", () => {
 test("packed package installs cleanly and initializes config version 2", () => {
   const archiveDirectory = mkdtempSync(join(tmpdir(), "nanasa-pack-"));
   const installDirectory = mkdtempSync(join(tmpdir(), "nanasa-install-"));
-  temporaryDirectories.push(archiveDirectory, installDirectory);
+  const repoFreeDirectory = mkdtempSync(join(tmpdir(), "nanasa-docs-"));
+  temporaryDirectories.push(archiveDirectory, installDirectory, repoFreeDirectory);
 
   const packed = spawnSync(
     "npm",
@@ -317,6 +330,22 @@ test("packed package installs cleanly and initializes config version 2", () => {
     existsSync(join(installDirectory, "node_modules", "pi-mcp-adapter", "index.ts")),
     true,
   );
+  const installedHelpIndex = join(
+    installDirectory,
+    "node_modules",
+    "nanasa",
+    "dist",
+    "help",
+    "index.md",
+  );
+  const docs = spawnSync(installedCli, ["docs"], {
+    cwd: repoFreeDirectory,
+    encoding: "utf8",
+  });
+  assert.equal(docs.status, 0, docs.stderr);
+  assert.equal(docs.stdout, `${installedHelpIndex}\n`);
+  assert.equal(existsSync(installedHelpIndex), true);
+
   const initialized = spawnSync(installedCli, ["init"], { cwd: repository, encoding: "utf8" });
   assert.equal(initialized.status, 0, initialized.stderr);
   const configPath = join(repository, ".nanasa", "config.yaml");

@@ -20,16 +20,14 @@ describe("portal preferences v2", () => {
   it("parses version 2 fields and rejects old or malformed values", () => {
     expect(
       parsePortalPreferences(
-        '{"version":2,"theme":"dark","terminalLayout":"grid","pinnedRunIdsByGroup":{"group":["run"]},"completionNotificationMemberIdsByGroup":{"group":["member","member",3],"invalid":"member"},"maximizedRunByGroup":{"group":"run"},"terminalSplitRatioByGroup":{"group":65,"invalid":90}}',
+        '{"version":2,"theme":"dark","terminalLayout":"grid","pinnedRunIdsByGroup":{"group":["run"]},"completionNotificationMemberIdsByGroup":{"group":["member","member",3],"invalid":"member"},"maximizedRunByGroup":{"group":"run"},"terminalSplitRatioByGroup":{"group":65},"terminalColumnsByGroup":{"group":3,"automatic":"auto","invalid":4}}',
       ),
     ).toMatchObject({
       version: 2,
       theme: "dark",
-      terminalLayout: "grid",
       pinnedRunIdsByGroup: { group: ["run"] },
       completionNotificationMemberIdsByGroup: { group: ["member"] },
-      maximizedRunByGroup: { group: "run" },
-      terminalSplitRatioByGroup: { group: 65 },
+      terminalColumnsByGroup: { group: 3, automatic: "auto" },
       notifications: { inApp: true, desktop: false, sound: false },
     });
     expect(parsePortalPreferences('{"theme":"neon","motion":"unsafe"}')).toMatchObject({
@@ -60,8 +58,7 @@ describe("portal preferences v2", () => {
           kept: ["member-kept", "member-old"],
           deleted: ["member-old"],
         },
-        maximizedRunByGroup: { kept: "run-kept", deleted: "run-old" },
-        terminalSplitRatioByGroup: { kept: 65, deleted: 40 },
+        terminalColumnsByGroup: { kept: 3, deleted: 1 },
       },
       new Map([["kept", new Set(["run-kept"])]]),
       new Map([["kept", new Set(["member-kept"])]]),
@@ -73,8 +70,7 @@ describe("portal preferences v2", () => {
       activeRunByGroup: { kept: "run-kept" },
       pinnedRunIdsByGroup: { kept: ["run-kept"] },
       completionNotificationMemberIdsByGroup: { kept: ["member-kept"] },
-      maximizedRunByGroup: { kept: "run-kept" },
-      terminalSplitRatioByGroup: { kept: 65 },
+      terminalColumnsByGroup: { kept: 3 },
     });
     expect(cleaned).not.toHaveProperty("selectedGroupId");
   });
@@ -87,27 +83,27 @@ describe("portal preferences v2", () => {
     };
     const storedFromAnotherTab = {
       ...current,
-      maximizedRunByGroup: { "group-one": "run-two" },
-      terminalSplitRatioByGroup: { "group-two": 65 },
+      activeRunByGroup: { "group-one": "run-two" },
+      terminalColumnsByGroup: { "group-two": 3 as const },
       notifications: { ...current.notifications, sound: true },
     };
     expect(mergePortalPreferenceUpdate(current, locallyPinned, storedFromAnotherTab)).toMatchObject(
       {
         pinnedRunIdsByGroup: { "group-one": ["run-one"] },
-        maximizedRunByGroup: { "group-one": "run-two" },
-        terminalSplitRatioByGroup: { "group-two": 65 },
+        activeRunByGroup: { "group-one": "run-two" },
+        terminalColumnsByGroup: { "group-two": 3 },
         notifications: { sound: true },
       },
     );
 
     const sameFieldDifferentGroup = mergePortalPreferenceUpdate(
       current,
-      { ...current, terminalSplitRatioByGroup: { "group-one": 40 } },
-      { ...current, terminalSplitRatioByGroup: { "group-two": 60 } },
+      { ...current, terminalColumnsByGroup: { "group-one": 1 } },
+      { ...current, terminalColumnsByGroup: { "group-two": 2 } },
     );
-    expect(sameFieldDifferentGroup.terminalSplitRatioByGroup).toEqual({
-      "group-one": 40,
-      "group-two": 60,
+    expect(sameFieldDifferentGroup.terminalColumnsByGroup).toEqual({
+      "group-one": 1,
+      "group-two": 2,
     });
 
     const sameGroupPins = mergePortalPreferenceUpdate(
@@ -138,11 +134,11 @@ describe("portal preferences v2", () => {
     ]);
 
     const cleanupDoesNotEraseNewer = mergePortalPreferenceUpdate(
-      { ...current, maximizedRunByGroup: { group: "run-old" } },
+      { ...current, activeRunByGroup: { group: "run-old" } },
       current,
-      { ...current, maximizedRunByGroup: { group: "run-new" } },
+      { ...current, activeRunByGroup: { group: "run-new" } },
     );
-    expect(cleanupDoesNotEraseNewer.maximizedRunByGroup).toEqual({ group: "run-new" });
+    expect(cleanupDoesNotEraseNewer.activeRunByGroup).toEqual({ group: "run-new" });
   });
 
   it("serializes true cross-agent updates through one browser lock", async () => {
@@ -168,11 +164,11 @@ describe("portal preferences v2", () => {
       })),
       commitPortalPreferenceUpdate((current) => ({
         ...current,
-        maximizedRunByGroup: { ...current.maximizedRunByGroup, group: "run-two" },
+        activeRunByGroup: { ...current.activeRunByGroup, group: "run-two" },
       })),
       commitPortalPreferenceUpdate((current) => ({
         ...current,
-        terminalSplitRatioByGroup: { ...current.terminalSplitRatioByGroup, group: 65 },
+        terminalColumnsByGroup: { ...current.terminalColumnsByGroup, group: 3 },
       })),
       commitPortalPreferenceUpdate((current) => ({
         ...current,
@@ -186,8 +182,8 @@ describe("portal preferences v2", () => {
       parsePortalPreferences(window.localStorage.getItem("nanasa.portal.preferences.v2")),
     ).toMatchObject({
       pinnedRunIdsByGroup: { group: ["run-one"] },
-      maximizedRunByGroup: { group: "run-two" },
-      terminalSplitRatioByGroup: { group: 65 },
+      activeRunByGroup: { group: "run-two" },
+      terminalColumnsByGroup: { group: 3 },
       completionNotificationMemberIdsByGroup: { group: ["member-one"] },
     });
   });

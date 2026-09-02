@@ -36,5 +36,5 @@ test("versioned fixtures parse through final contracts", () => {
   AgentStatusEventInputSchema.parse(
     JSON.parse(readFileSync(join(fixtures, "reporter-event.v2.json"), "utf8")),
   );
-  NanasaConfigSchema.parse(parseYaml(readFileSync(join(fixtures, "config-v2.yaml"), "utf8")));
+  NanasaConfigSchema.parse(parseYaml(readFileSync(join(fixtures, "config.yaml"), "utf8")));
 });
