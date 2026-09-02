@@ -2,45 +2,40 @@ import { hostHeaderValidation, originValidation, toNodeHandler } from "@modelcon
 import { type AuthInfo, createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import {
   AgentProgressReportCommandSchema,
+  CreateAgentActionCommandSchema,
   MAX_MESSAGE_REQUEST_BYTES,
   type MessageSubmissionResult,
   SubmitMessageCommandSchema,
+  WaitForAgentActionCommandSchema,
 } from "@nanasa/contracts";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { nanasaMcpServerInstructions } from "./coordination-instructions.js";
+import type { AgentActionService } from "./actions/agent-action-service.js";
+import type { AgentOpenWaitService } from "./actions/agent-open-wait-service.js";
+import type { AgentWaitService } from "./actions/agent-wait-service.js";
 import { McpCredentialIssuer, type McpPrincipal } from "./mcp-auth.js";
 import { MessageCommandService } from "./message-command-service.js";
+import { MessageRepository } from "./message-repository.js";
+import { DeliveryRepository } from "./delivery-repository.js";
 import { DomainError, NanasaStore } from "./store.js";
-
-const IdentifierSchema = z.string().trim().min(1).max(128);
-const MessageFieldsSchema = z
-  .object({
-    groupId: IdentifierSchema.optional(),
-    text: z.string().min(1),
-    intent: z.enum(["inform", "request", "response"]).default("request"),
-    contentType: z.enum(["text/plain", "text/markdown"]).default("text/markdown"),
-    conversationId: IdentifierSchema.optional(),
-    replyTo: IdentifierSchema.optional(),
-  })
-  .strict();
-const DirectMessageSchema = MessageFieldsSchema.extend({ recipientMemberId: IdentifierSchema });
-const MulticastMessageSchema = MessageFieldsSchema.extend({
-  recipientMemberIds: z
-    .array(IdentifierSchema)
-    .min(2)
-    .refine((ids) => new Set(ids).size === ids.length),
-});
-const ListMembersSchema = z.object({ groupId: IdentifierSchema.optional() }).strict();
-const ListAgentStatusesSchema = z
-  .object({
-    groupId: IdentifierSchema.optional(),
-    attentionOnly: z.boolean().default(false),
-  })
-  .strict();
-const GetAgentStatusSchema = z
-  .object({ groupId: IdentifierSchema.optional(), memberId: IdentifierSchema })
-  .strict();
+import {
+  MCP_TOOL_REGISTRY,
+  McpActionReferenceSchema as ActionReferenceSchema,
+  McpDeliverySchema,
+  McpDirectMessageSchema as DirectMessageSchema,
+  McpGetAgentStatusSchema as GetAgentStatusSchema,
+  McpListAgentStatusesSchema as ListAgentStatusesSchema,
+  McpListMembersSchema as ListMembersSchema,
+  McpMessageFieldsSchema as MessageFieldsSchema,
+  McpMulticastMessageSchema as MulticastMessageSchema,
+  McpOwnWaitsSchema,
+  McpPromptPeerSchema as PromptPeerSchema,
+  McpVisibleHistorySchema,
+  McpWaitActionSchema as WaitActionSchema,
+  assertMcpToolPrincipal,
+  mcpTool,
+} from "./mcp/tool-registry.js";
 
 export interface McpRouteOptions {
   path: string;
@@ -49,6 +44,11 @@ export interface McpRouteOptions {
   credentials: McpCredentialIssuer;
   store: NanasaStore;
   messages: MessageCommandService;
+  messageHistory: MessageRepository;
+  deliveries: DeliveryRepository;
+  actions: AgentActionService;
+  actionWaits: AgentWaitService;
+  openWaits: AgentOpenWaitService;
 }
 
 class McpRateLimiter {
@@ -116,10 +116,84 @@ function commandBase(principal: McpPrincipal, input: z.infer<typeof MessageField
         ? { kind: "agent" as const, memberId: principal.memberId, runId: principal.runId }
         : { kind: "operator" as const, operatorId: principal.operatorId },
     body: { contentType: input.contentType, text: input.text },
-    delivery: { mode: "terminal" as const },
+    delivery: {},
     replyTo: input.replyTo,
-    hop: 0,
   };
+}
+
+function actionPrincipal(principal: McpPrincipal) {
+  return principal.kind === "agent"
+    ? {
+        kind: "agent" as const,
+        groupId: principal.groupId,
+        memberId: principal.memberId,
+        runId: principal.runId,
+        generation: principal.generation,
+      }
+    : { kind: "operator" as const, operatorId: principal.operatorId };
+}
+
+function actionToolResult(operation: () => unknown) {
+  try {
+    const result = operation();
+    return {
+      content: [{ type: "text" as const, text: "Durable action state returned." }],
+      structuredContent: { result },
+    };
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: error instanceof Error ? error.message : "Agent action failed",
+        },
+      ],
+      isError: true,
+    };
+  }
+}
+
+function messageVisibleTo(
+  principal: McpPrincipal,
+  message: ReturnType<NanasaStore["getMessage"]>,
+): boolean {
+  if (principal.kind === "operator") return true;
+  if (message.groupId !== principal.groupId) return false;
+  if (message.sender.kind === "agent" && message.sender.memberId === principal.memberId)
+    return true;
+  if (message.audience.kind === "group") return true;
+  if (message.audience.kind === "dm") return message.audience.memberId === principal.memberId;
+  return message.audience.memberIds.includes(principal.memberId);
+}
+
+function visibleDeliveries(
+  principal: McpPrincipal,
+  options: McpRouteOptions,
+  messageId: string,
+  recipientMemberId?: string,
+) {
+  const message = options.store.getMessage(messageId);
+  if (!messageVisibleTo(principal, message)) {
+    throw new DomainError(
+      "mcp_message_forbidden",
+      "The message is not visible to this principal",
+      403,
+    );
+  }
+  const ownsSubmission =
+    principal.kind === "operator" ||
+    (message.sender.kind === "agent" && message.sender.memberId === principal.memberId);
+  return options.deliveries
+    .list(messageId)
+    .filter(
+      (delivery) =>
+        recipientMemberId === undefined || delivery.recipientMemberId === recipientMemberId,
+    )
+    .filter(
+      (delivery) =>
+        ownsSubmission ||
+        (principal.kind === "agent" && delivery.recipientMemberId === principal.memberId),
+    );
 }
 
 function listMembersResult(
@@ -267,44 +341,40 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
       }
     },
   );
-  server.registerTool(
-    "nanasa.report_progress",
-    {
-      description:
-        "Report the caller's current task stage, progress summary, next step, blocker, or final outcome",
-      inputSchema: AgentProgressReportCommandSchema,
-    },
-    async (input) => {
-      if (principal.kind !== "agent") {
-        return {
-          content: [{ type: "text" as const, text: "Only agents can report progress." }],
-          isError: true,
-        };
-      }
-      try {
-        const status = options.store.reportAgentProgress(principal, input);
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Progress recorded for ${status.alias} at ${status.progressStage}.`,
-            },
-          ],
-          structuredContent: { status },
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: error instanceof Error ? error.message : "Progress report failed",
-            },
-          ],
-          isError: true,
-        };
-      }
-    },
-  );
+  if (principal.kind === "agent") {
+    server.registerTool(
+      "nanasa.report_progress",
+      {
+        description:
+          "Report the caller's current task stage, progress summary, next step, blocker, or final outcome",
+        inputSchema: AgentProgressReportCommandSchema,
+      },
+      async (input) => {
+        try {
+          const status = options.store.reportAgentProgress(principal, input);
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Progress recorded for ${status.alias} at ${status.progressStage}.`,
+              },
+            ],
+            structuredContent: { status },
+          };
+        } catch (error) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: error instanceof Error ? error.message : "Progress report failed",
+              },
+            ],
+            isError: true,
+          };
+        }
+      },
+    );
+  }
   server.registerTool(
     "nanasa.send_dm",
     {
@@ -360,6 +430,137 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
         );
       }),
   );
+  server.registerTool(
+    "nanasa.prompt_peer",
+    {
+      description:
+        "Create a durable prompt action for one exact current peer; dispatch waits for safe readiness",
+      inputSchema: PromptPeerSchema,
+    },
+    async (input) =>
+      actionToolResult(() =>
+        options.actions.create(
+          actionPrincipal(principal),
+          CreateAgentActionCommandSchema.parse({
+            kind: "prompt",
+            groupId: targetGroup(principal, input.groupId),
+            memberId: input.memberId,
+            prompt: input.prompt,
+            allowWorking: false,
+            expectedRunId: input.expectedRunId,
+            expectedGeneration: input.expectedGeneration,
+            expectedStatusRevision: input.expectedStatusRevision,
+          }),
+          input.idempotencyKey,
+        ),
+      ),
+  );
+  server.registerTool(
+    "nanasa.get_action_result",
+    {
+      description:
+        "Read the exact durable state and correlated result for an action created by the caller",
+      inputSchema: ActionReferenceSchema,
+    },
+    async (input) =>
+      actionToolResult(() => options.actions.get(actionPrincipal(principal), input.actionId)),
+  );
+  server.registerTool(
+    "nanasa.wait_action",
+    {
+      description: "Wait for one exact durable action to enter any requested lifecycle state",
+      inputSchema: WaitActionSchema,
+    },
+    async (input) => {
+      try {
+        const result = await options.actionWaits.wait(
+          actionPrincipal(principal),
+          input.actionId,
+          WaitForAgentActionCommandSchema.parse({
+            states: input.states,
+            timeoutMs: input.timeoutMs,
+          }),
+        );
+        return {
+          content: [{ type: "text" as const, text: `Action is ${result.action.state}.` }],
+          structuredContent: result,
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: error instanceof Error ? error.message : "Action wait failed",
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+  server.registerTool(
+    "nanasa.cancel_action",
+    {
+      description: "Cancel the caller's own action before provider submission",
+      inputSchema: ActionReferenceSchema,
+    },
+    async (input) =>
+      actionToolResult(() => options.actions.cancel(actionPrincipal(principal), input.actionId)),
+  );
+  server.registerTool(
+    "nanasa.get_delivery",
+    {
+      description: mcpTool("nanasa.get_delivery").description,
+      inputSchema: McpDeliverySchema,
+    },
+    async (input) =>
+      actionToolResult(() => {
+        assertMcpToolPrincipal("nanasa.get_delivery", principal);
+        return visibleDeliveries(principal, options, input.messageId, input.recipientMemberId);
+      }),
+  );
+  server.registerTool(
+    "nanasa.list_visible_history",
+    {
+      description: mcpTool("nanasa.list_visible_history").description,
+      inputSchema: McpVisibleHistorySchema,
+    },
+    async (input) =>
+      actionToolResult(() => {
+        assertMcpToolPrincipal("nanasa.list_visible_history", principal);
+        const groupId = targetGroup(principal, input.groupId);
+        const page = options.messageHistory.page(groupId, {
+          limit: input.limit,
+          ...(input.before === undefined ? {} : { before: input.before }),
+          ...(input.after === undefined ? {} : { after: input.after }),
+        });
+        const messages = page.messages.filter((message) => messageVisibleTo(principal, message));
+        const visibleIds = new Set(messages.map((message) => message.id));
+        const deliveryOutcomes = page.deliveryOutcomes.filter(
+          (delivery) =>
+            visibleIds.has(delivery.messageId) &&
+            (principal.kind === "operator" || delivery.recipientMemberId === principal.memberId),
+        );
+        return { ...page, messages, deliveryOutcomes };
+      }),
+  );
+  if (principal.kind === "agent") {
+    server.registerTool(
+      "nanasa.list_own_waits",
+      {
+        description: "List only the authenticated agent runtime's exact open provider waits",
+        inputSchema: McpOwnWaitsSchema,
+      },
+      async (input) =>
+        actionToolResult(() =>
+          options.openWaits.list(
+            actionPrincipal(principal),
+            targetGroup(principal, input.groupId),
+            principal.memberId,
+          ),
+        ),
+    );
+  }
   return server;
 }
 
@@ -390,7 +591,9 @@ export function registerMcpRoutes(app: FastifyInstance, options: McpRouteOptions
     (request.raw as typeof request.raw & { auth?: AuthInfo }).auth = {
       token,
       clientId: "nanasa-bearer-client",
-      scopes: ["messages:submit"],
+      scopes: MCP_TOOL_REGISTRY.filter((tool) => tool.principals.includes(principal.kind)).map(
+        (tool) => tool.scope,
+      ),
     };
     reply.hijack();
     await nodeHandler(request.raw as Parameters<typeof nodeHandler>[0], reply.raw, request.body);

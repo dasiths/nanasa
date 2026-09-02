@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "eventId": "event_fixture",
+  "providerId": "provider-fixture",
+  "adapterId": "copilot",
+  "reporterId": "reporter_fixture",
+  "source": "copilot",
+  "protocolVersion": 2,
+  "reporterVersion": "1.0.0",
+  "runId": "run_fixture",
+  "generation": 1,
+  "reporterEpoch": "epoch_fixture",
+  "sourceSequence": 1,
+  "event": "session.ready",
+  "data": {}
+}

@@ -1,0 +1,978 @@
+{
+  "generatorVersion": 1,
+  "packageVersion": "0.1.0-next.11.0",
+  "commands": [
+    {
+      "id": "daemon.status",
+      "family": "daemon",
+      "command": "status",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Read daemon status"
+    },
+    {
+      "id": "daemon.open",
+      "family": "daemon",
+      "command": "open",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Resolve the running daemon"
+    },
+    {
+      "id": "api.meta",
+      "family": "api",
+      "command": "meta",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Read daemon metadata"
+    },
+    {
+      "id": "api.schema",
+      "family": "api",
+      "command": "schema",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Read OpenAPI"
+    },
+    {
+      "id": "api.eventsSchema",
+      "family": "api",
+      "command": "events-schema",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Read event JSON Schema"
+    },
+    {
+      "id": "api.snapshot",
+      "family": "api",
+      "command": "snapshot",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Read atomic snapshot"
+    },
+    {
+      "id": "metadata.get",
+      "family": "metadata",
+      "command": "get",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Read daemon metadata"
+    },
+    {
+      "id": "config.show",
+      "family": "config",
+      "command": "show",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Read configuration"
+    },
+    {
+      "id": "config.status",
+      "family": "config",
+      "command": "status",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Read config diagnostics"
+    },
+    {
+      "id": "auth.status",
+      "family": "auth",
+      "command": "status",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Read operator authentication status"
+    },
+    {
+      "id": "auth.portal",
+      "family": "auth",
+      "command": "portal",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Create a one-use portal login URL"
+    },
+    {
+      "id": "auth.revoke",
+      "family": "auth",
+      "command": "revoke",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Revoke current portal session"
+    },
+    {
+      "id": "auth.login",
+      "family": "auth",
+      "command": "login",
+      "mode": "local",
+      "positionals": [
+        "integration"
+      ],
+      "summary": "Launch provider authentication"
+    },
+    {
+      "id": "state.list",
+      "family": "state",
+      "command": "list",
+      "mode": "control",
+      "positionals": [],
+      "summary": "List provider state"
+    },
+    {
+      "id": "state.get",
+      "family": "state",
+      "command": "get",
+      "mode": "control",
+      "positionals": [
+        "binding-id"
+      ],
+      "summary": "Read provider state"
+    },
+    {
+      "id": "state.retain",
+      "family": "state",
+      "command": "retain",
+      "mode": "control",
+      "positionals": [
+        "binding-id"
+      ],
+      "summary": "Retain provider state"
+    },
+    {
+      "id": "state.delete",
+      "family": "state",
+      "command": "delete",
+      "mode": "control",
+      "positionals": [
+        "binding-id"
+      ],
+      "summary": "Delete provider state"
+    },
+    {
+      "id": "trust.list",
+      "family": "trust",
+      "command": "list",
+      "mode": "control",
+      "positionals": [],
+      "summary": "List trust receipts"
+    },
+    {
+      "id": "extension.list",
+      "family": "extension",
+      "command": "list",
+      "mode": "control",
+      "positionals": [],
+      "summary": "List provider extensions and health"
+    },
+    {
+      "id": "extension.inspect",
+      "family": "extension",
+      "command": "inspect",
+      "mode": "control",
+      "positionals": [
+        "extension-id"
+      ],
+      "summary": "Inspect one provider extension"
+    },
+    {
+      "id": "extension.plan",
+      "family": "extension",
+      "command": "plan",
+      "mode": "control",
+      "positionals": [
+        "extension-id"
+      ],
+      "summary": "Preview extension permissions and mutations"
+    },
+    {
+      "id": "extension.health",
+      "family": "extension",
+      "command": "health",
+      "mode": "control",
+      "positionals": [
+        "extension-id"
+      ],
+      "summary": "Inspect extension health and drift"
+    },
+    {
+      "id": "extension.trust",
+      "family": "extension",
+      "command": "trust",
+      "mode": "control",
+      "positionals": [
+        "extension-id"
+      ],
+      "summary": "Trust one exact extension plan"
+    },
+    {
+      "id": "extension.install",
+      "family": "extension",
+      "command": "install",
+      "mode": "control",
+      "positionals": [
+        "extension-id"
+      ],
+      "summary": "Install a declarative provider extension"
+    },
+    {
+      "id": "extension.repair",
+      "family": "extension",
+      "command": "repair",
+      "mode": "control",
+      "positionals": [
+        "extension-id"
+      ],
+      "summary": "Repair a declarative provider extension"
+    },
+    {
+      "id": "extension.disable",
+      "family": "extension",
+      "command": "disable",
+      "mode": "control",
+      "positionals": [
+        "extension-id"
+      ],
+      "summary": "Disable a declarative provider extension"
+    },
+    {
+      "id": "extension.rollback",
+      "family": "extension",
+      "command": "rollback",
+      "mode": "control",
+      "positionals": [
+        "extension-id"
+      ],
+      "summary": "Rollback a declarative provider extension"
+    },
+    {
+      "id": "extension.remove",
+      "family": "extension",
+      "command": "remove",
+      "mode": "control",
+      "positionals": [
+        "extension-id"
+      ],
+      "summary": "Remove extension lock ownership conservatively"
+    },
+    {
+      "id": "group.list",
+      "family": "group",
+      "command": "list",
+      "mode": "control",
+      "positionals": [],
+      "summary": "List groups"
+    },
+    {
+      "id": "group.get",
+      "family": "group",
+      "command": "get",
+      "mode": "control",
+      "positionals": [
+        "group-id"
+      ],
+      "summary": "Read group"
+    },
+    {
+      "id": "group.create",
+      "family": "group",
+      "command": "create",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Create group"
+    },
+    {
+      "id": "group.update",
+      "family": "group",
+      "command": "update",
+      "mode": "control",
+      "positionals": [
+        "group-id"
+      ],
+      "summary": "Update group"
+    },
+    {
+      "id": "group.delete",
+      "family": "group",
+      "command": "delete",
+      "mode": "control",
+      "positionals": [
+        "group-id"
+      ],
+      "summary": "Delete group"
+    },
+    {
+      "id": "group.reorder",
+      "family": "group",
+      "command": "reorder",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Reorder groups"
+    },
+    {
+      "id": "role.list",
+      "family": "role",
+      "command": "list",
+      "mode": "control",
+      "positionals": [],
+      "summary": "List roles"
+    },
+    {
+      "id": "role.get",
+      "family": "role",
+      "command": "get",
+      "mode": "control",
+      "positionals": [
+        "role-id"
+      ],
+      "summary": "Read role"
+    },
+    {
+      "id": "role.update",
+      "family": "role",
+      "command": "update",
+      "mode": "control",
+      "positionals": [
+        "role-id"
+      ],
+      "summary": "Update role presentation"
+    },
+    {
+      "id": "agent.list",
+      "family": "agent",
+      "command": "list",
+      "mode": "control",
+      "positionals": [
+        "group-id"
+      ],
+      "summary": "List agents"
+    },
+    {
+      "id": "agent.get",
+      "family": "agent",
+      "command": "get",
+      "mode": "control",
+      "positionals": [
+        "group-id",
+        "agent-id"
+      ],
+      "summary": "Read agent"
+    },
+    {
+      "id": "agent.create",
+      "family": "agent",
+      "command": "create",
+      "mode": "control",
+      "positionals": [
+        "group-id"
+      ],
+      "summary": "Create agent"
+    },
+    {
+      "id": "agent.update",
+      "family": "agent",
+      "command": "update",
+      "mode": "control",
+      "positionals": [
+        "group-id",
+        "agent-id"
+      ],
+      "summary": "Update agent"
+    },
+    {
+      "id": "agent.delete",
+      "family": "agent",
+      "command": "delete",
+      "mode": "control",
+      "positionals": [
+        "group-id",
+        "agent-id"
+      ],
+      "summary": "Delete agent"
+    },
+    {
+      "id": "agent.reorder",
+      "family": "agent",
+      "command": "reorder",
+      "mode": "control",
+      "positionals": [
+        "group-id"
+      ],
+      "summary": "Reorder agents"
+    },
+    {
+      "id": "agent.reparent",
+      "family": "agent",
+      "command": "reparent",
+      "mode": "control",
+      "positionals": [
+        "group-id",
+        "agent-id"
+      ],
+      "summary": "Reparent stopped agent"
+    },
+    {
+      "id": "agent.checkout",
+      "family": "agent",
+      "command": "checkout",
+      "mode": "control",
+      "positionals": [
+        "group-id",
+        "agent-id"
+      ],
+      "summary": "Assign agent checkout"
+    },
+    {
+      "id": "agent.prompt",
+      "family": "agent",
+      "command": "prompt",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Create safe peer prompt"
+    },
+    {
+      "id": "agent.read",
+      "family": "agent",
+      "command": "read",
+      "mode": "control",
+      "positionals": [
+        "run-id",
+        "generation"
+      ],
+      "summary": "Read agent terminal"
+    },
+    {
+      "id": "agent.wait",
+      "family": "agent",
+      "command": "wait",
+      "mode": "control",
+      "positionals": [
+        "action-id"
+      ],
+      "summary": "Wait for action"
+    },
+    {
+      "id": "run.list",
+      "family": "run",
+      "command": "list",
+      "mode": "control",
+      "positionals": [],
+      "summary": "List runs"
+    },
+    {
+      "id": "run.get",
+      "family": "run",
+      "command": "get",
+      "mode": "control",
+      "positionals": [
+        "run-id"
+      ],
+      "summary": "Read run"
+    },
+    {
+      "id": "run.start",
+      "family": "run",
+      "command": "start",
+      "mode": "control",
+      "positionals": [
+        "group-id",
+        "agent-id"
+      ],
+      "summary": "Start run"
+    },
+    {
+      "id": "run.stop",
+      "family": "run",
+      "command": "stop",
+      "mode": "control",
+      "positionals": [
+        "group-id",
+        "agent-id"
+      ],
+      "summary": "Stop run"
+    },
+    {
+      "id": "run.restart",
+      "family": "run",
+      "command": "restart",
+      "mode": "control",
+      "positionals": [
+        "run-id"
+      ],
+      "summary": "Restart run"
+    },
+    {
+      "id": "run.startAll",
+      "family": "run",
+      "command": "start-all",
+      "mode": "control",
+      "positionals": [
+        "group-id"
+      ],
+      "summary": "Start group runs"
+    },
+    {
+      "id": "run.stopAll",
+      "family": "run",
+      "command": "stop-all",
+      "mode": "control",
+      "positionals": [
+        "group-id"
+      ],
+      "summary": "Stop group runs"
+    },
+    {
+      "id": "run.restartAll",
+      "family": "run",
+      "command": "restart-all",
+      "mode": "control",
+      "positionals": [
+        "group-id"
+      ],
+      "summary": "Restart group runs"
+    },
+    {
+      "id": "run.interrupt",
+      "family": "run",
+      "command": "interrupt",
+      "mode": "control",
+      "positionals": [
+        "run-id"
+      ],
+      "summary": "Interrupt run"
+    },
+    {
+      "id": "status.list",
+      "family": "status",
+      "command": "list",
+      "mode": "control",
+      "positionals": [],
+      "summary": "List status"
+    },
+    {
+      "id": "status.get",
+      "family": "status",
+      "command": "get",
+      "mode": "control",
+      "positionals": [
+        "group-id",
+        "member-id"
+      ],
+      "summary": "Read status"
+    },
+    {
+      "id": "status.ack",
+      "family": "status",
+      "command": "ack",
+      "mode": "control",
+      "positionals": [
+        "group-id",
+        "member-id"
+      ],
+      "summary": "Acknowledge completion"
+    },
+    {
+      "id": "message.send",
+      "family": "message",
+      "command": "send",
+      "mode": "control",
+      "positionals": [
+        "group-id"
+      ],
+      "summary": "Send durable message"
+    },
+    {
+      "id": "message.list",
+      "family": "message",
+      "command": "list",
+      "mode": "control",
+      "positionals": [
+        "group-id"
+      ],
+      "summary": "List messages"
+    },
+    {
+      "id": "message.deliveries",
+      "family": "message",
+      "command": "deliveries",
+      "mode": "control",
+      "positionals": [
+        "message-id"
+      ],
+      "summary": "List deliveries"
+    },
+    {
+      "id": "message.clear",
+      "family": "message",
+      "command": "clear",
+      "mode": "control",
+      "positionals": [
+        "group-id"
+      ],
+      "summary": "Clear messages"
+    },
+    {
+      "id": "action.create",
+      "family": "action",
+      "command": "create",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Create action"
+    },
+    {
+      "id": "action.get",
+      "family": "action",
+      "command": "get",
+      "mode": "control",
+      "positionals": [
+        "action-id"
+      ],
+      "summary": "Read action"
+    },
+    {
+      "id": "action.list",
+      "family": "action",
+      "command": "list",
+      "mode": "control",
+      "positionals": [
+        "group-id"
+      ],
+      "summary": "List action workspace"
+    },
+    {
+      "id": "action.wait",
+      "family": "action",
+      "command": "wait",
+      "mode": "control",
+      "positionals": [
+        "action-id"
+      ],
+      "summary": "Wait for action"
+    },
+    {
+      "id": "action.cancel",
+      "family": "action",
+      "command": "cancel",
+      "mode": "control",
+      "positionals": [
+        "action-id"
+      ],
+      "summary": "Cancel action"
+    },
+    {
+      "id": "wait.list",
+      "family": "wait",
+      "command": "list",
+      "mode": "control",
+      "positionals": [
+        "group-id"
+      ],
+      "summary": "List open waits"
+    },
+    {
+      "id": "wait.reply",
+      "family": "wait",
+      "command": "reply",
+      "mode": "control",
+      "positionals": [
+        "wait-id"
+      ],
+      "summary": "Reply to exact wait"
+    },
+    {
+      "id": "terminal.status",
+      "family": "terminal",
+      "command": "status",
+      "mode": "control",
+      "positionals": [
+        "run-id"
+      ],
+      "summary": "Read terminal status"
+    },
+    {
+      "id": "terminal.read",
+      "family": "terminal",
+      "command": "read",
+      "mode": "control",
+      "positionals": [
+        "run-id",
+        "generation"
+      ],
+      "summary": "Read terminal history"
+    },
+    {
+      "id": "terminal.open",
+      "family": "terminal",
+      "command": "open",
+      "mode": "control",
+      "positionals": [
+        "run-id"
+      ],
+      "summary": "Resolve terminal stream"
+    },
+    {
+      "id": "terminal.checkpoints",
+      "family": "terminal",
+      "command": "checkpoints",
+      "mode": "control",
+      "positionals": [],
+      "summary": "List checkpoints"
+    },
+    {
+      "id": "terminal.checkpoint",
+      "family": "terminal",
+      "command": "checkpoint",
+      "mode": "control",
+      "positionals": [
+        "checkpoint-id"
+      ],
+      "summary": "Read checkpoint"
+    },
+    {
+      "id": "console.list",
+      "family": "console",
+      "command": "list",
+      "mode": "control",
+      "positionals": [],
+      "summary": "List consoles"
+    },
+    {
+      "id": "console.get",
+      "family": "console",
+      "command": "get",
+      "mode": "control",
+      "positionals": [
+        "console-id"
+      ],
+      "summary": "Read console"
+    },
+    {
+      "id": "console.create",
+      "family": "console",
+      "command": "create",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Create console"
+    },
+    {
+      "id": "console.delete",
+      "family": "console",
+      "command": "delete",
+      "mode": "control",
+      "positionals": [
+        "console-id"
+      ],
+      "summary": "Delete console"
+    },
+    {
+      "id": "checkout.repositories",
+      "family": "checkout",
+      "command": "repositories",
+      "mode": "control",
+      "positionals": [],
+      "summary": "List repositories"
+    },
+    {
+      "id": "checkout.list",
+      "family": "checkout",
+      "command": "list",
+      "mode": "control",
+      "positionals": [
+        "repository-id"
+      ],
+      "summary": "List checkouts"
+    },
+    {
+      "id": "checkout.open",
+      "family": "checkout",
+      "command": "open",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Open checkout"
+    },
+    {
+      "id": "checkout.assign",
+      "family": "checkout",
+      "command": "assign",
+      "mode": "control",
+      "positionals": [
+        "group-id",
+        "agent-id"
+      ],
+      "summary": "Assign checkout"
+    },
+    {
+      "id": "worktree.list",
+      "family": "worktree",
+      "command": "list",
+      "mode": "control",
+      "positionals": [
+        "repository-id"
+      ],
+      "summary": "List worktrees"
+    },
+    {
+      "id": "worktree.create",
+      "family": "worktree",
+      "command": "create",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Create worktree"
+    },
+    {
+      "id": "worktree.remove",
+      "family": "worktree",
+      "command": "remove",
+      "mode": "control",
+      "positionals": [
+        "worktree-id"
+      ],
+      "summary": "Remove worktree"
+    },
+    {
+      "id": "events.watch",
+      "family": "events",
+      "command": "watch",
+      "mode": "events",
+      "positionals": [],
+      "summary": "Watch sequenced events"
+    },
+    {
+      "id": "service.install",
+      "family": "service",
+      "command": "install",
+      "mode": "local",
+      "positionals": [],
+      "summary": "Install the project-local systemd user service"
+    },
+    {
+      "id": "service.status",
+      "family": "service",
+      "command": "status",
+      "mode": "local",
+      "positionals": [],
+      "summary": "Status the project-local systemd user service"
+    },
+    {
+      "id": "service.start",
+      "family": "service",
+      "command": "start",
+      "mode": "local",
+      "positionals": [],
+      "summary": "Start the project-local systemd user service"
+    },
+    {
+      "id": "service.stop",
+      "family": "service",
+      "command": "stop",
+      "mode": "local",
+      "positionals": [],
+      "summary": "Stop the project-local systemd user service"
+    },
+    {
+      "id": "service.restart",
+      "family": "service",
+      "command": "restart",
+      "mode": "local",
+      "positionals": [],
+      "summary": "Restart the project-local systemd user service"
+    },
+    {
+      "id": "service.remove",
+      "family": "service",
+      "command": "remove",
+      "mode": "local",
+      "positionals": [],
+      "summary": "Remove the project-local systemd user service"
+    },
+    {
+      "id": "service.logs",
+      "family": "service",
+      "command": "logs",
+      "mode": "local",
+      "positionals": [],
+      "summary": "Logs the project-local systemd user service"
+    },
+    {
+      "id": "service.wait-ready",
+      "family": "service",
+      "command": "wait-ready",
+      "mode": "local",
+      "positionals": [],
+      "summary": "Wait-ready the project-local systemd user service"
+    },
+    {
+      "id": "service.upgrade",
+      "family": "service",
+      "command": "upgrade",
+      "mode": "local",
+      "positionals": [
+        "candidate-package-root"
+      ],
+      "summary": "Atomically upgrade package and state with readiness rollback"
+    },
+    {
+      "id": "service.rollback",
+      "family": "service",
+      "command": "rollback",
+      "mode": "local",
+      "positionals": [
+        "backup-id"
+      ],
+      "summary": "Restore one verified package-state backup"
+    },
+    {
+      "id": "remote.describe",
+      "family": "remote",
+      "command": "describe",
+      "mode": "local",
+      "positionals": [],
+      "summary": "Describe exact repository service and protocol identity"
+    },
+    {
+      "id": "remote.connect",
+      "family": "remote",
+      "command": "connect",
+      "mode": "local",
+      "positionals": [
+        "ssh-target"
+      ],
+      "summary": "Open a loopback-only OpenSSH portal tunnel"
+    },
+    {
+      "id": "remote.start",
+      "family": "remote",
+      "command": "start",
+      "mode": "local",
+      "positionals": [
+        "ssh-target"
+      ],
+      "summary": "Start the remote project service through OpenSSH"
+    },
+    {
+      "id": "remote.restart",
+      "family": "remote",
+      "command": "restart",
+      "mode": "local",
+      "positionals": [
+        "ssh-target"
+      ],
+      "summary": "Restart the remote project service through OpenSSH"
+    },
+    {
+      "id": "doctor.run",
+      "family": "doctor",
+      "command": "run",
+      "mode": "local",
+      "positionals": [],
+      "summary": "Run local diagnostics"
+    },
+    {
+      "id": "completion.generate",
+      "family": "completion",
+      "command": "generate",
+      "mode": "local",
+      "positionals": [
+        "shell"
+      ],
+      "summary": "Generate shell completion"
+    }
+  ]
+}

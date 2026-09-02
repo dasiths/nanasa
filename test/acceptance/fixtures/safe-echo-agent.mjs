@@ -14,6 +14,25 @@ process.stdin.on("data", (chunk) => {
 
 const lines = createInterface({ input: process.stdin, terminal: false });
 lines.on("line", (line) => {
+  if (line === "__ALT__") {
+    process.stdout.write("\u001b[?1049hALTERNATE_SCREEN_READY\r\n");
+    setTimeout(() => process.stdout.write("\u001b[?1049lALTERNATE_SCREEN_EXITED\n"), 250);
+    return;
+  }
+  if (line === "__OSC52__") {
+    process.stdout.write(
+      `\u001b]52;c;${Buffer.from("clipboard 世界 🌍").toString("base64")}\u0007`,
+    );
+    return;
+  }
+  if (line === "__OSC52_TMUX__") {
+    const encoded = Buffer.from("clipboard 世界 🌍").toString("base64");
+    const wrap = (sequence) =>
+      `\u001bPtmux;${sequence.replaceAll("\u001b", "\u001b\u001b")}\u001b\\`;
+    process.stdout.write(wrap(`\u001b]52;p!;${encoded};\u0007`));
+    process.stdout.write(wrap(`\u001b]52;c;${encoded}\u0007`));
+    return;
+  }
   process.stdout.write(`SAFE_ECHO:${line}\n`);
 });
 

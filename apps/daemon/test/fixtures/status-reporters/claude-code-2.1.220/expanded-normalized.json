@@ -1,0 +1,92 @@
+[
+  { "event": "session.ready", "sessionId": "claude-session" },
+  { "event": "turn.started", "sessionId": "claude-session" },
+  {
+    "event": "tool.started",
+    "sessionId": "claude-session",
+    "operationId": "claude-tool-1",
+    "data": { "tool": "Bash" }
+  },
+  {
+    "event": "tool.started",
+    "sessionId": "claude-session",
+    "operationId": "claude-tool-2",
+    "data": { "tool": "Read" }
+  },
+  {
+    "event": "tool.finished",
+    "sessionId": "claude-session",
+    "operationId": "claude-tool-2",
+    "data": { "tool": "Read" }
+  },
+  { "event": "wait.closed", "sessionId": "claude-session", "requestId": "<stable-permission>" },
+  {
+    "event": "tool.failed",
+    "sessionId": "claude-session",
+    "operationId": "claude-tool-1",
+    "data": { "tool": "Bash" }
+  },
+  { "event": "wait.closed", "sessionId": "claude-session", "requestId": "<stable-permission>" },
+  {
+    "event": "wait.opened",
+    "sessionId": "claude-session",
+    "requestId": "<stable-permission>",
+    "data": {
+      "waitKind": "question",
+      "summary": "Agent question requires input",
+      "replyChannel": "terminal"
+    }
+  },
+  { "event": "wait.closed", "sessionId": "claude-session", "requestId": "<stable-permission>" },
+  { "event": "wait.closed", "sessionId": "claude-session", "requestId": "<stable-permission>" },
+  {
+    "event": "wait.opened",
+    "sessionId": "claude-session",
+    "requestId": "<stable-permission>",
+    "data": {
+      "waitKind": "plan_approval",
+      "summary": "Plan approval required",
+      "replyChannel": "terminal"
+    }
+  },
+  { "event": "wait.closed", "sessionId": "claude-session", "requestId": "<stable-permission>" },
+  { "event": "wait.closed", "sessionId": "claude-session", "requestId": "<stable-permission>" },
+  {
+    "event": "wait.opened",
+    "sessionId": "claude-session",
+    "requestId": "<stable-permission>",
+    "data": {
+      "waitKind": "permission",
+      "summary": "Tool permission required",
+      "replyChannel": "terminal"
+    }
+  },
+  {
+    "event": "tool.finished",
+    "sessionId": "claude-session",
+    "operationId": "claude-tool-3",
+    "data": { "tool": "Bash" }
+  },
+  { "event": "wait.closed", "sessionId": "claude-session", "requestId": "<stable-permission>" },
+  { "event": "compaction.started", "sessionId": "claude-session" },
+  { "event": "compaction.finished", "sessionId": "claude-session" },
+  {
+    "event": "wait.opened",
+    "sessionId": "claude-session",
+    "requestId": "<stable-permission>",
+    "data": {
+      "waitKind": "elicitation",
+      "summary": "MCP elicitation requires input",
+      "replyChannel": "terminal"
+    }
+  },
+  { "event": "wait.closed", "sessionId": "claude-session", "requestId": "<stable-permission>" },
+  {
+    "event": "failure.observed",
+    "sessionId": "claude-session",
+    "data": { "errorClass": "ProviderError", "fatal": true }
+  },
+  { "event": "wait.closed", "sessionId": "claude-session", "requestId": "<stable-permission>" },
+  { "event": "turn.settled", "sessionId": "claude-session", "data": { "activeCount": 2 } },
+  { "event": "session.ended", "sessionId": "claude-session" }
+]

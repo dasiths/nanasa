@@ -1,68 +1,43 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
-
+import { expect, it, vi } from "vitest";
 import type { PortalClient } from "../api.js";
 import { AdHocConsoleDialog } from "./ad-hoc-console-dialog.js";
 
-describe("AdHocConsoleDialog", () => {
-  it("opens a ready terminal and deletes the console when closed", async () => {
-    const client = {
-      createConsole: vi.fn().mockResolvedValue({ id: "console-one", runId: "console-run" }),
-      closeConsole: vi.fn().mockResolvedValue(undefined),
-      getTerminalEndpointStatus: vi.fn().mockResolvedValue({
-        runId: "console-run",
-        provider: "ttyd",
-        state: "ready",
-        url: "/terminals/0123456789abcdef0123456789abcdef/",
-      }),
-    } as unknown as PortalClient;
+vi.mock("../terminal/terminal-console.js", () => ({
+  TerminalConsole: ({ label }: { label: string }) => <div data-testid="console-xterm">{label}</div>,
+}));
 
-    function Harness() {
-      const [open, setOpen] = useState(true);
-      return open ? <AdHocConsoleDialog client={client} onClose={() => setOpen(false)} /> : null;
-    }
-
-    const user = userEvent.setup();
-    render(<Harness />);
-
-    expect(await screen.findByTitle("Ad hoc console terminal")).toHaveAttribute(
-      "src",
-      "/terminals/0123456789abcdef0123456789abcdef/",
-    );
-    expect(client.createConsole).toHaveBeenCalledOnce();
-
-    await user.click(screen.getByRole("button", { name: "Close console" }));
-    await waitFor(() => expect(client.closeConsole).toHaveBeenCalledWith("console-one"));
-    expect(screen.queryByRole("dialog", { name: "Console" })).not.toBeInTheDocument();
-  });
-
-  it("replaces a console session when its route is lost", async () => {
-    const client = {
-      createConsole: vi
-        .fn()
-        .mockResolvedValueOnce({ id: "console-stale", runId: "console-stale" })
-        .mockResolvedValueOnce({ id: "console-fresh", runId: "console-fresh" }),
-      closeConsole: vi.fn().mockResolvedValue(undefined),
-      getTerminalEndpointStatus: vi
-        .fn()
-        .mockRejectedValueOnce(new Error("Route not found"))
-        .mockResolvedValue({
-          runId: "console-fresh",
-          provider: "ttyd",
-          state: "ready",
-          url: "/terminals/0123456789abcdef0123456789abcdef/",
-        }),
-    } as unknown as PortalClient;
-    const user = userEvent.setup();
-    render(<AdHocConsoleDialog client={client} onClose={vi.fn()} />);
-
-    expect(await screen.findByText("Route not found")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Retry" }));
-
-    expect(await screen.findByTitle("Ad hoc console terminal")).toBeVisible();
-    expect(client.createConsole).toHaveBeenCalledTimes(2);
-    expect(client.closeConsole).toHaveBeenCalledWith("console-stale");
-  });
+it("opens the ad hoc console in the shared owned terminal and cleans it up", async () => {
+  const closeConsole = vi.fn().mockResolvedValue(undefined);
+  const client = {
+    createConsole: vi
+      .fn()
+      .mockResolvedValue({ id: "console-one", runId: "console-one", generation: 1 }),
+    closeConsole,
+    getTerminalEndpointStatus: vi.fn().mockResolvedValue({
+      runId: "console-one",
+      provider: "nanasa-terminal.v1",
+      state: "ready",
+      streamUrl: "/api/v1/terminal-stream/console-one",
+      protocol: "nanasa-terminal.v1",
+      limits: {
+        maxFrameBytes: 262144,
+        maxInputBytes: 65536,
+        maxPasteBytes: 196608,
+        maxOutputQueueBytes: 1048576,
+        maxViewers: 4,
+        maxObservers: 3,
+        maxReadLines: 5000,
+        maxReadBytes: 1048576,
+        heartbeatMs: 5000,
+        leaseMs: 15000,
+        reconnectHistoryFrames: 256,
+      },
+      observers: 0,
+    }),
+  } as unknown as PortalClient;
+  const { unmount } = render(<AdHocConsoleDialog client={client} onClose={vi.fn()} />);
+  expect(await screen.findByTestId("console-xterm")).toHaveTextContent("Ad hoc console terminal");
+  unmount();
+  await waitFor(() => expect(closeConsole).toHaveBeenCalledWith("console-one"));
 });

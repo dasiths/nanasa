@@ -1,0 +1,11 @@
+{
+  "generatorVersion": 1,
+  "packageVersion": "0.1.0-next.11.0",
+  "controlApiVersion": 1,
+  "eventProtocolVersion": 1,
+  "terminalProtocolVersion": 1,
+  "configVersion": 2,
+  "service": "systemd-user",
+  "remote": "openssh-loopback-forward",
+  "updateContinuity": "tmux-process-retained-browser-resnapshot"
+}

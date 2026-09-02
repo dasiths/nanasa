@@ -8,7 +8,7 @@ import {
   discoverRepositoryRoot,
   loadNanasaConfig,
   nanasaPaths,
-} from "../src/config.js";
+} from "../src/config-loader.js";
 import { resolveEffectiveAgentPrompt } from "../src/instruction-resolver.js";
 
 const temporaryDirectories: string[] = [];
@@ -23,19 +23,18 @@ function temporaryRepository(config: string): string {
 }
 
 function validConfig(extra = ""): string {
-  return `integrations:
+  return `version: 2
+integrations:
   copilot:
     name: GitHub Copilot
     kind: copilot
-    adapter: copilot-cli
     command: [copilot]
-    recovery: resume-or-restart
-    capabilities: [queue]
 ${extra}`;
 }
 
 function minimalConfig(extra = ""): string {
-  return `integrations:
+  return `version: 2
+integrations:
   opencode:
     name: OpenCode
     kind: opencode
@@ -59,10 +58,10 @@ describe("Nanasa configuration", () => {
       id: "copilot",
       command: ["copilot"],
       cwd: repository,
-      agentConfigHome: { scope: "integration" },
+      providerState: { scope: "membership" },
     });
     expect(Object.keys(first.config.integrations.copilot)).not.toEqual(
-      expect.arrayContaining(["adapter", "capabilities", "recovery"]),
+      expect.arrayContaining(["adapter", "capabilities", "recovery", "agentConfigHome"]),
     );
     expect(JSON.parse(JSON.stringify(first.config))).not.toMatchObject({
       integrations: { copilot: { adapter: expect.anything() } },
@@ -77,8 +76,20 @@ describe("Nanasa configuration", () => {
     const repository = temporaryRepository(minimalConfig());
 
     expect(loadNanasaConfig(repository).config).toEqual({
+      version: 2,
+      repository: { path: repository, checkout: { kind: "current" } },
+      terminal: {
+        checkpoints: {
+          enabled: false,
+          maxLines: 5_000,
+          maxBytes: 1_048_576,
+          retentionSeconds: 86_400,
+          sensitivity: "repository-private",
+        },
+      },
       instructions: [],
       roles: {},
+      extensions: {},
       integrations: {
         opencode: {
           id: "opencode",
@@ -86,7 +97,11 @@ describe("Nanasa configuration", () => {
           kind: "opencode",
           command: ["opencode"],
           cwd: repository,
-          agentConfigHome: { scope: "integration" },
+          providerState: { scope: "membership" },
+          credentials: { kind: "provider-managed" },
+          model: { resumePolicy: "preserve-session" },
+          nativeRecovery: { mode: "resume-or-restart", confirmationTimeoutSeconds: 30 },
+          extensions: [],
           environment: {},
         },
       },
@@ -208,25 +223,25 @@ instructions: [.nanasa/instructions/nul.md]
 
   it("loads agent and repository-local custom configuration homes", () => {
     const agentRepository = temporaryRepository(
-      validConfig("    agentConfigHome: { scope: agent }\n"),
+      validConfig("    providerState: { scope: membership }\n"),
     );
-    expect(loadNanasaConfig(agentRepository).config.integrations.copilot.agentConfigHome).toEqual({
-      scope: "agent",
+    expect(loadNanasaConfig(agentRepository).config.integrations.copilot.providerState).toEqual({
+      scope: "membership",
     });
 
     const customRepository = temporaryRepository(
       validConfig(
-        '    agentConfigHome: { scope: custom, path: "homes/{integrationId}/{agentId}" }\n',
+        '    providerState: { scope: custom, path: "homes/{integrationId}/{agentId}" }\n',
       ),
     );
-    expect(loadNanasaConfig(customRepository).config.integrations.copilot.agentConfigHome).toEqual({
+    expect(loadNanasaConfig(customRepository).config.integrations.copilot.providerState).toEqual({
       scope: "custom",
       path: "homes/{integrationId}/{agentId}",
     });
   });
 
   it.each([
-    ["version", `${validConfig()}version: 1\n`],
+    ["version", validConfig().replace("version: 2", "version: 1")],
     ["agentTypes", validConfig().replace("integrations:", "agentTypes:")],
     ["agentProfiles", `${validConfig()}agentProfiles: {}\n`],
     ["memberships", `${validConfig()}groups:\n  group_one:\n    name: Team\n    memberships: {}\n`],
@@ -236,23 +251,24 @@ instructions: [.nanasa/instructions/nul.md]
   });
 
   it("rejects integrations that resolve to the same configuration home", () => {
-    const repository = temporaryRepository(`integrations:
+    const repository = temporaryRepository(`version: 2
+integrations:
   first:
     name: First
     kind: copilot
     command: [copilot]
-    agentConfigHome: { scope: custom, path: shared }
+    providerState: { scope: custom, path: shared }
   second:
     name: Second
     kind: pi
     command: [pi]
-    agentConfigHome: { scope: custom, path: shared }
+    providerState: { scope: custom, path: shared }
 `);
 
     expect(() => loadNanasaConfig(repository)).toThrowError(
       expect.objectContaining({
         status: expect.objectContaining({
-          diagnostics: [expect.objectContaining({ code: "agent_config_home_collision" })],
+          diagnostics: [expect.objectContaining({ code: "provider_state_collision" })],
         }),
       }),
     );
@@ -262,14 +278,12 @@ instructions: [.nanasa/instructions/nul.md]
     ["duplicate keys", validConfig("  copilot:\n    name: Duplicate\n")],
     [
       "aliases",
-      `integrations:
+      `version: 2
+integrations:
   copilot: &agent
     name: GitHub Copilot
     kind: copilot
-    adapter: copilot-cli
     command: [copilot]
-    recovery: resume-or-restart
-    capabilities: [queue]
   second: *agent
 `,
     ],
@@ -277,48 +291,39 @@ instructions: [.nanasa/instructions/nul.md]
       "merge keys",
       `base: &base
   name: Base
+version: 2
 integrations:
   copilot:
     <<: *base
     kind: copilot
-    adapter: copilot-cli
     command: [copilot]
-    recovery: resume-or-restart
-    capabilities: [queue]
 `,
     ],
     ["custom tags", validConfig("    environment: !unsafe {}\n")],
     ["multiple documents", `${validConfig()}---\n${validConfig()}`],
     ["unknown properties", validConfig("    unknown: true\n")],
     ["empty argv", validConfig().replace("command: [copilot]", "command: []")],
-    ["legacy adapter-kind mismatch", validConfig().replace("kind: copilot", "kind: opencode")],
-    [
-      "terminal steer",
-      validConfig()
-        .replace("adapter: copilot-cli", "adapter: terminal")
-        .replace("recovery: resume-or-restart", "recovery: restart")
-        .replace("capabilities: [queue]", "capabilities: [queue, steer]"),
-    ],
+    ["discarded adapter", validConfig("    adapter: terminal\n")],
     ["dangerous environment", validConfig("    environment: { NODE_OPTIONS: --inspect }\n")],
     [
       "external configuration home",
-      validConfig("    agentConfigHome: { scope: custom, path: ../../outside }\n"),
+      validConfig("    providerState: { scope: custom, path: ../../outside }\n"),
     ],
     [
       "unknown configuration home placeholder",
-      validConfig('    agentConfigHome: { scope: custom, path: "homes/{runId}" }\n'),
+      validConfig('    providerState: { scope: custom, path: "homes/{runId}" }\n'),
     ],
     [
       "Windows absolute configuration home",
-      validConfig('    agentConfigHome: { scope: custom, path: "C:\\\\outside" }\n'),
+      validConfig('    providerState: { scope: custom, path: "C:\\\\outside" }\n'),
     ],
     [
       "reserved configuration home namespace",
-      validConfig("    agentConfigHome: { scope: custom, path: agents/shared }\n"),
+      validConfig("    providerState: { scope: custom, path: integrations/shared }\n"),
     ],
     [
       "integration root as configuration home",
-      validConfig("    agentConfigHome: { scope: custom, path: . }\n"),
+      validConfig("    providerState: { scope: custom, path: . }\n"),
     ],
   ])("rejects %s", (_name, source) => {
     const repository = temporaryRepository(source);

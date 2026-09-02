@@ -1,0 +1,300 @@
+name: External certification
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact pushed commit SHA to certify
+        required: true
+        type: string
+      mode:
+        description: Fail-closed external environment to certify
+        required: true
+        type: choice
+        options: [provider, webkit, arm64, node24, ubuntu, systemd, ssh]
+      provider_id:
+        description: Closed built-in provider profile
+        required: false
+        type: choice
+        options: [copilot, claude-code, opencode, pi]
+      ssh_target:
+        description: OpenSSH target for SSH mode
+        required: false
+        type: string
+      ssh_repository:
+        description: Absolute remote repository path for SSH mode
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  NANASA_CERT_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+  NANASA_ALLOW_PUBLIC_REGISTRY_FALLBACK: "true"
+
+jobs:
+  validate-dispatch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        run: test "${NANASA_CERT_CANDIDATE_SHA}" = "$(git rev-parse HEAD)" && test "${#NANASA_CERT_CANDIDATE_SHA}" = 40
+      - name: Validate closed certification dispatch
+        shell: bash
+        env:
+          NANASA_CERT_MODE: ${{ inputs.mode }}
+          NANASA_CERT_PROVIDER_ID: ${{ inputs.provider_id }}
+        run: node scripts/certification-dispatch.mjs
+
+  provider:
+    if: inputs.mode == 'provider'
+    needs: validate-dispatch
+    strategy:
+      fail-fast: false
+      matrix:
+        provider_id: ${{ fromJSON(format('["{0}"]', inputs.provider_id)) }}
+    runs-on: [self-hosted, linux, x64, provider-certification]
+    timeout-minutes: 20
+    env:
+      NANASA_ALLOW_PUBLIC_REGISTRY_FALLBACK: "false"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        run: test "${NANASA_CERT_CANDIDATE_SHA}" = "$(git rev-parse HEAD)" && test "${#NANASA_CERT_CANDIDATE_SHA}" = 40
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Configure registry and pinned pnpm
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install and build candidate without provider credentials
+        run: |
+          source scripts/ci-registry-env.sh; pnpm install --frozen-lockfile
+          source scripts/ci-registry-env.sh; pnpm package:build
+      - name: Certify GitHub Copilot semantic lifecycle
+        if: matrix.provider_id == 'copilot'
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: node scripts/certify-external.mjs provider copilot
+      - name: Certify Claude Code semantic lifecycle
+        if: matrix.provider_id == 'claude-code'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node scripts/certify-external.mjs provider claude-code
+      - name: Certify OpenCode semantic lifecycle
+        if: matrix.provider_id == 'opencode'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node scripts/certify-external.mjs provider opencode
+      - name: Certify Pi semantic lifecycle
+        if: matrix.provider_id == 'pi'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node scripts/certify-external.mjs provider pi
+
+  webkit:
+    if: inputs.mode == 'webkit'
+    needs: validate-dispatch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      NANASA_BROWSER: webkit
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        run: test "${NANASA_CERT_CANDIDATE_SHA}" = "$(git rev-parse HEAD)" && test "${#NANASA_CERT_CANDIDATE_SHA}" = 40
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Configure registry and pinned pnpm
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install frozen dependencies and WebKit
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm install --frozen-lockfile
+          source scripts/ci-registry-env.sh; pnpm exec playwright install --with-deps webkit
+      - name: Certify WebKit
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm certify:webkit
+
+  arm64:
+    if: inputs.mode == 'arm64'
+    needs: validate-dispatch
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        run: test "${NANASA_CERT_CANDIDATE_SHA}" = "$(git rev-parse HEAD)" && test "${#NANASA_CERT_CANDIDATE_SHA}" = 40
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Configure registry and pinned pnpm
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install and certify native arm64
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm install --frozen-lockfile
+          source scripts/ci-registry-env.sh; pnpm certify:arm64
+
+  node24:
+    if: inputs.mode == 'node24'
+    needs: validate-dispatch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        run: test "${NANASA_CERT_CANDIDATE_SHA}" = "$(git rev-parse HEAD)" && test "${#NANASA_CERT_CANDIDATE_SHA}" = 40
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Configure registry and pinned pnpm
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install and certify Node.js 24
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm install --frozen-lockfile
+          source scripts/ci-registry-env.sh; pnpm certify:node24
+
+  ubuntu:
+    if: inputs.mode == 'ubuntu'
+    needs: validate-dispatch
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        run: test "${NANASA_CERT_CANDIDATE_SHA}" = "$(git rev-parse HEAD)" && test "${#NANASA_CERT_CANDIDATE_SHA}" = 40
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Configure registry and pinned pnpm
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install and certify Ubuntu runtime
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm install --frozen-lockfile
+          source scripts/ci-registry-env.sh; pnpm certify:ubuntu
+
+  systemd:
+    if: inputs.mode == 'systemd'
+    needs: validate-dispatch
+    runs-on: [self-hosted, linux, x64, systemd-user]
+    timeout-minutes: 20
+    env:
+      NANASA_ALLOW_PUBLIC_REGISTRY_FALLBACK: "false"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        run: test "${NANASA_CERT_CANDIDATE_SHA}" = "$(git rev-parse HEAD)" && test "${#NANASA_CERT_CANDIDATE_SHA}" = 40
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Configure registry and pinned pnpm
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install and certify persistent systemd
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm install --frozen-lockfile
+          source scripts/ci-registry-env.sh; pnpm package:build
+          source scripts/ci-registry-env.sh; pnpm certify:systemd
+
+  ssh:
+    if: inputs.mode == 'ssh'
+    needs: validate-dispatch
+    runs-on: [self-hosted, linux, x64, ssh-certification]
+    timeout-minutes: 20
+    env:
+      NANASA_ALLOW_PUBLIC_REGISTRY_FALLBACK: "false"
+      NANASA_CERT_SSH_TARGET: ${{ inputs.ssh_target }}
+      NANASA_CERT_SSH_REPOSITORY: ${{ inputs.ssh_repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        run: test "${NANASA_CERT_CANDIDATE_SHA}" = "$(git rev-parse HEAD)" && test "${#NANASA_CERT_CANDIDATE_SHA}" = 40
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Configure registry and pinned pnpm
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install frozen dependencies
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm install --frozen-lockfile
+      - name: Certify authenticated live SSH target
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh; pnpm package:build
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm certify:ssh

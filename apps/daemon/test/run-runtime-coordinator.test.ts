@@ -23,7 +23,7 @@ const runningRun: AgentRun = {
 };
 
 describe("RunRuntimeCoordinator", () => {
-  it("stops ttyd and removes the view session before killing the owner pane", async () => {
+  it("stops the gateway and removes the view session before killing the owner pane", async () => {
     const operations: string[] = [];
     const stoppedRun: AgentRun = {
       ...runningRun,
@@ -49,7 +49,7 @@ describe("RunRuntimeCoordinator", () => {
     };
     const supervisor = {
       stop: vi.fn(async () => {
-        operations.push("ttyd:stop");
+        operations.push("gateway:stop");
       }),
       close: vi.fn(async () => undefined),
     };
@@ -70,7 +70,7 @@ describe("RunRuntimeCoordinator", () => {
       );
       expect(operations).toEqual([
         "status:stopping",
-        "ttyd:stop",
+        "gateway:stop",
         "view-session:remove",
         "owner-pane:stop",
       ]);
@@ -103,8 +103,6 @@ describe("RunRuntimeCoordinator", () => {
       name: "Pi",
       agentType: "pi",
       kind: "pi",
-      adapter: "pi-rpc",
-      capabilities: ["queue", "steer"],
       command: "pi",
       args: [],
       environment: {},
@@ -129,14 +127,14 @@ describe("RunRuntimeCoordinator", () => {
     });
     const runtime = {
       reconcile: vi.fn(async () => undefined),
-      isCurrentRun: vi.fn(async () => false),
+      observeRun: vi.fn(async () => ({ state: "missing" })),
       recoverRun,
       removeViewSession: vi.fn(async () => undefined),
       removeStaleViewSessions: vi.fn(async () => undefined),
       ensureViewSession: vi.fn(async () => "view"),
       close: vi.fn(async () => undefined),
     };
-    const ttyd = {
+    const gateway = {
       stop: vi.fn(async () => undefined),
       reconcile: vi.fn(async () => undefined),
       close: vi.fn(async () => undefined),
@@ -144,12 +142,14 @@ describe("RunRuntimeCoordinator", () => {
     const coordinator = new RunRuntimeCoordinator(
       store,
       runtime as never,
-      ttyd as never,
+      gateway as never,
       { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
       { reconcileIntervalMs: 60_000, now: () => new Date("2026-08-10T12:00:00.000Z") },
     );
 
     try {
+      await coordinator.reconcile(true);
+      expect(recoverRun).not.toHaveBeenCalled();
       await coordinator.reconcile(true);
       const replacement = store.listDesiredRunningRuns()[0]!;
       expect(recoverRun).toHaveBeenCalledWith(
@@ -171,78 +171,34 @@ describe("RunRuntimeCoordinator", () => {
     }
   });
 
-  it("forces one replacement for a migration-marked current pane", async () => {
-    const store = new NanasaStore(":memory:");
-    const group = store.createGroup({ name: "Migration" });
-    const profile = store.createInternalAgentProfile({
-      name: "Legacy worker",
-      agentType: "pi",
-      kind: "pi",
-      command: "pi",
-      args: [],
-      environment: {},
-    });
-    store.addMembership(group.id, {
-      memberId: "alpha",
-      agentProfileId: profile.id,
-      alias: "Alpha",
-    });
-    const original = store.createRun({
-      ...runningRun,
-      id: "run-migration",
-      groupId: group.id,
-      agentProfileId: profile.id,
-      recoveryPhase: "reconciling",
-      recoveryReason: "terminal_runtime_migration",
-    });
-    const recoverRun = vi.fn(async (previous: AgentRun) => {
-      store.updateRunStatus(previous.id, "failed", { reason: "recovery_replaced" });
-      const created = store.createRunForMembership(group.id, "alpha", {
-        recoveryFrom: store.getRun(previous.id),
-      }).run;
-      return store.updateRunStatus(created.id, "running", {
-        terminal: { ...runningRun.terminal!, paneId: "%4", windowId: "@3" },
-      });
-    });
+  it("never launches or replaces a run after an indeterminate observation", async () => {
+    const recoverRun = vi.fn();
     const runtime = {
       reconcile: vi.fn(async () => undefined),
-      isCurrentRun: vi.fn(async () => true),
+      observeRun: vi.fn(async () => ({ state: "indeterminate", evidenceCode: "tmux_timeout" })),
       recoverRun,
-      removeViewSession: vi.fn(async () => undefined),
       removeStaleViewSessions: vi.fn(async () => undefined),
-      ensureViewSession: vi.fn(async () => "view"),
       close: vi.fn(async () => undefined),
     };
     const coordinator = new RunRuntimeCoordinator(
-      store,
+      {
+        listActiveRuns: vi.fn(() => []),
+        listDesiredRunningRuns: vi.fn(() => [runningRun]),
+      } as never,
       runtime as never,
       {
-        stop: vi.fn(async () => undefined),
         reconcile: vi.fn(async () => undefined),
         close: vi.fn(async () => undefined),
       } as never,
       { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
       { reconcileIntervalMs: 60_000 },
     );
-
     try {
-      await coordinator.reconcile();
-      expect(recoverRun).toHaveBeenCalledOnce();
-      expect(recoverRun).toHaveBeenCalledWith(
-        expect.objectContaining({ id: original.id, recoveryReason: "terminal_runtime_migration" }),
-        { cols: 120, rows: 40 },
-      );
-      expect(store.listDesiredRunningRuns()[0]).toMatchObject({
-        generation: 2,
-        recoveryPhase: "recovered",
-        recoveryReason: "runtime_recovered",
-      });
-
-      await coordinator.reconcile();
-      expect(recoverRun).toHaveBeenCalledOnce();
+      await coordinator.reconcile(true);
+      await coordinator.reconcile(true);
+      expect(recoverRun).not.toHaveBeenCalled();
     } finally {
       await coordinator.close();
-      store.close();
     }
   });
 
@@ -253,8 +209,6 @@ describe("RunRuntimeCoordinator", () => {
       name: "Terminal",
       agentType: "opencode",
       kind: "opencode",
-      adapter: "terminal",
-      capabilities: ["queue"],
       command: "opencode",
       args: [],
       environment: {},
@@ -277,7 +231,7 @@ describe("RunRuntimeCoordinator", () => {
     });
     const runtime = {
       reconcile: vi.fn(async () => undefined),
-      isCurrentRun: vi.fn(async () => false),
+      observeRun: vi.fn(async () => ({ kind: "dead" })),
       recoverRun: vi.fn(),
       removeViewSession: vi.fn(async () => undefined),
       stopRun: vi.fn(async () => store.updateRunStatus(run.id, "stopped")),
@@ -422,7 +376,7 @@ describe("RunRuntimeCoordinator", () => {
       runtime as never,
       {
         start: vi.fn(),
-        stop: vi.fn(async () => operations.push("ttyd:stop")),
+        stop: vi.fn(async () => operations.push("gateway:stop")),
         close: vi.fn(async () => undefined),
       } as never,
       {
@@ -440,7 +394,7 @@ describe("RunRuntimeCoordinator", () => {
       expect(operations).toEqual([
         "run:start",
         "status:stopping",
-        "ttyd:stop",
+        "gateway:stop",
         "view:remove",
         "run:stop",
         "membership:remove",
@@ -511,7 +465,7 @@ describe("RunRuntimeCoordinator", () => {
       store as never,
       runtime as never,
       {
-        stop: vi.fn(async (runId: string) => operations.push(`${runId}:ttyd-stop`)),
+        stop: vi.fn(async (runId: string) => operations.push(`${runId}:gateway-stop`)),
         close: vi.fn(async () => undefined),
       } as never,
       { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
@@ -522,7 +476,7 @@ describe("RunRuntimeCoordinator", () => {
       expect(await coordinator.deleteGroup("group-one", "delete-key")).toEqual(result);
       expect(operations).toEqual([
         "run-alpha:stopping",
-        "run-alpha:ttyd-stop",
+        "run-alpha:gateway-stop",
         "run-alpha:view-remove",
         "run-alpha:runtime-stop",
         "run-beta:desired-stopped",

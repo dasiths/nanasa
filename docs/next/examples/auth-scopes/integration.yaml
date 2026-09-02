@@ -1,0 +1,23 @@
+version: 2
+repository:
+  path: .
+  checkout: { kind: current }
+integrations:
+  copilot:
+    name: Shared GitHub Copilot
+    kind: copilot
+    command: [copilot]
+    providerState: { scope: integration }
+    credentials: { kind: provider-managed }
+groups:
+  auth-example:
+    name: Shared state example
+    agents:
+      agent_builder:
+        memberId: copilot.builder
+        name: Builder
+        integrationId: copilot
+      agent_reviewer:
+        memberId: copilot.reviewer
+        name: Reviewer
+        integrationId: copilot

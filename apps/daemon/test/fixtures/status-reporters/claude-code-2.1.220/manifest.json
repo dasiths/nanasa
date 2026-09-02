@@ -1,7 +1,22 @@
 {
   "harness": "claude-code",
   "version": "2.1.220",
-  "reporterVersion": "1",
+  "reporterVersion": "2",
   "captureDate": "2026-08-11",
-  "scenario": "lifecycle-tool-wait"
+  "scenario": "lifecycle-parallel-tools-waits-compaction-failure",
+  "declaredEvents": [
+    "session.ready",
+    "turn.started",
+    "turn.settled",
+    "tool.started",
+    "tool.finished",
+    "tool.failed",
+    "wait.opened",
+    "wait.closed",
+    "compaction.started",
+    "compaction.finished",
+    "failure.observed",
+    "session.ended"
+  ],
+  "limitations": ["no-heartbeat", "no-effective-model", "no-action-correlation"]
 }

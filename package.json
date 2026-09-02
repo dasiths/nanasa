@@ -1,7 +1,7 @@
 {
   "name": "nanasa",
-  "version": "0.0.0",
-  "description": "Local terminal-only coding-agent pool with tmux, a web portal, and authenticated MCP messaging",
+  "version": "0.1.0-next.11.0",
+  "description": "Linux coding-agent pool with tmux, an accessible web portal, and authenticated coordination",
   "license": "MIT",
   "homepage": "https://github.com/dasiths/nanasa#readme",
   "bugs": {
@@ -15,7 +15,7 @@
     "coding-agent",
     "mcp",
     "tmux",
-    "ttyd"
+    "xterm"
   ],
   "type": "module",
   "bin": {
@@ -26,18 +26,31 @@
     "dist",
     "templates",
     "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
     "README.md"
   ],
   "packageManager": "pnpm@10.34.5",
-  "engines": {
-    "node": ">=22"
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "node-pty"
+    ]
   },
+  "engines": {
+    "node": ">=22 <23 || >=24 <25"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
   "scripts": {
     "dev": "pnpm --parallel --filter @nanasa/daemon --filter @nanasa/portal dev",
     "prestart": "pnpm build",
     "start": "NANASA_MCP_ENABLED=true NODE_ENV=production pnpm --filter @nanasa/daemon start",
-    "build": "pnpm --filter @nanasa/contracts build && pnpm --filter @nanasa/daemon build && pnpm --filter @nanasa/portal build",
-    "package:build": "node scripts/build-package.mjs",
+    "build": "pnpm --filter @nanasa/contracts build && pnpm --filter @nanasa/control-client build && pnpm --filter @nanasa/daemon build && pnpm --filter @nanasa/portal build",
+    "package:build": "pnpm --filter @nanasa/contracts build && pnpm --filter @nanasa/control-client build && node scripts/build-package.mjs",
     "package:test": "pnpm package:build && node --test test/package-cli.test.mjs",
     "acceptance": "pnpm package:build && playwright test",
     "prepack": "pnpm package:build",
@@ -46,22 +59,53 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "test": "pnpm -r --if-present test && pnpm package:test",
-    "smoke": "pnpm --filter @nanasa/daemon smoke"
+    "smoke": "pnpm --filter @nanasa/daemon smoke",
+    "docs:generate": "pnpm build && node --import tsx scripts/generate-references.mjs --write",
+    "docs:check": "pnpm build && node --import tsx scripts/generate-references.mjs --check && node scripts/validate-docs.mjs",
+    "test:release": "node --test test/release/*.test.mjs test/security/*.test.mjs",
+    "test:coverage": "pnpm build && node scripts/coverage-ratchet.mjs",
+    "coverage:ratchet": "node scripts/coverage-ratchet.mjs",
+    "check:static": "pnpm format:check && pnpm lint && pnpm typecheck",
+    "check:architecture": "node scripts/release-gate.mjs architecture",
+    "check:security": "node scripts/release-gate.mjs security",
+    "check:performance": "node scripts/release-gate.mjs performance && pnpm performance:measured",
+    "performance:measured": "pnpm --filter @nanasa/daemon exec vitest run test/runtime-performance-and-backpressure.test.ts",
+    "check:provenance": "node scripts/release-gate.mjs provenance",
+    "check:sbom": "node scripts/release-gate.mjs sbom",
+    "check:systemd": "pnpm --filter @nanasa/daemon exec vitest run test/release-and-activation.test.ts -t systemd",
+    "check:release-state": "pnpm --filter @nanasa/daemon exec vitest run test/release-and-activation.test.ts test/checkpoint-and-rollback-remediation.test.ts",
+    "check:watchdog": "node --test test/release/process-harness.test.mjs",
+    "check:fixtures": "node --test test/release/fixture-drift.test.mjs",
+    "check:property": "node --test test/release/property-models.test.mjs",
+    "check:fuzz": "node --test test/release/bounded-fuzz.test.mjs",
+    "certify:provider:copilot": "node scripts/certify-external.mjs provider copilot",
+    "certify:provider:claude-code": "node scripts/certify-external.mjs provider claude-code",
+    "certify:provider:opencode": "node scripts/certify-external.mjs provider opencode",
+    "certify:provider:pi": "node scripts/certify-external.mjs provider pi",
+    "certify:provider:local": "node --import tsx scripts/certify-provider-local.ts",
+    "certify:webkit": "node scripts/certify-external.mjs webkit",
+    "certify:arm64": "node scripts/certify-external.mjs arm64",
+    "certify:node24": "node scripts/certify-external.mjs node24",
+    "certify:ubuntu": "node scripts/certify-external.mjs ubuntu",
+    "certify:systemd": "node scripts/certify-external.mjs systemd",
+    "certify:ssh": "node scripts/certify-external.mjs ssh",
+    "release:dry-run": "pnpm package:build && node scripts/release-gate.mjs release"
   },
   "dependencies": {
-    "@fastify/http-proxy": "11.6.0",
     "@fastify/static": "^10.1.2",
     "@fastify/websocket": "^11.3.0",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "docker-names": "1.2.1",
     "fastify": "^5.11.0",
+    "node-pty": "1.1.0",
     "pi-mcp-adapter": "2.18.0",
     "ws": "8.21.1",
     "yaml": "2.9.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
     "@biomejs/biome": "^2.5.6",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.55.0",

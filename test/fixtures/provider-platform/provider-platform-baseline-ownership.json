@@ -1,0 +1,153 @@
+{
+  "formatVersion": 1,
+  "fleetScales": [1, 15, 100],
+  "baselines": [
+    {
+      "id": "built-in-launch",
+      "owners": ["apps/daemon/test/built-in-provider-snapshot-conformance.test.ts"]
+    },
+    {
+      "id": "reporter-events",
+      "owners": ["apps/daemon/test/status-reporter-goldens.test.ts"]
+    },
+    {
+      "id": "provider-certification",
+      "owners": ["test/release/external-certification.test.mjs"]
+    },
+    {
+      "id": "fleet-1-15-100",
+      "owners": [
+        "apps/daemon/test/provider-platform-regression-baseline.test.ts",
+        "apps/daemon/test/runtime-performance-and-backpressure.test.ts"
+      ]
+    },
+    {
+      "id": "terminal",
+      "owners": [
+        "apps/daemon/test/terminal-control-service.test.ts",
+        "apps/daemon/test/terminal-input-arbiter.test.ts",
+        "apps/daemon/test/terminal-gateway-runtime.test.ts",
+        "apps/portal/src/terminal/terminal-console.test.tsx",
+        "test/acceptance/terminal-gateway.spec.ts"
+      ]
+    },
+    {
+      "id": "osc52",
+      "owners": [
+        "apps/daemon/test/terminal-effect-policy.test.ts",
+        "apps/daemon/test/terminal-osc52-runtime.test.ts",
+        "apps/portal/src/terminal/terminal-clipboard.test.ts",
+        "test/acceptance/terminal-gateway.spec.ts"
+      ]
+    },
+    {
+      "id": "portal-status",
+      "owners": [
+        "apps/portal/src/App.test.tsx",
+        "apps/portal/src/member-status.test.ts",
+        "apps/portal/src/components/terminal-workspace.test.tsx"
+      ]
+    },
+    {
+      "id": "attention",
+      "owners": [
+        "apps/portal/src/attention-items.test.ts",
+        "apps/portal/src/routes/portal-route-panels.test.tsx"
+      ]
+    },
+    {
+      "id": "notifications",
+      "owners": [
+        "apps/portal/src/attention-notifications.test.ts",
+        "apps/portal/src/notification-sound.test.ts",
+        "apps/portal/src/App.test.tsx"
+      ]
+    },
+    {
+      "id": "responsive",
+      "owners": ["test/acceptance/preferences-and-responsive.spec.ts"]
+    },
+    {
+      "id": "accessibility",
+      "owners": [
+        "test/acceptance/route-accessibility.spec.ts",
+        "test/acceptance/preferences-and-responsive.spec.ts",
+        "apps/portal/src/App.test.tsx"
+      ]
+    }
+  ],
+  "stopConditions": [
+    {
+      "id": "SC-01",
+      "condition": "Built-in golden drift or live-provider certification failure",
+      "baselineRefs": ["built-in-launch", "reporter-events", "provider-certification"]
+    },
+    {
+      "id": "SC-02",
+      "condition": "Raw terminal, OSC, prompt, reasoning, credential, token, or session leakage",
+      "baselineRefs": ["reporter-events", "osc52", "terminal"]
+    },
+    {
+      "id": "SC-03",
+      "condition": "Weaker run, snapshot, process, reporter, wait, action, or terminal fencing",
+      "owners": [
+        "apps/daemon/test/process-status-authority.test.ts",
+        "apps/daemon/test/agent-actions.test.ts",
+        "apps/daemon/test/terminal-input-arbiter.test.ts"
+      ]
+    },
+    {
+      "id": "SC-04",
+      "condition": "Process-only Idle, Working, Done, outcome, or action eligibility",
+      "owners": [
+        "apps/daemon/test/agent-status-reducer.test.ts",
+        "apps/portal/src/member-status.test.ts",
+        "apps/daemon/test/agent-actions.test.ts"
+      ]
+    },
+    {
+      "id": "SC-05",
+      "condition": "Screen/OSC mutation of exact reporter facts",
+      "owners": [
+        "apps/daemon/test/agent-status-reducer.test.ts",
+        "apps/daemon/test/process-status-authority.test.ts",
+        "apps/daemon/test/terminal-effect-policy.test.ts"
+      ]
+    },
+    {
+      "id": "SC-06",
+      "condition": "Recovery resolving mutable current adapter behavior",
+      "owners": [
+        "apps/daemon/test/native-recovery-coordinator.test.ts",
+        "apps/daemon/test/run-runtime-coordinator.test.ts"
+      ]
+    },
+    {
+      "id": "SC-07",
+      "condition": "Runtime index visible before all immutable objects, grants, trust, and journal commit",
+      "owners": [
+        "apps/daemon/test/provider-extensions.test.ts",
+        "apps/daemon/test/release-and-activation.test.ts"
+      ]
+    },
+    {
+      "id": "SC-08",
+      "condition": "Package, archive, namespace, RPC, or sandbox escape",
+      "owners": [
+        "apps/daemon/test/extension-package-loader.test.ts",
+        "test/release/bounded-fuzz.test.mjs",
+        "test/security/external-certification.test.mjs"
+      ]
+    },
+    {
+      "id": "SC-09",
+      "condition": "Accessibility regression or noisy polling announcements",
+      "baselineRefs": ["accessibility", "notifications", "responsive"]
+    },
+    {
+      "id": "SC-10",
+      "condition": "Material event churn, SQLite write amplification, or failure of the 100-run gate",
+      "baselineRefs": ["fleet-1-15-100"]
+    }
+  ]
+}

@@ -1,14 +1,17 @@
 import type {
+  AgentActionWorkspace,
   AgentProfile,
   AgentRun,
+  AgentStatusSummary,
   GroupMembership,
   Message,
   MessageSubmissionResult,
   NanasaConfig,
+  OpenWait,
   PortalSnapshot,
   StartGroupRunsResult,
 } from "@nanasa/contracts";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,18 +21,40 @@ import { GroupTree } from "./components/group-tree.js";
 import {
   buildMessageCommand,
   MESSAGE_HISTORY_KEY,
-  MESSAGE_OVERLAY_OPEN_KEY,
   MessageWorkspace,
 } from "./components/message-workspace.js";
 import { MESSAGE_READ_CURSORS_KEY, messageUnreadCount } from "./hooks/use-message-read-cursors.js";
-import { PORTAL_PREFERENCES_KEY } from "./hooks/use-portal-preferences.js";
+import {
+  defaultPortalPreferences,
+  PORTAL_PREFERENCES_KEY,
+} from "./hooks/use-portal-preferences.js";
 
 vi.mock("./components/terminal-workspace.js", () => ({
-  TerminalWorkspace: () => <div data-testid="terminal-surface">terminal-surface</div>,
+  TerminalWorkspace: ({
+    members,
+    runs,
+    onSetFocusedRun,
+  }: {
+    members: GroupMembership[];
+    runs: AgentRun[];
+    onSetFocusedRun(runId: string | undefined): void;
+  }) => (
+    <div data-testid="terminal-surface">
+      terminal-surface
+      {runs.map((run) => {
+        const alias =
+          members.find((member) => member.memberId === run.memberId)?.alias ?? run.memberId;
+        return (
+          <button type="button" key={run.id} onClick={() => onSetFocusedRun(run.id)}>
+            Focus {alias} terminal
+          </button>
+        );
+      })}
+    </div>
+  ),
 }));
 
 const timestamp = "2026-08-09T12:00:00.000Z";
-
 const config: NanasaConfig = {
   instructions: [],
   roles: {
@@ -84,7 +109,11 @@ const config: NanasaConfig = {
       name: "GitHub Copilot",
       kind: "copilot",
       command: ["copilot", "--acp", "--stdio"],
-      agentConfigHome: { scope: "integration" },
+      providerState: { scope: "integration" },
+      credentials: { kind: "provider-managed" },
+      model: { resumePolicy: "preserve-session" },
+      nativeRecovery: { mode: "resume-or-restart", confirmationTimeoutSeconds: 30 },
+      extensions: [],
       environment: {},
     },
     "claude-copilot": {
@@ -92,7 +121,11 @@ const config: NanasaConfig = {
       name: "Claude through Copilot",
       kind: "claude-code",
       command: ["make", "claude-copilot"],
-      agentConfigHome: { scope: "integration" },
+      providerState: { scope: "integration" },
+      credentials: { kind: "provider-managed" },
+      model: { resumePolicy: "preserve-session" },
+      nativeRecovery: { mode: "resume-or-restart", confirmationTimeoutSeconds: 30 },
+      extensions: [],
       environment: {},
     },
     "custom-agent": {
@@ -100,10 +133,26 @@ const config: NanasaConfig = {
       name: "Custom reviewer",
       kind: "opencode",
       command: ["custom-reviewer"],
-      agentConfigHome: { scope: "integration" },
+      providerState: { scope: "integration" },
+      credentials: { kind: "provider-managed" },
+      model: { resumePolicy: "preserve-session" },
+      nativeRecovery: { mode: "resume-or-restart", confirmationTimeoutSeconds: 30 },
+      extensions: [],
       environment: {},
     },
   },
+  version: 2,
+  repository: { path: ".", checkout: { kind: "current" } },
+  terminal: {
+    checkpoints: {
+      enabled: false,
+      maxLines: 5_000,
+      maxBytes: 1_048_576,
+      retentionSeconds: 86_400,
+      sensitivity: "repository-private",
+    },
+  },
+  extensions: {},
 };
 
 const profile: AgentProfile = {
@@ -125,6 +174,7 @@ const memberships: GroupMembership[] = [
     memberId: "builder",
     agentProfileId: profile.id,
     alias: "Builder",
+    order: 0,
     state: "active",
     joinedAt: timestamp,
   },
@@ -135,6 +185,7 @@ const memberships: GroupMembership[] = [
     agentProfileId: profile.id,
     alias: "Reviewer",
     roleId: "reviewer",
+    order: 1,
     state: "active",
     joinedAt: timestamp,
   },
@@ -144,18 +195,23 @@ const memberships: GroupMembership[] = [
     memberId: "auditor",
     agentProfileId: profile.id,
     alias: "Auditor",
+    order: 0,
     state: "active",
     joinedAt: timestamp,
   },
 ];
 
 const snapshot: PortalSnapshot = {
+  instanceId: "daemon-test",
+  daemonEpoch: 1,
   sequence: 7,
   generatedAt: timestamp,
+  orderRevision: 4,
   groups: [
     {
       id: "group-backend",
       name: "Backend",
+      order: 0,
       membershipRevision: 4,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -163,6 +219,7 @@ const snapshot: PortalSnapshot = {
     {
       id: "group-review",
       name: "Review",
+      order: 1,
       membershipRevision: 2,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -171,6 +228,9 @@ const snapshot: PortalSnapshot = {
   agentProfiles: [profile],
   memberships,
   runs: [],
+  repositories: [],
+  checkouts: [],
+  worktrees: [],
   messages: [],
   deliveryOutcomes: [],
 };
@@ -198,14 +258,54 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     desiredState: "stopped",
     recoveryPhase: "idle",
     recoveryAttempts: 0,
+    launchKind: "fresh",
+    requestedModelSource: "provider-default",
     startedAt: timestamp,
     stoppedAt: timestamp,
   };
   return {
-    createConsole: vi.fn().mockResolvedValue({ id: "console-one", runId: "console-one" }),
+    createConsole: vi
+      .fn()
+      .mockResolvedValue({ id: "console-one", runId: "console-one", generation: 1 }),
     closeConsole: vi.fn().mockResolvedValue(undefined),
+    loadMetadata: vi.fn().mockResolvedValue({
+      apiVersion: 1,
+      eventProtocolVersion: 1,
+      productVersion: "0.0.0",
+      configVersion: 2,
+      databaseSchemaVersion: 5,
+      repositoryId: "repo-test",
+      instanceId: snapshot.instanceId,
+      daemonEpoch: snapshot.daemonEpoch,
+      lifecycle: "ready",
+      remoteAccess: "loopback-only",
+      limits: {},
+    }),
     loadSnapshot: vi.fn().mockResolvedValue(snapshot),
     loadConfig: vi.fn().mockResolvedValue(config),
+    loadConfigStatus: vi.fn().mockResolvedValue({
+      state: "ready",
+      repoRoot: "/repo",
+      configPath: "/repo/.nanasa/config.yaml",
+      revision: "a".repeat(64),
+      diagnostics: [],
+    }),
+    loadServiceStatus: vi.fn(),
+    loadRemoteStatus: vi.fn(),
+    planServiceRestart: vi.fn(),
+    listProviderStates: vi.fn().mockResolvedValue([]),
+    listProviderExtensions: vi.fn().mockResolvedValue([]),
+    inspectProviderExtension: vi.fn(),
+    planProviderExtension: vi.fn(),
+    providerExtensionHealth: vi.fn(),
+    trustProviderExtension: vi.fn(),
+    installProviderExtension: vi.fn(),
+    repairProviderExtension: vi.fn(),
+    disableProviderExtension: vi.fn(),
+    rollbackProviderExtension: vi.fn(),
+    removeProviderExtension: vi.fn(),
+    retainProviderState: vi.fn(),
+    deleteProviderState: vi.fn(),
     createGroup: vi.fn().mockResolvedValue(snapshot.groups[0]),
     updateGroup: vi.fn().mockResolvedValue(snapshot.groups[0]),
     deleteGroup: vi.fn().mockResolvedValue({
@@ -226,8 +326,14 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     reorderAgents: vi.fn().mockResolvedValue({
       groupId: "group-backend",
       agentIds: ["builder-agent", "reviewer-agent"],
-      agentRevision: 4,
+      orderRevision: 4,
     }),
+    reorderGroups: vi.fn(),
+    reparentAgent: vi.fn(),
+    assignCheckout: vi.fn(),
+    createWorktree: vi.fn(),
+    openCheckout: vi.fn(),
+    removeWorktree: vi.fn(),
     updateRolePresentation: vi.fn().mockResolvedValue(config.roles.reviewer),
     startRun: vi.fn().mockResolvedValue(run),
     startAllRuns: vi.fn().mockResolvedValue({ groupId: "group-backend", outcomes: [] }),
@@ -236,6 +342,17 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
       if (submission === undefined) throw new Error("No submission fixture configured");
       return submission;
     }),
+    createAgentAction: vi.fn(),
+    loadActionWorkspace: vi.fn().mockResolvedValue({
+      groupId: "group-backend",
+      actions: [],
+      attempts: [],
+      acknowledgements: [],
+      openWaits: [],
+    }),
+    cancelAgentAction: vi.fn(),
+    replyOpenWait: vi.fn(),
+    acknowledgeCompletion: vi.fn(),
     loadMessages: vi.fn().mockResolvedValue({
       groupId: "group-backend",
       messages: [],
@@ -262,6 +379,11 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
       },
     }),
     getTerminalEndpointStatus: vi.fn(),
+    readTerminal: vi.fn(),
+    listTerminalCheckpoints: vi.fn().mockResolvedValue([]),
+    createTerminalCheckpoint: vi.fn(),
+    getTerminalCheckpoint: vi.fn(),
+    deleteTerminalCheckpoint: vi.fn().mockResolvedValue(undefined),
     createEventsSocket: vi.fn().mockImplementation(inertSocket),
   };
 }
@@ -293,9 +415,165 @@ function submissionResult(): MessageSubmissionResult {
   };
 }
 
+function activeRun(
+  member: GroupMembership = memberships[0]!,
+  overrides: Partial<AgentRun> = {},
+): AgentRun {
+  return {
+    id: `run-${member.memberId}`,
+    groupId: member.groupId,
+    memberId: member.memberId,
+    agentProfileId: member.agentProfileId,
+    generation: 1,
+    status: "running",
+    desiredState: "running",
+    recoveryPhase: "idle",
+    recoveryAttempts: 0,
+    launchKind: "fresh",
+    requestedModelSource: "provider-default",
+    startedAt: timestamp,
+    ...overrides,
+  };
+}
+
+function statusSummary(
+  member: GroupMembership = memberships[0]!,
+  overrides: Partial<AgentStatusSummary> = {},
+): AgentStatusSummary {
+  return {
+    groupId: member.groupId,
+    memberId: member.memberId,
+    alias: member.alias,
+    agentType: "copilot",
+    runId: `run-${member.memberId}`,
+    generation: 1,
+    runStatus: "running",
+    state: "working",
+    phase: "model",
+    outcome: "unknown",
+    confidence: "high",
+    attention: "none",
+    observedAt: timestamp,
+    stateChangedAt: timestamp,
+    statusRevision: 1,
+    completionRevision: 0,
+    operatorAcknowledgedCompletionRevision: 0,
+    completionPending: false,
+    interactiveReady: true,
+    staleAuthority: false,
+    authorityKind: "reporter",
+    authorityId: "reporter-one",
+    evidenceConfidence: "high",
+    processState: "present",
+    ...overrides,
+  };
+}
+
+function requestAttentionSnapshot(
+  member: GroupMembership = memberships[0]!,
+  attention: "input_required" | "decision_required" = "input_required",
+  statusRevision = 1,
+): PortalSnapshot {
+  return {
+    ...snapshot,
+    runs: [activeRun(member)],
+    agentStatuses: [
+      statusSummary(member, {
+        state: "waiting",
+        phase: attention === "decision_required" ? "plan_approval" : "question",
+        attention,
+        statusRevision,
+      }),
+    ],
+  };
+}
+
+function completionAttentionSnapshot(
+  completionRevision: number,
+  member: GroupMembership = memberships[0]!,
+): PortalSnapshot {
+  return {
+    ...snapshot,
+    runs: [activeRun(member)],
+    agentStatuses: [
+      statusSummary(member, {
+        state: "idle",
+        phase: "settled",
+        statusRevision: completionRevision + 1,
+        completionRevision,
+        completionPending: true,
+      }),
+    ],
+  };
+}
+
+function backendCompletionSnapshot(
+  completionMember?: GroupMembership,
+  sequence = snapshot.sequence,
+): PortalSnapshot {
+  const backendMembers = memberships.slice(0, 2);
+  const backendRuns = backendMembers.map((member) => activeRun(member));
+  return {
+    ...snapshot,
+    sequence,
+    runs: backendRuns,
+    agentStatuses: backendMembers.map((member) =>
+      statusSummary(member, {
+        ...(completionMember?.memberId === member.memberId
+          ? {
+              state: "idle",
+              phase: "settled",
+              statusRevision: 2,
+              completionRevision: 1,
+              completionPending: true,
+            }
+          : {}),
+      }),
+    ),
+  };
+}
+
+function actionWorkspace(groupId: string, openWaits: OpenWait[] = []): AgentActionWorkspace {
+  return {
+    groupId,
+    actions: [],
+    attempts: [],
+    acknowledgements: [],
+    openWaits,
+  };
+}
+
+function builderOpenWait(): OpenWait {
+  return {
+    id: "wait-builder",
+    groupId: "group-backend",
+    memberId: "builder",
+    runId: "run-builder",
+    generation: 1,
+    reporterSessionId: "reporter-session-one",
+    reporterId: "reporter-one",
+    reporterEpoch: "reporter-epoch-one",
+    providerRequestId: "request-builder",
+    kind: "question",
+    summary: "Choose a database",
+    replyChannel: "terminal",
+    openedStatusRevision: 1,
+    state: "open",
+    openedAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
 async function openMessageComposer(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByLabelText("Compose message"));
+  const routeCompose = screen.queryByLabelText("Compose message");
+  if (routeCompose !== null) await user.click(routeCompose);
+  else await user.click(await screen.findByRole("button", { name: /Compose message to/ }));
   return screen.getByRole("dialog", { name: "New message" });
+}
+
+async function openMessagesRoute(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("link", { name: /^Messages/ }));
+  return screen.findByRole("region", { name: "Messages" });
 }
 
 async function chooseRowAction(
@@ -310,13 +588,16 @@ async function chooseRowAction(
 
 describe("portal application", () => {
   beforeEach(() => {
+    window.history.replaceState({}, "", "/");
     window.localStorage.clear();
-    window.localStorage.setItem(MESSAGE_OVERLAY_OPEN_KEY, "true");
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
-  it("refreshes the snapshot when the domain event socket connects", async () => {
+  it("refreshes the snapshot when a typed domain event arrives", async () => {
     const client = createClient();
     render(<App client={client} />);
     await screen.findByRole("heading", { name: "Backend" });
@@ -324,10 +605,467 @@ describe("portal application", () => {
 
     await waitFor(() => expect(client.createEventsSocket).toHaveBeenCalledTimes(1));
     const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
-    await waitFor(() => expect(socket?.onopen).toEqual(expect.any(Function)));
-    await act(async () => socket!.onopen!(new Event("open")));
+    await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
+    await act(async () =>
+      socket!.onmessage!(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "domain.event",
+            event: {
+              sequence: 8,
+              id: "event-8",
+              type: "group.changed",
+              aggregateType: "group",
+              aggregateId: "group-backend",
+              occurredAt: timestamp,
+              payload: {},
+            },
+          }),
+        }),
+      ),
+    );
 
     await waitFor(() => expect(client.loadSnapshot).toHaveBeenCalledTimes(2));
+  });
+
+  it("sounds only for new hidden urgent items after canonical hydration", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    let activated = true;
+    Object.defineProperty(navigator, "userActivation", {
+      configurable: true,
+      get: () => ({ hasBeenActive: activated }),
+    });
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (_name: string, _options: unknown, callback: () => boolean) =>
+          Promise.resolve(callback()),
+      },
+    });
+    const oscillator = {
+      type: "sine",
+      frequency: { value: 0 },
+      connect: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+      addEventListener: vi.fn(),
+    };
+    const audioContext = {
+      state: "running",
+      currentTime: 1,
+      destination: {},
+      createOscillator: vi.fn(() => oscillator),
+      createGain: vi.fn(() => ({
+        gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+        connect: vi.fn(),
+      })),
+      close: vi.fn(),
+    };
+    class TestAudioContext {
+      public constructor() {
+        return audioContext as never;
+      }
+    }
+    vi.stubGlobal("AudioContext", TestAudioContext);
+
+    const emitAttention = async (client: PortalClient, sequence: number) => {
+      const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
+      await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
+      await act(async () =>
+        socket!.onmessage!(
+          new MessageEvent("message", {
+            data: JSON.stringify({
+              type: "domain.event",
+              event: {
+                sequence,
+                id: `attention-${sequence}`,
+                type: "status.changed",
+                aggregateType: "run",
+                aggregateId: "run-builder",
+                occurredAt: timestamp,
+                payload: {},
+              },
+            }),
+          }),
+        ),
+      );
+    };
+
+    const defaultOff = createClient();
+    vi.mocked(defaultOff.loadSnapshot)
+      .mockResolvedValueOnce(snapshot)
+      .mockResolvedValue(requestAttentionSnapshot());
+    render(<App client={defaultOff} />);
+    await screen.findByRole("heading", { name: "Backend" });
+    await emitAttention(defaultOff, 8);
+    await waitFor(() => expect(defaultOff.loadSnapshot).toHaveBeenCalledTimes(2));
+    expect(oscillator.start).not.toHaveBeenCalled();
+    cleanup();
+
+    window.localStorage.setItem(
+      PORTAL_PREFERENCES_KEY,
+      JSON.stringify({
+        ...defaultPortalPreferences,
+        notifications: { ...defaultPortalPreferences.notifications, sound: true },
+      }),
+    );
+    activated = false;
+    const enabled = createClient();
+    vi.mocked(enabled.loadSnapshot)
+      .mockResolvedValueOnce(requestAttentionSnapshot())
+      .mockResolvedValueOnce(requestAttentionSnapshot())
+      .mockResolvedValueOnce(requestAttentionSnapshot(memberships[0]!, "decision_required"))
+      .mockResolvedValue(completionAttentionSnapshot(1));
+    render(<App client={enabled} />);
+    await screen.findByRole("heading", { name: "Backend" });
+    await emitAttention(enabled, 8);
+    await waitFor(() => expect(enabled.loadSnapshot).toHaveBeenCalledTimes(2));
+    expect(oscillator.start).not.toHaveBeenCalled();
+
+    activated = true;
+    await emitAttention(enabled, 9);
+    await waitFor(() => expect(oscillator.start).toHaveBeenCalledTimes(1));
+    await emitAttention(enabled, 10);
+    await waitFor(() => expect(enabled.loadSnapshot).toHaveBeenCalledTimes(4));
+    expect(oscillator.start).toHaveBeenCalledTimes(1);
+    cleanup();
+
+    const remounted = createClient();
+    vi.mocked(remounted.loadSnapshot).mockResolvedValue(completionAttentionSnapshot(1));
+    render(<App client={remounted} />);
+    await screen.findByRole("heading", { name: "Backend" });
+    await waitFor(() => expect(remounted.createEventsSocket).toHaveBeenCalled());
+    expect(oscillator.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("seeds notifications after initial workspace errors recover without replaying existing items", async () => {
+    const client = createClient();
+    let backendLoads = 0;
+    vi.mocked(client.loadActionWorkspace).mockImplementation((groupId) => {
+      if (groupId !== "group-backend") return Promise.resolve(actionWorkspace(groupId));
+      backendLoads += 1;
+      return backendLoads === 1
+        ? Promise.reject(new Error("workspace unavailable"))
+        : Promise.resolve(actionWorkspace(groupId, [builderOpenWait()]));
+    });
+    const initial = requestAttentionSnapshot();
+    const recovered = { ...initial, sequence: 8 };
+    const later = {
+      ...requestAttentionSnapshot(memberships[2]!, "decision_required", 2),
+      sequence: 9,
+    };
+    vi.mocked(client.loadSnapshot)
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce(recovered)
+      .mockResolvedValue(later);
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+    await waitFor(() => expect(client.loadActionWorkspace).toHaveBeenCalledTimes(2));
+    await act(async () => Promise.resolve());
+
+    const emitStatusChange = async (sequence: number) => {
+      const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
+      await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
+      await act(async () =>
+        socket!.onmessage!(
+          new MessageEvent("message", {
+            data: JSON.stringify({
+              type: "domain.event",
+              event: {
+                sequence,
+                id: `workspace-recovery-${sequence}`,
+                type: "status.changed",
+                aggregateType: "run",
+                aggregateId: "run-builder",
+                occurredAt: timestamp,
+                payload: {},
+              },
+            }),
+          }),
+        ),
+      );
+    };
+
+    await emitStatusChange(8);
+    await waitFor(() => expect(client.loadActionWorkspace).toHaveBeenCalledTimes(4));
+    await act(async () => Promise.resolve());
+    expect(screen.queryByRole("complementary", { name: "Attention notifications" })).toBeNull();
+
+    await emitStatusChange(9);
+    const notices = await screen.findByRole("complementary", { name: "Attention notifications" });
+    expect(within(notices).getByText("Auditor · Needs approval")).toBeInTheDocument();
+  });
+
+  it("uses canonical desktop routes and passes per-agent completion opt-ins", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const notifications: Array<{
+      title: string;
+      options: NotificationOptions | undefined;
+      notification: TestNotification;
+    }> = [];
+    class TestNotification {
+      public static readonly permission = "granted";
+      public onclick: (() => void) | null = null;
+      public readonly close = vi.fn();
+
+      public constructor(title: string, options?: NotificationOptions) {
+        notifications.push({ title, options, notification: this });
+      }
+    }
+    vi.stubGlobal("Notification", TestNotification);
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (_name: string, _options: unknown, callback: () => boolean) =>
+          Promise.resolve(callback()),
+      },
+    });
+    window.localStorage.setItem(
+      PORTAL_PREFERENCES_KEY,
+      JSON.stringify({
+        ...defaultPortalPreferences,
+        notifications: { ...defaultPortalPreferences.notifications, desktop: true },
+        completionNotificationMemberIdsByGroup: { "group-review": ["auditor"] },
+      }),
+    );
+
+    const auditor = memberships[2]!;
+    const client = createClient();
+    vi.mocked(client.loadSnapshot)
+      .mockResolvedValueOnce(snapshot)
+      .mockResolvedValueOnce(requestAttentionSnapshot(auditor, "input_required", 2))
+      .mockResolvedValueOnce(requestAttentionSnapshot(auditor, "input_required", 3))
+      .mockResolvedValueOnce(requestAttentionSnapshot(auditor, "decision_required", 4))
+      .mockResolvedValueOnce(completionAttentionSnapshot(1, auditor))
+      .mockResolvedValue(completionAttentionSnapshot(2, auditor));
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+    await waitFor(() => expect(client.createEventsSocket).toHaveBeenCalled());
+
+    const emitStatusChange = async (sequence: number) => {
+      const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
+      await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
+      await act(async () =>
+        socket!.onmessage!(
+          new MessageEvent("message", {
+            data: JSON.stringify({
+              type: "domain.event",
+              event: {
+                sequence,
+                id: `global-attention-${sequence}`,
+                type: "status.changed",
+                aggregateType: "run",
+                aggregateId: "run-auditor",
+                occurredAt: timestamp,
+                payload: {},
+              },
+            }),
+          }),
+        ),
+      );
+    };
+
+    await emitStatusChange(8);
+    await waitFor(() => expect(notifications).toHaveLength(1));
+    expect(notifications[0]).toMatchObject({
+      title: "Auditor · Needs input",
+      options: { body: "Review · Auditor is needs input.", silent: true },
+    });
+    expect(notifications[0]?.options?.tag).toMatch(/^nanasa-attention-[0-9a-f]{8}$/);
+    expect(screen.queryByText(/need attention/)).not.toBeInTheDocument();
+
+    await emitStatusChange(9);
+    await waitFor(() => expect(client.loadSnapshot).toHaveBeenCalledTimes(3));
+    expect(notifications).toHaveLength(1);
+
+    await emitStatusChange(10);
+    await waitFor(() => expect(notifications).toHaveLength(2));
+    expect(notifications[1]).toMatchObject({
+      title: "Auditor · Needs approval",
+      options: { body: "Review · Auditor is needs approval.", silent: true },
+    });
+    notifications[1]?.notification.onclick?.();
+    expect(window.location.pathname).toBe("/groups/group-review/terminals/run-auditor");
+    expect(notifications[1]?.notification.close).toHaveBeenCalled();
+
+    await emitStatusChange(11);
+    await waitFor(() => expect(notifications).toHaveLength(3));
+    expect(notifications[2]).toMatchObject({
+      title: "Auditor · Completion ready",
+      options: { body: "Review · Completion revision 1 is ready for review.", silent: true },
+    });
+
+    await emitStatusChange(12);
+    await waitFor(() => expect(notifications).toHaveLength(4));
+    expect(notifications[3]).toMatchObject({
+      title: "Auditor · Completion ready",
+      options: { body: "Review · Completion revision 2 is ready for review.", silent: true },
+    });
+  });
+
+  it("shows enabled in-app notices on unrelated visible routes and opens their exact target", async () => {
+    window.history.replaceState({}, "", "/agents");
+    const client = createClient();
+    vi.mocked(client.loadSnapshot)
+      .mockResolvedValueOnce(snapshot)
+      .mockResolvedValue(requestAttentionSnapshot());
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "All agents", level: 1 });
+    await waitFor(() => expect(client.createEventsSocket).toHaveBeenCalled());
+    const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
+    await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
+
+    await act(async () =>
+      socket!.onmessage!(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "domain.event",
+            event: {
+              sequence: 8,
+              id: "toast-attention-8",
+              type: "status.changed",
+              aggregateType: "run",
+              aggregateId: "run-builder",
+              occurredAt: timestamp,
+              payload: {},
+            },
+          }),
+        }),
+      ),
+    );
+
+    const notices = await screen.findByRole("complementary", { name: "Attention notifications" });
+    expect(within(notices).getByText("Builder · Needs input")).toBeInTheDocument();
+    fireEvent.click(within(notices).getByRole("button", { name: "Open" }));
+    expect(window.location.pathname).toBe("/groups/group-backend/terminals/run-builder");
+    expect(screen.queryByRole("complementary", { name: "Attention notifications" })).toBeNull();
+  });
+
+  it.each([
+    {
+      name: "canvas secondary pane",
+      activeRunId: "run-builder",
+      focusAlias: undefined,
+      completionMember: memberships[1]!,
+      expectedToast: false,
+    },
+    {
+      name: "focused completion pane",
+      activeRunId: "run-builder",
+      focusAlias: "Reviewer",
+      completionMember: memberships[1]!,
+      expectedToast: false,
+    },
+    {
+      name: "run hidden by Focus mode",
+      activeRunId: "run-builder",
+      focusAlias: "Builder",
+      completionMember: memberships[1]!,
+      expectedToast: true,
+    },
+  ])(
+    "uses actual terminal visibility for a completion on the $name",
+    async ({ activeRunId, focusAlias, completionMember, expectedToast }) => {
+      window.history.replaceState({}, "", "/groups/group-backend/terminals");
+      window.localStorage.setItem(
+        PORTAL_PREFERENCES_KEY,
+        JSON.stringify({
+          ...defaultPortalPreferences,
+          activeRunByGroup: { "group-backend": activeRunId },
+          completionNotificationMemberIdsByGroup: {
+            "group-backend": [completionMember.memberId],
+          },
+        }),
+      );
+      const client = createClient();
+      vi.mocked(client.loadSnapshot)
+        .mockResolvedValueOnce(backendCompletionSnapshot())
+        .mockResolvedValue(backendCompletionSnapshot(completionMember, 8));
+      render(<App client={client} />);
+      await screen.findByRole("heading", { name: "Backend" });
+      if (focusAlias !== undefined) {
+        fireEvent.click(
+          await screen.findByRole("button", { name: `Focus ${focusAlias} terminal` }),
+        );
+        await screen.findByRole("button", { name: "All terminals" });
+      }
+      await waitFor(() => expect(client.createEventsSocket).toHaveBeenCalled());
+      const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
+      await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
+
+      await act(async () =>
+        socket!.onmessage!(
+          new MessageEvent("message", {
+            data: JSON.stringify({
+              type: "domain.event",
+              event: {
+                sequence: 8,
+                id: `visible-completion-${completionMember.memberId}`,
+                type: "status.changed",
+                aggregateType: "run",
+                aggregateId: `run-${completionMember.memberId}`,
+                occurredAt: timestamp,
+                payload: {},
+              },
+            }),
+          }),
+        ),
+      );
+
+      await waitFor(() => expect(client.loadSnapshot).toHaveBeenCalledTimes(2));
+      if (expectedToast) {
+        const notices = await screen.findByRole("complementary", {
+          name: "Attention notifications",
+        });
+        expect(within(notices).getByText("Reviewer · Completion ready")).toBeInTheDocument();
+      } else {
+        await act(async () => Promise.resolve());
+        expect(screen.queryByRole("complementary", { name: "Attention notifications" })).toBeNull();
+      }
+    },
+  );
+
+  it("coalesces an event burst into one in-flight snapshot and one trailing invalidation", async () => {
+    const client = createClient();
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+    await waitFor(() => expect(client.createEventsSocket).toHaveBeenCalledTimes(1));
+    const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
+    await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
+
+    let resolveSnapshot: (value: PortalSnapshot) => void = () => undefined;
+    vi.mocked(client.loadSnapshot)
+      .mockImplementationOnce(
+        () =>
+          new Promise<PortalSnapshot>((resolve) => {
+            resolveSnapshot = resolve;
+          }),
+      )
+      .mockResolvedValue({ ...snapshot, sequence: 1_007 });
+
+    await act(async () => {
+      for (let sequence = 8; sequence < 1_008; sequence += 1) {
+        socket!.onmessage!(
+          new MessageEvent("message", {
+            data: JSON.stringify({
+              type: "domain.event",
+              event: {
+                sequence,
+                id: `event-${sequence}`,
+                type: "fixture.changed",
+                aggregateType: "fixture",
+                aggregateId: "fixture-one",
+                occurredAt: timestamp,
+                payload: {},
+              },
+            }),
+          }),
+        );
+      }
+    });
+    expect(client.loadSnapshot).toHaveBeenCalledTimes(2);
+    resolveSnapshot({ ...snapshot, sequence: 1_007 });
+    await waitFor(() => expect(client.loadSnapshot).toHaveBeenCalledTimes(3));
   });
 
   it("replaces the rail Add agent shortcut with Console", async () => {
@@ -519,7 +1257,7 @@ describe("portal application", () => {
     await waitFor(() =>
       expect(client.reorderAgents).toHaveBeenCalledWith("group-backend", {
         agentIds: ["reviewer-agent", "builder-agent"],
-        expectedAgentRevision: 4,
+        expectedOrderRevision: snapshot.orderRevision,
       }),
     );
   });
@@ -836,14 +1574,14 @@ describe("portal application", () => {
   });
 
   it.each([
-    ["reconciling", "stopped", "Stop Builder"],
-    ["resuming", "starting", "Stop Builder"],
-    ["restarting", "stopped", "Stop Builder"],
-    ["recovered", "running", "Stop Builder"],
-    ["failed", "failed", "Retry Builder"],
+    ["reconciling", "stopped", "Starting", "Stop Builder"],
+    ["resuming", "starting", "Starting", "Stop Builder"],
+    ["restarting", "stopped", "Starting", "Stop Builder"],
+    ["recovered", "running", "Working", "Stop Builder"],
+    ["failed", "failed", "Failed", "Retry Builder"],
   ] as const)(
-    "renders %s recovery status with the correct action",
-    async (recoveryPhase, runStatus, actionName) => {
+    "projects %s recovery while preserving the correct action",
+    async (recoveryPhase, runStatus, statusLabel, actionName) => {
       const user = userEvent.setup();
       const run: AgentRun = {
         id: `run-${recoveryPhase}`,
@@ -855,6 +1593,8 @@ describe("portal application", () => {
         desiredState: "running",
         recoveryPhase,
         recoveryAttempts: 1,
+        launchKind: "fresh",
+        requestedModelSource: "provider-default",
         recoveryReason: "daemon_restart",
         recoveryNotBefore: recoveryPhase === "restarting" ? "2026-08-10T12:00:00.000Z" : undefined,
         startedAt: timestamp,
@@ -878,10 +1618,15 @@ describe("portal application", () => {
         />,
       );
 
-      expect(screen.getByText(new RegExp(`^${recoveryPhase}`))).toHaveAttribute(
+      expect(screen.getByText(new RegExp(`^${statusLabel}`))).toHaveAttribute(
         "title",
         "daemon_restart",
       );
+      expect(
+        screen.getByRole("button", {
+          name: `View details for Builder, status ${statusLabel}`,
+        }),
+      ).toBeInTheDocument();
       await user.click(screen.getByRole("button", { name: "Actions for agent Builder" }));
       const menu = screen.getByRole("menu", { name: "Actions for agent Builder" });
       expect(within(menu).getByRole("menuitem", { name: actionName })).toBeInTheDocument();
@@ -893,6 +1638,7 @@ describe("portal application", () => {
 
   it("renders semantic status, progress context, and attention independently of run controls", async () => {
     const user = userEvent.setup();
+    const onSelectTerminal = vi.fn();
     const run: AgentRun = {
       id: "run-waiting",
       groupId: "group-backend",
@@ -903,6 +1649,8 @@ describe("portal application", () => {
       desiredState: "running",
       recoveryPhase: "idle",
       recoveryAttempts: 0,
+      launchKind: "fresh",
+      requestedModelSource: "provider-default",
       startedAt: timestamp,
     };
     render(
@@ -927,6 +1675,16 @@ describe("portal application", () => {
               attention: "decision_required",
               observedAt: timestamp,
               stateChangedAt: timestamp,
+              statusRevision: 3,
+              completionRevision: 0,
+              operatorAcknowledgedCompletionRevision: 0,
+              completionPending: false,
+              interactiveReady: true,
+              staleAuthority: false,
+              authorityKind: "reporter",
+              authorityId: "reporter-one",
+              evidenceConfidence: "high",
+              processState: "present",
               progressStage: "validation",
               lastProgressSummary: "Implementation complete",
             },
@@ -936,6 +1694,7 @@ describe("portal application", () => {
         selectedGroupId="group-backend"
         unreadCounts={new Map()}
         onSelectGroup={vi.fn()}
+        onSelectTerminal={onSelectTerminal}
         onCreateGroup={vi.fn()}
         onRenameGroup={vi.fn()}
         onDeleteGroup={vi.fn()}
@@ -948,10 +1707,18 @@ describe("portal application", () => {
       />,
     );
 
+    expect(screen.getByText("Needs approval")).toHaveAttribute("title", "Implementation complete");
     expect(
-      screen.getByText(/^waiting · permission · decision required · validation/),
-    ).toHaveAttribute("title", "Implementation complete");
-    expect(screen.getByLabelText("Builder needs decision required")).toBeInTheDocument();
+      screen.getByRole("button", {
+        name: "View details for Builder, status Needs approval",
+      }),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open terminal for Builder, status Needs approval",
+      }),
+    );
+    expect(onSelectTerminal).toHaveBeenCalledWith("group-backend", "run-waiting");
     await user.click(screen.getByRole("button", { name: "Actions for agent Builder" }));
     expect(
       within(screen.getByRole("menu", { name: "Actions for agent Builder" })).getByRole(
@@ -961,7 +1728,9 @@ describe("portal application", () => {
     ).toBeInTheDocument();
     await user.keyboard("{Escape}");
 
-    const memberButton = screen.getByRole("button", { name: "View details for Builder" });
+    const memberButton = screen.getByRole("button", {
+      name: "View details for Builder, status Needs approval",
+    });
     await user.click(memberButton);
     const details = screen.getByRole("dialog", { name: "Agent details for Builder" });
     await waitFor(() => expect(details).toHaveFocus());
@@ -970,6 +1739,10 @@ describe("portal application", () => {
     expect(within(details).getByText("builder")).toBeInTheDocument();
     const kindLabel = within(details).getByText("Kind");
     expect(kindLabel.nextElementSibling).toHaveTextContent("copilot");
+    const phaseLabel = within(details).getByText("Phase");
+    expect(phaseLabel.nextElementSibling).toHaveTextContent("permission");
+    const progressStageLabel = within(details).getByText("Progress stage");
+    expect(progressStageLabel.nextElementSibling).toHaveTextContent("validation");
     await user.click(within(details).getByRole("button", { name: "Close details for Builder" }));
     expect(
       screen.queryByRole("dialog", { name: "Agent details for Builder" }),
@@ -977,56 +1750,132 @@ describe("portal application", () => {
     await waitFor(() => expect(memberButton).toHaveFocus());
   });
 
-  it("counts explicit input separately from ordinary waiting", async () => {
+  it("shows a group-qualified delivery-only Messages control", async () => {
+    const onOpenMessages = vi.fn();
+    const renderTree = (failedGroupId: string) => (
+      <GroupTree
+        snapshot={{
+          ...requestAttentionSnapshot(memberships[0]!),
+          messageGroups: [
+            {
+              groupId: failedGroupId,
+              latestGroupSeq: 1,
+              retainedMessageCount: 1,
+              activeDeliveryCount: 0,
+              failedRecipientMemberIds: ["builder"],
+            },
+          ],
+        }}
+        config={config}
+        selectedGroupId="group-backend"
+        unreadCounts={new Map()}
+        onSelectGroup={vi.fn()}
+        onOpenMessages={onOpenMessages}
+        onCreateGroup={vi.fn()}
+        onRenameGroup={vi.fn()}
+        onDeleteGroup={vi.fn()}
+        onAddAgent={vi.fn()}
+        onRenameAgent={vi.fn()}
+        onRemoveAgent={vi.fn()}
+        onStartRun={vi.fn()}
+        onStopRun={vi.fn()}
+        onOpenConsole={vi.fn()}
+      />
+    );
+    const view = render(renderTree("group-review"));
+
+    expect(
+      screen.queryByRole("button", { name: "Open failed delivery for Builder in Backend" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "View details for Builder, status Needs input" }),
+    ).toBeInTheDocument();
+
+    view.rerender(renderTree("group-backend"));
+    screen.getByRole("button", { name: "Open failed delivery for Builder in Backend" }).click();
+    expect(onOpenMessages).toHaveBeenCalledWith("group-backend");
+  });
+
+  it("counts ordinary waiting as Working and explicit input as projected Attention", async () => {
     const client = createClient();
+    const builderRun = activeRun(memberships[0]!);
+    const reviewerRun = activeRun(memberships[1]!);
     vi.mocked(client.loadSnapshot).mockResolvedValue({
       ...snapshot,
+      runs: [builderRun, reviewerRun],
       agentStatuses: [
-        {
-          groupId: "group-backend",
-          memberId: "builder",
-          alias: "Builder",
-          agentType: "copilot",
-          runId: "run-builder",
-          generation: 1,
-          runStatus: "running",
+        statusSummary(memberships[0]!, {
           state: "waiting",
           phase: "question",
-          outcome: "unknown",
-          confidence: "high",
           attention: "input_required",
-          observedAt: timestamp,
-          stateChangedAt: timestamp,
-        },
-        {
-          groupId: "group-backend",
-          memberId: "reviewer",
-          alias: "Reviewer",
-          agentType: "copilot",
-          runId: "run-reviewer",
-          generation: 1,
-          runStatus: "running",
+          statusRevision: 2,
+        }),
+        statusSummary(memberships[1]!, {
           state: "waiting",
           phase: "settled",
-          outcome: "unknown",
-          confidence: "high",
-          attention: "none",
-          observedAt: timestamp,
-          stateChangedAt: timestamp,
-        },
+          statusRevision: 2,
+          authorityId: "reporter-two",
+        }),
       ],
     });
 
     render(<App client={client} />);
     await screen.findByRole("heading", { name: "Backend" });
 
-    expect(screen.getByText("2 waiting")).toBeInTheDocument();
-    expect(screen.getByText("1 needs attention")).toHaveAttribute(
-      "title",
-      "Builder: input required",
-    );
-    expect(screen.getByText(/^waiting · question · input required/)).toBeInTheDocument();
-    expect(screen.getByText(/^waiting · settled/)).toBeInTheDocument();
+    expect(screen.getByText("1 working")).toBeInTheDocument();
+    expect(screen.queryByText(/waiting$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/needs attention/)).not.toBeInTheDocument();
+    expect(
+      screen.getByLabelText("1 review item requires attention across all groups"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "View details for Builder, status Needs input" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "View details for Reviewer, status Working" }),
+    ).toBeInTheDocument();
+  });
+
+  it("counts Done but excludes reporter-stale Unknown from local and global Attention", async () => {
+    const client = createClient();
+    vi.mocked(client.loadSnapshot).mockResolvedValue({
+      ...snapshot,
+      runs: [activeRun(memberships[0]!), activeRun(memberships[1]!)],
+      agentStatuses: [
+        statusSummary(memberships[0]!, {
+          state: "idle",
+          phase: "settled",
+          completionRevision: 3,
+          completionPending: true,
+        }),
+        statusSummary(memberships[1]!, {
+          state: "unknown",
+          phase: "model",
+          attention: "reporter_stale",
+          staleAuthority: true,
+          authorityKind: "process",
+          authorityId: undefined,
+        }),
+      ],
+    });
+
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+
+    expect(screen.getByText("0 working")).toBeInTheDocument();
+    expect(screen.queryByText(/needs attention/)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "View details for Builder, status Done" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "View details for Reviewer, status Unknown" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", {
+        name: "Open Attention, 1 review item across all groups",
+      }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(document.title).toBe("(1) Backend Terminals · Nanasa"));
   });
 
   it("offers Start for a normally stopped desired-stopped run", async () => {
@@ -1041,6 +1890,8 @@ describe("portal application", () => {
       desiredState: "stopped",
       recoveryPhase: "idle",
       recoveryAttempts: 0,
+      launchKind: "fresh",
+      requestedModelSource: "provider-default",
       startedAt: timestamp,
       stoppedAt: timestamp,
     };
@@ -1073,7 +1924,9 @@ describe("portal application", () => {
       ),
     ).toBeInTheDocument();
     await user.keyboard("{Escape}");
-    await user.click(screen.getByRole("button", { name: "View details for Builder" }));
+    await user.click(
+      screen.getByRole("button", { name: "View details for Builder, status Stopped" }),
+    );
     expect(
       within(screen.getByRole("dialog", { name: "Agent details for Builder" })).getByText(
         /GitHub Copilot \(copilot\)/,
@@ -1095,7 +1948,7 @@ describe("portal application", () => {
     window.dispatchEvent(
       new StorageEvent("storage", {
         key: PORTAL_PREFERENCES_KEY,
-        newValue: JSON.stringify({ theme: "light", terminalLayout: "grid" }),
+        newValue: JSON.stringify({ version: 2, theme: "light" }),
       }),
     );
     await waitFor(() =>
@@ -1104,7 +1957,76 @@ describe("portal application", () => {
         "true",
       ),
     );
-    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+    await waitFor(() => expect(document.documentElement).toHaveAttribute("data-theme", "light"));
+  });
+
+  it("persists terminal columns from the group navigation row", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState({}, "", "/groups/group-backend/terminals");
+    render(<App client={createClient()} />);
+    await screen.findByRole("heading", { name: "Backend" });
+
+    const columns = screen.getByRole("button", { name: "3 terminal columns" });
+    await user.click(columns);
+    await waitFor(() => expect(columns).toHaveAttribute("aria-pressed", "true"));
+    expect(JSON.parse(window.localStorage.getItem(PORTAL_PREFERENCES_KEY) ?? "{}")).toMatchObject({
+      terminalColumnsByGroup: { "group-backend": 3 },
+    });
+  });
+
+  it("separates group, repository, system, and mobile navigation", async () => {
+    const user = userEvent.setup();
+    render(<App client={createClient()} />);
+    await screen.findByRole("heading", { name: "Backend" });
+
+    const groupNavigation = screen.getByRole("navigation", { name: "Backend sections" });
+    expect(
+      within(groupNavigation)
+        .getAllByRole("link")
+        .map((link) => link.textContent),
+    ).toEqual(["Terminals", "Messages", "Attention", "Overview"]);
+
+    const repositoryNavigation = screen.getByRole("navigation", {
+      name: "Repository operations",
+    });
+    expect(within(repositoryNavigation).getByRole("link", { name: "Attention" })).toHaveAttribute(
+      "href",
+      "/attention",
+    );
+    expect(within(repositoryNavigation).getByRole("link", { name: "All agents" })).toHaveAttribute(
+      "href",
+      "/agents",
+    );
+    await user.click(within(repositoryNavigation).getByText("System"));
+    expect(within(repositoryNavigation).getByRole("link", { name: "Extensions" })).toHaveAttribute(
+      "href",
+      "/extensions",
+    );
+    expect(
+      within(repositoryNavigation).getByRole("link", { name: "Remote access" }),
+    ).toHaveAttribute("href", "/remote");
+
+    await user.click(screen.getByRole("button", { name: "Open command palette" }));
+    const palette = screen.getByRole("dialog", { name: "Command palette" });
+    expect(within(palette).getByRole("button", { name: /Open extensions/ })).toBeInTheDocument();
+    expect(within(palette).getByRole("button", { name: /Open About Nanasa/ })).toBeInTheDocument();
+    await user.click(within(palette).getByRole("button", { name: "Close command palette" }));
+
+    const mobileTrigger = screen.getByRole("button", { name: "Open application menu" });
+    await user.click(mobileTrigger);
+    const drawer = screen.getByRole("dialog", { name: "Nanasa" });
+    expect(within(drawer).getByRole("link", { name: "Backend" })).toBeInTheDocument();
+    expect(within(drawer).getByRole("link", { name: "Preferences" })).toHaveAttribute(
+      "href",
+      "/settings",
+    );
+    await user.click(within(drawer).getByRole("button", { name: "Close menu" }));
+    expect(screen.queryByRole("dialog", { name: "Nanasa" })).not.toBeInTheDocument();
+    await waitFor(() => expect(mobileTrigger).toHaveFocus());
+
+    await user.click(mobileTrigger);
+    fireEvent.click(screen.getByRole("dialog", { name: "Nanasa" }));
+    expect(screen.queryByRole("dialog", { name: "Nanasa" })).not.toBeInTheDocument();
   });
 
   it("selects a group from the tree and updates the workspace", async () => {
@@ -1118,36 +2040,17 @@ describe("portal application", () => {
     expect(screen.getByText(/1 agents/)).toBeInTheDocument();
   });
 
-  it("keeps floating Messages open across the workspace and restores launcher focus", async () => {
+  it("keeps quick compose terminal-only and uses Messages as the canonical inbox", async () => {
     const user = userEvent.setup();
-    vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
-      return this.classList.contains("message-history") ? 1_000 : 0;
-    });
     render(<App client={createClient()} />);
 
     expect(await screen.findByTestId("terminal-surface")).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Messages" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Compose message")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Messages" })).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Compose message to Backend" }),
+    ).toBeInTheDocument();
     expect(screen.queryByLabelText("Message body")).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Workspace input mode" })).not.toBeInTheDocument();
-
-    await user.click(
-      within(screen.getByRole("region", { name: "Messages overlay" })).getByRole("button", {
-        name: "Close messages",
-      }),
-    );
-    expect(screen.queryByRole("region", { name: "Messages" })).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Messages" })).toHaveFocus());
-    await user.click(screen.getByRole("button", { name: "Messages" }));
-    await waitFor(() =>
-      expect(screen.getByRole("region", { name: "Message history" }).scrollTop).toBe(1_000),
-    );
-    expect(window.localStorage.getItem(MESSAGE_OVERLAY_OPEN_KEY)).toBe("true");
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("region", { name: "Messages" })).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Messages" })).toHaveFocus());
-    expect(window.localStorage.getItem(MESSAGE_OVERLAY_OPEN_KEY)).toBe("false");
-    await user.click(screen.getByRole("button", { name: "Messages" }));
 
     const dialog = await openMessageComposer(user);
     expect(within(dialog).getByLabelText("Message body")).toBeInTheDocument();
@@ -1160,10 +2063,17 @@ describe("portal application", () => {
     expect(
       within(dialog).getByText("Share context or a status update. No response is required."),
     ).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await openMessagesRoute(user);
+    expect(screen.queryByRole("button", { name: /Compose message to/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Message history" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "Action progress and exact waits" }),
+    ).not.toBeInTheDocument();
   });
 
   it("preserves read cursors across refresh and counts only new messages", async () => {
-    window.localStorage.setItem(MESSAGE_OVERLAY_OPEN_KEY, "false");
     const client = createClient();
     vi.mocked(client.loadSnapshot).mockResolvedValue({
       ...snapshot,
@@ -1180,18 +2090,18 @@ describe("portal application", () => {
     });
     const first = render(<App client={client} />);
 
-    expect(await screen.findByLabelText("1 unread messages")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Messages" }));
+    expect(await screen.findByLabelText("1 unread messages in Backend")).toBeInTheDocument();
+    expect(screen.queryByLabelText("1 unread")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: /^Messages/ }));
     await waitFor(() =>
-      expect(screen.queryByLabelText("1 unread messages")).not.toBeInTheDocument(),
+      expect(screen.queryByLabelText("1 unread messages in Backend")).not.toBeInTheDocument(),
     );
-    await userEvent.click(screen.getByRole("button", { name: "Close messages" }));
     first.unmount();
 
     expect(window.localStorage.getItem(MESSAGE_READ_CURSORS_KEY)).not.toBeNull();
     const second = render(<App client={client} />);
     await screen.findByRole("heading", { name: "Backend" });
-    expect(screen.queryByLabelText("1 unread messages")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("1 unread messages in Backend")).not.toBeInTheDocument();
     second.unmount();
 
     vi.mocked(client.loadSnapshot).mockResolvedValue({
@@ -1207,9 +2117,10 @@ describe("portal application", () => {
         },
       ],
     });
+    window.history.replaceState({}, "", "/");
     render(<App client={client} />);
 
-    expect(await screen.findByLabelText("1 unread messages")).toBeInTheDocument();
+    expect(await screen.findByLabelText("1 unread messages in Backend")).toBeInTheDocument();
   });
 
   it("does not count messages pruned before the read cursor", () => {
@@ -1268,6 +2179,7 @@ describe("portal application", () => {
 
     render(
       <MessageWorkspace
+        presentation="route"
         group={snapshot.groups[0]!}
         members={memberships.slice(0, 2)}
         messageState={{
@@ -1320,6 +2232,7 @@ describe("portal application", () => {
     const client = createClient(submissionResult());
     render(<App client={client} />);
     await screen.findByRole("heading", { name: "Backend" });
+    await openMessagesRoute(user);
     await openMessageComposer(user);
     await user.type(screen.getByLabelText("Message body"), "Review the API");
     await user.click(screen.getByRole("button", { name: "Send message" }));
@@ -1339,10 +2252,214 @@ describe("portal application", () => {
     );
   });
 
+  it("creates Prompt when ready work separately from communication delivery", async () => {
+    const user = userEvent.setup();
+    const client = createClient(submissionResult());
+    vi.mocked(client.createAgentAction).mockResolvedValue({
+      version: 1,
+      id: "action-1",
+      kind: "prompt",
+      principal: { kind: "operator", operatorId: "portal-operator" },
+      target: {
+        groupId: "group-backend",
+        memberId: "builder",
+        runId: "run-builder",
+        generation: 1,
+        daemonEpoch: 1,
+        reporterSessionId: "reporter-1",
+        reporterId: "copilot-hooks",
+        reporterEpoch: "epoch-1",
+        baselineStatusRevision: 2,
+        baselineCompletionRevision: 0,
+      },
+      messageId: "message-1",
+      conversationId: "conversation-1",
+      idempotencyKey: "action-key",
+      requestDigest: "a".repeat(64),
+      prompt: "Review the API",
+      allowWorking: false,
+      state: "created",
+      queueDeadlineAt: "2026-08-29T12:05:00.000Z",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+    await openMessagesRoute(user);
+    await openMessageComposer(user);
+    await user.type(screen.getByLabelText("Message body"), "Review the API");
+    await user.click(
+      screen.getByLabelText(
+        "Prompt when ready (creates exact durable work separately from delivery)",
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() => expect(client.submitMessage).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(client.createAgentAction).toHaveBeenCalledWith({
+        kind: "prompt",
+        groupId: "group-backend",
+        memberId: "builder",
+        prompt: "Review the API",
+        messageId: "message-1",
+        conversationId: "conversation-1",
+        allowWorking: false,
+      }),
+    );
+    expect(
+      screen.queryByRole("region", { name: "Action progress and exact waits" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("loads repository Attention with partial workspace success and truthful wait counts", async () => {
+    window.history.replaceState({}, "", "/attention");
+    const client = createClient();
+    vi.mocked(client.loadActionWorkspace).mockImplementation((groupId) => {
+      if (groupId === "group-review") return Promise.reject(new Error("unavailable"));
+      return Promise.resolve({
+        groupId,
+        actions: [],
+        attempts: [],
+        acknowledgements: [],
+        openWaits: [
+          {
+            id: "wait-global",
+            groupId,
+            memberId: "builder",
+            runId: "run-builder",
+            generation: 1,
+            reporterSessionId: "reporter-1",
+            reporterId: "copilot-hooks",
+            reporterEpoch: "epoch-1",
+            providerRequestId: "permission-global",
+            kind: "permission",
+            summary: "Approve repository check?",
+            replyChannel: "terminal",
+            openedStatusRevision: 7,
+            state: "open",
+            openedAt: timestamp,
+            updatedAt: timestamp,
+          },
+        ],
+      });
+    });
+
+    render(<App client={client} />);
+
+    expect(await screen.findByText("Approve repository check?")).toBeInTheDocument();
+    expect(client.loadActionWorkspace).toHaveBeenCalledWith("group-backend");
+    expect(client.loadActionWorkspace).toHaveBeenCalledWith("group-review");
+    expect(screen.getByText("Review: unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("1 review item requires attention across all groups"),
+    ).toBeInTheDocument();
+    expect(document.title).toBe("(1) Attention · Nanasa");
+  });
+
+  it("loads all active group workspaces before Attention navigation for canonical counts", async () => {
+    const client = createClient();
+    vi.mocked(client.loadActionWorkspace).mockImplementation((groupId) =>
+      Promise.resolve({
+        groupId,
+        actions: [],
+        attempts: [],
+        acknowledgements: [],
+        openWaits: [
+          {
+            id: `wait-${groupId}`,
+            groupId,
+            memberId: groupId === "group-backend" ? "builder" : "auditor",
+            runId: groupId === "group-backend" ? "run-builder" : "run-auditor",
+            generation: 1,
+            reporterSessionId: "reporter-1",
+            reporterId: "copilot-hooks",
+            reporterEpoch: "epoch-1",
+            providerRequestId: `permission-${groupId}`,
+            kind: "permission",
+            summary: `Approve ${groupId}?`,
+            replyChannel: "terminal",
+            openedStatusRevision: 7,
+            state: "open",
+            openedAt: timestamp,
+            updatedAt: timestamp,
+          },
+        ],
+      }),
+    );
+
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+
+    await waitFor(() => expect(client.loadActionWorkspace).toHaveBeenCalledTimes(2));
+    expect(client.loadActionWorkspace).toHaveBeenCalledWith("group-backend");
+    expect(client.loadActionWorkspace).toHaveBeenCalledWith("group-review");
+    expect(
+      await screen.findByLabelText("2 review items require attention across all groups"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("1 review item requires attention in Backend"),
+    ).toBeInTheDocument();
+    expect(document.title).toBe("(2) Backend Terminals · Nanasa");
+  });
+
+  it("renders exact permission waits separately and sends only closed logical replies", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    vi.mocked(client.loadActionWorkspace).mockResolvedValue({
+      groupId: "group-backend",
+      actions: [],
+      attempts: [],
+      acknowledgements: [],
+      openWaits: [
+        {
+          id: "wait-1",
+          groupId: "group-backend",
+          memberId: "builder",
+          runId: "run-builder",
+          generation: 1,
+          reporterSessionId: "reporter-1",
+          reporterId: "copilot-hooks",
+          reporterEpoch: "epoch-1",
+          providerRequestId: "permission-1",
+          kind: "permission",
+          summary: "Allow one command?",
+          replyChannel: "terminal",
+          openedStatusRevision: 7,
+          state: "open",
+          openedAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ],
+    });
+    vi.mocked(client.replyOpenWait).mockResolvedValue({
+      ...(await client.loadActionWorkspace("group-backend")).openWaits[0]!,
+      state: "replying",
+    });
+    render(<App client={client} />);
+    const groupNavigation = await screen.findByRole("navigation", { name: "Backend sections" });
+    await user.click(within(groupNavigation).getByRole("link", { name: /^Attention/ }));
+    await screen.findByText("Allow one command?");
+    expect(
+      within(groupNavigation).getByLabelText("1 review item requires attention in Backend"),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Allow once" }));
+
+    expect(client.replyOpenWait).toHaveBeenCalledWith("wait-1", {
+      expectedRunId: "run-builder",
+      expectedGeneration: 1,
+      expectedReporterEpoch: "epoch-1",
+      expectedStatusRevision: 7,
+      reply: { kind: "allow-once" },
+    });
+    expect(screen.queryByRole("button", { name: /send keys/i })).not.toBeInTheDocument();
+  });
+
   it("restores server message history and clears persisted entries", async () => {
     const user = userEvent.setup();
     const first = render(<App client={createClient(submissionResult())} />);
     await screen.findByRole("heading", { name: "Backend" });
+    await openMessagesRoute(user);
     await openMessageComposer(user);
     await user.type(screen.getByLabelText("Message body"), "Review the API");
     await user.click(screen.getByRole("button", { name: "Send message" }));
@@ -1438,7 +2555,7 @@ describe("portal application", () => {
         {
           messageId: agentMessage.id,
           recipientMemberId: "builder",
-          status: "consumed",
+          status: "terminal_injected",
           attempts: 2,
           updatedAt: agentMessage.createdAt,
         },
@@ -1449,6 +2566,7 @@ describe("portal application", () => {
 
     const { container } = render(<App client={client} />);
     await screen.findByRole("heading", { name: "Backend" });
+    await openMessagesRoute(user);
 
     expect((await screen.findAllByText(/^From:/)).map((heading) => heading.textContent)).toEqual([
       "From: Human",
@@ -1464,7 +2582,7 @@ describe("portal application", () => {
     const agentBubble = screen.getByText(/^From: Reviewer/).closest("article");
     expect(agentBubble).not.toBeNull();
     const agentDelivery = within(agentBubble!).getByRole("button", {
-      name: "Sent to 1 · 1 consumed",
+      name: "Sent to 1 · 1 terminal_injected",
     });
     await user.click(agentDelivery);
     expect(within(agentBubble!).getByText("Builder")).toBeInTheDocument();
@@ -1477,6 +2595,7 @@ describe("portal application", () => {
     const onSubmit = vi.fn().mockResolvedValue(submissionResult());
     const { rerender } = render(
       <MessageWorkspace
+        presentation="route"
         group={snapshot.groups[0]!}
         members={memberships.slice(0, 2)}
         onSubmit={onSubmit}
@@ -1490,6 +2609,7 @@ describe("portal application", () => {
 
     rerender(
       <MessageWorkspace
+        presentation="route"
         group={snapshot.groups[1]!}
         members={[memberships[2]!]}
         onSubmit={onSubmit}

@@ -78,11 +78,12 @@ test("init creates one repository-local config without runtime state", () => {
   );
   const original = readFileSync(configPath, "utf8");
   assert.match(original, /^integrations:$/m);
-  assert.doesNotMatch(original, /^version:/m);
+  assert.match(original, /^version: 2$/m);
   assert.doesNotMatch(original, /^agentProfiles:|^agentTypes:/m);
   assert.match(original, /command: \[copilot\]/);
   assert.match(original, /command: \[pi\]/);
-  assert.doesNotMatch(original, /^\s+(adapter|capabilities|recovery):/m);
+  assert.doesNotMatch(original, /^\s+(adapter|capabilities|recovery|agentConfigHome):/m);
+  assert.match(original, /^\s+providerState: \{ scope: membership \}$/m);
   assert.doesNotMatch(original, /packagefeedproxy|pkgs\.visualstudio|\/workspaces\/nanasa/);
 
   writeFileSync(configPath, `${original}# operator-owned\n`);
@@ -99,18 +100,16 @@ test("start fails clearly before launch when configuration is absent", () => {
   assert.match(result.stderr, /Run nanasa init first/);
 });
 
-test("start explains the ttyd system prerequisite before daemon launch", () => {
+test("start rejects retired terminal-provider options", () => {
   const repository = temporaryRepository();
   assert.equal(runCli(repository, ["init"]).status, 0);
   const nested = join(repository, "packages", "example");
   const mkdir = spawnSync("mkdir", ["-p", nested]);
   assert.equal(mkdir.status, 0);
 
-  const missingTtyd = join(repository, "missing-ttyd");
-  const result = runCli(nested, ["start", "--ttyd-path", missingTtyd]);
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /Install ttyd 1\.7\.7 through your system or devcontainer/);
-  assert.match(result.stderr, /NANASA_TTYD_PATH/);
+  const result = runCli(nested, ["start", "--legacy-terminal-path", "/missing"]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /Unknown option: --legacy-terminal-path/);
   assert.equal(existsSync(join(repository, ".nanasa", "state")), false);
   assert.equal(existsSync(join(nested, ".nanasa")), false);
 });
@@ -120,10 +119,23 @@ test("help documents authenticated MCP enablement", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /--host <host>\s+Listen host; MCP requires loopback/);
   assert.match(result.stdout, /--mcp\s+Enable authenticated MCP \(default path: \/mcp\)/);
-  assert.match(result.stdout, /nanasa auth <integration> \[--agent <agent-id>\]/);
+  assert.match(result.stdout, /nanasa auth login <integration> \[--agent <agent-id>\]/);
+  assert.match(result.stdout, /nanasa auth portal/);
   assert.match(result.stdout, /setup\s+Prepare repository-local integration configuration homes/);
-  assert.match(result.stdout, /auth\s+Launch an integration CLI in its isolated home/);
+  assert.match(result.stdout, /auth\s+Authenticate locally or inspect daemon auth state/);
   assert.match(result.stdout, /doctor\s+Validate configuration, commands, and integration homes/);
+  assert.match(result.stdout, /docs\s+Print the absolute path to the packaged documentation index/);
+});
+
+test("docs locates packaged help without a repository or daemon", () => {
+  const directory = mkdtempSync(join(tmpdir(), "nanasa-docs-"));
+  temporaryDirectories.push(directory);
+
+  const result = runCli(directory, ["docs"]);
+  const helpIndex = join(root, "dist", "help", "index.md");
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, `${helpIndex}\n`);
+  assert.equal(existsSync(helpIndex), true);
 });
 
 test("setup and doctor prepare private repository-local integrations", () => {
@@ -131,13 +143,14 @@ test("setup and doctor prepare private repository-local integrations", () => {
   assert.equal(runCli(repository, ["init"]).status, 0);
   writeFileSync(
     join(repository, ".nanasa", "config.yaml"),
-    `integrations:
+    `version: 2
+integrations:
   fixture:
     name: Fixture
     kind: copilot
     command: [node]
     cwd: .
-    agentConfigHome: { scope: integration }
+    providerState: { scope: integration }
 `,
   );
 
@@ -149,7 +162,7 @@ test("setup and doctor prepare private repository-local integrations", () => {
   assert.equal(setup.status, 0, setup.stderr);
   const integrations = join(repository, ".nanasa", "integrations");
   assert.equal(statSync(integrations).mode & 0o777, 0o700);
-  assert.equal(existsSync(join(integrations, "integrations", "fixture")), true);
+  assert.equal(existsSync(join(integrations, "state", "integrations", "fixture")), true);
 
   const doctor = runCli(repository, ["doctor"]);
   assert.equal(doctor.status, 0, doctor.stderr);
@@ -176,17 +189,18 @@ writeFileSync(process.env.AUTH_CAPTURE, JSON.stringify({
   );
   writeFileSync(
     join(repository, ".nanasa", "config.yaml"),
-    `integrations:
+    `version: 2
+integrations:
   fixture:
     name: Fixture Copilot
     kind: copilot
     command: [node, ${JSON.stringify(scriptPath)}]
     cwd: .
-    agentConfigHome: { scope: custom, path: "auth/{integrationId}" }
+    providerState: { scope: custom, path: "auth/{integrationId}" }
 `,
   );
 
-  const authenticated = runCli(repository, ["auth", "fixture"], {
+  const authenticated = runCli(repository, ["auth", "login", "fixture"], {
     AUTH_CAPTURE: capturePath,
     HOME: externalHome,
   });
@@ -195,7 +209,7 @@ writeFileSync(process.env.AUTH_CAPTURE, JSON.stringify({
   assert.equal(environment.home, externalHome);
   assert.equal(
     environment.copilotHome,
-    join(repository, ".nanasa", "integrations", "auth", "fixture"),
+    join(repository, ".nanasa", "integrations", "state", "custom", "auth", "fixture"),
   );
   assert.equal(environment.copilotCacheHome, join(environment.copilotHome, "cache"));
   assert.equal(readFileSync(join(externalHome, "sentinel"), "utf8"), "unchanged\n");
@@ -206,22 +220,23 @@ test("agent-scoped auth requires a stable agent identifier", () => {
   assert.equal(runCli(repository, ["init"]).status, 0);
   writeFileSync(
     join(repository, ".nanasa", "config.yaml"),
-    `integrations:
+    `version: 2
+integrations:
   fixture:
     name: Fixture
     kind: copilot
     command: [node]
     cwd: .
-    agentConfigHome: { scope: agent }
+    providerState: { scope: membership }
 `,
   );
 
-  const result = runCli(repository, ["auth", "fixture"]);
+  const result = runCli(repository, ["auth", "login", "fixture"]);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /requires --agent <agent-id>/);
 });
 
-test("package build contains one terminal-only daemon entry", () => {
+test("package build contains one fenced daemon entry and release metadata", () => {
   const daemonDirectory = join(root, "dist", "daemon");
   assert.deepEqual(listFiles(daemonDirectory), ["index.js"]);
   const daemonBundle = readFileSync(join(daemonDirectory, "index.js"), "utf8");
@@ -230,12 +245,41 @@ test("package build contains one terminal-only daemon entry", () => {
     /copilot-cli-worker|copilot-acp-process|pi-rpc-worker|pi-rpc-process/,
   );
   assert.equal(existsSync(join(root, "dist", "cli", "admin.js")), true);
+  assert.equal(existsSync(join(root, "dist", "cli", "control.js")), true);
+  const metadata = JSON.parse(readFileSync(join(root, "dist", "meta", "build.json"), "utf8"));
+  const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  assert.equal(metadata.packageVersion, packageJson.version);
+  assert.equal(metadata.channel, "next");
+  assert.deepEqual(metadata.hosts, ["linux-x64", "linux-arm64"]);
+  assert.equal(metadata.node, ">=22 <23 || >=24 <25");
+  assert.deepEqual(metadata.terminalHelper, { name: "node-pty", version: "1.1.0" });
+  assert.deepEqual(metadata.browsers, ["chromium", "firefox", "webkit"]);
+  assert.match(metadata.commit, /^[a-f0-9]{40}$/);
+  assert.equal(existsSync(join(root, "dist", "meta", "sbom.spdx.json")), true);
+  assert.equal(existsSync(join(root, "dist", "help", "index.md")), true);
 });
 
-test("packed package installs cleanly and initializes terminal-only config", () => {
+test("completion is daemon-free and grammar failures use exit 2", () => {
+  const repository = temporaryRepository();
+  const completion = runCli(repository, ["completion", "bash"]);
+  assert.equal(completion.status, 0, completion.stderr);
+  assert.match(completion.stdout, /complete -W/);
+
+  const invalid = runCli(repository, ["group", "unknown"]);
+  assert.equal(invalid.status, 1);
+  assert.match(invalid.stderr, /Run nanasa init first/);
+
+  assert.equal(runCli(repository, ["init"]).status, 0);
+  const usage = runCli(repository, ["group", "unknown"]);
+  assert.equal(usage.status, 2);
+  assert.match(usage.stderr, /Unknown command/);
+});
+
+test("packed package installs cleanly and initializes config version 2", () => {
   const archiveDirectory = mkdtempSync(join(tmpdir(), "nanasa-pack-"));
   const installDirectory = mkdtempSync(join(tmpdir(), "nanasa-install-"));
-  temporaryDirectories.push(archiveDirectory, installDirectory);
+  const repoFreeDirectory = mkdtempSync(join(tmpdir(), "nanasa-docs-"));
+  temporaryDirectories.push(archiveDirectory, installDirectory, repoFreeDirectory);
 
   const packed = spawnSync(
     "npm",
@@ -247,11 +291,23 @@ test("packed package installs cleanly and initializes terminal-only config", () 
   const publishedFiles = manifest.files.map((file) => file.path);
   assert.ok(publishedFiles.includes("dist/daemon/index.js"));
   assert.ok(publishedFiles.includes("dist/cli/admin.js"));
+  assert.ok(publishedFiles.includes("dist/cli/control.js"));
+  assert.ok(publishedFiles.includes("dist/meta/build.json"));
+  assert.ok(publishedFiles.includes("dist/meta/sbom.spdx.json"));
+  assert.ok(publishedFiles.includes("dist/help/index.md"));
   assert.ok(publishedFiles.includes("templates/config.yaml"));
+  assert.ok(publishedFiles.includes("templates/systemd/nanasa.service"));
+  assert.ok(publishedFiles.includes("THIRD_PARTY_NOTICES.md"));
   assert.equal(
-    publishedFiles.some((path) => /worker|\.map$|^test\//.test(path)),
+    publishedFiles.some((path) =>
+      /worker|\.map$|^test\/|(?:^|\/)\.env|\.sqlite(?:-wal|-shm)?$|mcp-secret|terminal-checkpoints|provider-state/.test(
+        path,
+      ),
+    ),
     false,
   );
+  const buildEntry = manifest.files.find((file) => file.path === "dist/meta/build.json");
+  assert.ok(buildEntry?.size > 0);
 
   writeFileSync(join(installDirectory, "package.json"), '{"private":true}\n');
   const installed = spawnSync(
@@ -274,13 +330,30 @@ test("packed package installs cleanly and initializes terminal-only config", () 
     existsSync(join(installDirectory, "node_modules", "pi-mcp-adapter", "index.ts")),
     true,
   );
+  const installedHelpIndex = join(
+    installDirectory,
+    "node_modules",
+    "nanasa",
+    "dist",
+    "help",
+    "index.md",
+  );
+  const docs = spawnSync(installedCli, ["docs"], {
+    cwd: repoFreeDirectory,
+    encoding: "utf8",
+  });
+  assert.equal(docs.status, 0, docs.stderr);
+  assert.equal(docs.stdout, `${installedHelpIndex}\n`);
+  assert.equal(existsSync(installedHelpIndex), true);
+
   const initialized = spawnSync(installedCli, ["init"], { cwd: repository, encoding: "utf8" });
   assert.equal(initialized.status, 0, initialized.stderr);
   const configPath = join(repository, ".nanasa", "config.yaml");
   const config = readFileSync(configPath, "utf8");
   assert.match(config, /^integrations:$/m);
   assert.match(config, /command: \[copilot\]/);
-  assert.doesNotMatch(config, /^version:|^agentProfiles:|^agentTypes:/m);
-  assert.doesNotMatch(config, /^\s+(adapter|capabilities|recovery):/m);
+  assert.match(config, /^version: 2$/m);
+  assert.doesNotMatch(config, /^agentProfiles:|^agentTypes:/m);
+  assert.doesNotMatch(config, /^\s+(adapter|capabilities|recovery|agentConfigHome):/m);
   assert.equal(existsSync(join(repository, ".nanasa", "state")), false);
 });

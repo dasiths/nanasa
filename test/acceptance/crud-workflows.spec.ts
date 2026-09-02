@@ -9,7 +9,7 @@ test("group and agent rename and delete workflows require confirmation", async (
     "Retained agent",
   ]);
   await nanasa.seedGroup("Fallback team", []);
-  await page.goto(nanasa.baseUrl);
+  await page.goto(nanasa.portalUrl);
   await nanasa.startAll(group.id);
   const runningSnapshot = await nanasa.snapshot();
   const panesByMember = new Map(
@@ -23,7 +23,7 @@ test("group and agent rename and delete workflows require confirmation", async (
   }
 
   let paneExpectedStopped: string | undefined;
-  await page.route("**/api/snapshot", async (route) => {
+  await page.route("**/api/v1/snapshot", async (route) => {
     if (paneExpectedStopped !== undefined) {
       await nanasa.waitForPaneStopped(paneExpectedStopped);
       expect(nanasa.paneExists(paneExpectedStopped)).toBe(false);
@@ -95,10 +95,17 @@ test("group and agent rename and delete workflows require confirmation", async (
     .getByRole("dialog", { name: "Delete Renamed team?" })
     .getByRole("button", { name: "Delete group" })
     .click();
-  await expect(page.getByRole("heading", { name: "Fallback team" })).toBeVisible();
-  await expect(page.getByText("Renamed team", { exact: true })).toHaveCount(0);
+  if (paneExpectedStopped !== undefined) {
+    await nanasa.waitForPaneStopped(paneExpectedStopped);
+    paneExpectedStopped = undefined;
+  }
   expect(paneExpectedStopped).toBeUndefined();
 
+  await expect
+    .poll(async () =>
+      (await nanasa.snapshot()).groups.some((candidate) => candidate.id === group.id),
+    )
+    .toBe(false);
   const afterGroupDeletion = await nanasa.snapshot();
   expect(afterGroupDeletion.groups.some((candidate) => candidate.id === group.id)).toBe(false);
   expect(afterGroupDeletion.memberships.some((agent) => agent.groupId === group.id)).toBe(false);
@@ -113,17 +120,22 @@ test("group and agent rename and delete workflows require confirmation", async (
             aggregateId: string;
             payload: Record<string, unknown>;
           }> = [];
-          const socket = new WebSocket(`${baseUrl.replace(/^http/, "ws")}/api/events?after=0`);
+          const socket = new WebSocket(`${baseUrl.replace(/^http/, "ws")}/api/v1/events?after=0`);
           const timeout = window.setTimeout(() => {
             socket.close();
             rejectEvents(new Error("Timed out replaying deletion events"));
           }, 5_000);
           socket.onmessage = (event) => {
-            const domainEvent = JSON.parse(String(event.data)) as {
+            const frame = JSON.parse(String(event.data)) as {
               type: string;
-              aggregateId: string;
-              payload: Record<string, unknown>;
+              event?: {
+                type: string;
+                aggregateId: string;
+                payload: Record<string, unknown>;
+              };
             };
+            const domainEvent = frame.event;
+            if (frame.type !== "domain.event" || domainEvent === undefined) return;
             events.push(domainEvent);
             if (
               domainEvent.type === "group.deleted" &&

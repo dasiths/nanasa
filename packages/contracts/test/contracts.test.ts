@@ -1,30 +1,103 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import {
+  AgentActionAttemptSchema,
+  AgentActionSchema,
+  AgentActionStateSchema,
   AgentProfileSchema,
   AgentProgressReportCommandSchema,
   AgentRunSchema,
   AgentStatusDetailSchema,
   AgentStatusEventInputSchema,
+  AgentStatusStateSchema,
+  CheckoutSchema,
   ConfigStatusSchema,
+  ControlMetadataSchema,
   CreateGroupAgentCommandSchema,
+  CreateWorktreeCommandSchema,
+  CredentialProfileReferenceSchema,
   DeleteGroupResultSchema,
-  DeliveryModeSchema,
   DeliveryOutcomeSchema,
+  EventServerFrameSchema,
+  ExtensionLockSchema,
   InstructionPathSchema,
   InterruptAgentRunCommandSchema,
   MAX_MESSAGE_TEXT_BYTES,
   MessageSchema,
   NanasaConfigSchema,
+  NativeRecoveryPolicySchema,
+  NativeSessionReferenceSchema,
+  OpenWaitSchema,
+  PortalSnapshotSchema,
+  ProviderExtensionDescriptorSchema,
+  REQUIRED_PROVIDER_EXTENSION_PERMISSIONS,
   RemoveGroupAgentResultSchema,
+  RemoveWorktreeCommandSchema,
   ReorderGroupAgentsCommandSchema,
   ReorderGroupAgentsResultSchema,
+  ReplyOpenWaitCommandSchema,
+  RepositorySchema,
   StartAgentRunCommandSchema,
   SubmitMessageCommandSchema,
+  TerminalCheckpointSchema,
   TerminalEndpointStatusSchema,
+  TerminalServerFrameSchema,
   UpdateGroupAgentCommandSchema,
   UpdateGroupCommandSchema,
+  WorktreeSchema,
 } from "../src/index.js";
+
+describe("versioned control-plane contracts", () => {
+  it("requires daemon identity, epoch, versions, and explicit loopback-only metadata", () => {
+    expect(
+      ControlMetadataSchema.parse({
+        apiVersion: 1,
+        eventProtocolVersion: 1,
+        productVersion: "0.1.0-next.11.0",
+        buildCommit: "a".repeat(40),
+        releaseChannel: "next",
+        configVersion: 2,
+        databaseSchemaVersion: 5,
+        repositoryId: "repo-one",
+        instanceId: "daemon-one",
+        daemonEpoch: 2,
+        lifecycle: "ready",
+        remoteAccess: "loopback-only",
+        limits: { eventPendingBytes: 1_048_576 },
+      }),
+    ).toMatchObject({ instanceId: "daemon-one", daemonEpoch: 2 });
+  });
+
+  it("accepts only typed replay, heartbeat, reset, slow-consumer, and restart frames", () => {
+    expect(
+      EventServerFrameSchema.parse({
+        type: "subscription.reset-required",
+        reason: "cursor_expired",
+        cursor: 10,
+        snapshotUrl: "/api/v1/snapshot",
+      }),
+    ).toMatchObject({ type: "subscription.reset-required" });
+    expect(EventServerFrameSchema.safeParse({ type: "event", sequence: 11 }).success).toBe(false);
+  });
+
+  it("fences portal snapshots by daemon instance and event sequence", () => {
+    expect(
+      PortalSnapshotSchema.parse({
+        instanceId: "daemon-one",
+        daemonEpoch: 2,
+        sequence: 10,
+        generatedAt: "2026-08-29T12:00:00.000Z",
+        groups: [],
+        agentProfiles: [],
+        memberships: [],
+        runs: [],
+        messages: [],
+        deliveryOutcomes: [],
+      }),
+    ).toMatchObject({ instanceId: "daemon-one", sequence: 10 });
+  });
+});
 
 const baseMessage = {
   id: "msg_1",
@@ -45,14 +118,34 @@ const baseMessage = {
     contentType: "text/markdown",
     text: "Review the proposed API.",
   },
-  delivery: {
-    mode: "steer",
-  },
+  delivery: {},
   hop: 0,
   createdAt: "2026-08-09T15:00:00Z",
 } as const;
 
 describe("message policy contracts", () => {
+  it("derives causal depth on the server instead of accepting caller-owned hops", () => {
+    const command = {
+      intent: baseMessage.intent,
+      sender: baseMessage.sender,
+      audience: baseMessage.audience,
+      body: baseMessage.body,
+      delivery: baseMessage.delivery,
+    };
+    expect(SubmitMessageCommandSchema.safeParse(command).success).toBe(true);
+    expect(
+      SubmitMessageCommandSchema.safeParse({
+        ...command,
+        hop: 2,
+      }).success,
+    ).toBe(false);
+  });
+  it("generates only final delivery status names", () => {
+    const schema = JSON.stringify(z.toJSONSchema(DeliveryOutcomeSchema));
+    expect(schema).toContain("terminal_injected");
+    expect(schema).not.toContain('"consumed"');
+  });
+
   it("enforces message size in UTF-8 bytes and rejects malformed Unicode", () => {
     expect(
       MessageSchema.safeParse({
@@ -86,31 +179,27 @@ describe("message policy contracts", () => {
     ).toBe(false);
   });
 
-  it("accepts legacy modes but projects delivery as implicit terminal injection", () => {
+  it("uses one final delivery policy and rejects discarded delivery modes", () => {
     expect(MessageSchema.parse(baseMessage).delivery).toEqual({});
-    expect(DeliveryModeSchema.parse("terminal")).toBe("terminal");
-    expect(
-      MessageSchema.parse({
-        ...baseMessage,
-        delivery: { mode: "terminal", expiresAt: "2026-08-10T15:00:00Z" },
-      }).delivery,
-    ).toEqual({ expiresAt: "2026-08-10T15:00:00Z" });
+    const command = {
+      conversationId: baseMessage.conversationId,
+      intent: baseMessage.intent,
+      sender: baseMessage.sender,
+      audience: baseMessage.audience,
+      body: baseMessage.body,
+      delivery: baseMessage.delivery,
+    };
     expect(
       SubmitMessageCommandSchema.parse({
-        ...baseMessage,
-        id: undefined,
-        groupId: undefined,
-        groupSeq: undefined,
-        createdAt: undefined,
+        ...command,
       }).delivery,
     ).toEqual({});
     expect(
+      MessageSchema.safeParse({ ...baseMessage, delivery: { mode: "terminal" } }).success,
+    ).toBe(false);
+    expect(
       SubmitMessageCommandSchema.parse({
-        ...baseMessage,
-        id: undefined,
-        groupId: undefined,
-        groupSeq: undefined,
-        createdAt: undefined,
+        ...command,
         delivery: {},
       }).delivery,
     ).toEqual({});
@@ -123,9 +212,9 @@ describe("message policy contracts", () => {
   });
 
   it.each([
-    ["inbox mode", { delivery: { mode: "inbox" } }],
+    ["queue mode", { delivery: { mode: "queue" } }],
     ["interrupt mode", { delivery: { mode: "interrupt" } }],
-    ["fallback", { delivery: { mode: "steer", fallback: "queue" } }],
+    ["fallback", { delivery: { fallback: "queue" } }],
     ["agent control message", { intent: "control" }],
     [
       "duplicate multicast recipients",
@@ -138,88 +227,299 @@ describe("message policy contracts", () => {
   });
 });
 
+describe("durable action contracts", () => {
+  it("defines every distinct exact-work lifecycle state", () => {
+    expect(AgentActionStateSchema.options).toEqual([
+      "created",
+      "deferred",
+      "submitted",
+      "accepted",
+      "started",
+      "blocked",
+      "completed",
+      "settled-unverified",
+      "failed",
+      "stalled",
+      "timed-out",
+      "cancelled",
+      "expired",
+      "superseded",
+      "rejected",
+    ]);
+  });
+
+  it("requires complete runtime, daemon, reporter, revision, and terminal attempt pins", () => {
+    const target = {
+      groupId: "group_1",
+      memberId: "member_1",
+      runId: "run_1",
+      generation: 2,
+      daemonEpoch: 4,
+      reporterSessionId: "reporter_session_1",
+      reporterId: "claude-hooks",
+      reporterEpoch: "reporter_epoch_1",
+      nativeSessionId: "native_1",
+      baselineStatusRevision: 9,
+      baselineCompletionRevision: 3,
+    };
+    expect(
+      AgentActionSchema.parse({
+        version: 1,
+        id: "action_1",
+        kind: "prompt",
+        principal: { kind: "operator", operatorId: "operator_1" },
+        target,
+        idempotencyKey: "action-key",
+        requestDigest: "a".repeat(64),
+        prompt: "Review this",
+        allowWorking: false,
+        state: "created",
+        queueDeadlineAt: "2026-08-29T12:05:00Z",
+        createdAt: "2026-08-29T12:00:00Z",
+        updatedAt: "2026-08-29T12:00:00Z",
+      }).target,
+    ).toEqual(target);
+    expect(
+      AgentActionAttemptSchema.safeParse({
+        id: "attempt_1",
+        actionId: "action_1",
+        attempt: 1,
+        effect: "terminal-injection",
+        state: "submitting",
+        ...target,
+        terminalBinding: {
+          serverName: "nanasa",
+          sessionId: "session_1",
+          windowId: "@1",
+          paneId: "%1",
+        },
+        terminalBindingFingerprint: "b".repeat(64),
+        leaseOwner: "scheduler_1",
+        leaseExpiresAt: "2026-08-29T12:01:00Z",
+        createdAt: "2026-08-29T12:00:00Z",
+        updatedAt: "2026-08-29T12:00:00Z",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("models exact question, permission, plan approval, and elicitation replies", () => {
+    for (const kind of ["question", "permission", "plan_approval", "elicitation"] as const) {
+      expect(
+        OpenWaitSchema.parse({
+          id: `wait_${kind}`,
+          groupId: "group_1",
+          memberId: "member_1",
+          runId: "run_1",
+          generation: 1,
+          reporterSessionId: "reporter_1",
+          reporterId: "claude-hooks",
+          reporterEpoch: "epoch_1",
+          providerRequestId: `request_${kind}`,
+          kind,
+          summary: "Exact provider request",
+          replyChannel: "terminal",
+          openedStatusRevision: 2,
+          state: "open",
+          openedAt: "2026-08-29T12:00:00Z",
+          updatedAt: "2026-08-29T12:00:00Z",
+        }).kind,
+      ).toBe(kind);
+    }
+    expect(
+      ReplyOpenWaitCommandSchema.safeParse({
+        expectedRunId: "run_1",
+        expectedGeneration: 1,
+        expectedReporterEpoch: "epoch_1",
+        expectedStatusRevision: 2,
+        reply: { kind: "keys", keys: ["Enter"] },
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe("terminal endpoint status contracts", () => {
-  it.each(["starting", "backoff", "unavailable", "stopped"] as const)(
-    "accepts the %s state without a URL",
+  it.each(["starting", "unavailable", "stopped"] as const)(
+    "accepts the %s state without a stream URL",
     (state) => {
       expect(
-        TerminalEndpointStatusSchema.parse({ runId: "run_1", provider: "ttyd", state }),
+        TerminalEndpointStatusSchema.parse({
+          runId: "run_1",
+          provider: "nanasa-terminal.v1",
+          state,
+        }),
       ).toEqual({
         runId: "run_1",
-        provider: "ttyd",
+        provider: "nanasa-terminal.v1",
         state,
       });
     },
   );
 
-  it("accepts a ready endpoint with a same-origin URL", () => {
-    expect(
-      TerminalEndpointStatusSchema.parse({
-        runId: "run_1",
-        provider: "ttyd",
-        state: "ready",
-        url: "/terminals/0123456789abcdef0123456789abcdef/",
-      }),
-    ).toEqual({
+  it("accepts a ready endpoint with final protocol limits", () => {
+    const endpoint = {
       runId: "run_1",
-      provider: "ttyd",
-      state: "ready",
-      url: "/terminals/0123456789abcdef0123456789abcdef/",
-    });
-  });
-
-  it("accepts retry and error metadata without exposing an upstream", () => {
-    expect(
-      TerminalEndpointStatusSchema.parse({
-        runId: "run_1",
-        provider: "ttyd",
-        state: "backoff",
-        retryAfterMs: 2_000,
-        error: { code: "ttyd_exited", message: "Terminal provider exited" },
-      }),
-    ).toMatchObject({
-      provider: "ttyd",
-      retryAfterMs: 2_000,
-      error: { code: "ttyd_exited" },
-    });
+      provider: "nanasa-terminal.v1",
+      state: "ready" as const,
+      streamUrl: "/api/v1/terminal-stream/run_1",
+      protocol: "nanasa-terminal.v1",
+      limits: {
+        maxFrameBytes: 262_144,
+        maxInputBytes: 65_536,
+        maxPasteBytes: 196_608,
+        maxOutputQueueBytes: 1_048_576,
+        maxViewers: 4,
+        maxObservers: 3,
+        maxReadLines: 5_000,
+        maxReadBytes: 1_048_576,
+        heartbeatMs: 5_000,
+        leaseMs: 15_000,
+        reconnectHistoryFrames: 256,
+      },
+      observers: 0,
+    };
+    expect(TerminalEndpointStatusSchema.parse(endpoint)).toEqual(endpoint);
   });
 
   it.each([
     [
       "a non-ready endpoint URL",
-      { runId: "run_1", provider: "ttyd", state: "starting", url: "/terminals/x/" },
+      {
+        runId: "run_1",
+        provider: "nanasa-terminal.v1",
+        state: "starting",
+        streamUrl: "/api/v1/terminal-stream/run_1",
+      },
     ],
-    ["a ready endpoint without a URL", { runId: "run_1", provider: "ttyd", state: "ready" }],
+    [
+      "a ready endpoint without a descriptor",
+      { runId: "run_1", provider: "nanasa-terminal.v1", state: "ready" },
+    ],
     ["a missing provider", { runId: "run_1", state: "unavailable" }],
     ["a different provider", { runId: "run_1", provider: "custom", state: "unavailable" }],
     [
       "an absolute ready endpoint URL",
       {
         runId: "run_1",
-        provider: "ttyd",
+        provider: "nanasa-terminal.v1",
         state: "ready",
-        url: "https://example.com/terminals/0123456789abcdef0123456789abcdef/",
+        streamUrl: "https://example.com/api/v1/terminal-stream/run_1",
       },
     ],
     [
       "an endpoint key with the wrong shape",
       {
         runId: "run_1",
-        provider: "ttyd",
+        provider: "nanasa-terminal.v1",
         state: "ready",
-        url: "/terminals/not-a-valid-endpoint-key/",
+        streamUrl: "/terminals/not-a-valid-endpoint-key/",
       },
     ],
     [
       "an upstream port",
-      { runId: "run_1", provider: "ttyd", state: "unavailable", upstreamPort: 7681 },
+      { runId: "run_1", provider: "nanasa-terminal.v1", state: "unavailable", upstreamPort: 7681 },
     ],
     [
       "an upstream host",
-      { runId: "run_1", provider: "ttyd", state: "unavailable", upstreamHost: "127.0.0.1" },
+      {
+        runId: "run_1",
+        provider: "nanasa-terminal.v1",
+        state: "unavailable",
+        upstreamHost: "127.0.0.1",
+      },
     ],
   ])("rejects %s", (_name, status) => {
     expect(TerminalEndpointStatusSchema.safeParse(status).success).toBe(false);
+  });
+});
+
+describe("terminal input state contracts", () => {
+  const welcome = {
+    type: "welcome",
+    version: 1,
+    daemonEpoch: 1,
+    streamId: "stream_1",
+    streamGeneration: 1,
+    runId: "run_1",
+    runGeneration: 1,
+    binding: { serverName: "nanasa", sessionId: "$1", windowId: "@1", paneId: "%1" },
+    role: "controller",
+    inputState: "automated",
+    limits: {
+      maxFrameBytes: 262_144,
+      maxInputBytes: 65_536,
+      maxPasteBytes: 196_608,
+      maxOutputQueueBytes: 1_048_576,
+      maxViewers: 4,
+      maxObservers: 3,
+      maxReadLines: 5_000,
+      maxReadBytes: 1_048_576,
+      heartbeatMs: 5_000,
+      leaseMs: 15_000,
+      reconnectHistoryFrames: 256,
+    },
+    capabilities: {
+      input: true,
+      paste: true,
+      focus: true,
+      resize: true,
+      effects: true,
+      read: true,
+      checkpoints: true,
+    },
+  } as const;
+
+  it("requires current input state during terminal handshake", () => {
+    expect(TerminalServerFrameSchema.parse(welcome)).toMatchObject({ inputState: "automated" });
+    expect(TerminalServerFrameSchema.safeParse({ ...welcome, inputState: undefined }).success).toBe(
+      false,
+    );
+  });
+
+  it("accepts only strict interactive and automated transition frames", () => {
+    expect(TerminalServerFrameSchema.parse({ type: "input-state", state: "interactive" })).toEqual({
+      type: "input-state",
+      state: "interactive",
+    });
+    expect(
+      TerminalServerFrameSchema.safeParse({ type: "input-state", state: "paused" }).success,
+    ).toBe(false);
+    expect(
+      TerminalServerFrameSchema.safeParse({
+        type: "input-state",
+        state: "automated",
+        messageId: "secret",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("terminal checkpoint contracts", () => {
+  it("accepts owner-bound metadata without raw terminal content", () => {
+    const checkpoint = TerminalCheckpointSchema.parse({
+      id: "checkpoint_1",
+      ownerPrincipalId: "operator_1",
+      runId: "run_1",
+      generation: 2,
+      terminalBinding: {
+        serverName: "nanasa",
+        sessionId: "session_1",
+        windowId: "@1",
+        paneId: "%1",
+      },
+      capturedAt: "2026-08-29T12:00:00Z",
+      lineCount: 10,
+      byteCount: 200,
+      truncated: false,
+      sensitivity: "repository-private",
+      storageReference: ".nanasa/state/checkpoints/checkpoint_1.enc",
+      contentDigest: "a".repeat(64),
+      expiresAt: "2026-08-30T12:00:00Z",
+    });
+    expect(checkpoint.ownerPrincipalId).toBe("operator_1");
+    expect(
+      TerminalCheckpointSchema.safeParse({ ...checkpoint, rawBytes: "secret terminal output" })
+        .success,
+    ).toBe(false);
   });
 });
 
@@ -228,25 +528,8 @@ describe("agent run contracts", () => {
     expect(StartAgentRunCommandSchema.parse({})).toEqual({ cols: 120, rows: 40 });
   });
 
-  it("tracks desired state and recovery phase without exposing adapter sessions", () => {
-    expect(
-      AgentRunSchema.parse({
-        id: "run_1",
-        groupId: "group_1",
-        memberId: "member_1",
-        agentProfileId: "profile_1",
-        generation: 1,
-        status: "running",
-        desiredState: "running",
-        recoveryPhase: "recovered",
-        adapterSession: {
-          adapter: "copilot-cli",
-          sessionId: "session_1",
-          updatedAt: "2026-08-10T12:00:00Z",
-        },
-        startedAt: "2026-08-10T12:00:00Z",
-      }),
-    ).toEqual({
+  it("tracks desired state and recovery phase and rejects adapter sessions", () => {
+    const run = {
       id: "run_1",
       groupId: "group_1",
       memberId: "member_1",
@@ -255,14 +538,17 @@ describe("agent run contracts", () => {
       status: "running",
       desiredState: "running",
       recoveryPhase: "recovered",
-      recoveryAttempts: 0,
       startedAt: "2026-08-10T12:00:00Z",
-    });
+    } as const;
+    expect(AgentRunSchema.parse(run)).toMatchObject({ recoveryPhase: "recovered" });
+    expect(
+      AgentRunSchema.safeParse({ ...run, adapterSession: { sessionId: "session_1" } }).success,
+    ).toBe(false);
   });
 
-  it("projects legacy profile metadata out of canonical profiles", () => {
+  it("rejects discarded adapter metadata on canonical profiles", () => {
     expect(
-      AgentProfileSchema.parse({
+      AgentProfileSchema.safeParse({
         id: "profile_1",
         name: "Reviewer",
         agentType: "copilot",
@@ -274,19 +560,102 @@ describe("agent run contracts", () => {
         environment: {},
         createdAt: "2026-08-10T12:00:00Z",
         updatedAt: "2026-08-10T12:00:00Z",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("Git ownership contracts", () => {
+  it("separates common repository identity from checkout identity", () => {
+    const repository = RepositorySchema.parse({
+      id: "repo_one",
+      commonDirectory: "/repos/one/.git",
+      displayName: "one",
+      objectFormat: "sha1",
+      refStorage: "files",
+      primaryCheckoutId: "checkout_main",
+      revision: 1,
+      createdAt: "2026-08-29T12:00:00Z",
+      updatedAt: "2026-08-29T12:00:00Z",
+    });
+    const checkout = CheckoutSchema.parse({
+      id: "checkout_main",
+      repositoryId: repository.id,
+      checkoutKey: "a".repeat(64),
+      path: "/repos/one",
+      gitDirectory: "/repos/one/.git",
+      kind: "primary",
+      branch: "main",
+      dirty: false,
+      observedAt: "2026-08-29T12:00:00Z",
+    });
+    expect(checkout.repositoryId).toBe(repository.id);
+    expect(checkout.id).not.toBe(repository.id);
+  });
+
+  it("requires persisted provenance and operation generation for managed deletion", () => {
+    expect(
+      WorktreeSchema.parse({
+        id: "worktree_one",
+        repositoryId: "repo_one",
+        checkoutId: "checkout_one",
+        sourceCheckoutId: "checkout_main",
+        path: "/repos/worktrees/one",
+        branch: "feature/one",
+        base: "HEAD",
+        provenanceToken: "b".repeat(64),
+        operationGeneration: 3,
+        state: "ready",
+        createdAt: "2026-08-29T12:00:00Z",
+        updatedAt: "2026-08-29T12:00:00Z",
       }),
-    ).not.toMatchObject({ adapter: expect.anything(), capabilities: expect.anything() });
+    ).toMatchObject({ operationGeneration: 3, state: "ready" });
+    expect(
+      RemoveWorktreeCommandSchema.parse({ force: true, expectedOperationGeneration: 3 }),
+    ).toEqual({ force: true, expectedOperationGeneration: 3 });
+    expect(
+      CreateWorktreeCommandSchema.parse({
+        sourceCheckoutId: "checkout_main",
+        branch: "feature/one",
+      }),
+    ).toMatchObject({ base: "HEAD", assignAgentIds: [] });
   });
 });
 
 describe("agent status contracts", () => {
+  const reporter = {
+    version: 2 as const,
+    providerId: "claude-code",
+    adapterId: "claude-code",
+    reporterId: "claude-hooks",
+    source: "claude-code" as const,
+    protocolVersion: 2 as const,
+    reporterVersion: "2",
+    runId: "run_1",
+    generation: 1,
+    reporterEpoch: "epoch_1",
+  };
+
+  it("defines exactly the nine canonical semantic states", () => {
+    expect(AgentStatusStateSchema.options).toEqual([
+      "starting",
+      "idle",
+      "working",
+      "waiting",
+      "blocked",
+      "suspected_stuck",
+      "stopped",
+      "failed",
+      "unknown",
+    ]);
+  });
+
   it("accepts normalized correlated tool and wait events", () => {
     expect(
       AgentStatusEventInputSchema.parse({
-        version: 1,
+        ...reporter,
         eventId: "event_1",
-        source: "claude-code",
-        reporterVersion: "1",
+        sourceSequence: 1,
         event: "tool.started",
         operationId: "tool_1",
         data: { tool: "Bash" },
@@ -294,10 +663,9 @@ describe("agent status contracts", () => {
     ).toMatchObject({ event: "tool.started", operationId: "tool_1" });
     expect(
       AgentStatusEventInputSchema.parse({
-        version: 1,
+        ...reporter,
         eventId: "event_2",
-        source: "opencode",
-        reporterVersion: "1",
+        sourceSequence: 2,
         event: "wait.opened",
         requestId: "request_1",
         data: {
@@ -312,21 +680,19 @@ describe("agent status contracts", () => {
   it("rejects missing correlation, caller identity, and unknown metadata", () => {
     expect(
       AgentStatusEventInputSchema.safeParse({
-        version: 1,
+        ...reporter,
         eventId: "event_1",
-        source: "pi",
-        reporterVersion: "1",
+        sourceSequence: 1,
         event: "tool.started",
       }).success,
     ).toBe(false);
     expect(
       AgentStatusEventInputSchema.safeParse({
-        version: 1,
+        ...reporter,
         eventId: "event_2",
-        source: "copilot",
-        reporterVersion: "1",
+        sourceSequence: 2,
         event: "session.ready",
-        runId: "forged",
+        unknownIdentity: "forged",
       }).success,
     ).toBe(false);
   });
@@ -355,6 +721,19 @@ describe("agent status contracts", () => {
         attention: "decision_required",
         observedAt: "2026-08-11T12:00:00Z",
         stateChangedAt: "2026-08-11T12:00:00Z",
+        statusRevision: 4,
+        completionRevision: 1,
+        operatorAcknowledgedCompletionRevision: 0,
+        completionPending: false,
+        interactiveReady: true,
+        staleAuthority: false,
+        authorityKind: "reporter",
+        authorityId: "reporter_session_1",
+        evidenceConfidence: "high",
+        processState: "present",
+        reporterEpoch: "epoch_1",
+        reporterLeaseExpiresAt: "2026-08-11T12:00:45Z",
+        readinessCoverage: "full",
         openWait: {
           requestId: "request_1",
           kind: "permission",
@@ -371,77 +750,93 @@ describe("agent status contracts", () => {
 });
 
 describe("configuration contracts", () => {
+  it("stores credential references and rejects raw secrets", () => {
+    expect(
+      CredentialProfileReferenceSchema.parse({ kind: "broker-profile", profileId: "work" }),
+    ).toEqual({
+      kind: "broker-profile",
+      profileId: "work",
+    });
+    expect(
+      CredentialProfileReferenceSchema.safeParse({
+        kind: "broker-profile",
+        profileId: "work",
+        token: "secret",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("bounds confirmed native recovery and validates opaque native references", () => {
+    expect(
+      NativeRecoveryPolicySchema.parse({
+        mode: "resume-only",
+        confirmationTimeoutSeconds: 30,
+      }),
+    ).toEqual({ mode: "resume-only", confirmationTimeoutSeconds: 30 });
+    expect(
+      NativeRecoveryPolicySchema.safeParse({
+        mode: "resume-or-restart",
+        confirmationTimeoutSeconds: 4,
+      }).success,
+    ).toBe(false);
+    expect(
+      NativeRecoveryPolicySchema.safeParse({
+        mode: "resume-or-restart",
+        confirmationTimeoutSeconds: 301,
+      }).success,
+    ).toBe(false);
+    expect(
+      NativeSessionReferenceSchema.parse({
+        provider: "copilot",
+        source: "copilot",
+        referenceKind: "id",
+        referenceValue: "session-one",
+        dedupeHash: "a".repeat(64),
+      }),
+    ).toMatchObject({ referenceValue: "session-one" });
+  });
+
   const config = {
+    version: 2,
     integrations: {
       copilot: {
         id: "copilot",
         name: "GitHub Copilot",
         kind: "copilot",
-        adapter: "copilot-cli",
         command: ["copilot"],
-        environment: {},
-        recovery: "resume-or-restart",
-        capabilities: ["queue"],
       },
       opencode: {
         id: "opencode",
         name: "OpenCode",
         kind: "opencode",
-        adapter: "terminal",
         command: ["opencode"],
-        environment: {},
-        recovery: "restart",
-        capabilities: ["queue"],
       },
     },
   } as const;
 
-  it("emits an unversioned integration configuration with canonical defaults", () => {
-    expect(NanasaConfigSchema.parse(config)).toEqual({
-      instructions: [],
-      roles: {},
-      integrations: {
-        copilot: {
-          id: "copilot",
-          name: "GitHub Copilot",
-          kind: "copilot",
-          command: ["copilot"],
-          agentConfigHome: { scope: "integration" },
-          environment: {},
-        },
-        opencode: {
-          id: "opencode",
-          name: "OpenCode",
-          kind: "opencode",
-          command: ["opencode"],
-          agentConfigHome: { scope: "integration" },
-          environment: {},
-        },
-      },
-      groups: {},
-      messages: { retentionPerGroup: 1_000 },
+  it("requires version 2 and emits final canonical defaults", () => {
+    const parsed = NanasaConfigSchema.parse(config);
+    expect(parsed.version).toBe(2);
+    expect(parsed.repository).toEqual({ path: ".", checkout: { kind: "current" } });
+    expect(parsed.terminal.checkpoints).toMatchObject({
+      enabled: false,
+      sensitivity: "repository-private",
     });
+    expect(parsed.integrations.copilot).toMatchObject({
+      providerState: { scope: "membership" },
+      credentials: { kind: "provider-managed" },
+      model: { resumePolicy: "preserve-session" },
+      nativeRecovery: { mode: "resume-or-restart", confirmationTimeoutSeconds: 30 },
+      extensions: [],
+    });
+    expect(NanasaConfigSchema.safeParse({ ...config, version: undefined }).success).toBe(false);
+    expect(NanasaConfigSchema.safeParse({ ...config, version: 1 }).success).toBe(false);
     expect(
       NanasaConfigSchema.safeParse({
         ...config,
         integrations: {
           ...config.integrations,
-          opencode: {
-            ...config.integrations.opencode,
-            capabilities: ["queue", "steer"],
-          },
-        },
-      }).success,
-    ).toBe(false);
-    expect(
-      NanasaConfigSchema.safeParse({
-        ...config,
-        integrations: {
-          ...config.integrations,
-          copilot: {
-            ...config.integrations.copilot,
-            capabilities: ["queue", "steer"],
-          },
+          copilot: { ...config.integrations.copilot, adapter: "copilot-cli" },
         },
       }).success,
     ).toBe(false);
@@ -450,6 +845,7 @@ describe("configuration contracts", () => {
   it("accepts a minimal terminal-only integration", () => {
     expect(
       NanasaConfigSchema.parse({
+        version: 2,
         integrations: {
           pi: {
             id: "pi",
@@ -459,26 +855,15 @@ describe("configuration contracts", () => {
           },
         },
       }),
-    ).toEqual({
-      instructions: [],
-      roles: {},
-      integrations: {
-        pi: {
-          id: "pi",
-          name: "Pi",
-          kind: "pi",
-          command: ["pi"],
-          agentConfigHome: { scope: "integration" },
-          environment: {},
-        },
-      },
-      groups: {},
-      messages: { retentionPerGroup: 1_000 },
+    ).toMatchObject({
+      version: 2,
+      integrations: { pi: { providerState: { scope: "membership" } } },
     });
   });
 
   it("validates flattened agents, integration and role references, and defaults", () => {
     const parsed = NanasaConfigSchema.parse({
+      version: 2,
       integrations: config.integrations,
       instructions: [".nanasa/instructions/team.md"],
       roles: {
@@ -607,7 +992,8 @@ describe("configuration contracts", () => {
   });
 
   it.each([
-    ["version", { ...config, version: 1 }],
+    ["missing version", { ...config, version: undefined }],
+    ["version 1", { ...config, version: 1 }],
     ["agentTypes", { ...config, agentTypes: config.integrations }],
     ["agentProfiles", { ...config, agentProfiles: {} }],
     [
@@ -621,32 +1007,34 @@ describe("configuration contracts", () => {
     expect(NanasaConfigSchema.safeParse(legacyConfig).success).toBe(false);
   });
 
-  it("accepts agent and custom repository-local configuration homes", () => {
+  it("accepts membership and custom provider state scopes", () => {
     const agent = NanasaConfigSchema.parse({
+      version: 2,
       integrations: {
         pi: {
           id: "pi",
           name: "Pi",
           kind: "pi",
           command: ["pi"],
-          agentConfigHome: { scope: "agent" },
+          providerState: { scope: "membership" },
         },
       },
     });
-    expect(agent.integrations.pi.agentConfigHome).toEqual({ scope: "agent" });
+    expect(agent.integrations.pi.providerState).toEqual({ scope: "membership" });
 
     const custom = NanasaConfigSchema.parse({
+      version: 2,
       integrations: {
         copilot: {
           id: "copilot",
           name: "Copilot",
           kind: "copilot",
           command: ["copilot"],
-          agentConfigHome: { scope: "custom", path: "homes/{integrationId}/{agentId}" },
+          providerState: { scope: "custom", path: "homes/{integrationId}/{agentId}" },
         },
       },
     });
-    expect(custom.integrations.copilot.agentConfigHome).toEqual({
+    expect(custom.integrations.copilot.providerState).toEqual({
       scope: "custom",
       path: "homes/{integrationId}/{agentId}",
     });
@@ -669,6 +1057,99 @@ describe("configuration contracts", () => {
         diagnostics: [],
       }),
     ).toMatchObject({ state: "ready", revision: "a".repeat(64) });
+  });
+});
+
+describe("declarative provider extension contracts", () => {
+  const descriptor = {
+    apiVersion: "nanasa.dev/provider-extension/v1",
+    kind: "ProviderExtension",
+    metadata: {
+      id: "example.copilot",
+      name: "Example Copilot",
+      version: "1.2.3",
+      publisher: "Example",
+      description: "A data-only provider descriptor",
+    },
+    compatibility: { minNanasaVersion: "0.0.0", reporterProtocol: 2 },
+    providers: [
+      {
+        id: "example-copilot",
+        displayName: "Example Copilot",
+        commandNames: ["copilot"],
+        strategies: {
+          adapter: "copilot-adapter-v1",
+          home: "copilot-home-v1",
+          prompt: "copilot-agent-v1",
+          mcp: "copilot-mcp-v1",
+          reporter: "copilot-hooks-v2",
+          control: "copilot-terminal-v1",
+          nativeResume: "copilot-resume-v1",
+          provisioning: ["owned-file-v1", "managed-json-object-v1"],
+        },
+      },
+    ],
+    permissions: [...REQUIRED_PROVIDER_EXTENSION_PERMISSIONS],
+    assets: [
+      {
+        path: "metadata/provider.json",
+        mediaType: "application/json",
+        bytes: 3,
+        sha256: "a".repeat(64),
+      },
+    ],
+  } as const;
+
+  it("accepts strict data-only descriptors and complete reproducible locks", () => {
+    const parsed = ProviderExtensionDescriptorSchema.parse(descriptor);
+    expect(parsed.providers[0]?.strategies.adapter).toBe("copilot-adapter-v1");
+    expect(
+      ExtensionLockSchema.parse({
+        version: 1,
+        revision: 1,
+        extensions: {
+          "example.copilot": {
+            descriptor: parsed,
+            descriptorDigest: "b".repeat(64),
+            packageDigest: "c".repeat(64),
+            source: { kind: "uploaded", label: "reviewed fixture" },
+            signature: {
+              algorithm: "ed25519",
+              keyId: "fixture-key",
+              signature: "A".repeat(86),
+            },
+            grantedPermissions: [...REQUIRED_PROVIDER_EXTENSION_PERMISSIONS],
+            packageReference: ".nanasa/state/extensions/packages/example.copilot/1.2.3/digest",
+            enabled: true,
+            installedAt: "2026-08-30T00:00:00.000Z",
+          },
+        },
+      }).extensions["example.copilot"]?.enabled,
+    ).toBe(true);
+  });
+
+  it.each([
+    [
+      "mixed strategy families",
+      {
+        providers: [
+          {
+            ...descriptor.providers[0],
+            strategies: { ...descriptor.providers[0].strategies, reporter: "pi-events-v2" },
+          },
+        ],
+      },
+    ],
+    ["missing derived permission", { permissions: descriptor.permissions.slice(1) }],
+    ["wildcard permission", { permissions: ["*"] }],
+    ["JavaScript asset", { assets: [{ ...descriptor.assets[0], path: "assets/hook.mjs" }] }],
+    ["traversing asset", { assets: [{ ...descriptor.assets[0], path: "../provider.json" }] }],
+    ["executable declaration", { build: ["node", "build.js"] }],
+    ["portal declaration", { portal: { component: "index.js" } }],
+  ])("rejects %s", (_name, override) => {
+    expect(
+      ProviderExtensionDescriptorSchema.safeParse({ ...descriptor, ...override }).success,
+    ).toBe(false);
   });
 });
 
@@ -714,22 +1195,22 @@ describe("group CRUD contracts", () => {
 
     const reordered = {
       agentIds: ["agent_one", "agent_two"],
-      expectedAgentRevision: 3,
+      expectedOrderRevision: 3,
     };
     expect(ReorderGroupAgentsCommandSchema.parse(reordered)).toEqual(reordered);
     expect(
       ReorderGroupAgentsCommandSchema.safeParse({
         agentIds: ["agent_one", "agent_one"],
-        expectedAgentRevision: 3,
+        expectedOrderRevision: 3,
       }).success,
     ).toBe(false);
     expect(
       ReorderGroupAgentsResultSchema.parse({
         groupId: "group_1",
         agentIds: reordered.agentIds,
-        agentRevision: 4,
+        orderRevision: 4,
       }),
-    ).toEqual({ groupId: "group_1", agentIds: reordered.agentIds, agentRevision: 4 });
+    ).toEqual({ groupId: "group_1", agentIds: reordered.agentIds, orderRevision: 4 });
   });
 
   it("validates strict delete counts", () => {
@@ -745,9 +1226,9 @@ describe("group CRUD contracts", () => {
     expect(DeleteGroupResultSchema.safeParse({ ...result, unknown: 0 }).success).toBe(false);
   });
 
-  it("projects legacy delivery outcomes to status-only canonical records", () => {
+  it("rejects discarded delivery adapter metadata", () => {
     expect(
-      DeliveryOutcomeSchema.parse({
+      DeliveryOutcomeSchema.safeParse({
         messageId: "message_1",
         recipientMemberId: "member_1",
         requestedMode: "steer",
@@ -760,14 +1241,7 @@ describe("group CRUD contracts", () => {
         status: "queued",
         attempts: 0,
         updatedAt: "2026-08-10T12:00:00Z",
-      }),
-    ).toEqual({
-      messageId: "message_1",
-      recipientMemberId: "member_1",
-      reason: "requested_mode_not_supported",
-      status: "queued",
-      attempts: 0,
-      updatedAt: "2026-08-10T12:00:00Z",
-    });
+      }).success,
+    ).toBe(false);
   });
 });

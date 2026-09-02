@@ -8,6 +8,8 @@ export default tseslint.config(
       "**/dist/**",
       "**/node_modules/**",
       "coverage/**",
+      ".copilot-tracking/**",
+      ".nanasa/backups/**",
       ".nanasa/agents/**",
       ".nanasa/integrations/**",
       ".nanasa/runtime/**",

@@ -2,7 +2,6 @@ import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   createWriteStream,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -10,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test as base, expect, type TestInfo } from "@playwright/test";
 
@@ -54,9 +53,9 @@ interface McpResponse {
 
 export interface TerminalEndpointStatus {
   runId: string;
-  provider: "ttyd";
-  state: "starting" | "ready" | "backoff" | "unavailable" | "stopped";
-  url?: string;
+  provider: "nanasa-terminal.v1";
+  state: "starting" | "ready" | "unavailable" | "stopped";
+  streamUrl?: string;
 }
 
 export interface SeededGroup {
@@ -85,12 +84,6 @@ async function freePort(): Promise<number> {
     server.close((error) => (error === undefined ? resolveClose() : reject(error))),
   );
   return port;
-}
-
-function ttydPath(): string {
-  if (process.env.NANASA_TTYD_PATH !== undefined) return process.env.NANASA_TTYD_PATH;
-  const localTtyd = join(homedir(), ".local", "bin", "ttyd");
-  return existsSync(localTtyd) ? localTtyd : "ttyd";
 }
 
 async function waitFor(description: string, check: () => Promise<boolean>, timeout = 15_000) {
@@ -125,8 +118,10 @@ export class PackageAcceptanceService {
   readonly port: number;
   readonly tmuxServer: string;
   readonly baseUrl: string;
+  portalUrl: string;
   readonly logPath: string;
   #daemon?: ChildProcess;
+  #operatorToken?: string;
   #log = createWriteStream("/dev/null");
 
   private constructor(repository: string, port: number, tmuxServer: string) {
@@ -134,6 +129,7 @@ export class PackageAcceptanceService {
     this.port = port;
     this.tmuxServer = tmuxServer;
     this.baseUrl = `http://127.0.0.1:${port}`;
+    this.portalUrl = this.baseUrl;
     this.logPath = join(repository, "daemon.log");
     this.#log.end();
     this.#log = createWriteStream(this.logPath, { flags: "a" });
@@ -143,18 +139,26 @@ export class PackageAcceptanceService {
     const repository = mkdtempSync(join(tmpdir(), "nanasa-acceptance-"));
     const port = await freePort();
     const tmuxServer = `nanasa-e2e-${browserName}-${process.pid}-${randomUUID().slice(0, 8)}`;
-    mkdirSync(join(repository, ".git"));
+    const initialized = spawnSync("git", ["init", "--quiet", repository], { encoding: "utf8" });
+    if (initialized.status !== 0) {
+      throw new Error(initialized.stderr || "Could not initialize acceptance Git repository");
+    }
     mkdirSync(join(repository, ".nanasa"));
     writeFileSync(
       join(repository, ".nanasa", "config.yaml"),
       [
+        "version: 2",
+        "repository: { path: ., checkout: { kind: current } }",
         "integrations:",
         "  echo:",
         "    name: Safe Echo",
         "    kind: opencode",
         `    command: [${JSON.stringify(process.execPath)}, ${JSON.stringify(echoAgentPath)}]`,
         "    cwd: .",
-        "    agentConfigHome: { scope: integration }",
+        "    providerState: { scope: integration }",
+        "    credentials: { kind: provider-managed }",
+        "    model: { resumePolicy: preserve-session }",
+        "    nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }",
         "",
       ].join("\n"),
     );
@@ -170,20 +174,11 @@ export class PackageAcceptanceService {
 
   async startDaemon(): Promise<void> {
     if (this.#daemon !== undefined) throw new Error("Acceptance daemon is already running");
+    this.portalUrl = this.baseUrl;
     this.#log.write(`\n--- daemon start ${new Date().toISOString()} ---\n`);
     const child = spawn(
       process.execPath,
-      [
-        cliPath,
-        "start",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        String(this.port),
-        "--ttyd-path",
-        ttydPath(),
-        "--mcp",
-      ],
+      [cliPath, "start", "--host", "127.0.0.1", "--port", String(this.port), "--mcp"],
       {
         cwd: this.repository,
         env: { ...process.env, NANASA_TMUX_SERVER: this.tmuxServer },
@@ -191,13 +186,25 @@ export class PackageAcceptanceService {
       },
     );
     this.#daemon = child;
-    child.stdout?.pipe(this.#log, { end: false });
+    let stdoutBuffer = "";
+    child.stdout?.on("data", (chunk: Buffer) => {
+      this.#log.write(chunk);
+      stdoutBuffer = `${stdoutBuffer}${chunk.toString("utf8")}`.slice(-8_192);
+      const match = stdoutBuffer.match(/Open (http:\/\/[^\s]+)/);
+      if (match?.[1] !== undefined) this.portalUrl = match[1];
+    });
     child.stderr?.pipe(this.#log, { end: false });
     await waitFor("packaged daemon health", async () => {
       if (child.exitCode !== null) throw new Error(`daemon exited with ${child.exitCode}`);
       const response = await fetch(`${this.baseUrl}/health`);
       return response.ok;
     });
+    this.#operatorToken = readFileSync(
+      join(this.repository, ".nanasa", "runtime", "operator-secret"),
+    ).toString("base64url");
+    await waitFor("portal bootstrap URL", async () =>
+      this.portalUrl.includes("#nanasa-bootstrap="),
+    );
   }
 
   async stopDaemon(): Promise<void> {
@@ -214,7 +221,13 @@ export class PackageAcceptanceService {
   }
 
   async request<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`, init);
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      ...init,
+      headers: {
+        ...(init?.headers ?? {}),
+        Authorization: `Bearer ${this.#operatorToken}`,
+      },
+    });
     const body = (await response.json()) as T | { message?: string };
     if (!response.ok) {
       throw new Error(
@@ -225,7 +238,7 @@ export class PackageAcceptanceService {
   }
 
   async seedGroup(name: string, agentNames: string[]): Promise<SeededGroup> {
-    const group = await this.request<Group>("/api/groups", {
+    const group = await this.request<Group>("/api/v1/groups", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
@@ -233,7 +246,7 @@ export class PackageAcceptanceService {
     const agents: RuntimeAgent[] = [];
     for (const name of agentNames) {
       agents.push(
-        await this.request<RuntimeAgent>(`/api/groups/${group.id}/agents`, {
+        await this.request<RuntimeAgent>(`/api/v1/groups/${group.id}/agents`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -247,7 +260,7 @@ export class PackageAcceptanceService {
   }
 
   async snapshot(): Promise<Snapshot> {
-    return this.request<Snapshot>("/api/snapshot");
+    return this.request<Snapshot>("/api/v1/snapshot");
   }
 
   async agentMcpRequest(
@@ -323,21 +336,23 @@ export class PackageAcceptanceService {
     return payload;
   }
 
-  async waitForTerminalReady(runId: string): Promise<TerminalEndpointStatus & { url: string }> {
-    let ready: (TerminalEndpointStatus & { url: string }) | undefined;
+  async waitForTerminalReady(
+    runId: string,
+  ): Promise<TerminalEndpointStatus & { streamUrl: string }> {
+    let ready: (TerminalEndpointStatus & { streamUrl: string }) | undefined;
     await waitFor(`terminal endpoint for ${runId} to be ready`, async () => {
-      const status = await this.request<TerminalEndpointStatus>(`/api/runs/${runId}/terminal`);
-      if (status.state !== "ready" || status.url === undefined) return false;
-      ready = status as TerminalEndpointStatus & { url: string };
+      const status = await this.request<TerminalEndpointStatus>(`/api/v1/runs/${runId}/terminal`);
+      if (status.state !== "ready" || status.streamUrl === undefined) return false;
+      ready = status as TerminalEndpointStatus & { streamUrl: string };
       return true;
     });
     return ready!;
   }
 
   async startAll(groupId: string): Promise<void> {
-    await this.request(`/api/groups/${groupId}/runs/start-all`, {
+    await this.request(`/api/v1/groups/${groupId}/runs/start-all`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Idempotency-Key": randomUUID() },
+      headers: { "Content-Type": "application/json" },
       body: "{}",
     });
     await waitFor("all echo agents to run", async () => {
@@ -368,6 +383,26 @@ export class PackageAcceptanceService {
       { encoding: "utf8" },
     );
     return result.status === 0 ? result.stdout : result.stderr;
+  }
+
+  paneSize(paneId: string): string {
+    const result = spawnSync(
+      "tmux",
+      [
+        "-L",
+        this.tmuxServer,
+        "-f",
+        "/dev/null",
+        "display-message",
+        "-p",
+        "-t",
+        paneId,
+        "#{pane_width}x#{pane_height}",
+      ],
+      { encoding: "utf8" },
+    );
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
   }
 
   paneExists(paneId: string): boolean {

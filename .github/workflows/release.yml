@@ -1,0 +1,78 @@
+name: Release verification
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  NANASA_CANDIDATE_SHA: ${{ github.sha }}
+  NANASA_ALLOW_PUBLIC_REGISTRY_FALLBACK: "true"
+
+jobs:
+  exact-commit-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.NANASA_CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        run: test "$(git rev-parse HEAD)" = "$NANASA_CANDIDATE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Configure registry and pinned pnpm
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Pin reproducible build time
+        run: echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
+      - name: Install frozen dependencies
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm install --frozen-lockfile
+      - name: Install runtime and browser prerequisites
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm exec playwright install --with-deps chromium
+      - name: Verify exact candidate
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm check:static
+          source scripts/ci-registry-env.sh; pnpm test
+          source scripts/ci-registry-env.sh; pnpm acceptance
+          source scripts/ci-registry-env.sh; pnpm docs:check
+          source scripts/ci-registry-env.sh; pnpm release:dry-run
+      - name: Pack immutable candidate
+        shell: bash
+        run: |
+          mkdir -p release-artifacts
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm pack --pack-destination release-artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nanasa-${{ github.sha }}
+          path: |
+            release-artifacts/*.tgz
+            dist/meta/build.json
+            dist/meta/sbom.spdx.json
+
+  publication-boundary:
+    needs: exact-commit-release
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "Verification produces immutable artifacts; trusted npm publication remains environment-owned."

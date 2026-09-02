@@ -21,10 +21,12 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  CircleAlert,
   CircleStop,
   Copy,
   EllipsisVertical,
+  Info,
+  MailWarning,
+  MoveRight,
   Palette,
   Pencil,
   Play,
@@ -62,10 +64,14 @@ export interface AddAgentInput {
 interface GroupTreeProps {
   snapshot: PortalSnapshot;
   config: NanasaConfig;
+  repositoryNavigation?: ReactNode;
+  utilities?: ReactNode;
   selectedGroupId?: string;
   unreadCounts: ReadonlyMap<string, number>;
   busyAction?: string;
   onSelectGroup(groupId: string): void;
+  onSelectTerminal?(groupId: string, runId?: string): void;
+  onOpenMessages?(groupId: string): void;
   onCreateGroup(name: string, instructions: string[]): Promise<void>;
   onRenameGroup(groupId: string, name: string): Promise<void>;
   onUpdateGroup?(groupId: string, command: UpdateGroupCommand): Promise<void>;
@@ -75,6 +81,8 @@ interface GroupTreeProps {
   onUpdateAgent?(groupId: string, agentId: string, command: UpdateGroupAgentCommand): Promise<void>;
   onUpdateRolePresentation?(roleId: string, command: UpdateRolePresentationCommand): Promise<void>;
   onReorderAgents?(groupId: string, command: ReorderGroupAgentsCommand): Promise<void>;
+  onReorderGroups?(groupIds: string[], expectedOrderRevision: number): Promise<void>;
+  onReparentAgent?(sourceGroupId: string, agentId: string, targetGroupId: string): Promise<void>;
   onRemoveAgent(groupId: string, agentId: string): Promise<void>;
   onStartRun(groupId: string, agentId: string): Promise<void>;
   onStopRun(groupId: string, agentId: string): Promise<void>;
@@ -373,6 +381,70 @@ function ConfirmRemovalDialog({
           </button>
         </div>
       </div>
+    </dialog>
+  );
+}
+
+function ReparentAgentDialog({
+  name,
+  sourceGroupId,
+  groups,
+  busy,
+  onClose,
+  onMove,
+}: {
+  name: string;
+  sourceGroupId: string;
+  groups: readonly Group[];
+  busy: boolean;
+  onClose(): void;
+  onMove(targetGroupId: string): Promise<void>;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const targets = groups.filter((group) => group.id !== sourceGroupId);
+  const [targetGroupId, setTargetGroupId] = useState(targets[0]?.id ?? "");
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+  }, []);
+  return (
+    <dialog ref={dialogRef} className="confirmation-dialog" aria-labelledby="reparent-agent-title">
+      <form
+        className="confirmation-dialog-body"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void onMove(targetGroupId)
+            .then(onClose)
+            .catch(() => undefined);
+        }}
+      >
+        <h2 id="reparent-agent-title">Move {name}?</h2>
+        <p>The stopped agent keeps its stable ID and history. Live agents cannot be moved.</p>
+        <label>
+          Target group
+          <select value={targetGroupId} onChange={(event) => setTargetGroupId(event.target.value)}>
+            {targets.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="confirmation-actions">
+          <button type="button" className="compact-button" disabled={busy} onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="compact-button"
+            disabled={busy || targetGroupId.length === 0}
+          >
+            <MoveRight aria-hidden="true" size={15} /> Move agent
+          </button>
+        </div>
+      </form>
     </dialog>
   );
 }
@@ -985,10 +1057,13 @@ function AddAgentDialog({
 export function GroupTree({
   snapshot,
   config,
+  repositoryNavigation,
+  utilities,
   selectedGroupId,
-  unreadCounts,
   busyAction,
   onSelectGroup,
+  onSelectTerminal,
+  onOpenMessages,
   onCreateGroup,
   onRenameGroup,
   onUpdateGroup,
@@ -998,6 +1073,8 @@ export function GroupTree({
   onUpdateAgent,
   onUpdateRolePresentation,
   onReorderAgents,
+  onReorderGroups,
+  onReparentAgent,
   onRemoveAgent,
   onStartRun,
   onStopRun,
@@ -1016,13 +1093,20 @@ export function GroupTree({
     agentId: string;
   }>();
   const [destructiveTarget, setDestructiveTarget] = useState<DestructiveTarget>();
+  const [reparentTarget, setReparentTarget] = useState<{
+    sourceGroupId: string;
+    agentId: string;
+    name: string;
+  }>();
   const [statusPopover, setStatusPopover] = useState<{
     membershipId: string;
     left: number;
     top: number;
   }>();
-  const failedMemberIds = new Set(
-    snapshot.messageGroups?.flatMap((state) => state.failedRecipientMemberIds) ?? [],
+  const failedRecipientsByGroup = new Map(
+    (snapshot.messageGroups ?? []).map(
+      (state) => [state.groupId, new Set(state.failedRecipientMemberIds)] as const,
+    ),
   );
   const settingsAgent =
     settingsTarget === undefined
@@ -1109,6 +1193,7 @@ export function GroupTree({
         </div>
       </div>
       {showCreateGroup && <CreateGroupForm onCreate={onCreateGroup} />}
+      {repositoryNavigation}
       <nav className="group-tree" aria-label="Group tree">
         {snapshot.groups.length === 0 && (
           <div className="empty-state compact-empty">
@@ -1118,7 +1203,7 @@ export function GroupTree({
             </button>
           </div>
         )}
-        {snapshot.groups.map((group) => {
+        {snapshot.groups.map((group, groupIndex) => {
           const agents = Object.entries(config.groups[group.id]?.agents ?? {})
             .map(([agentId, agent], index) => ({ agentId, agent, index }))
             .sort(
@@ -1135,7 +1220,6 @@ export function GroupTree({
               return member === undefined ? [] : [{ agentId, agent, member }];
             });
           const expanded = expandedGroups.has(group.id);
-          const unread = unreadCounts.get(group.id) ?? 0;
           return (
             <div className="tree-group" key={group.id}>
               <div className={`tree-group-row ${selectedGroupId === group.id ? "selected" : ""}`}>
@@ -1174,17 +1258,12 @@ export function GroupTree({
                   >
                     <span>{group.name}</span>
                     <span className="tree-count">{agents.length}</span>
-                    {unread > 0 && (
-                      <span className="unread-badge" aria-label={`${unread} unread`}>
-                        {unread}
-                      </span>
-                    )}
                   </button>
                 )}
                 {editTarget?.groupId !== group.id && (
                   <ActionMenu
                     label={`Actions for group ${group.name}`}
-                    itemCount={4}
+                    itemCount={6}
                     triggerId={`group-actions-${group.id}`}
                   >
                     <button
@@ -1226,6 +1305,48 @@ export function GroupTree({
                     <button
                       type="button"
                       role="menuitem"
+                      className="action-menu-item"
+                      aria-label={`Move group ${group.name} up`}
+                      disabled={groupIndex === 0 || onReorderGroups === undefined}
+                      onClick={() => {
+                        const groupIds = snapshot.groups.map((candidate) => candidate.id);
+                        [groupIds[groupIndex - 1], groupIds[groupIndex]] = [
+                          groupIds[groupIndex] as string,
+                          groupIds[groupIndex - 1] as string,
+                        ];
+                        void onReorderGroups?.(groupIds, snapshot.orderRevision).catch(
+                          () => undefined,
+                        );
+                      }}
+                    >
+                      <ArrowUp aria-hidden="true" size={14} />
+                      <span>Move group up</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="action-menu-item"
+                      aria-label={`Move group ${group.name} down`}
+                      disabled={
+                        groupIndex === snapshot.groups.length - 1 || onReorderGroups === undefined
+                      }
+                      onClick={() => {
+                        const groupIds = snapshot.groups.map((candidate) => candidate.id);
+                        [groupIds[groupIndex], groupIds[groupIndex + 1]] = [
+                          groupIds[groupIndex + 1] as string,
+                          groupIds[groupIndex] as string,
+                        ];
+                        void onReorderGroups?.(groupIds, snapshot.orderRevision).catch(
+                          () => undefined,
+                        );
+                      }}
+                    >
+                      <ArrowDown aria-hidden="true" size={14} />
+                      <span>Move group down</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
                       className="action-menu-item danger-action"
                       aria-label={`Delete group ${group.name}`}
                       onClick={() =>
@@ -1254,23 +1375,20 @@ export function GroupTree({
                     const {
                       run,
                       status: agentStatus,
-                      label: semanticLabel,
+                      key: statusKey,
+                      label: statusLabel,
                     } = memberStatusView(snapshot.agentStatuses, snapshot.runs, member);
+                    const deliveryFailed =
+                      failedRecipientsByGroup.get(group.id)?.has(member.memberId) === true;
                     const action = runAction(run);
                     const actionKey = `${group.id}:${agentId}`;
                     const integration = config.integrations[agent.integrationId];
+                    const checkout = snapshot.checkouts.find(
+                      (candidate) => candidate.id === member.checkoutId,
+                    );
                     const role =
                       agent.roleId === undefined ? undefined : config.roles[agent.roleId];
                     const recoveryDetail = run?.recoveryReason;
-                    const semanticDetail = [
-                      agentStatus?.phase,
-                      agentStatus?.attention === "none"
-                        ? undefined
-                        : agentStatus?.attention.replaceAll("_", " "),
-                      agentStatus?.progressStage,
-                    ]
-                      .filter((value): value is string => value !== undefined)
-                      .join(" · ");
                     const statusTitle = [
                       recoveryDetail,
                       agentStatus?.blocker,
@@ -1282,7 +1400,7 @@ export function GroupTree({
                     const popoverVisible = statusPopover?.membershipId === member.id;
                     return (
                       <div className="member-row" key={agentId}>
-                        <span className={`status-dot status-${semanticLabel}`} aria-hidden="true" />
+                        <span className={`status-dot status-${statusKey}`} aria-hidden="true" />
                         {editTarget?.kind === "agent" &&
                         editTarget.groupId === group.id &&
                         editTarget.agentId === agentId ? (
@@ -1299,28 +1417,37 @@ export function GroupTree({
                           />
                         ) : (
                           <button
-                            id={`member-status-trigger-${member.id}`}
                             type="button"
                             className="member-select"
-                            aria-label={`View details for ${agent.name}`}
-                            aria-haspopup="dialog"
-                            aria-expanded={popoverVisible}
-                            aria-controls={popoverVisible ? popoverId : undefined}
-                            onClick={(event) => {
-                              onSelectGroup(group.id);
-                              toggleStatusPopover(member.id, event.currentTarget);
-                            }}
+                            aria-label={`Open terminal for ${agent.name}, status ${statusLabel}`}
+                            onClick={() =>
+                              onSelectTerminal === undefined
+                                ? onSelectGroup(group.id)
+                                : onSelectTerminal(group.id, run?.id)
+                            }
                           >
                             <span>{agent.name}</span>
                             <RoleIdentity role={role} />
                             <small title={statusTitle || undefined}>
-                              {semanticLabel}
-                              {semanticDetail.length > 0 && ` · ${semanticDetail}`}
+                              {statusLabel}
                               {run?.recoveryNotBefore !== undefined &&
                                 ` · retry ${new Date(run.recoveryNotBefore).toLocaleTimeString()}`}
                             </small>
                           </button>
                         )}
+                        <button
+                          id={`member-status-trigger-${member.id}`}
+                          type="button"
+                          className="icon-button member-info-button"
+                          aria-label={`View details for ${agent.name}, status ${statusLabel}`}
+                          aria-haspopup="dialog"
+                          aria-expanded={popoverVisible}
+                          aria-controls={popoverVisible ? popoverId : undefined}
+                          title={`View details for ${agent.name}`}
+                          onClick={(event) => toggleStatusPopover(member.id, event.currentTarget)}
+                        >
+                          <Info aria-hidden="true" size={15} />
+                        </button>
                         {popoverVisible &&
                           createPortal(
                             <div
@@ -1333,11 +1460,11 @@ export function GroupTree({
                             >
                               <div className="member-status-popover-heading">
                                 <span
-                                  className={`status-dot status-${semanticLabel}`}
+                                  className={`status-dot status-${statusKey}`}
                                   aria-hidden="true"
                                 />
                                 <strong>{agent.name}</strong>
-                                <span>{semanticLabel.replaceAll("_", " ")}</span>
+                                <span>{statusLabel}</span>
                                 <button
                                   type="button"
                                   className="icon-button status-popover-close"
@@ -1376,37 +1503,67 @@ export function GroupTree({
                                   <dd>{role?.name ?? agent.roleId ?? "Unassigned"}</dd>
                                 </div>
                                 <div>
-                                  <dt>Semantic status</dt>
+                                  <dt>Checkout</dt>
                                   <dd>
-                                    {semanticLabel.replaceAll("_", " ")}
-                                    {agentStatus === undefined
-                                      ? ""
-                                      : ` / ${agentStatus.phase.replaceAll("_", " ")}`}
+                                    {checkout === undefined
+                                      ? "Unassigned"
+                                      : `${checkout.branch ?? "detached"} · ${checkout.path}`}
                                   </dd>
                                 </div>
                                 <div>
-                                  <dt>Terminal</dt>
-                                  <dd>
-                                    {run === undefined
-                                      ? "Not started"
-                                      : `${run.status} / ${run.recoveryPhase}`}
-                                  </dd>
+                                  <dt>User-facing status</dt>
+                                  <dd>{statusLabel}</dd>
                                 </div>
                                 {agentStatus !== undefined && (
                                   <>
                                     <div>
-                                      <dt>Confidence</dt>
-                                      <dd>{agentStatus.confidence}</dd>
+                                      <dt>Backend state</dt>
+                                      <dd>{agentStatus.state.replaceAll("_", " ")}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Phase</dt>
+                                      <dd>{agentStatus.phase.replaceAll("_", " ")}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Outcome</dt>
+                                      <dd>{agentStatus.outcome.replaceAll("_", " ")}</dd>
                                     </div>
                                     <div>
                                       <dt>Attention</dt>
                                       <dd>{agentStatus.attention.replaceAll("_", " ")}</dd>
                                     </div>
+                                    {agentStatus.progressStage !== undefined && (
+                                      <div>
+                                        <dt>Progress stage</dt>
+                                        <dd>{agentStatus.progressStage}</dd>
+                                      </div>
+                                    )}
+                                    <div>
+                                      <dt>Confidence</dt>
+                                      <dd>{agentStatus.confidence}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Authority</dt>
+                                      <dd>
+                                        {agentStatus.authorityKind.replaceAll("_", " ")}
+                                        {agentStatus.authorityId === undefined
+                                          ? ""
+                                          : ` (${agentStatus.authorityId})`}
+                                      </dd>
+                                    </div>
+                                    <div>
+                                      <dt>Stale authority</dt>
+                                      <dd>{agentStatus.staleAuthority ? "Yes" : "No"}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Process state</dt>
+                                      <dd>{agentStatus.processState.replaceAll("_", " ")}</dd>
+                                    </div>
                                   </>
                                 )}
                                 {agentStatus?.lastProgressSummary !== undefined && (
                                   <div>
-                                    <dt>Progress</dt>
+                                    <dt>Progress summary</dt>
                                     <dd>{agentStatus.lastProgressSummary}</dd>
                                   </div>
                                 )}
@@ -1422,32 +1579,63 @@ export function GroupTree({
                                     <dd>{agentStatus.nextStep}</dd>
                                   </div>
                                 )}
-                                {agentStatus?.lastActivityKind !== undefined && (
+                                {(agentStatus?.lastActivityKind !== undefined ||
+                                  agentStatus?.lastActivityAt !== undefined) && (
                                   <div>
                                     <dt>Last activity</dt>
-                                    <dd>{agentStatus.lastActivityKind.replaceAll("_", " ")}</dd>
+                                    <dd>
+                                      {[
+                                        agentStatus.lastActivityKind?.replaceAll("_", " "),
+                                        agentStatus.lastActivityAt === undefined
+                                          ? undefined
+                                          : new Date(agentStatus.lastActivityAt).toLocaleString(),
+                                      ]
+                                        .filter((value): value is string => value !== undefined)
+                                        .join(" · ")}
+                                    </dd>
                                   </div>
+                                )}
+                                {run !== undefined && (
+                                  <>
+                                    <div>
+                                      <dt>Terminal status</dt>
+                                      <dd>{run.status}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Recovery phase</dt>
+                                      <dd>{run.recoveryPhase}</dd>
+                                    </div>
+                                    {run.recoveryReason !== undefined && (
+                                      <div>
+                                        <dt>Recovery reason</dt>
+                                        <dd>{run.recoveryReason}</dd>
+                                      </div>
+                                    )}
+                                  </>
                                 )}
                               </dl>
                             </div>,
                             document.body,
                           )}
-                        {(failedMemberIds.has(member.memberId) ||
-                          (agentStatus !== undefined && agentStatus.attention !== "none")) && (
-                          <CircleAlert
-                            className="attention-icon"
-                            aria-label={
-                              agentStatus !== undefined && agentStatus.attention !== "none"
-                                ? `${agent.name} needs ${agentStatus.attention.replaceAll("_", " ")}`
-                                : "Delivery needs attention"
+                        {deliveryFailed && (
+                          <button
+                            type="button"
+                            className="delivery-warning-button"
+                            aria-label={`Open failed delivery for ${agent.name} in ${group.name}`}
+                            title={`Open ${group.name} Messages for failed delivery to ${agent.name}`}
+                            onClick={() =>
+                              onOpenMessages === undefined
+                                ? onSelectGroup(group.id)
+                                : onOpenMessages(group.id)
                             }
-                            size={15}
-                          />
+                          >
+                            <MailWarning aria-hidden="true" size={15} />
+                          </button>
                         )}
                         {editTarget?.kind !== "agent" && (
                           <ActionMenu
                             label={`Actions for agent ${agent.name}`}
-                            itemCount={action === "none" ? 6 : 7}
+                            itemCount={action === "none" ? 7 : 8}
                             triggerId={`member-actions-${group.id}-${member.memberId}`}
                           >
                             <button
@@ -1480,7 +1668,7 @@ export function GroupTree({
                                 ];
                                 void onReorderAgents?.(group.id, {
                                   agentIds,
-                                  expectedAgentRevision: group.membershipRevision,
+                                  expectedOrderRevision: snapshot.orderRevision,
                                 }).catch(() => undefined);
                               }}
                             >
@@ -1505,7 +1693,7 @@ export function GroupTree({
                                 ];
                                 void onReorderAgents?.(group.id, {
                                   agentIds,
-                                  expectedAgentRevision: group.membershipRevision,
+                                  expectedOrderRevision: snapshot.orderRevision,
                                 }).catch(() => undefined);
                               }}
                             >
@@ -1578,6 +1766,27 @@ export function GroupTree({
                             <button
                               type="button"
                               role="menuitem"
+                              className="action-menu-item"
+                              aria-label={`Move ${agent.name} to another group`}
+                              disabled={
+                                action !== "start" ||
+                                onReparentAgent === undefined ||
+                                snapshot.groups.length < 2
+                              }
+                              onClick={() =>
+                                setReparentTarget({
+                                  sourceGroupId: group.id,
+                                  agentId,
+                                  name: agent.name,
+                                })
+                              }
+                            >
+                              <MoveRight aria-hidden="true" size={14} />
+                              <span>Move to group</span>
+                            </button>
+                            <button
+                              type="button"
+                              role="menuitem"
                               className="action-menu-item danger-action"
                               aria-label={`Remove agent ${agent.name}`}
                               onClick={() =>
@@ -1608,6 +1817,7 @@ export function GroupTree({
           <SquareTerminal aria-hidden="true" size={15} />
           Console
         </button>
+        {utilities}
       </div>
       {destructiveTarget !== undefined && (
         <ConfirmRemovalDialog
@@ -1623,6 +1833,18 @@ export function GroupTree({
             destructiveTarget.kind === "group"
               ? onDeleteGroup(destructiveTarget.groupId)
               : onRemoveAgent(destructiveTarget.groupId, destructiveTarget.agentId)
+          }
+        />
+      )}
+      {reparentTarget !== undefined && onReparentAgent !== undefined && (
+        <ReparentAgentDialog
+          name={reparentTarget.name}
+          sourceGroupId={reparentTarget.sourceGroupId}
+          groups={snapshot.groups}
+          busy={busyAction === `${reparentTarget.sourceGroupId}:${reparentTarget.agentId}:reparent`}
+          onClose={() => setReparentTarget(undefined)}
+          onMove={(targetGroupId) =>
+            onReparentAgent(reparentTarget.sourceGroupId, reparentTarget.agentId, targetGroupId)
           }
         />
       )}

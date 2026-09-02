@@ -1,0 +1,62 @@
+[
+  { "event": "session.ready", "sessionId": "opencode-root" },
+  { "event": "turn.started", "sessionId": "opencode-root" },
+  {
+    "event": "tool.started",
+    "sessionId": "opencode-root",
+    "operationId": "opencode-tool-1",
+    "data": { "tool": "bash" }
+  },
+  {
+    "event": "tool.started",
+    "sessionId": "opencode-root",
+    "operationId": "opencode-tool-2",
+    "data": { "tool": "read" }
+  },
+  {
+    "event": "wait.opened",
+    "sessionId": "opencode-root",
+    "requestId": "opencode-permission-1",
+    "data": {
+      "waitKind": "permission",
+      "summary": "Tool permission required",
+      "replyChannel": "terminal"
+    }
+  },
+  { "event": "wait.closed", "sessionId": "opencode-root", "requestId": "opencode-permission-1" },
+  {
+    "event": "wait.opened",
+    "sessionId": "opencode-root",
+    "requestId": "opencode-question-1",
+    "data": {
+      "waitKind": "question",
+      "summary": "Agent question requires input",
+      "replyChannel": "terminal"
+    }
+  },
+  { "event": "wait.closed", "sessionId": "opencode-root", "requestId": "opencode-question-1" },
+  {
+    "event": "retry.observed",
+    "sessionId": "opencode-root",
+    "data": { "retryAt": "2026-08-11T06:33:20.000Z" }
+  },
+  {
+    "event": "tool.finished",
+    "sessionId": "opencode-root",
+    "operationId": "opencode-tool-2",
+    "data": { "tool": "read" }
+  },
+  {
+    "event": "tool.failed",
+    "sessionId": "opencode-root",
+    "operationId": "opencode-tool-1",
+    "data": { "tool": "bash" }
+  },
+  {
+    "event": "failure.observed",
+    "sessionId": "opencode-root",
+    "data": { "errorClass": "ProviderError" }
+  },
+  { "event": "turn.settled", "sessionId": "opencode-root" },
+  { "event": "session.ended", "sessionId": "opencode-root" }
+]

@@ -9,7 +9,7 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
     "Beta",
     "Gamma",
   ]);
-  await page.goto(nanasa.baseUrl);
+  await page.goto(nanasa.portalUrl);
 
   await page
     .getByRole("button", { name: "Start all non-running agents in Acceptance team" })
@@ -17,14 +17,11 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
   await expect(page.getByRole("status").filter({ hasText: "Start all complete" })).toContainText(
     "3 started",
   );
-  await expect(page.getByRole("region", { name: /terminal$/ })).toHaveCount(1);
-  await expect(page.getByRole("button", { name: "Messages", exact: true })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Messages overlay" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Grid terminal layout" }).click();
   await expect(page.getByRole("region", { name: /terminal$/ })).toHaveCount(3);
-  await page.getByRole("button", { name: "Messages", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Messages overlay" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Messages", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Messages", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Compose message to Acceptance team" }),
+  ).toBeVisible();
   await expect(page.getByRole("region", { name: "Agent terminals" })).toBeVisible();
   await expect(page.getByRole("group", { name: "Workspace input mode" })).toHaveCount(0);
 
@@ -35,22 +32,20 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
       .map((run) => [run.memberId, run.terminal?.paneId]),
   );
   for (const member of members) {
-    expect(member.memberId).toMatch(/^echo\.[a-z0-9]+(?:-[a-z0-9]+)+$/);
+    expect(member.memberId).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)+$/);
     const paneId = paneByMember.get(member.memberId);
     expect(paneId).toBeDefined();
     await nanasa.waitForPaneText(paneId as string, "SAFE_ECHO_READY:");
   }
 
-  const alphaFrame = page.frameLocator(
-    `iframe[title="Alpha (${members[0]!.memberId}) ttyd terminal"]`,
-  );
-  const alphaInput = alphaFrame.locator(".xterm-helper-textarea");
+  const alphaTerminal = page.getByLabel(`Alpha (${members[0]!.memberId}) terminal console`);
+  const alphaInput = alphaTerminal.locator(".xterm-helper-textarea");
   await alphaInput.focus();
   await page.keyboard.press("PageUp");
   await page.keyboard.press("PageDown");
   await nanasa.waitForPaneText(paneByMember.get(members[0]!.memberId)!, "SAFE_KEY:PageUp");
   await nanasa.waitForPaneText(paneByMember.get(members[0]!.memberId)!, "SAFE_KEY:PageDown");
-  const alphaScreen = await alphaFrame.locator(".xterm-screen").boundingBox();
+  const alphaScreen = await alphaTerminal.locator(".xterm-screen").boundingBox();
   expect(alphaScreen).not.toBeNull();
   await page.mouse.move(
     alphaScreen!.x + alphaScreen!.width / 2,
@@ -60,6 +55,12 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
   await page.mouse.wheel(0, 120);
   await nanasa.waitForPaneText(paneByMember.get(members[0]!.memberId)!, "SAFE_MOUSE:WheelUp");
   await nanasa.waitForPaneText(paneByMember.get(members[0]!.memberId)!, "SAFE_MOUSE:WheelDown");
+
+  await page.getByRole("link", { name: "Messages", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Group messages" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Compose message to Acceptance team" }),
+  ).toHaveCount(0);
 
   const openComposer = async () => {
     await page.getByLabel("Compose message").click();
@@ -79,7 +80,7 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
   await history.getByRole("button", { name: /Sent to 1/ }).click();
   await expect(history).toContainText("Alpha");
   await nanasa.waitForPaneText(paneByMember.get(members[0]!.memberId)!, "acceptance-dm");
-  await expect(history).toContainText("consumed");
+  await expect(history).toContainText("terminal_injected");
   expect(nanasa.capturePane(paneByMember.get(members[1]!.memberId)!)).not.toContain(
     "acceptance-dm",
   );
@@ -97,6 +98,13 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
     "nanasa.send_dm",
     "nanasa.send_multicast",
     "nanasa.broadcast_group",
+    "nanasa.prompt_peer",
+    "nanasa.get_action_result",
+    "nanasa.wait_action",
+    "nanasa.cancel_action",
+    "nanasa.get_delivery",
+    "nanasa.list_visible_history",
+    "nanasa.list_own_waits",
   ]);
   const listedMembers = await nanasa.agentMcpRequest(
     paneByMember.get(members[0]!.memberId)!,
@@ -136,11 +144,15 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
   );
   await nanasa.waitForPaneText(
     paneByMember.get(members[1]!.memberId)!,
-    `[From: Alpha | Member: ${members[0]!.memberId} | Intent: inform]`,
+    `[From: Alpha | Member: ${members[0]!.memberId} | Message:`,
   );
-  const agentMessage = page.getByText("acceptance-agent-to-agent").locator("..");
+  const agentMessage = page
+    .locator(".chat-bubble")
+    .filter({ hasText: "acceptance-agent-to-agent" });
   await expect(agentMessage).toContainText("From: Alpha");
-  await expect(agentMessage.getByRole("button", { name: /Sent to 1/ })).toContainText("consumed");
+  await expect(agentMessage.getByRole("button", { name: /Sent to 1/ })).toContainText(
+    "terminal_injected",
+  );
 
   await nanasa.agentMcpRequest(
     paneByMember.get(members[0]!.memberId)!,

@@ -1,7 +1,8 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { discoverAndLoadNanasaConfig, loadNanasaConfig } from "./config.js";
+import { assertLoopbackControlHost } from "./authority-policy.js";
+import { discoverAndLoadNanasaConfig, loadNanasaConfig } from "./config-loader.js";
 import { isLoopbackHost, validateMcpEndpointConfiguration } from "./mcp-config.js";
 import { createDaemon } from "./server.js";
 
@@ -11,7 +12,7 @@ export {
   discoverRepositoryRoot,
   loadNanasaConfig,
   nanasaPaths,
-} from "./config.js";
+} from "./config-loader.js";
 export { createDaemon } from "./server.js";
 export { DomainError, NanasaStore } from "./store.js";
 
@@ -102,13 +103,13 @@ async function start(): Promise<void> {
     configuredPath("NANASA_RUNTIME_PATH", process.env.NANASA_RUNTIME_PATH) ??
     loadedConfig.runtimeDirectory;
   const tmuxServerName = process.env.NANASA_TMUX_SERVER ?? "nanasa";
-  const ttydPath = process.env.NANASA_TTYD_PATH ?? "ttyd";
   const mcpEnabled = configuredBoolean("NANASA_MCP_ENABLED", process.env.NANASA_MCP_ENABLED, false);
   const mcpPath = process.env.NANASA_MCP_PATH ?? "/mcp";
   const mcpOperatorToken = process.env.NANASA_MCP_OPERATOR_TOKEN;
   const mcpEndpointUrl =
     process.env.NANASA_MCP_URL ?? `http://${hostForUrl(host)}:${port}${mcpPath}`;
-  const statusEndpointUrl = `http://${hostForUrl(host)}:${port}/api/agent-status/events`;
+  const statusEndpointUrl = `http://${hostForUrl(host)}:${port}/api/v1/agent-status/events`;
+  assertLoopbackControlHost(host);
   validateMcpStartupConfiguration({
     enabled: mcpEnabled,
     listenHost: host,
@@ -123,16 +124,17 @@ async function start(): Promise<void> {
   const portalAssetsPath =
     process.env.NANASA_PORTAL_PATH ??
     resolve(dirname(fileURLToPath(import.meta.url)), "../../portal/dist");
-  const { app } = await createDaemon({
+  const packageRoot = configuredPath("NANASA_PACKAGE_ROOT", process.env.NANASA_PACKAGE_ROOT);
+  const daemon = await createDaemon({
     ...(dataPath === undefined ? {} : { dataPath }),
     runtimePath,
     loadedConfig,
     logger: true,
-    tmuxServerName,
-    ttydPath,
+    ...(process.env.NANASA_TMUX_SERVER === undefined ? {} : { tmuxServerName }),
     statusEndpointUrl,
     servePortal,
     portalAssetsPath,
+    ...(packageRoot === undefined ? {} : { packageRoot }),
     mcp: {
       enabled: mcpEnabled,
       path: mcpPath,
@@ -143,12 +145,18 @@ async function start(): Promise<void> {
   });
 
   const close = async () => {
-    await app.close();
+    await daemon.app.close();
     process.exitCode = 0;
   };
   process.once("SIGINT", close);
   process.once("SIGTERM", close);
-  await app.listen({ host, port });
+  try {
+    await daemon.app.listen({ host, port });
+  } catch (error) {
+    await daemon.app.close();
+    throw error;
+  }
+  process.stdout.write(`Open http://${hostForUrl(host)}:${port}/#${daemon.bootstrapFragment}\n`);
 }
 
 const entryPoint = process.argv[1];

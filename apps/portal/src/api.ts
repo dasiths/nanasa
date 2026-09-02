@@ -1,69 +1,156 @@
 import {
   type AdHocConsoleSession,
   AdHocConsoleSessionSchema,
+  type AgentAction,
+  AgentActionSchema,
+  type AgentActionWorkspace,
+  AgentActionWorkspaceSchema,
   type AgentRun,
   AgentRunSchema,
+  type AgentStatusDetail,
+  AgentStatusDetailSchema,
+  type AssignAgentCheckoutCommand,
+  AssignAgentCheckoutCommandSchema,
+  type BrowserRestartFrame,
+  BrowserRestartFrameSchema,
   type ClearMessageHistoryResult,
   ClearMessageHistoryResultSchema,
+  type ConfigStatus,
+  ConfigStatusSchema,
+  type ControlMetadata,
+  type CreateAgentActionCommand,
+  CreateAgentActionCommandSchema,
   type CreateGroupAgentCommand,
   CreateGroupAgentCommandSchema,
   type CreateGroupCommand,
   CreateGroupCommandSchema,
+  type CreateWorktreeCommand,
+  CreateWorktreeCommandSchema,
   type DeleteGroupResult,
   DeleteGroupResultSchema,
+  type ExtensionLifecycleCommand,
+  type ExtensionTrustReceipt,
+  ExtensionTrustReceiptSchema,
   type Group,
   type GroupMembership,
   GroupMembershipSchema,
   GroupSchema,
+  type InstallProviderExtensionCommand,
   type MessagePage,
   MessagePageSchema,
   type MessageSubmissionResult,
   MessageSubmissionResultSchema,
   type NanasaConfig,
   NanasaConfigSchema,
+  type OpenCheckoutCommand,
+  OpenCheckoutCommandSchema,
+  type OpenWait,
+  OpenWaitSchema,
   type PortalSnapshot,
   PortalSnapshotSchema,
+  type ProviderCatalogItem,
+  ProviderCatalogItemSchema,
+  type ProviderExtensionHealth,
+  ProviderExtensionHealthSchema,
+  type ProviderExtensionInspect,
+  ProviderExtensionInspectSchema,
+  type ProviderExtensionPlan,
+  ProviderExtensionPlanSchema,
+  type ProviderStateBinding,
+  ProviderStateBindingSchema,
+  type RemoteDescriptor,
+  RemoteDescriptorSchema,
   type RemoveGroupAgentResult,
   RemoveGroupAgentResultSchema,
+  type RemoveWorktreeCommand,
+  RemoveWorktreeCommandSchema,
   type ReorderGroupAgentsCommand,
   ReorderGroupAgentsCommandSchema,
   type ReorderGroupAgentsResult,
-  ReorderGroupAgentsResultSchema,
+  type ReorderGroupsCommand,
+  ReorderGroupsCommandSchema,
+  type ReorderGroupsResult,
+  type ReparentGroupAgentCommand,
+  ReparentGroupAgentCommandSchema,
+  type ReparentGroupAgentResult,
+  type ReplyOpenWaitCommand,
+  ReplyOpenWaitCommandSchema,
   type RoleDefinition,
   RoleDefinitionSchema,
+  type ServiceDescriptor,
+  ServiceDescriptorSchema,
   type StartGroupRunsResult,
   StartGroupRunsResultSchema,
   type SubmitMessageCommand,
   SubmitMessageCommandSchema,
+  type TerminalCheckpoint,
+  type TerminalCheckpointCapture,
+  TerminalCheckpointContentSchema,
+  TerminalCheckpointSchema,
   type TerminalEndpointStatus,
   TerminalEndpointStatusSchema,
+  type TerminalReadResult,
+  TerminalReadResultSchema,
+  type TrustProviderExtensionCommand,
   type UpdateGroupAgentCommand,
   UpdateGroupAgentCommandSchema,
   type UpdateGroupCommand,
   UpdateGroupCommandSchema,
   type UpdateRolePresentationCommand,
   UpdateRolePresentationCommandSchema,
+  type WorktreeOperationResult,
 } from "@nanasa/contracts";
+import {
+  CONTROL_API_PREFIX,
+  ControlClientError,
+  NanasaControlClient,
+  NanasaControlResources,
+  type Schema,
+} from "@nanasa/control-client";
 
-interface Schema<T> {
-  parse(value: unknown): T;
-}
-
-export class ApiError extends Error {
-  public readonly status: number;
-
-  public constructor(message: string, status: number) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-  }
-}
+export { ControlClientError as ApiError };
 
 export interface PortalClient {
   createConsole(): Promise<AdHocConsoleSession>;
   closeConsole(consoleId: string): Promise<void>;
+  loadMetadata(): Promise<ControlMetadata>;
   loadSnapshot(): Promise<PortalSnapshot>;
   loadConfig(): Promise<NanasaConfig>;
+  loadConfigStatus(): Promise<ConfigStatus>;
+  loadServiceStatus(): Promise<ServiceDescriptor>;
+  loadRemoteStatus(): Promise<RemoteDescriptor>;
+  planServiceRestart(reason: BrowserRestartFrame["reason"]): Promise<BrowserRestartFrame>;
+  listProviderStates(): Promise<ProviderStateBinding[]>;
+  listProviderExtensions(): Promise<ProviderCatalogItem[]>;
+  inspectProviderExtension(extensionId: string): Promise<ProviderExtensionInspect>;
+  planProviderExtension(extensionId: string): Promise<ProviderExtensionPlan>;
+  providerExtensionHealth(extensionId: string): Promise<ProviderExtensionHealth>;
+  trustProviderExtension(
+    extensionId: string,
+    command: TrustProviderExtensionCommand,
+  ): Promise<ExtensionTrustReceipt>;
+  installProviderExtension(
+    extensionId: string,
+    command: InstallProviderExtensionCommand,
+  ): Promise<ProviderExtensionInspect>;
+  repairProviderExtension(
+    extensionId: string,
+    command: InstallProviderExtensionCommand,
+  ): Promise<ProviderExtensionInspect>;
+  disableProviderExtension(
+    extensionId: string,
+    command: ExtensionLifecycleCommand,
+  ): Promise<ProviderExtensionInspect>;
+  rollbackProviderExtension(
+    extensionId: string,
+    command: ExtensionLifecycleCommand,
+  ): Promise<ProviderExtensionInspect>;
+  removeProviderExtension(
+    extensionId: string,
+    command: ExtensionLifecycleCommand,
+  ): Promise<ProviderCatalogItem>;
+  retainProviderState(bindingId: string): Promise<ProviderStateBinding>;
+  deleteProviderState(bindingId: string): Promise<ProviderStateBinding>;
   createGroup(command: CreateGroupCommand): Promise<Group>;
   updateGroup(groupId: string, command: UpdateGroupCommand): Promise<Group>;
   deleteGroup(groupId: string): Promise<DeleteGroupResult>;
@@ -78,6 +165,23 @@ export interface PortalClient {
     groupId: string,
     command: ReorderGroupAgentsCommand,
   ): Promise<ReorderGroupAgentsResult>;
+  reorderGroups(command: ReorderGroupsCommand): Promise<ReorderGroupsResult>;
+  reparentAgent(
+    groupId: string,
+    agentId: string,
+    command: ReparentGroupAgentCommand,
+  ): Promise<ReparentGroupAgentResult>;
+  assignCheckout(
+    groupId: string,
+    agentId: string,
+    command: AssignAgentCheckoutCommand,
+  ): Promise<void>;
+  createWorktree(command: CreateWorktreeCommand): Promise<WorktreeOperationResult>;
+  openCheckout(command: OpenCheckoutCommand): Promise<WorktreeOperationResult>;
+  removeWorktree(
+    worktreeId: string,
+    command: RemoveWorktreeCommand,
+  ): Promise<WorktreeOperationResult>;
   updateRolePresentation(
     roleId: string,
     command: UpdateRolePresentationCommand,
@@ -86,137 +190,259 @@ export interface PortalClient {
   startAllRuns(groupId: string, idempotencyKey: string): Promise<StartGroupRunsResult>;
   stopRun(groupId: string, agentId: string): Promise<AgentRun>;
   submitMessage(groupId: string, command: SubmitMessageCommand): Promise<MessageSubmissionResult>;
+  createAgentAction(command: CreateAgentActionCommand): Promise<AgentAction>;
+  loadActionWorkspace(groupId: string): Promise<AgentActionWorkspace>;
+  cancelAgentAction(actionId: string): Promise<AgentAction>;
+  replyOpenWait(waitId: string, command: ReplyOpenWaitCommand): Promise<OpenWait>;
+  acknowledgeCompletion(groupId: string, memberId: string): Promise<AgentStatusDetail>;
   loadMessages(
     groupId: string,
     options?: { limit?: number; before?: number; after?: number },
   ): Promise<MessagePage>;
   clearMessages(groupId: string): Promise<ClearMessageHistoryResult>;
   getTerminalEndpointStatus(runId: string): Promise<TerminalEndpointStatus>;
-  createEventsSocket(afterSequence: number): WebSocket;
+  readTerminal(runId: string, generation: number): Promise<TerminalReadResult>;
+  listTerminalCheckpoints(): Promise<TerminalCheckpoint[]>;
+  createTerminalCheckpoint(
+    runId: string,
+    command: TerminalCheckpointCapture,
+  ): Promise<TerminalCheckpoint>;
+  getTerminalCheckpoint(
+    checkpointId: string,
+  ): Promise<{ checkpoint: TerminalCheckpoint; text: string }>;
+  deleteTerminalCheckpoint(checkpointId: string): Promise<void>;
+  createEventsSocket(afterSequence: number, instanceId: string): WebSocket;
 }
 
-function websocketUrl(path: string): string {
-  const url = new URL(path, window.location.href);
-  url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
-}
+const control = new NanasaControlClient();
+const resources = new NanasaControlResources(control);
 
 async function request<T>(path: string, schema: Schema<T>, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
-  const payload: unknown = await response.json();
-  if (!response.ok) {
-    const message =
-      typeof payload === "object" && payload !== null && "message" in payload
-        ? String(payload.message)
-        : `Request failed with status ${response.status}`;
-    throw new ApiError(message, response.status);
-  }
-  return schema.parse(payload);
+  return control.request(path, schema, { ...(init === undefined ? {} : { init }) });
 }
 
 async function requestVoid(path: string, init: RequestInit): Promise<void> {
-  const response = await fetch(path, init);
-  if (response.ok) return;
-  const payload: unknown = await response.json();
-  const message =
-    typeof payload === "object" && payload !== null && "message" in payload
-      ? String(payload.message)
-      : `Request failed with status ${response.status}`;
-  throw new ApiError(message, response.status);
+  return control.requestVoid(path, init);
 }
 
 function commandInit(
   method: "POST" | "PUT" | "PATCH" | "DELETE",
   body: unknown,
-  idempotencyKey: string = crypto.randomUUID(),
+  idempotencyKey?: string,
 ): RequestInit {
   return {
     method,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
-      "Idempotency-Key": idempotencyKey,
+      ...(idempotencyKey === undefined ? {} : { "Idempotency-Key": idempotencyKey }),
     },
     body: JSON.stringify(body),
   };
 }
 
 export const api: PortalClient = {
-  createConsole: () => request("/api/consoles", AdHocConsoleSessionSchema, commandInit("POST", {})),
+  createConsole: () =>
+    request(`${CONTROL_API_PREFIX}/consoles`, AdHocConsoleSessionSchema, commandInit("POST", {})),
   closeConsole: (consoleId) =>
-    requestVoid(`/api/consoles/${encodeURIComponent(consoleId)}`, commandInit("DELETE", {})),
-  loadSnapshot: () => request("/api/snapshot", PortalSnapshotSchema),
-  loadConfig: () => request("/api/config", NanasaConfigSchema),
+    requestVoid(
+      `${CONTROL_API_PREFIX}/consoles/${encodeURIComponent(consoleId)}`,
+      commandInit("DELETE", {}),
+    ),
+  loadMetadata: () => control.metadata(),
+  loadSnapshot: () => request(`${CONTROL_API_PREFIX}/snapshot`, PortalSnapshotSchema),
+  loadConfig: () => request(`${CONTROL_API_PREFIX}/config`, NanasaConfigSchema),
+  loadConfigStatus: () => request(`${CONTROL_API_PREFIX}/config/status`, ConfigStatusSchema),
+  loadServiceStatus: () => request(`${CONTROL_API_PREFIX}/service`, ServiceDescriptorSchema),
+  loadRemoteStatus: () => request(`${CONTROL_API_PREFIX}/remote`, RemoteDescriptorSchema),
+  planServiceRestart: (reason) =>
+    request(
+      `${CONTROL_API_PREFIX}/service/restart-plan`,
+      BrowserRestartFrameSchema,
+      commandInit("POST", { reason }, crypto.randomUUID()),
+    ),
+  listProviderStates: () =>
+    request(`${CONTROL_API_PREFIX}/provider-states`, ProviderStateBindingSchema.array()),
+  listProviderExtensions: () =>
+    request(`${CONTROL_API_PREFIX}/extensions`, ProviderCatalogItemSchema.array()),
+  inspectProviderExtension: (extensionId) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}`,
+      ProviderExtensionInspectSchema,
+    ),
+  planProviderExtension: (extensionId) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}/plan`,
+      ProviderExtensionPlanSchema,
+    ),
+  providerExtensionHealth: (extensionId) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}/health`,
+      ProviderExtensionHealthSchema,
+    ),
+  trustProviderExtension: (extensionId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}/trust`,
+      ExtensionTrustReceiptSchema,
+      commandInit("POST", command),
+    ),
+  installProviderExtension: (extensionId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}/install`,
+      ProviderExtensionInspectSchema,
+      commandInit("POST", command),
+    ),
+  repairProviderExtension: (extensionId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}/repair`,
+      ProviderExtensionInspectSchema,
+      commandInit("POST", command),
+    ),
+  disableProviderExtension: (extensionId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}/disable`,
+      ProviderExtensionInspectSchema,
+      commandInit("POST", command),
+    ),
+  rollbackProviderExtension: (extensionId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}/rollback`,
+      ProviderExtensionInspectSchema,
+      commandInit("POST", command),
+    ),
+  removeProviderExtension: (extensionId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/extensions/${encodeURIComponent(extensionId)}`,
+      ProviderCatalogItemSchema,
+      commandInit("DELETE", command),
+    ),
+  retainProviderState: (bindingId) =>
+    request(
+      `${CONTROL_API_PREFIX}/provider-states/${encodeURIComponent(bindingId)}/retain`,
+      ProviderStateBindingSchema,
+      commandInit("POST", {}, crypto.randomUUID()),
+    ),
+  deleteProviderState: (bindingId) =>
+    request(
+      `${CONTROL_API_PREFIX}/provider-states/${encodeURIComponent(bindingId)}`,
+      ProviderStateBindingSchema,
+      commandInit("DELETE", {}, crypto.randomUUID()),
+    ),
   createGroup: (command) =>
     request(
-      "/api/groups",
+      `${CONTROL_API_PREFIX}/groups`,
       GroupSchema,
       commandInit("POST", CreateGroupCommandSchema.parse(command)),
     ),
   updateGroup: (groupId, command) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}`,
       GroupSchema,
       commandInit("PATCH", UpdateGroupCommandSchema.parse(command)),
     ),
   deleteGroup: (groupId) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}`,
       DeleteGroupResultSchema,
       commandInit("DELETE", {}),
     ),
   createAgent: (groupId, command) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/agents`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agents`,
       GroupMembershipSchema,
       commandInit("POST", CreateGroupAgentCommandSchema.parse(command)),
     ),
   updateAgent: (groupId, agentId, command) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}`,
       GroupMembershipSchema,
       commandInit("PATCH", UpdateGroupAgentCommandSchema.parse(command)),
     ),
   removeAgent: (groupId, agentId) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}`,
       RemoveGroupAgentResultSchema,
       commandInit("DELETE", {}),
     ),
   reorderAgents: (groupId, command) =>
-    request(
-      `/api/groups/${encodeURIComponent(groupId)}/agent-order`,
-      ReorderGroupAgentsResultSchema,
-      commandInit("PUT", ReorderGroupAgentsCommandSchema.parse(command)),
+    resources.topology.reorderAgents(groupId, ReorderGroupAgentsCommandSchema.parse(command)),
+  reorderGroups: (command) =>
+    resources.topology.reorderGroups(ReorderGroupsCommandSchema.parse(command)),
+  reparentAgent: (groupId, agentId, command) =>
+    resources.topology.reparentAgent(
+      groupId,
+      agentId,
+      ReparentGroupAgentCommandSchema.parse(command),
     ),
+  assignCheckout: (groupId, agentId, command) =>
+    resources.workspace.assignCheckout(
+      groupId,
+      agentId,
+      AssignAgentCheckoutCommandSchema.parse(command),
+    ),
+  createWorktree: (command) =>
+    resources.workspace.createWorktree(CreateWorktreeCommandSchema.parse(command)),
+  openCheckout: (command) =>
+    resources.workspace.openCheckout(OpenCheckoutCommandSchema.parse(command)),
+  removeWorktree: (worktreeId, command) =>
+    resources.workspace.removeWorktree(worktreeId, RemoveWorktreeCommandSchema.parse(command)),
   updateRolePresentation: (roleId, command) =>
     request(
-      `/api/roles/${encodeURIComponent(roleId)}/presentation`,
+      `${CONTROL_API_PREFIX}/roles/${encodeURIComponent(roleId)}/presentation`,
       RoleDefinitionSchema,
       commandInit("PATCH", UpdateRolePresentationCommandSchema.parse(command)),
     ),
   startRun: (groupId, agentId) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}/run`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}/run`,
       AgentRunSchema,
       commandInit("POST", {}),
     ),
-  startAllRuns: (groupId, idempotencyKey) =>
+  startAllRuns: (groupId) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/runs/start-all`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/runs/start-all`,
       StartGroupRunsResultSchema,
-      commandInit("POST", {}, idempotencyKey),
+      commandInit("POST", {}),
     ),
   stopRun: (groupId, agentId) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}/run`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}/run`,
       AgentRunSchema,
       commandInit("DELETE", {}),
     ),
   submitMessage: (groupId, command) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/messages`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/messages`,
       MessageSubmissionResultSchema,
-      commandInit("POST", SubmitMessageCommandSchema.parse(command)),
+      commandInit("POST", SubmitMessageCommandSchema.parse(command), crypto.randomUUID()),
+    ),
+  createAgentAction: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/agent-actions`,
+      AgentActionSchema,
+      commandInit("POST", CreateAgentActionCommandSchema.parse(command), crypto.randomUUID()),
+    ),
+  loadActionWorkspace: (groupId) =>
+    request(
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/action-workspace`,
+      AgentActionWorkspaceSchema,
+    ),
+  cancelAgentAction: (actionId) =>
+    request(
+      `${CONTROL_API_PREFIX}/agent-actions/${encodeURIComponent(actionId)}/cancel`,
+      AgentActionSchema,
+      commandInit("POST", {}, crypto.randomUUID()),
+    ),
+  replyOpenWait: (waitId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/open-waits/${encodeURIComponent(waitId)}/reply`,
+      OpenWaitSchema,
+      commandInit("POST", ReplyOpenWaitCommandSchema.parse(command)),
+    ),
+  acknowledgeCompletion: (groupId, memberId) =>
+    request(
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/status/acknowledge`,
+      AgentStatusDetailSchema,
+      commandInit("POST", {}, crypto.randomUUID()),
     ),
   loadMessages: (groupId, options = {}) => {
     const query = new URLSearchParams();
@@ -225,18 +451,45 @@ export const api: PortalClient = {
     if (options.after !== undefined) query.set("after", String(options.after));
     const suffix = query.size === 0 ? "" : `?${query.toString()}`;
     return request(
-      `/api/groups/${encodeURIComponent(groupId)}/messages${suffix}`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/messages${suffix}`,
       MessagePageSchema,
     );
   },
   clearMessages: (groupId) =>
     request(
-      `/api/groups/${encodeURIComponent(groupId)}/messages`,
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/messages`,
       ClearMessageHistoryResultSchema,
-      commandInit("DELETE", {}),
+      commandInit("DELETE", {}, crypto.randomUUID()),
     ),
   getTerminalEndpointStatus: (runId) =>
-    request(`/api/runs/${encodeURIComponent(runId)}/terminal`, TerminalEndpointStatusSchema),
-  createEventsSocket: (afterSequence) =>
-    new WebSocket(websocketUrl(`/api/events?after=${afterSequence}`)),
+    request(
+      `${CONTROL_API_PREFIX}/runs/${encodeURIComponent(runId)}/terminal`,
+      TerminalEndpointStatusSchema,
+    ),
+  readTerminal: (runId, generation) =>
+    request(
+      `${CONTROL_API_PREFIX}/runs/${encodeURIComponent(runId)}/terminal/read?generation=${generation}&source=history&maxLines=500&maxBytes=262144`,
+      TerminalReadResultSchema,
+    ),
+  listTerminalCheckpoints: () =>
+    request(`${CONTROL_API_PREFIX}/terminal-checkpoints`, {
+      parse: (value: unknown) => TerminalCheckpointSchema.array().parse(value),
+    }),
+  createTerminalCheckpoint: (runId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/runs/${encodeURIComponent(runId)}/terminal/checkpoints`,
+      TerminalCheckpointSchema,
+      commandInit("POST", command),
+    ),
+  getTerminalCheckpoint: (checkpointId) =>
+    request(
+      `${CONTROL_API_PREFIX}/terminal-checkpoints/${encodeURIComponent(checkpointId)}`,
+      TerminalCheckpointContentSchema,
+    ),
+  deleteTerminalCheckpoint: (checkpointId) =>
+    requestVoid(
+      `${CONTROL_API_PREFIX}/terminal-checkpoints/${encodeURIComponent(checkpointId)}`,
+      commandInit("DELETE", {}),
+    ),
+  createEventsSocket: (afterSequence, instanceId) => control.openEvents(afterSequence, instanceId),
 };

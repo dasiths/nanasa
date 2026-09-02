@@ -2,26 +2,18 @@ import { randomUUID } from "node:crypto";
 import type { AdHocConsoleSession, AgentRun } from "@nanasa/contracts";
 
 import { DomainError } from "./store.js";
-import type { TerminalEndpointRegistry } from "./terminal-endpoint-registry.js";
+import type { TerminalGateway } from "./terminal/terminal-gateway.js";
 import type { TmuxRuntime } from "./tmux-runtime.js";
-import type { TtydSupervisor } from "./ttyd-supervisor.js";
 
 export class AdHocConsoleManager {
   readonly #runtime: TmuxRuntime;
-  readonly #supervisor: TtydSupervisor;
-  readonly #endpoints: TerminalEndpointRegistry;
+  readonly #supervisor: TerminalGateway;
   readonly #workingDirectory: string;
   readonly #sessions = new Map<string, AgentRun>();
 
-  public constructor(
-    runtime: TmuxRuntime,
-    supervisor: TtydSupervisor,
-    endpoints: TerminalEndpointRegistry,
-    workingDirectory: string,
-  ) {
+  public constructor(runtime: TmuxRuntime, supervisor: TerminalGateway, workingDirectory: string) {
     this.#runtime = runtime;
     this.#supervisor = supervisor;
-    this.#endpoints = endpoints;
     this.#workingDirectory = workingDirectory;
   }
 
@@ -33,11 +25,23 @@ export class AdHocConsoleManager {
       await this.#runtime.ensureViewSession(run);
       this.#sessions.set(id, run);
       this.#supervisor.startDetached(run);
-      return { id, runId: run.id };
+      return { id, runId: run.id, generation: run.generation };
     } catch (error) {
       if (run !== undefined) await this.#runtime.stopConsole(run).catch(() => undefined);
       throw error;
     }
+  }
+
+  public list(): AdHocConsoleSession[] {
+    return [...this.#sessions.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([id, run]) => ({ id, runId: run.id, generation: run.generation }));
+  }
+
+  public get(id: string): AdHocConsoleSession {
+    const run = this.#sessions.get(id);
+    if (run === undefined) throw new DomainError("console_not_found", "Console not found", 404);
+    return { id, runId: run.id, generation: run.generation };
   }
 
   public async remove(id: string): Promise<void> {
@@ -49,7 +53,6 @@ export class AdHocConsoleManager {
     await this.#supervisor.stop(run.id);
     await this.#runtime.removeViewSession(run.id);
     await this.#runtime.stopConsole(run);
-    this.#endpoints.remove(run.id);
   }
 
   public async close(): Promise<void> {

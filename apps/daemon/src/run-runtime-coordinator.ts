@@ -4,18 +4,27 @@ import type {
   GroupMembership,
   StartGroupRunsCommand,
   StartGroupRunsResult,
+  NativeRecoveryPolicy,
 } from "@nanasa/contracts";
 
 import { DeliveryDispatcher } from "./delivery-dispatcher.js";
+import { NativeSessionService } from "./native-session-service.js";
+import type { RuntimeObservation } from "./runtime-observation.js";
 import { DomainError, NanasaStore } from "./store.js";
+import { TerminalGateway } from "./terminal/terminal-gateway.js";
 import { TmuxRuntime } from "./tmux-runtime.js";
-import { TtydSupervisor } from "./ttyd-supervisor.js";
 
 export interface RunRuntimeCoordinatorOptions {
   reconcileIntervalMs?: number;
   recoveryMaxAttempts?: number;
   recoveryCooldownMs?: readonly number[];
   now?: () => Date;
+  nativeSessions?: NativeSessionService;
+  nativeRecoveryPolicy?: (run: AgentRun) => {
+    integrationId: string;
+    policy: NativeRecoveryPolicy;
+  };
+  onRuntimeObservation?: (observation: RuntimeObservation) => void | Promise<void>;
 }
 
 const RECOVERY_TERMINAL_SIZE = { cols: 120, rows: 40 } as const;
@@ -24,20 +33,24 @@ const STATUS_PROBE_INTERVAL_MS = 15_000;
 export class RunRuntimeCoordinator {
   readonly #store: NanasaStore;
   readonly #runtime: TmuxRuntime;
-  readonly #supervisor: TtydSupervisor;
+  readonly #supervisor: TerminalGateway;
   readonly #dispatcher: DeliveryDispatcher;
   readonly #reconcileTimer: NodeJS.Timeout;
   readonly #recoveryMaxAttempts: number;
   readonly #recoveryCooldownMs: readonly number[];
   readonly #now: () => Date;
+  readonly #nativeSessions: NativeSessionService | undefined;
+  readonly #nativeRecoveryPolicy: RunRuntimeCoordinatorOptions["nativeRecoveryPolicy"];
+  readonly #onRuntimeObservation: RunRuntimeCoordinatorOptions["onRuntimeObservation"];
   #pending: Promise<void> = Promise.resolve();
   #closing = false;
   #lastStatusProbeAt = 0;
+  readonly #missingConfirmations = new Map<string, number>();
 
   public constructor(
     store: NanasaStore,
     runtime: TmuxRuntime,
-    supervisor: TtydSupervisor,
+    supervisor: TerminalGateway,
     dispatcher: DeliveryDispatcher,
     options: RunRuntimeCoordinatorOptions = {},
   ) {
@@ -48,6 +61,9 @@ export class RunRuntimeCoordinator {
     this.#recoveryMaxAttempts = options.recoveryMaxAttempts ?? 3;
     this.#recoveryCooldownMs = options.recoveryCooldownMs ?? [1_000, 5_000, 30_000];
     this.#now = options.now ?? (() => new Date());
+    this.#nativeSessions = options.nativeSessions;
+    this.#nativeRecoveryPolicy = options.nativeRecoveryPolicy;
+    this.#onRuntimeObservation = options.onRuntimeObservation;
     this.#reconcileTimer = setInterval(
       () => void this.reconcile().catch(() => undefined),
       options.reconcileIntervalMs ?? 1_000,
@@ -156,6 +172,41 @@ export class RunRuntimeCoordinator {
     return this.#serialize(() => this.#stopRun(groupId, memberId));
   }
 
+  public restartRun(runId: string, size: { cols: number; rows: number }): Promise<AgentRun> {
+    return this.#serialize(async () => {
+      const current = this.#store.getRun(runId);
+      const active = this.#store.getActiveRun(current.groupId, current.memberId);
+      if (active?.id !== current.id) {
+        throw new DomainError("run_replaced", "The run was replaced", 409);
+      }
+      await this.#stopRun(current.groupId, current.memberId);
+      return this.#startRun(current.groupId, current.memberId, size);
+    });
+  }
+
+  public stopAll(groupId: string): Promise<AgentRun[]> {
+    return this.#serialize(async () => {
+      this.#store.getGroup(groupId);
+      const stopped: AgentRun[] = [];
+      for (const run of this.#store.listGroupRunsRequiringStop(groupId)) {
+        stopped.push(await this.#stopRun(groupId, run.memberId));
+      }
+      return stopped;
+    });
+  }
+
+  public restartAll(groupId: string, size: { cols: number; rows: number }): Promise<AgentRun[]> {
+    return this.#serialize(async () => {
+      this.#store.getGroup(groupId);
+      const restarted: AgentRun[] = [];
+      for (const run of this.#store.listGroupRunsRequiringStop(groupId)) {
+        await this.#stopRun(groupId, run.memberId);
+        restarted.push(await this.#startRun(groupId, run.memberId, size));
+      }
+      return restarted;
+    });
+  }
+
   public interrupt(runId: string): Promise<void> {
     return this.#serialize(async () => {
       const run = this.#store.getRun(runId);
@@ -202,22 +253,82 @@ export class RunRuntimeCoordinator {
       }
       const recoveredRuns: AgentRun[] = [];
       for (const persisted of this.#store.listDesiredRunningRuns()) {
-        if (
-          persisted.recoveryReason !== "terminal_runtime_migration" &&
-          (await this.#runtime.isCurrentRun(persisted))
-        ) {
+        const observationKey = `${persisted.id}:${persisted.generation}`;
+        const observation = await this.#runtime.observeRun(persisted);
+        await this.#onRuntimeObservation?.(observation);
+        if (observation.state === "present") {
+          this.#missingConfirmations.delete(observationKey);
           let current = persisted;
+          if (markOrphanedStarting && persisted.recoveryPhase !== "resuming") {
+            current = this.#store.updateRunProviderMetadata(persisted.id, {
+              launchKind: "adopted",
+              recoveryOutcome: "retained",
+            });
+          }
+          if (persisted.recoveryPhase === "resuming") {
+            if (
+              persisted.nativeSessionId !== undefined &&
+              this.#nativeSessions?.isConfirmed(persisted.nativeSessionId, persisted.id) === true
+            ) {
+              current = this.#store.updateRunProviderMetadata(persisted.id, {
+                launchKind: "resuming",
+                recoveryOutcome: "resumed",
+              });
+              current = this.#store.transitionRunRecovery(
+                current.id,
+                current.generation,
+                "recovered",
+                { reason: "native_session_confirmed" },
+              );
+            } else {
+              const recovery = this.#nativeRecoveryPolicy?.(persisted);
+              const timeoutMs = (recovery?.policy.confirmationTimeoutSeconds ?? 30) * 1_000;
+              if (this.#now().getTime() - Date.parse(persisted.startedAt) >= timeoutMs) {
+                if (recovery?.policy.mode === "resume-only") {
+                  this.#store.updateRunProviderMetadata(persisted.id, {
+                    recoveryOutcome: "failed",
+                  });
+                  this.#store.transitionRunRecovery(persisted.id, persisted.generation, "failed", {
+                    reason: "native_resume_confirmation_timeout",
+                  });
+                  continue;
+                }
+                const replacement = await this.#recoverMissingRun(persisted, true);
+                if (replacement !== undefined) recoveredRuns.push(replacement);
+                continue;
+              }
+            }
+          }
           if (markOrphanedStarting || persisted.recoveryPhase !== "recovered") {
-            current = this.#store.transitionRunRecovery(
-              persisted.id,
-              persisted.generation,
-              "reconciling",
-              { reason: markOrphanedStarting ? "daemon_restart" : "runtime_reconcile" },
-            );
+            if (current.recoveryPhase !== "resuming" && current.recoveryPhase !== "recovered") {
+              current = this.#store.transitionRunRecovery(
+                persisted.id,
+                persisted.generation,
+                "reconciling",
+                { reason: markOrphanedStarting ? "daemon_restart" : "runtime_reconcile" },
+              );
+            }
           }
           recoveredRuns.push(current);
           continue;
         }
+        if (observation.state === "indeterminate") {
+          this.#missingConfirmations.delete(observationKey);
+          continue;
+        }
+        if (observation.state === "missing") {
+          const confirmations = (this.#missingConfirmations.get(observationKey) ?? 0) + 1;
+          this.#missingConfirmations.set(observationKey, confirmations);
+          if (confirmations < 2) continue;
+          const finalObservation = await this.#runtime.observeRun(persisted);
+          await this.#onRuntimeObservation?.(finalObservation);
+          if (finalObservation.state !== "missing" && finalObservation.state !== "dead") {
+            this.#missingConfirmations.delete(observationKey);
+            if (finalObservation.state === "present") recoveredRuns.push(persisted);
+            continue;
+          }
+        }
+        this.#missingConfirmations.delete(observationKey);
         const replacement = await this.#recoverMissingRun(persisted);
         if (replacement !== undefined) recoveredRuns.push(replacement);
       }
@@ -225,19 +336,19 @@ export class RunRuntimeCoordinator {
         (run) => run.status === "running" && run.terminal !== undefined,
       );
       await this.#runtime.removeStaleViewSessions(new Set(running.map((run) => run.id)));
-      const readyForTtyd: AgentRun[] = [];
+      const readyForGateway: AgentRun[] = [];
       for (const run of running) {
         try {
           await this.#runtime.ensureViewSession(run);
-          readyForTtyd.push(run);
-        } catch (error) {
+          readyForGateway.push(run);
+        } catch {
           await this.#supervisor.stop(run.id);
-          this.#supervisor.unavailable(run, error);
+          this.#supervisor.unavailable(run);
         }
       }
-      await this.#supervisor.reconcile(readyForTtyd);
-      for (const run of readyForTtyd) {
-        if (run.recoveryPhase === "recovered") continue;
+      await this.#supervisor.reconcile(readyForGateway);
+      for (const run of readyForGateway) {
+        if (run.recoveryPhase === "recovered" || run.recoveryPhase === "resuming") continue;
         try {
           this.#store.transitionRunRecovery(run.id, run.generation, "recovered", {
             reason: "runtime_recovered",
@@ -278,8 +389,8 @@ export class RunRuntimeCoordinator {
     try {
       await this.#runtime.ensureViewSession(run);
       this.#supervisor.start(run);
-    } catch (error) {
-      this.#supervisor.unavailable(run, error);
+    } catch {
+      this.#supervisor.unavailable(run);
     }
     return run;
   }
@@ -301,7 +412,7 @@ export class RunRuntimeCoordinator {
     return this.#runtime.stopRun(groupId, memberId);
   }
 
-  async #recoverMissingRun(run: AgentRun): Promise<AgentRun | undefined> {
+  async #recoverMissingRun(run: AgentRun, forceFresh = false): Promise<AgentRun | undefined> {
     if (run.recoveryAttempts >= this.#recoveryMaxAttempts) {
       if (run.recoveryPhase !== "failed") {
         this.#store.transitionRunRecovery(run.id, run.generation, "failed", {
@@ -324,18 +435,54 @@ export class RunRuntimeCoordinator {
     const cooldown =
       this.#recoveryCooldownMs[Math.min(nextAttempt - 1, this.#recoveryCooldownMs.length - 1)] ??
       30_000;
-    current = this.#store.transitionRunRecovery(current.id, current.generation, "restarting", {
-      incrementAttempt: true,
-      recoveryNotBefore: new Date(now.getTime() + cooldown).toISOString(),
-      reason:
-        current.recoveryReason === "terminal_runtime_migration"
-          ? "terminal_runtime_migration"
-          : "process_restart",
-    });
+    const recovery = this.#nativeRecoveryPolicy?.(current);
+    const reservation =
+      forceFresh || recovery?.policy.mode === "restart"
+        ? undefined
+        : this.#nativeSessions?.reserve(
+            current.memberId,
+            recovery?.integrationId ?? "",
+            current.id,
+          );
+    if (reservation === undefined && recovery?.policy.mode === "resume-only" && !forceFresh) {
+      this.#store.updateRunProviderMetadata(current.id, { recoveryOutcome: "failed" });
+      this.#store.transitionRunRecovery(current.id, current.generation, "failed", {
+        reason: "native_session_unavailable",
+      });
+      return undefined;
+    }
+    current = this.#store.transitionRunRecovery(
+      current.id,
+      current.generation,
+      reservation === undefined ? "restarting" : "resuming",
+      {
+        incrementAttempt: true,
+        recoveryNotBefore: new Date(now.getTime() + cooldown).toISOString(),
+        reason:
+          reservation === undefined
+            ? forceFresh
+              ? "native_resume_fallback_restart"
+              : "process_restart"
+            : "native_session_resume",
+      },
+    );
     try {
       await this.#supervisor.stop(current.id);
       await this.#runtime.removeViewSession(current.id);
-      return await this.#runtime.recoverRun(current, RECOVERY_TERMINAL_SIZE);
+      const replacement =
+        reservation === undefined
+          ? await this.#runtime.recoverRun(current, RECOVERY_TERMINAL_SIZE)
+          : await this.#runtime.recoverRun(current, RECOVERY_TERMINAL_SIZE, {
+              nativeSession: reservation.reference,
+              nativeSessionId: reservation.session.id,
+            });
+      if (reservation === undefined) {
+        return this.#store.updateRunProviderMetadata(replacement.id, {
+          launchKind: "restarted",
+          recoveryOutcome: "restarted",
+        });
+      }
+      return replacement;
     } catch (error) {
       const reason = error instanceof Error ? error.message : "recovery_launch_failed";
       this.#store.recordRuntimeEvent("run.recovery-failed", "run", current.id, {

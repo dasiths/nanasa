@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { TerminalDeliveryTarget } from "../src/delivery-dispatcher.js";
 import { DeliveryDispatcher } from "../src/delivery-dispatcher.js";
+import { DeliveryRepository } from "../src/delivery-repository.js";
 import { NanasaStore } from "../src/store.js";
 
 const temporaryDirectories: string[] = [];
@@ -21,8 +22,6 @@ function createFixture(store = new NanasaStore(":memory:"), delivery: { expiresA
     name: "Native",
     agentType: "pi",
     kind: "pi",
-    adapter: "pi-rpc",
-    capabilities: ["queue", "steer"],
     command: "pi",
     args: [],
     environment: {},
@@ -47,7 +46,6 @@ function createFixture(store = new NanasaStore(":memory:"), delivery: { expiresA
     audience: { kind: "dm", memberId: membership.memberId },
     body: { contentType: "text/plain", text: "Review this." },
     delivery,
-    hop: 0,
   });
   return { store, group, membership, submission };
 }
@@ -60,14 +58,16 @@ describe("DeliveryDispatcher", () => {
     const target: TerminalDeliveryTarget = {
       deliver: vi.fn(async () => undefined),
     };
-    const dispatcher = new DeliveryDispatcher(store, target, { owner: "test-owner" });
+    const dispatcher = new DeliveryDispatcher(store, new DeliveryRepository(store), target, {
+      owner: "test-owner",
+    });
 
     await Promise.all([dispatcher.tick(), dispatcher.tick(), dispatcher.tick()]);
 
     expect(target.deliver).toHaveBeenCalledTimes(1);
     expect(store.listDeliveries(submission.message.id)).toMatchObject([
       {
-        status: "consumed",
+        status: "terminal_injected",
         attempts: 1,
       },
     ]);
@@ -79,7 +79,7 @@ describe("DeliveryDispatcher", () => {
       payload: {
         messageId: submission.message.id,
         recipientMemberId: "worker",
-        status: "consumed",
+        status: "terminal_injected",
       },
     });
     unsubscribe();
@@ -103,8 +103,12 @@ describe("DeliveryDispatcher", () => {
         await blocked;
       }),
     };
-    const first = new DeliveryDispatcher(primary, target, { owner: "first" });
-    const second = new DeliveryDispatcher(secondary, target, { owner: "second" });
+    const first = new DeliveryDispatcher(primary, new DeliveryRepository(primary), target, {
+      owner: "first",
+    });
+    const second = new DeliveryDispatcher(secondary, new DeliveryRepository(secondary), target, {
+      owner: "second",
+    });
 
     const firstTick = first.tick();
     const secondTick = second.tick();
@@ -113,7 +117,7 @@ describe("DeliveryDispatcher", () => {
     await Promise.all([firstTick, secondTick]);
 
     expect(primary.listDeliveries(submission.message.id)).toMatchObject([
-      { status: "consumed", attempts: 1 },
+      { status: "terminal_injected", attempts: 1 },
     ]);
     await Promise.all([first.close(), second.close()]);
     secondary.close();
@@ -128,7 +132,7 @@ describe("DeliveryDispatcher", () => {
         throw new Error("terminal_owner_pane_unavailable");
       }),
     };
-    const dispatcher = new DeliveryDispatcher(store, target, {
+    const dispatcher = new DeliveryDispatcher(store, new DeliveryRepository(store), target, {
       maxAttempts: 2,
       retryBaseMs: 100,
       now: () => now,
@@ -165,7 +169,9 @@ describe("DeliveryDispatcher", () => {
     const target: TerminalDeliveryTarget = {
       deliver: vi.fn(async () => undefined),
     };
-    const dispatcher = new DeliveryDispatcher(store, target, { now: () => now });
+    const dispatcher = new DeliveryDispatcher(store, new DeliveryRepository(store), target, {
+      now: () => now,
+    });
 
     await dispatcher.tick();
 
@@ -189,7 +195,7 @@ describe("DeliveryDispatcher", () => {
         throw new Error("terminal_writer_conflict");
       }),
     };
-    const dispatcher = new DeliveryDispatcher(store, target, {
+    const dispatcher = new DeliveryDispatcher(store, new DeliveryRepository(store), target, {
       maxAttempts: 2,
       retryBaseMs: 100,
       now: () => now,
@@ -225,7 +231,7 @@ describe("DeliveryDispatcher", () => {
         await acceptance;
       }),
     };
-    const dispatcher = new DeliveryDispatcher(store, target);
+    const dispatcher = new DeliveryDispatcher(store, new DeliveryRepository(store), target);
 
     const tick = dispatcher.tick();
     await vi.waitFor(() => expect(target.deliver).toHaveBeenCalledOnce());
@@ -272,12 +278,12 @@ describe("DeliveryDispatcher", () => {
     const target: TerminalDeliveryTarget = {
       deliver: vi.fn(async () => undefined),
     };
-    const dispatcher = new DeliveryDispatcher(reopened, target);
+    const dispatcher = new DeliveryDispatcher(reopened, new DeliveryRepository(reopened), target);
     await dispatcher.tick();
 
     expect(target.deliver).toHaveBeenCalledOnce();
     expect(reopened.listDeliveries(submission.message.id)).toMatchObject([
-      { status: "consumed", attempts: 1 },
+      { status: "terminal_injected", attempts: 1 },
     ]);
     await dispatcher.close();
     reopened.close();

@@ -14,7 +14,8 @@
       "mcp__nanasa__nanasa_report_progress",
       "Bash(git check-ignore *)",
       "Bash(git restore *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "mcp__nanasa__nanasa_list_visible_history"
     ]
   }
 }

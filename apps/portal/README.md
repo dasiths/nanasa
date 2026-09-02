@@ -1,19 +1,10 @@
----
-title: Nanasa portal
-description: Development and production build notes for the Nanasa operational portal
-author: Nanasa
-ms.date: 2026-08-10
-ms.topic: reference
----
+# Nanasa portal development
 
 ## Development
 
-The portal uses relative `/api` URLs for application REST and event WebSocket
-traffic. Terminal status responses contain bounded relative `/terminals` URLs,
-which the portal mounts as ttyd iframes. Vite proxies both route families to the
-daemon at `http://127.0.0.1:3210` by default. The terminal proxy preserves the
-browser authority so the daemon and ttyd can enforce same-origin WebSocket
-upgrades.
+The portal uses relative `/api/v1` URLs for application REST, event WebSocket, and
+`nanasa-terminal.v1` traffic. The daemon remains at
+`http://127.0.0.1:3210` by default.
 
 Set `VITE_DAEMON_URL` when the daemon uses another origin:
 
@@ -23,54 +14,65 @@ VITE_DAEMON_URL=http://127.0.0.1:4210 pnpm --filter @nanasa/portal dev
 
 ## Terminal views
 
-ttyd is the portal's only terminal provider. Tab layout mounts one iframe for
-the selected run. Grid layout mounts one iframe for each visible run. Every
-iframe uses the daemon-provided same-origin URL, a descriptive title, and a
-same-origin referrer policy. Tabs, status bars, iframe titles, and accessible
+The portal owns xterm and selected addons. Tab layout mounts the selected run,
+while grid layout mounts each visible run. Tabs, status bars, and accessible
 terminal names include both the member alias and stable member ID.
 
-Each ttyd endpoint permits one live client. If ttyd asks to reconnect, close any
-other tab, grid, or browser showing that run before retrying. Unmounting an
-iframe removes only ttyd's disposable tmux client; the owner pane and agent
-process continue in the daemon's private tmux server. Starting, retrying,
-unavailable, and stopped states render outside the iframe.
+One controller and bounded observers can view a run. Observers receive output
+and can copy local selections, but cannot send input, paste, resize, focus, or
+approve effects. Unmounting a view removes only its disposable attachment.
 
-ttyd provides 10,000 lines of xterm scrollback. PageUp and PageDown remain input
+xterm provides 10,000 lines of local scrollback. PageUp and PageDown remain input
 for the active TUI, and tmux mouse mode forwards wheel events to mouse-aware
 applications or uses them for copy-mode scrollback. Full-screen alternate-screen
 TUIs own their visible history, so browser scrollbars can remain stationary even
 while the application scrolls internally.
 
-The daemon enables tmux extended-key reporting and clipboard signaling for the
+The daemon enables tmux extended-key reporting and external-only clipboard signaling for the
 private server. Modified Enter bindings therefore reach compatible TUIs. Agent
 PTYs disable software flow control so `Ctrl+S` and `Ctrl+Q` remain application
-input. Clipboard operations use browser/platform shortcuts such as
-`Ctrl+Shift+C` and `Ctrl+Shift+V`; plain `Ctrl+C` remains an interrupt.
+input. Shift+drag selects locally and copies the completed selection on Linux
+and Windows. Option+drag performs the same action on macOS. `Ctrl+C` or
+`Command+C` copies an existing selection; without a selection, `Ctrl+C` remains
+PTY input. Trusted copy and paste events are preferred, while toolbar actions
+provide a permission-aware fallback. Prompted OSC 52 writes are controller-only,
+and reads are rejected. TUI-owned selections can send tmux-wrapped OSC 52 to the
+controller. The portal keeps a denied request available for another trusted
+Copy click until it is replaced, expires, or the controller role is lost.
 
-The portal displays every persisted group message as a shared chronological chat
-timeline in a bottom-right floating overlay. Portal senders appear as Human;
-authenticated MCP senders show their agent name and stable member ID, so
-agent-to-agent messages are visible alongside operator messages. Hovering an
-initials badge shows the sender or recipient ID. Each message exposes a collapsed
-recipient and delivery summary with live outcomes. A claimed delivery count of
-two means one retry followed by success and is displayed as `Retried once`.
+The Messages group route displays every persisted group message as a shared
+chronological timeline. Portal senders appear as Human; authenticated MCP senders
+show their agent name and stable member ID, so agent-to-agent messages remain
+visible alongside operator messages. Hovering an initials badge shows the sender
+or recipient ID. Each message exposes a collapsed recipient and delivery summary
+with live outcomes. A claimed delivery count of two means one retry followed by
+success and is displayed as `Retried once`.
 
-The overlay keeps a compact `Type a message...` prompt below history. Activating
-it opens a modal for audience, recipients, intent, intent description, and body.
-Its launcher persists open state and reports unread messages while closed. On
-narrow screens, the overlay becomes an inset full-screen sheet. Terminal tab and
-grid layout remain independent, with grid rendering up to three agent columns,
-then two and one at smaller breakpoints.
+Terminals expose a small quick-compose launcher. It opens the same audience,
+recipient, intent, and body composer without duplicating message history, unread
+state, action progress, or exact waits. The Messages tab owns unread state and
+history. The Attention tab uses the retained `/activity` route for approvals,
+exact waits, health, completions, delivery summaries, and durable work progress.
+Unread messages remain a Messages count, while active and historical actions
+appear as neutral progress rather than review badge units.
 
-Messages floats over the terminal workspace. Before any portal or agent-originated
-delivery, the portal temporarily disconnects writable
-ttyd clients so the daemon can paste text into each verified recipient pane and
-send Enter separately. A consumed outcome confirms terminal injection, not
-semantic completion by the agent CLI.
+The daemon serializes every automated delivery through the terminal input arbiter
+and rechecks exact runtime identity before pasting text and sending Enter. A
+`terminal_injected` outcome confirms transport, not semantic completion by the
+agent CLI. Terminal tab and grid layout remain independent, with grid rendering
+up to three agent columns, then two and one at smaller breakpoints.
 
 ## Operations and preferences
 
-Agent creation validates `/api/config` with the shared configuration schema and
+The horizontal group navigation contains Terminals, Messages, Attention, and
+Overview. Repository-wide Attention, All agents, and Checkouts live in the left
+rail. Extensions, Diagnostics, Service, and Remote access are grouped under
+System. Preferences, Help, About Nanasa, and theme selection are available from
+the rail utility menu. The desktop rail owns the repository Attention count.
+Narrow screens hide that rail and expose the same count through the workspace
+header and application drawer.
+
+Agent creation validates `/api/v1/config` with the shared configuration schema and
 lists every configured integration and role by display name and key. A
 configuration load failure has a dedicated blocking state so the portal cannot
 offer stale or hardcoded launch choices.
@@ -79,14 +81,15 @@ The selected group header exposes Start all. One in-flight idempotency key is
 used until completion, then a live status panel lists started, already-running,
 and failed outcomes. Group and agent menus support inline rename and confirmed
 removal; removing an active agent stops its run first. Agent rows show
-recovery phase, reason, and scheduled retry time. Start is hidden during
-continuation; Retry appears only after continuation can no longer proceed.
+one user-facing status and any scheduled retry time. Agent details retain raw
+backend, terminal, and recovery diagnostics. Start is hidden during continuation;
+Retry appears only after continuation can no longer proceed.
 
 The workspace header reports agent and running counts. The agent-set revision is
 kept internal for safe broadcasts and is not displayed.
 
 Light, dark, and system themes and the terminal tab or grid layout persist in
-`localStorage` under `nanasa.portal.preferences.v1`. Storage events synchronize
+`localStorage` under `nanasa.portal.preferences.v2`. Storage events synchronize
 open tabs. Malformed values and unavailable storage use system theme and tab
 layout while controls remain usable. Browser-local message cache and clear
 markers use separate versioned keys. Preferences are independent of group

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,23 +13,34 @@ function usage() {
        nanasa init
        nanasa setup
        nanasa doctor
-      nanasa auth <integration> [--agent <agent-id>]
+       nanasa docs
+       nanasa auth login <integration> [--agent <agent-id>]
+       nanasa auth portal
+         nanasa reset --from-alpha --confirm <repository-root>
+         nanasa <family> <command> [arguments] [--body <json>]
 
 Commands:
   start              Start the daemon and portal (default)
   init               Create .nanasa/config.yaml when absent
   setup              Prepare repository-local integration configuration homes
   doctor             Validate configuration, commands, and integration homes
-  auth               Launch an integration CLI in its isolated home
+  docs               Print the absolute path to the packaged documentation index
+  auth               Authenticate locally or inspect daemon auth state
+  reset              Back up and destructively reset alpha config, state, and owned runtimes
+
+Operational families:
+  metadata config auth state trust extension group role run status message agent action
+  wait terminal console checkout worktree events api daemon service migration remote completion
 
 Options:
   --host <host>       Listen host; MCP requires loopback (default: 127.0.0.1)
   --port <port>       Listen port (default: NANASA_PORT or 3210)
   --mcp               Enable authenticated MCP (default path: /mcp)
-  --ttyd-path <path>  ttyd executable (default: NANASA_TTYD_PATH or ttyd)
   -h, --help          Show this help
   -v, --version       Show the installed version`;
 }
+
+class UsageError extends Error {}
 
 function ensureNanasaIgnore(root) {
   const path = join(root, ".nanasa", ".gitignore");
@@ -96,25 +107,24 @@ async function loadAdmin() {
   return import(join(packageRoot, "dist", "cli", "admin.js"));
 }
 
-function parseAuthOptions(args) {
-  const [integrationId, ...options] = args;
-  if (integrationId === undefined || integrationId.startsWith("-")) {
-    throw new Error("nanasa auth requires an integration");
+async function loadControl() {
+  return import(join(packageRoot, "dist", "cli", "control.js"));
+}
+
+function parseResetOptions(args) {
+  if (args[0] !== "--from-alpha") {
+    throw new UsageError("nanasa reset requires --from-alpha");
   }
-  let agentId;
-  for (let index = 0; index < options.length; index += 1) {
-    const option = options[index];
-    if (option !== "--agent") throw new Error(`Unknown auth option: ${option}`);
-    agentId = optionValue(options, index, option);
-    index += 1;
+  if (args[1] !== "--confirm" || args[2] === undefined || args.length !== 3) {
+    throw new UsageError("nanasa reset --from-alpha requires --confirm <repository-root>");
   }
-  return { integrationId, agentId };
+  return { confirmation: resolve(args[2]) };
 }
 
 function optionValue(args, index, option) {
   const value = args[index + 1];
   if (value === undefined || value.startsWith("-")) {
-    throw new Error(`${option} requires a value`);
+    throw new UsageError(`${option} requires a value`);
   }
   return value;
 }
@@ -131,11 +141,8 @@ function parseStartOptions(args) {
       index += 1;
     } else if (argument === "--mcp") {
       environment.NANASA_MCP_ENABLED = "true";
-    } else if (argument === "--ttyd-path") {
-      environment.NANASA_TTYD_PATH = optionValue(args, index, argument);
-      index += 1;
     } else {
-      throw new Error(`Unknown option: ${argument}`);
+      throw new UsageError(`Unknown option: ${argument}`);
     }
   }
   return environment;
@@ -146,16 +153,15 @@ function packageVersion() {
   return packageJson.version;
 }
 
-function verifyTtyd(ttydPath) {
-  const result = spawnSync(ttydPath, ["--version"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (result.error !== undefined || result.status !== 0) {
-    throw new Error(
-      `Could not run ${ttydPath} --version. Install ttyd 1.7.7 through your system or devcontainer, or set NANASA_TTYD_PATH.`,
-    );
-  }
+function packageBuild() {
+  const path = join(packageRoot, "dist", "meta", "build.json");
+  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : undefined;
+}
+
+function documentationIndex() {
+  const path = join(packageRoot, "dist", "help", "index.md");
+  if (!existsSync(path)) throw new Error("Packaged documentation is missing");
+  return path;
 }
 
 async function start(startPath, args) {
@@ -166,8 +172,7 @@ async function start(startPath, args) {
     );
   }
   const options = parseStartOptions(args);
-  const ttydPath = options.NANASA_TTYD_PATH ?? process.env.NANASA_TTYD_PATH ?? "ttyd";
-  verifyTtyd(ttydPath);
+  const build = packageBuild();
 
   const child = spawn(process.execPath, [join(packageRoot, "dist", "daemon", "index.js")], {
     cwd: repositoryRoot,
@@ -177,9 +182,11 @@ async function start(startPath, args) {
       ...options,
       NODE_ENV: "production",
       NANASA_REPO_ROOT: repositoryRoot,
+      NANASA_PACKAGE_ROOT: packageRoot,
+      NANASA_PRODUCT_VERSION: packageVersion(),
+      ...(build?.commit === undefined ? {} : { NANASA_BUILD_COMMIT: build.commit }),
       NANASA_SERVE_PORTAL: "true",
       NANASA_PORTAL_PATH: join(packageRoot, "dist", "portal"),
-      NANASA_TTYD_PATH: ttydPath,
     },
   });
 
@@ -210,11 +217,16 @@ export async function main(args = process.argv.slice(2), startPath = process.cwd
     return;
   }
   if (command === "init") {
-    if (rest.length > 0) throw new Error("nanasa init does not accept options");
+    if (rest.length > 0) throw new UsageError("nanasa init does not accept options");
     initialize(startPath);
     return;
   }
-  if (["setup", "doctor", "auth"].includes(command)) {
+  if (command === "docs") {
+    if (rest.length > 0) throw new UsageError("nanasa docs does not accept options");
+    process.stdout.write(`${documentationIndex()}\n`);
+    return;
+  }
+  if (["setup", "reset"].includes(command)) {
     const repositoryRoot = findConfigRoot(startPath);
     if (repositoryRoot === undefined) {
       throw new Error(
@@ -224,22 +236,39 @@ export async function main(args = process.argv.slice(2), startPath = process.cwd
     ensureNanasaIgnore(repositoryRoot);
     const admin = await loadAdmin();
     if (command === "setup") {
-      if (rest.length > 0) throw new Error("nanasa setup does not accept options");
+      if (rest.length > 0) throw new UsageError("nanasa setup does not accept options");
       admin.setupIntegrations(repositoryRoot);
-    } else if (command === "doctor") {
-      if (rest.length > 0) throw new Error("nanasa doctor does not accept options");
-      admin.doctorIntegrations(repositoryRoot);
     } else {
-      const options = parseAuthOptions(rest);
-      admin.authenticateAgent(repositoryRoot, options.integrationId, options.agentId);
+      const options = parseResetOptions(rest);
+      const template = readFileSync(join(packageRoot, "templates", "config.yaml"), "utf8");
+      await admin.resetAlphaRepository(repositoryRoot, options.confirmation, template);
+      ensureNanasaIgnore(repositoryRoot);
     }
+    return;
+  }
+  if (command !== "start" && !command.startsWith("--")) {
+    const remoteRepoIndex = command === "remote" ? rest.indexOf("--repo") : -1;
+    const requestedRemoteRoot =
+      remoteRepoIndex >= 0 && rest[remoteRepoIndex + 1] !== undefined
+        ? resolve(rest[remoteRepoIndex + 1])
+        : undefined;
+    const repositoryRoot =
+      command === "completion"
+        ? (findConfigRoot(startPath) ?? resolve(startPath))
+        : (requestedRemoteRoot ?? findConfigRoot(startPath));
+    if (repositoryRoot === undefined) {
+      throw new Error(
+        `No .nanasa/config.yaml found from ${resolve(startPath)}. Run nanasa init first.`,
+      );
+    }
+    const control = await loadControl();
+    process.exitCode = await control.runControlCli(args, repositoryRoot);
     return;
   }
   if (command.startsWith("--")) {
     await start(startPath, args);
     return;
   }
-  if (command !== "start") throw new Error(`Unknown command: ${command}`);
   await start(startPath, rest);
 }
 
@@ -249,6 +278,6 @@ if (
 ) {
   main().catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
+    process.exitCode = error instanceof UsageError ? 2 : 1;
   });
 }

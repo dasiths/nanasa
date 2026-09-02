@@ -1,9 +1,10 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadNanasaConfig } from "../src/config.js";
+import { loadNanasaConfig } from "../src/config-loader.js";
 import { McpCredentialIssuer } from "../src/mcp-auth.js";
 import {
   createDaemon as createDaemonBase,
@@ -23,11 +24,12 @@ afterEach(() => {
 function createDaemon(options: DaemonOptions = {}) {
   const repository = mkdtempSync(join(tmpdir(), "nanasa-mcp-config-"));
   temporaryDirectories.push(repository);
-  mkdirSync(join(repository, ".git"));
+  execFileSync("git", ["init", "--quiet", repository]);
   mkdirSync(join(repository, ".nanasa"));
   writeFileSync(
     join(repository, ".nanasa", "config.yaml"),
-    `integrations:
+    `version: 2
+integrations:
   fixture:
     name: Fixture
     kind: opencode
@@ -140,7 +142,7 @@ describe("Streamable HTTP MCP", () => {
   });
 
   it("initializes, lists tools, and rejects invalid Host, Origin, and bearer credentials", async () => {
-    const { daemon } = await createFixture();
+    const { daemon, agentToken } = await createFixture();
     const initialized = await mcpRequest(daemon, operatorToken, "initialize", {
       protocolVersion: "2026-07-28",
       capabilities: {},
@@ -156,11 +158,20 @@ describe("Streamable HTTP MCP", () => {
       "nanasa.list_members",
       "nanasa.list_agent_statuses",
       "nanasa.get_agent_status",
-      "nanasa.report_progress",
       "nanasa.send_dm",
       "nanasa.send_multicast",
       "nanasa.broadcast_group",
+      "nanasa.prompt_peer",
+      "nanasa.get_action_result",
+      "nanasa.wait_action",
+      "nanasa.cancel_action",
+      "nanasa.get_delivery",
+      "nanasa.list_visible_history",
     ]);
+    const agentTools = await mcpRequest(daemon, agentToken, "tools/list", {});
+    expect(agentTools.json().result.tools.map((tool: { name: string }) => tool.name)).toEqual(
+      expect.arrayContaining(["nanasa.report_progress", "nanasa.list_own_waits"]),
+    );
 
     expect((await mcpRequest(daemon, undefined, "tools/list", {})).statusCode).toBe(401);
     expect((await mcpRequest(daemon, "wrong-token", "tools/list", {})).statusCode).toBe(401);
@@ -220,6 +231,38 @@ describe("Streamable HTTP MCP", () => {
         { recipientMemberId: "beta", status: "queued" },
       ],
     });
+    await daemon.app.close();
+  });
+
+  it("limits delivery and history reads to messages visible to the authenticated group member", async () => {
+    const { daemon, group, run, agentToken } = await createFixture();
+    const sent = await callTool(daemon, agentToken, "nanasa.send_dm", {
+      recipientMemberId: "alpha",
+      text: "Visible outbound request",
+    });
+    const messageId = sent.json().result.structuredContent.message.id as string;
+
+    const history = await callTool(daemon, agentToken, "nanasa.list_visible_history", {
+      limit: 10,
+    });
+    expect(history.json().result.structuredContent.result).toMatchObject({
+      groupId: group.id,
+      messages: [
+        {
+          id: messageId,
+          sender: { kind: "agent", memberId: run.memberId },
+        },
+      ],
+    });
+
+    const delivery = await callTool(daemon, agentToken, "nanasa.get_delivery", {
+      messageId,
+      recipientMemberId: "alpha",
+    });
+    expect(delivery.json().result.structuredContent.result).toEqual([
+      expect.objectContaining({ messageId, recipientMemberId: "alpha" }),
+    ]);
+
     await daemon.app.close();
   });
 
@@ -313,8 +356,8 @@ describe("Streamable HTTP MCP", () => {
     expect(listed.json().result.structuredContent).toMatchObject({
       groupId: run.groupId,
       statuses: [
-        { memberId: "alpha", state: "not_started" },
-        { memberId: "beta", state: "not_started" },
+        { memberId: "alpha", state: "unknown" },
+        { memberId: "beta", state: "unknown" },
         {
           memberId: "sender",
           roleId: "reviewer",
@@ -347,24 +390,66 @@ describe("Streamable HTTP MCP", () => {
       stage: "forged",
       summary: "Operator cannot impersonate an agent",
     });
-    expect(rejected.json()).toMatchObject({ result: { isError: true } });
+    expect(rejected.json()).toMatchObject({
+      error: { code: -32602, message: "Tool nanasa.report_progress not found" },
+    });
     await daemon.app.close();
   });
 
   it("authenticates and deduplicates reporter events without accepting caller identity", async () => {
-    const { daemon, agentToken } = await createFixture();
+    const { daemon, agentToken, run } = await createFixture();
+    daemon.store.registerReporterSession({
+      id: "reporter-mcp",
+      providerId: "fixture",
+      adapterId: "opencode",
+      reporterId: "opencode-plugin",
+      source: "opencode",
+      protocolVersion: 2,
+      reporterVersion: "2",
+      runId: run.id,
+      generation: run.generation,
+      reporterEpoch: "epoch-mcp",
+      readinessCoverage: "full",
+      sourceSequence: 0,
+      openedAt: "2026-08-29T12:00:00.000Z",
+      leaseExpiresAt: "2099-08-29T12:00:00.000Z",
+    });
+    daemon.store.bindReporterProcess(run.id, run.generation, "a".repeat(64));
+    daemon.store.recordProcessStatus(run.id, {
+      event: "process.alive",
+      eventId: "reporter-mcp-process",
+      observedAt: new Date().toISOString(),
+      process: {
+        foregroundPgid: 10,
+        leaderPid: 10,
+        pidStartIdentity: "10:100",
+        executableFingerprint: "b".repeat(64),
+        argvFingerprint: "c".repeat(64),
+        processFingerprint: "a".repeat(64),
+        expectedProviderMatch: "match",
+        wrapperChain: ["opencode"],
+      },
+    });
     const payload = {
-      version: 1,
+      version: 2,
       eventId: "session-ready-1",
-      source: "claude-code",
-      reporterVersion: "1",
+      providerId: "fixture",
+      adapterId: "opencode",
+      reporterId: "opencode-plugin",
+      source: "opencode",
+      protocolVersion: 2,
+      reporterVersion: "2",
+      runId: run.id,
+      generation: run.generation,
+      reporterEpoch: "epoch-mcp",
+      sourceSequence: 1,
       event: "session.ready",
       data: {},
     };
     const submit = (token: string, body: unknown) =>
       daemon.app.inject({
         method: "POST",
-        url: "/api/agent-status/events",
+        url: "/api/v1/agent-status/events",
         headers: {
           host: "127.0.0.1:3210",
           authorization: `Bearer ${token}`,
@@ -375,7 +460,8 @@ describe("Streamable HTTP MCP", () => {
 
     expect(await submit(agentToken, payload)).toMatchObject({ statusCode: 202 });
     const duplicate = await submit(agentToken, payload);
-    expect(duplicate.json()).toMatchObject({ duplicate: true, status: { state: "waiting" } });
+    expect(duplicate).toMatchObject({ statusCode: 409 });
+    expect(duplicate.json()).toMatchObject({ code: "status_sequence_reordered" });
     expect((await submit(operatorToken, payload)).statusCode).toBe(403);
     expect(
       (
@@ -385,7 +471,7 @@ describe("Streamable HTTP MCP", () => {
           runId: "another-run",
         })
       ).statusCode,
-    ).toBe(400);
+    ).toBe(409);
     await daemon.app.close();
   });
 

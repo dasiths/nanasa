@@ -1,0 +1,265 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, feat/herdr-web-parity-redesign]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NANASA_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  NANASA_ALLOW_PUBLIC_REGISTRY_FALLBACK: "true"
+
+jobs:
+  static-unit-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.NANASA_CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        run: test "$(git rev-parse HEAD)" = "$NANASA_CANDIDATE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Configure registry and pinned pnpm
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install frozen dependencies
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm install --frozen-lockfile
+      - name: Static, unit, package, docs, and release infrastructure
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm check:static
+          source scripts/ci-registry-env.sh; pnpm test
+          source scripts/ci-registry-env.sh; pnpm docs:check
+          source scripts/ci-registry-env.sh; pnpm test:release
+          source scripts/ci-registry-env.sh; pnpm test:coverage
+          source scripts/ci-registry-env.sh; pnpm release:dry-run
+
+  runtime-linux:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.NANASA_CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        run: test "$(git rev-parse HEAD)" = "$NANASA_CANDIDATE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Configure registry and pinned pnpm
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('pnpm-lock.yaml') }}
+      - run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Enable and install
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm install --frozen-lockfile
+      - name: Runtime, systemd contract, migration, and watchdog
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm smoke
+          source scripts/ci-registry-env.sh; pnpm check:systemd
+          source scripts/ci-registry-env.sh; pnpm check:migration
+          source scripts/ci-registry-env.sh; pnpm check:watchdog
+
+  node-compat:
+    strategy:
+      matrix:
+        node: [22, 24]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.NANASA_CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        run: test "$(git rev-parse HEAD)" = "$NANASA_CANDIDATE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Configure registry and pinned pnpm
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-node${{ matrix.node }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Build and package on supported Node
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh; pnpm install --frozen-lockfile
+          source scripts/ci-registry-env.sh; pnpm package:test
+
+  browser-matrix:
+    strategy:
+      matrix:
+        browser: [chromium, firefox, webkit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.NANASA_CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        run: test "$(git rev-parse HEAD)" = "$NANASA_CANDIDATE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Configure registry and pinned pnpm
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install browser and run acceptance
+        shell: bash
+        env:
+          NANASA_BROWSER: ${{ matrix.browser }}
+        run: |
+          source scripts/ci-registry-env.sh; pnpm install --frozen-lockfile
+          source scripts/ci-registry-env.sh; pnpm exec playwright install --with-deps "${NANASA_BROWSER}"
+          source scripts/ci-registry-env.sh; pnpm acceptance
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-${{ matrix.browser }}-failure
+          path: |
+            test-results/
+            playwright-report/
+
+  architecture-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.NANASA_CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        run: test "$(git rev-parse HEAD)" = "$NANASA_CANDIDATE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Configure registry and pinned pnpm
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Native arm64 build and package verification
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh; pnpm install --frozen-lockfile
+          source scripts/ci-registry-env.sh; pnpm package:test
+          source scripts/ci-registry-env.sh; pnpm check:architecture
+
+  security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.NANASA_CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        run: test "$(git rev-parse HEAD)" = "$NANASA_CANDIDATE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Configure registry and pinned pnpm
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Audit production dependencies and artifacts
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh; pnpm install --frozen-lockfile
+          source scripts/ci-registry-env.sh; pnpm package:build
+          source scripts/ci-registry-env.sh; pnpm audit --prod
+          source scripts/ci-registry-env.sh; pnpm check:security
+
+  measured-performance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.NANASA_CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        run: test "$(git rev-parse HEAD)" = "$NANASA_CANDIDATE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Configure registry and pinned pnpm
+        shell: bash
+        run: bash scripts/setup-pnpm.sh
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install and run fixed-seed measured benchmarks
+        shell: bash
+        run: |
+          source scripts/ci-registry-env.sh
+          source scripts/ci-registry-env.sh; pnpm install --frozen-lockfile
+          source scripts/ci-registry-env.sh; pnpm build
+          source scripts/ci-registry-env.sh; pnpm check:performance
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: measured-performance-${{ env.NANASA_CANDIDATE_SHA }}
+          path: test-results/performance/runtime-performance-measured.json
+          if-no-files-found: error
+
+  quality-gate:
+    if: always()
+    needs: [static-unit-package, runtime-linux, node-compat, browser-matrix, architecture-arm64, security, measured-performance]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every release lane
+        run: |
+          test "${{ needs.static-unit-package.result }}" = success
+          test "${{ needs.runtime-linux.result }}" = success
+          test "${{ needs.node-compat.result }}" = success
+          test "${{ needs.browser-matrix.result }}" = success
+          test "${{ needs.architecture-arm64.result }}" = success
+          test "${{ needs.security.result }}" = success
+          test "${{ needs.measured-performance.result }}" = success

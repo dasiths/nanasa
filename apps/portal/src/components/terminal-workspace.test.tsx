@@ -1,130 +1,90 @@
 import type {
   AgentRun,
+  AgentStatusSummary,
   GroupMembership,
-  NanasaConfig,
   PortalSnapshot,
   TerminalEndpointStatus,
 } from "@nanasa/contracts";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import type { PortalClient } from "../api.js";
-import { PORTAL_PREFERENCES_KEY } from "../hooks/use-portal-preferences.js";
 import { TerminalWorkspace } from "./terminal-workspace.js";
 
-const timestamp = "2026-08-09T12:00:00.000Z";
-const endpointPaths = {
-  "run-builder": "/terminals/11111111111111111111111111111111/",
-  "run-reviewer": "/terminals/22222222222222222222222222222222/",
-} as const;
-
-const roles = {
-  implementor: {
-    name: "Implementor",
-    instructions: [],
-    permissionPolicy: "inherit",
-    presentation: { icon: "hammer", color: "blue", shortName: "Build" },
-  },
-  reviewer: {
-    name: "Reviewer",
-    instructions: [],
-    permissionPolicy: "read-only",
-    presentation: { icon: "shield-check", color: "amber", shortName: "Review" },
-  },
-} satisfies NanasaConfig["roles"];
-
-const config = {
-  instructions: [],
-  integrations: {
-    copilot: {
-      id: "copilot",
-      name: "GitHub Copilot",
-      kind: "copilot",
-      command: ["copilot"],
-      agentConfigHome: { scope: "integration" },
-      environment: {},
-    },
-  },
-  roles,
-  groups: {
-    "group-backend": {
-      name: "Backend",
-      instructions: [],
-      agents: {
-        "membership-builder": {
-          memberId: "builder",
-          name: "Builder",
-          integrationId: "copilot",
-          roleId: "implementor",
-          instructions: [],
-        },
-        "membership-reviewer": {
-          memberId: "reviewer",
-          name: "Reviewer",
-          integrationId: "copilot",
-          roleId: "reviewer",
-          instructions: [],
-        },
-      },
-    },
-  },
-  messages: { retentionPerGroup: 1_000 },
-} satisfies NanasaConfig;
-
-const members: GroupMembership[] = [
-  {
-    id: "membership-builder",
-    groupId: "group-backend",
-    memberId: "builder",
-    agentProfileId: "profile-copilot",
-    alias: "Builder",
-    roleId: "implementor",
-    state: "active",
-    joinedAt: timestamp,
-  },
-  {
-    id: "membership-reviewer",
-    groupId: "group-backend",
-    memberId: "reviewer",
-    agentProfileId: "profile-copilot",
-    alias: "Reviewer",
-    roleId: "reviewer",
-    state: "active",
-    joinedAt: timestamp,
-  },
-];
-
-const runs: AgentRun[] = members.map((member, index) => ({
-  id: index === 0 ? "run-builder" : "run-reviewer",
-  groupId: member.groupId,
-  memberId: member.memberId,
-  agentProfileId: member.agentProfileId,
-  generation: 1,
-  status: "running",
-  desiredState: "running",
-  recoveryPhase: "idle",
-  recoveryAttempts: 0,
-  terminal: {
-    serverName: "nanasa",
-    sessionId: "$1",
-    windowId: `@${index + 1}`,
-    paneId: `%${index + 1}`,
-  },
-  startedAt: timestamp,
+vi.mock("../terminal/terminal-console.js", () => ({
+  TerminalConsole: ({
+    label,
+    visible,
+    headerIdentity,
+    memberIdentity,
+    paneActions,
+  }: {
+    label: string;
+    visible?: boolean;
+    headerIdentity?: ReactNode;
+    memberIdentity?: ReactNode;
+    paneActions?: ReactNode;
+  }) => (
+    <div data-testid="owned-xterm" data-terminal-visible={visible}>
+      {label}
+      {headerIdentity}
+      {memberIdentity}
+      {paneActions}
+    </div>
+  ),
 }));
 
-function ready(runId: keyof typeof endpointPaths): TerminalEndpointStatus {
-  return { runId, provider: "ttyd", state: "ready", url: endpointPaths[runId] };
+const timestamp = "2026-08-29T00:00:00.000Z";
+const limits = {
+  maxFrameBytes: 262144,
+  maxInputBytes: 65536,
+  maxPasteBytes: 196608,
+  maxOutputQueueBytes: 1048576,
+  maxViewers: 4,
+  maxObservers: 3,
+  maxReadLines: 5000,
+  maxReadBytes: 1048576,
+  heartbeatMs: 5000,
+  leaseMs: 15000,
+  reconnectHistoryFrames: 256,
+};
+
+function ready(runId: string): TerminalEndpointStatus {
+  return {
+    runId,
+    provider: "nanasa-terminal.v1",
+    state: "ready",
+    streamUrl: `/api/v1/terminal-stream/${runId}`,
+    protocol: "nanasa-terminal.v1",
+    limits,
+    observers: 0,
+  };
 }
 
-function createClient(
-  getTerminalEndpointStatus: PortalClient["getTerminalEndpointStatus"],
-): PortalClient {
+function client(): PortalClient {
   return {
     createConsole: vi.fn(),
     closeConsole: vi.fn(),
+    loadMetadata: vi.fn(),
     loadSnapshot: vi.fn<() => Promise<PortalSnapshot>>(),
     loadConfig: vi.fn(),
+    loadConfigStatus: vi.fn(),
+    loadServiceStatus: vi.fn(),
+    loadRemoteStatus: vi.fn(),
+    planServiceRestart: vi.fn(),
+    listProviderStates: vi.fn(),
+    listProviderExtensions: vi.fn(),
+    inspectProviderExtension: vi.fn(),
+    planProviderExtension: vi.fn(),
+    providerExtensionHealth: vi.fn(),
+    trustProviderExtension: vi.fn(),
+    installProviderExtension: vi.fn(),
+    repairProviderExtension: vi.fn(),
+    disableProviderExtension: vi.fn(),
+    rollbackProviderExtension: vi.fn(),
+    removeProviderExtension: vi.fn(),
+    retainProviderState: vi.fn(),
+    deleteProviderState: vi.fn(),
     createGroup: vi.fn(),
     updateGroup: vi.fn(),
     deleteGroup: vi.fn(),
@@ -132,310 +92,365 @@ function createClient(
     updateAgent: vi.fn(),
     removeAgent: vi.fn(),
     reorderAgents: vi.fn(),
+    reorderGroups: vi.fn(),
+    reparentAgent: vi.fn(),
+    assignCheckout: vi.fn(),
+    createWorktree: vi.fn(),
+    openCheckout: vi.fn(),
+    removeWorktree: vi.fn(),
     updateRolePresentation: vi.fn(),
     startRun: vi.fn(),
     startAllRuns: vi.fn(),
     stopRun: vi.fn(),
     submitMessage: vi.fn(),
+    createAgentAction: vi.fn(),
+    loadActionWorkspace: vi.fn(),
+    cancelAgentAction: vi.fn(),
+    replyOpenWait: vi.fn(),
+    acknowledgeCompletion: vi.fn(),
     loadMessages: vi.fn(),
     clearMessages: vi.fn(),
-    getTerminalEndpointStatus,
+    getTerminalEndpointStatus: vi.fn(async (runId) => ready(runId)),
+    readTerminal: vi.fn(),
+    listTerminalCheckpoints: vi.fn().mockResolvedValue([]),
+    createTerminalCheckpoint: vi.fn(),
+    getTerminalCheckpoint: vi.fn(),
+    deleteTerminalCheckpoint: vi.fn(),
     createEventsSocket: vi.fn(),
   };
 }
 
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  window.localStorage.clear();
-});
+afterEach(() => window.localStorage.clear());
 
 describe("TerminalWorkspace", () => {
-  it("uses semantic agent status colors in tabs while the terminal is ready", async () => {
-    const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
-    const { container } = render(
-      <TerminalWorkspace
-        client={client}
-        config={config}
-        members={members}
-        roles={roles}
-        runs={runs}
-        agentStatuses={[
-          {
-            groupId: "group-backend",
-            memberId: "builder",
-            alias: "Builder",
-            agentType: "copilot",
-            runId: "run-builder",
-            generation: 1,
-            runStatus: "running",
-            state: "waiting",
-            phase: "settled",
-            outcome: "unknown",
-            confidence: "high",
-            attention: "none",
-            observedAt: timestamp,
-            stateChangedAt: timestamp,
-          },
-        ]}
-      />,
-    );
-
-    await screen.findByTitle("Builder (builder) ttyd terminal");
-    const builderTab = screen.getByRole("tab", { name: /Builder/ });
-    expect(builderTab).toHaveClass("role-color-blue");
-    expect(builderTab.querySelector(".status-dot")).toHaveClass("status-waiting");
-    expect(builderTab.querySelector(".status-dot")).not.toHaveClass("status-running");
-    expect(within(builderTab).getByLabelText("Role Implementor")).toHaveTextContent("Build");
-    expect(
-      within(screen.getByRole("region", { name: "Builder (builder) terminal" })).getByLabelText(
-        "Role Implementor",
-      ),
-    ).toHaveTextContent("Build");
-    expect(screen.getByRole("region", { name: "Builder (builder) terminal" })).toHaveClass(
-      "role-color-blue",
-    );
-    const titleBar = screen
-      .getByRole("region", { name: "Builder (builder) terminal" })
-      .querySelector(".terminal-statusbar");
-    const memberId = within(titleBar as HTMLElement).getByLabelText("Member ID builder");
-    expect(within(titleBar as HTMLElement).getByLabelText("Agent kind copilot")).toHaveClass(
-      "terminal-agent-kind",
-    );
-    expect(memberId).toHaveTextContent("builder");
-    expect(memberId).toHaveAttribute("title", "builder");
-    expect(memberId.parentElement).toHaveClass("terminal-title-tools");
-    expect(titleBar?.lastElementChild).toBe(memberId.parentElement);
-    expect(container.querySelector(".connection-ready")).toBeInTheDocument();
-  });
-
-  it("mounts only the selected run iframe in tabs", async () => {
-    const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
-    render(<TerminalWorkspace client={client} members={members} roles={roles} runs={runs} />);
-
-    const builderFrame = await screen.findByTitle("Builder (builder) ttyd terminal");
-    expect(screen.getAllByTitle(/ttyd terminal$/)).toHaveLength(1);
-    expect(builderFrame).toHaveAttribute("src", endpointPaths["run-builder"]);
-    expect(builderFrame).not.toHaveAttribute("sandbox");
-    expect(builderFrame).toHaveAttribute("referrerpolicy", "same-origin");
-
-    fireEvent.click(screen.getByRole("tab", { name: /Reviewer/ }));
-    const reviewerFrame = await screen.findByTitle("Reviewer (reviewer) ttyd terminal");
-    expect(screen.getAllByTitle(/ttyd terminal$/)).toHaveLength(1);
-    expect(reviewerFrame).toHaveAttribute("src", endpointPaths["run-reviewer"]);
-  });
-
-  it("copies member IDs from terminal title bars instead of tabs", async () => {
+  it("mounts a portal-owned terminal without an iframe", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText },
     });
-    const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
-    render(<TerminalWorkspace client={client} members={members} runs={runs} />);
-
-    expect(
-      within(screen.getByRole("tablist", { name: "Agent terminals" })).queryByRole("button", {
-        name: "Copy member ID builder",
-      }),
-    ).not.toBeInTheDocument();
-    fireEvent.click(
-      within(screen.getByRole("region", { name: "Builder (builder) terminal" })).getByRole(
-        "button",
-        { name: "Copy member ID builder" },
-      ),
+    const member = {
+      id: "agent-one",
+      groupId: "group-one",
+      memberId: "member-one",
+      agentProfileId: "profile-one",
+      alias: "Builder",
+      roleId: "implementor",
+      order: 0,
+      state: "active" as const,
+      joinedAt: timestamp,
+    };
+    const run = {
+      id: "run-one",
+      groupId: "group-one",
+      memberId: "member-one",
+      agentProfileId: "profile-one",
+      generation: 1,
+      status: "running" as const,
+      desiredState: "running" as const,
+      recoveryPhase: "recovered" as const,
+      recoveryAttempts: 0,
+      launchKind: "fresh" as const,
+      requestedModelSource: "provider-default" as const,
+      terminal: { serverName: "nanasa", sessionId: "$1", windowId: "@1", paneId: "%1" },
+      startedAt: timestamp,
+    };
+    const { container } = render(
+      <TerminalWorkspace client={client()} members={[member]} runs={[run]} />,
     );
-
-    expect(writeText).toHaveBeenCalledWith("builder");
+    expect(await screen.findByTestId("owned-xterm")).toHaveTextContent(
+      "Builder (member-one) terminal console",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Copy agent name member-one" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("member-one"));
+    expect(screen.queryByRole("button", { name: "Copy agent alias Builder" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Copy member ID/ })).toBeNull();
+    expect(container.querySelector("iframe")).toBeNull();
   });
 
-  it("mounts one isolated ready iframe per run in grid layout", async () => {
-    const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
-    render(<TerminalWorkspace client={client} members={members} roles={roles} runs={runs} />);
+  it("projects semantic, completion, and recovery states in terminal panes", async () => {
+    const members: GroupMembership[] = [
+      {
+        id: "agent-working",
+        groupId: "group-one",
+        memberId: "member-working",
+        agentProfileId: "profile-one",
+        alias: "Worker",
+        order: 0,
+        state: "active",
+        joinedAt: timestamp,
+      },
+      {
+        id: "agent-done",
+        groupId: "group-one",
+        memberId: "member-done",
+        agentProfileId: "profile-one",
+        alias: "Finisher",
+        order: 1,
+        state: "active",
+        joinedAt: timestamp,
+      },
+      {
+        id: "agent-recovering",
+        groupId: "group-one",
+        memberId: "member-recovering",
+        agentProfileId: "profile-one",
+        alias: "Recovering",
+        order: 2,
+        state: "active",
+        joinedAt: timestamp,
+      },
+    ];
+    const runs: AgentRun[] = members.map((member, index) => ({
+      id: `run-${index + 1}`,
+      groupId: member.groupId,
+      memberId: member.memberId,
+      agentProfileId: member.agentProfileId,
+      generation: 1,
+      status: "running",
+      desiredState: "running",
+      recoveryPhase: index === 2 ? "restarting" : "idle",
+      recoveryAttempts: 0,
+      launchKind: "fresh",
+      requestedModelSource: "provider-default",
+      terminal: {
+        serverName: "nanasa",
+        sessionId: "$1",
+        windowId: `@${index + 1}`,
+        paneId: `%${index + 1}`,
+      },
+      startedAt: timestamp,
+    }));
+    const statuses: AgentStatusSummary[] = [
+      {
+        groupId: "group-one",
+        memberId: "member-working",
+        alias: "Worker",
+        agentType: "copilot",
+        runId: "run-1",
+        generation: 1,
+        runStatus: "running",
+        state: "waiting",
+        phase: "tool",
+        outcome: "unknown",
+        confidence: "high",
+        attention: "none",
+        observedAt: timestamp,
+        stateChangedAt: timestamp,
+        statusRevision: 1,
+        completionRevision: 0,
+        operatorAcknowledgedCompletionRevision: 0,
+        completionPending: false,
+        interactiveReady: true,
+        staleAuthority: false,
+        authorityKind: "reporter",
+        evidenceConfidence: "high",
+        processState: "present",
+      },
+      {
+        groupId: "group-one",
+        memberId: "member-done",
+        alias: "Finisher",
+        agentType: "copilot",
+        runId: "run-2",
+        generation: 1,
+        runStatus: "running",
+        state: "idle",
+        phase: "settled",
+        outcome: "succeeded",
+        confidence: "high",
+        attention: "none",
+        observedAt: timestamp,
+        stateChangedAt: timestamp,
+        statusRevision: 2,
+        completionRevision: 1,
+        operatorAcknowledgedCompletionRevision: 0,
+        completionPending: true,
+        interactiveReady: true,
+        staleAuthority: false,
+        authorityKind: "reporter",
+        evidenceConfidence: "high",
+        processState: "present",
+      },
+    ];
 
-    fireEvent.click(screen.getByRole("button", { name: "Grid terminal layout" }));
-    await waitFor(() => expect(screen.getAllByTitle(/ttyd terminal$/)).toHaveLength(2));
-    expect(screen.getByTitle("Builder (builder) ttyd terminal")).toHaveAttribute(
-      "src",
-      endpointPaths["run-builder"],
-    );
-    expect(screen.getByTitle("Builder (builder) ttyd terminal")).not.toHaveAttribute("sandbox");
-    expect(screen.getByTitle("Reviewer (reviewer) ttyd terminal")).toHaveAttribute(
-      "src",
-      endpointPaths["run-reviewer"],
-    );
-    expect(screen.getByTitle("Reviewer (reviewer) ttyd terminal")).not.toHaveAttribute("sandbox");
-    expect(
-      within(screen.getByRole("region", { name: "Builder (builder) terminal" })).getByLabelText(
-        "Role Implementor",
-      ),
-    ).toHaveTextContent("Build");
-    expect(
-      within(screen.getByRole("region", { name: "Reviewer (reviewer) terminal" })).getByLabelText(
-        "Role Reviewer",
-      ),
-    ).toHaveTextContent("Review");
-    expect(screen.getByRole("region", { name: "Reviewer (reviewer) terminal" })).toHaveClass(
-      "role-color-amber",
-    );
-  });
-
-  it("uses incoming membership order for tabs and grid panes", async () => {
-    const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
     render(
       <TerminalWorkspace
-        client={client}
-        members={[...members].reverse()}
-        roles={roles}
+        client={client()}
+        members={members}
         runs={runs}
+        agentStatuses={statuses}
+      />,
+    );
+    await screen.findAllByTestId("owned-xterm");
+
+    expect(screen.getByLabelText("Working agent status")).toHaveClass("status-working");
+    expect(screen.getByLabelText("Working agent status")).toHaveAttribute("title", "Working");
+    expect(screen.getByLabelText("Done agent status")).toHaveClass("status-done");
+    expect(screen.getByLabelText("Starting agent status")).toHaveClass("status-starting");
+  });
+
+  it("keeps explicit columns while pinning and focusing without remounting terminals", async () => {
+    const members = ["one", "two"].map((id, order) => ({
+      id: `agent-${id}`,
+      groupId: "group-one",
+      memberId: `member-${id}`,
+      agentProfileId: "profile-one",
+      alias: id === "one" ? "Builder" : "Reviewer",
+      order,
+      state: "active" as const,
+      joinedAt: timestamp,
+    }));
+    const runs = members.map((member, index) => ({
+      id: `run-${index + 1}`,
+      groupId: "group-one",
+      memberId: member.memberId,
+      agentProfileId: "profile-one",
+      generation: 1,
+      status: "running" as const,
+      desiredState: "running" as const,
+      recoveryPhase: "recovered" as const,
+      recoveryAttempts: 0,
+      launchKind: "fresh" as const,
+      requestedModelSource: "provider-default" as const,
+      terminal: {
+        serverName: "nanasa",
+        sessionId: "$1",
+        windowId: `@${index + 1}`,
+        paneId: `%${index + 1}`,
+      },
+      startedAt: timestamp,
+    }));
+    const portalClient = client();
+    const setFocusedRun = vi.fn();
+    const view = render(
+      <TerminalWorkspace
+        client={portalClient}
+        members={members}
+        runs={runs}
+        columns={3}
+        onSetFocusedRun={setFocusedRun}
+      />,
+    );
+    const { container } = view;
+    const initialMounts = await screen.findAllByTestId("owned-xterm");
+    expect(initialMounts).toHaveLength(2);
+    expect(initialMounts.map((terminal) => terminal.dataset.terminalVisible)).toEqual([
+      "true",
+      "true",
+    ]);
+    expect(container.querySelector(".terminal-layout")).toHaveClass("terminal-layout-3");
+    fireEvent.click(screen.getByRole("button", { name: "Pin Reviewer terminal" }));
+    fireEvent.click(screen.getByRole("button", { name: "Focus Builder terminal" }));
+    expect(setFocusedRun).toHaveBeenLastCalledWith("run-1");
+    view.rerender(
+      <TerminalWorkspace
+        client={portalClient}
+        members={members}
+        runs={runs}
+        focusedRunId="run-1"
+        columns={3}
+        onSetFocusedRun={setFocusedRun}
       />,
     );
 
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
-      expect.stringContaining("Reviewer"),
-      expect.stringContaining("Builder"),
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Unpin Reviewer terminal", hidden: true }),
+      ).toHaveAttribute("aria-pressed", "true"),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Show all terminals from Builder terminal" }),
+      ).toHaveAttribute("aria-pressed", "true"),
+    );
+    expect(container.querySelector(".terminal-pane-slot[hidden]")).not.toBeNull();
+    expect(container.querySelector(".terminal-layout")).toHaveClass("terminal-layout-focused");
+    expect(screen.getAllByTestId("owned-xterm")).toEqual([initialMounts[1], initialMounts[0]]);
+    expect(initialMounts.map((terminal) => terminal.dataset.terminalVisible)).toEqual([
+      "true",
+      "false",
     ]);
-    fireEvent.click(screen.getByRole("button", { name: "Grid terminal layout" }));
-    await waitFor(() => expect(screen.getAllByTitle(/ttyd terminal$/)).toHaveLength(2));
+    setFocusedRun.mockClear();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(setFocusedRun).toHaveBeenLastCalledWith(undefined);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show all terminals from Builder terminal" }),
+    );
+    expect(setFocusedRun).toHaveBeenLastCalledWith(undefined);
     expect(
-      screen
-        .getAllByRole("region", { name: /terminal$/ })
-        .map((pane) => pane.getAttribute("aria-label")),
-    ).toEqual(["Reviewer (reviewer) terminal", "Builder (builder) terminal"]);
+      JSON.parse(window.localStorage.getItem("nanasa.portal.preferences.v2") ?? "{}"),
+    ).toMatchObject({
+      pinnedRunIdsByGroup: { "group-one": ["run-2"] },
+    });
   });
 
-  it("releases hidden grid clients when returning to the selected tab", async () => {
-    const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
-    render(<TerminalWorkspace client={client} members={members} runs={runs} />);
-
-    fireEvent.click(screen.getByRole("tab", { name: /Reviewer/ }));
-    await screen.findByTitle("Reviewer (reviewer) ttyd terminal");
-    fireEvent.click(screen.getByRole("button", { name: "Grid terminal layout" }));
-    await waitFor(() => expect(screen.getAllByTitle(/ttyd terminal$/)).toHaveLength(2));
-    fireEvent.click(screen.getByRole("button", { name: "Tabbed terminal layout" }));
-
-    await waitFor(() => expect(screen.getAllByTitle(/ttyd terminal$/)).toHaveLength(1));
-    expect(screen.getByTitle("Reviewer (reviewer) ttyd terminal")).toHaveAttribute(
-      "src",
-      endpointPaths["run-reviewer"],
-    );
-    expect(screen.queryByTitle("Builder (builder) ttyd terminal")).not.toBeInTheDocument();
-  });
-
-  it("persists layout and synchronizes storage changes across tabs", async () => {
-    window.localStorage.setItem(
-      PORTAL_PREFERENCES_KEY,
-      JSON.stringify({ theme: "system", terminalLayout: "grid" }),
-    );
-    const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
-    render(<TerminalWorkspace client={client} members={members} runs={runs} />);
-
-    await waitFor(() => expect(screen.getAllByTitle(/ttyd terminal$/)).toHaveLength(2));
-    expect(screen.getByRole("button", { name: "Grid terminal layout" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
+  it("opts a member into future completion notifications across run restarts", async () => {
+    const member = {
+      id: "agent-one",
+      groupId: "group-one",
+      memberId: "member-one",
+      agentProfileId: "profile-one",
+      alias: "Builder",
+      order: 0,
+      state: "active" as const,
+      joinedAt: timestamp,
+    };
+    const createRun = (id: string, generation: number) => ({
+      id,
+      groupId: member.groupId,
+      memberId: member.memberId,
+      agentProfileId: member.agentProfileId,
+      generation,
+      status: "running" as const,
+      desiredState: "running" as const,
+      recoveryPhase: "recovered" as const,
+      recoveryAttempts: 0,
+      launchKind: "fresh" as const,
+      requestedModelSource: "provider-default" as const,
+      terminal: { serverName: "nanasa", sessionId: "$1", windowId: "@1", paneId: "%1" },
+      startedAt: timestamp,
+    });
+    const view = render(
+      <TerminalWorkspace client={client()} members={[member]} runs={[createRun("run-one", 1)]} />,
     );
 
-    window.dispatchEvent(
-      new StorageEvent("storage", {
-        key: PORTAL_PREFERENCES_KEY,
-        newValue: JSON.stringify({ theme: "dark", terminalLayout: "tabs" }),
+    await screen.findByTestId("owned-xterm");
+    const enable = await screen.findByRole("button", {
+      name: "Enable completion notifications for Builder",
+    });
+    expect(enable).toHaveAttribute("title", "Enable completion notifications for Builder");
+    expect(enable).toHaveAttribute("aria-pressed", "false");
+    const paneButtons = enable.parentElement?.querySelectorAll("button");
+    expect(
+      [...Array.from(paneButtons ?? [])]
+        .map((button) => button.getAttribute("aria-label"))
+        .filter((label) => label !== "Copy agent name member-one"),
+    ).toEqual([
+      "Enable completion notifications for Builder",
+      "Pin Builder terminal",
+      "Focus Builder terminal",
+    ]);
+
+    fireEvent.click(enable);
+    const disable = await screen.findByRole("button", {
+      name: "Disable completion notifications for Builder",
+    });
+    expect(disable).toHaveAttribute("title", "Disable completion notifications for Builder");
+    expect(disable).toHaveAttribute("aria-pressed", "true");
+    expect(
+      JSON.parse(window.localStorage.getItem("nanasa.portal.preferences.v2") ?? "{}"),
+    ).toMatchObject({
+      completionNotificationMemberIdsByGroup: { "group-one": ["member-one"] },
+    });
+
+    view.rerender(
+      <TerminalWorkspace client={client()} members={[member]} runs={[createRun("run-two", 2)]} />,
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Disable completion notifications for Builder",
       }),
-    );
-    await waitFor(() => expect(screen.getAllByTitle(/ttyd terminal$/)).toHaveLength(1));
-    expect(screen.getByRole("button", { name: "Tabbed terminal layout" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-  });
-
-  it("uses default preferences when persisted storage is malformed", () => {
-    window.localStorage.setItem(PORTAL_PREFERENCES_KEY, "not-json");
-    const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
-    render(<TerminalWorkspace client={client} members={members} runs={runs} />);
-
-    expect(screen.getByRole("button", { name: "Tabbed terminal layout" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-  });
-
-  it("keeps layout controls usable when local storage is unavailable", () => {
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-      throw new Error("storage blocked");
-    });
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new Error("storage blocked");
-    });
-    const client = createClient(vi.fn(async (runId) => ready(runId as keyof typeof endpointPaths)));
-    render(<TerminalWorkspace client={client} members={members} runs={runs} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Grid terminal layout" }));
-    expect(screen.getByRole("button", { name: "Grid terminal layout" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-  });
-
-  it("renders portal-owned loading and unavailable states outside an iframe", async () => {
-    let resolveStatus: (status: TerminalEndpointStatus) => void = () => undefined;
-    const statusPromise = new Promise<TerminalEndpointStatus>((resolve) => {
-      resolveStatus = resolve;
-    });
-    const client = createClient(vi.fn(() => statusPromise));
-    render(<TerminalWorkspace client={client} members={members.slice(0, 1)} runs={runs} />);
-
-    expect(screen.getByText("Loading terminal")).toBeInTheDocument();
-    expect(screen.queryByTitle(/ttyd terminal$/)).not.toBeInTheDocument();
-    resolveStatus({
-      runId: "run-builder",
-      provider: "ttyd",
-      state: "unavailable",
-      error: { code: "ttyd_missing", message: "ttyd is not installed" },
-    });
-    expect(await screen.findByText("Terminal unavailable")).toBeInTheDocument();
-    expect(screen.getByText("ttyd is not installed")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
-    expect(screen.queryByTitle(/ttyd terminal$/)).not.toBeInTheDocument();
-  });
-
-  it("retries a backoff endpoint and mounts the iframe when it becomes ready", async () => {
-    vi.useFakeTimers();
-    const getStatus = vi
-      .fn<PortalClient["getTerminalEndpointStatus"]>()
-      .mockResolvedValueOnce({
-        runId: "run-builder",
-        provider: "ttyd",
-        state: "backoff",
-        retryAfterMs: 100,
-      })
-      .mockResolvedValue(ready("run-builder"));
-    const client = createClient(getStatus);
-    render(<TerminalWorkspace client={client} members={members.slice(0, 1)} runs={runs} />);
-
-    await act(async () => Promise.resolve());
-    expect(screen.getByText("Terminal retrying")).toBeInTheDocument();
-    await act(async () => vi.advanceTimersByTimeAsync(100));
-    expect(screen.getByTitle("Builder (builder) ttyd terminal")).toHaveAttribute(
-      "src",
-      endpointPaths["run-builder"],
-    );
-    expect(getStatus).toHaveBeenCalledTimes(2);
-  });
-
-  it("shows stopped and one-client states outside the iframe", async () => {
-    const stoppedRun: AgentRun = { ...runs[0]!, status: "stopped", stoppedAt: timestamp };
-    const client = createClient(
-      vi.fn().mockResolvedValue({
-        runId: stoppedRun.id,
-        provider: "ttyd",
-        state: "stopped",
-      }),
-    );
-    render(<TerminalWorkspace client={client} members={members.slice(0, 1)} runs={[stoppedRun]} />);
-
-    expect(await screen.findByText("Terminal stopped")).toBeInTheDocument();
-    expect(screen.queryByTitle(/ttyd terminal$/)).not.toBeInTheDocument();
-    expect(screen.getByText(/One live terminal client is allowed per run/)).toBeInTheDocument();
+    ).toHaveAttribute("aria-pressed", "true");
   });
 });

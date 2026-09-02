@@ -7,18 +7,32 @@ import type {
   RoleDefinition,
   TerminalEndpointState,
 } from "@nanasa/contracts";
-import { CircleAlert, Copy, Grid2X2, LoaderCircle, Monitor, RefreshCw, Rows3 } from "lucide-react";
-import { useState } from "react";
+import {
+  BellOff,
+  BellRing,
+  CircleAlert,
+  LoaderCircle,
+  Maximize2,
+  Minimize2,
+  Monitor,
+  Pin,
+  RefreshCw,
+} from "lucide-react";
+import { type ReactNode, useEffect, useRef } from "react";
 
 import type { PortalClient } from "../api.js";
 import { copyToClipboard } from "../copy-to-clipboard.js";
-import { usePortalPreferences } from "../hooks/use-portal-preferences.js";
+import {
+  type TerminalColumnsPreference,
+  usePortalPreferences,
+} from "../hooks/use-portal-preferences.js";
 import { useTerminalEndpoint } from "../hooks/use-terminal-endpoint.js";
+import { memberStatusView } from "../member-status.js";
+import { TerminalConsole } from "../terminal/terminal-console.js";
 import { RoleIdentity, roleColorClass } from "./role-identity.js";
 
 const endpointLabels: Record<Exclude<TerminalEndpointState, "ready">, string> = {
   starting: "Terminal starting",
-  backoff: "Terminal retrying",
   unavailable: "Terminal unavailable",
   stopped: "Terminal stopped",
 };
@@ -31,7 +45,16 @@ function TerminalPane({
   kind,
   role,
   connectionRevision,
-  suspended,
+  visible,
+  theme,
+  completionNotificationsEnabled,
+  pinned,
+  focused,
+  statusKey,
+  statusLabel,
+  onToggleCompletionNotifications,
+  onTogglePinned,
+  onToggleFocus,
 }: {
   client: PortalClient;
   run: AgentRun;
@@ -40,7 +63,16 @@ function TerminalPane({
   kind: AgentKind | undefined;
   role: RoleDefinition | undefined;
   connectionRevision: number;
-  suspended: boolean;
+  visible: boolean;
+  theme: "light" | "dark";
+  completionNotificationsEnabled: boolean;
+  pinned: boolean;
+  focused: boolean;
+  statusKey: string;
+  statusLabel: string;
+  onToggleCompletionNotifications(): void;
+  onTogglePinned(): void;
+  onToggleFocus(): void;
 }) {
   const runRevision = `${run.generation}:${run.status}:${run.terminal?.paneId ?? "pending"}:${connectionRevision}`;
   const { status, loading, error, retry } = useTerminalEndpoint(client, run.id, runRevision);
@@ -50,83 +82,124 @@ function TerminalPane({
     endpointState === undefined || endpointState === "ready"
       ? "Loading terminal"
       : endpointLabels[endpointState];
+  const identity: ReactNode = (
+    <>
+      <span
+        className={`status-dot status-${statusKey}`}
+        title={statusLabel}
+        aria-label={`${statusLabel} agent status`}
+      />
+      <span
+        className={`connection-dot connection-${endpointState ?? "starting"}`}
+        aria-hidden="true"
+      />
+      <strong>{alias}</strong>
+      {kind !== undefined && (
+        <span className="terminal-agent-kind" aria-label={`Agent kind ${kind}`} title="Agent kind">
+          {kind}
+        </span>
+      )}
+      <RoleIdentity role={role} compact />
+    </>
+  );
+  const memberIdentity = (
+    <button
+      type="button"
+      className="terminal-member-id"
+      aria-label={`Copy agent name ${memberId}`}
+      title={`Copy ${memberId}`}
+      onClick={() => void copyToClipboard(memberId).catch(() => undefined)}
+    >
+      {memberId}
+    </button>
+  );
+  const paneActions = (
+    <>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={`${completionNotificationsEnabled ? "Disable" : "Enable"} completion notifications for ${alias}`}
+        title={`${completionNotificationsEnabled ? "Disable" : "Enable"} completion notifications for ${alias}`}
+        aria-pressed={completionNotificationsEnabled}
+        onClick={onToggleCompletionNotifications}
+      >
+        {completionNotificationsEnabled ? (
+          <BellRing aria-hidden="true" size={12} />
+        ) : (
+          <BellOff aria-hidden="true" size={12} />
+        )}
+      </button>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={`${pinned ? "Unpin" : "Pin"} ${alias} terminal`}
+        aria-pressed={pinned}
+        onClick={onTogglePinned}
+      >
+        <Pin aria-hidden="true" size={12} />
+      </button>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={`${focused ? "Show all terminals from" : "Focus"} ${alias} terminal`}
+        aria-pressed={focused}
+        onClick={onToggleFocus}
+      >
+        {focused ? (
+          <Minimize2 aria-hidden="true" size={12} />
+        ) : (
+          <Maximize2 aria-hidden="true" size={12} />
+        )}
+      </button>
+    </>
+  );
 
   return (
     <section
-      className={`terminal-pane ${roleColorClass(role)}`}
+      className={`terminal-pane ${status?.state === "ready" ? "terminal-pane-ready" : ""} ${roleColorClass(role)}`}
       aria-label={`${alias} (${memberId}) terminal`}
     >
-      <div className="terminal-statusbar">
-        <span
-          className={`connection-dot connection-${endpointState ?? "starting"}`}
-          aria-hidden="true"
-        />
-        <strong>{alias}</strong>
-        {kind !== undefined && (
-          <span
-            className="terminal-agent-kind"
-            aria-label={`Agent kind ${kind}`}
-            title="Agent kind"
-          >
-            {kind}
-          </span>
-        )}
-        <RoleIdentity role={role} compact />
-        <span className="status-separator" aria-hidden="true" />
-        <span>{endpointState ?? (loading ? "loading" : "unavailable")}</span>
-        <div className="terminal-title-tools">
-          <code
-            className="terminal-member-id"
-            aria-label={`Member ID ${memberId}`}
-            title={memberId}
-          >
-            {memberId}
-          </code>
-          <button
-            type="button"
-            className="icon-button terminal-title-copy"
-            aria-label={`Copy member ID ${memberId}`}
-            title={`Copy ${memberId}`}
-            onClick={() => void copyToClipboard(memberId).catch(() => undefined)}
-          >
-            <Copy aria-hidden="true" size={12} />
-          </button>
-        </div>
-      </div>
-      {suspended ? (
-        <div className="terminal-state" role="status">
-          <LoaderCircle className="spin" aria-hidden="true" size={22} />
-          <strong>Routing message</strong>
-        </div>
-      ) : status?.state === "ready" ? (
-        <iframe
-          className="ttyd-frame"
-          src={status.url}
-          title={`${alias} (${memberId}) ttyd terminal`}
-          referrerPolicy="same-origin"
+      {status?.state === "ready" ? (
+        <TerminalConsole
+          client={client}
+          endpoint={status}
+          runGeneration={run.generation}
+          theme={theme}
+          label={`${alias} (${memberId}) terminal console`}
+          visible={visible}
+          headerIdentity={identity}
+          memberIdentity={memberIdentity}
+          paneActions={paneActions}
         />
       ) : (
-        <div
-          className="terminal-state"
-          role={endpointState === "unavailable" || error !== undefined ? "alert" : "status"}
-        >
-          {loading || endpointState === "starting" || endpointState === "backoff" ? (
-            <LoaderCircle className="spin" aria-hidden="true" size={22} />
-          ) : (
-            <CircleAlert aria-hidden="true" size={22} />
-          )}
-          <strong>{stateLabel}</strong>
-          {detail !== undefined && <span>{detail}</span>}
-          {status?.retryAfterMs !== undefined && (
-            <span>Retrying in {Math.ceil(status.retryAfterMs / 1_000)} seconds.</span>
-          )}
-          {(endpointState === "unavailable" || error !== undefined) && (
-            <button type="button" onClick={retry}>
-              <RefreshCw aria-hidden="true" size={15} />
-              Retry
-            </button>
-          )}
-        </div>
+        <>
+          <div className="terminal-statusbar">
+            {identity}
+            <span className="status-separator" aria-hidden="true" />
+            <span>{endpointState ?? (loading ? "loading" : "unavailable")}</span>
+            <span className="terminal-header-spacer" />
+            {memberIdentity}
+            <div className="terminal-pane-actions">{paneActions}</div>
+          </div>
+          <div
+            className="terminal-state"
+            role={endpointState === "unavailable" || error !== undefined ? "alert" : "status"}
+          >
+            {loading || endpointState === "starting" ? (
+              <LoaderCircle className="spin" aria-hidden="true" size={22} />
+            ) : (
+              <CircleAlert aria-hidden="true" size={22} />
+            )}
+            <strong>{stateLabel}</strong>
+            {detail !== undefined && <span>{detail}</span>}
+            {(endpointState === "unavailable" || error !== undefined) && (
+              <button type="button" onClick={retry}>
+                <RefreshCw aria-hidden="true" size={15} />
+                Retry
+              </button>
+            )}
+          </div>
+        </>
       )}
     </section>
   );
@@ -140,7 +213,11 @@ interface TerminalWorkspaceProps {
   runs: AgentRun[];
   agentStatuses?: AgentStatusSummary[];
   connectionRevision?: number;
-  suspended?: boolean;
+  activeRunId?: string;
+  focusedRunId?: string;
+  columns?: TerminalColumnsPreference;
+  onSetFocusedRun?(runId: string | undefined): void;
+  theme?: "light" | "dark";
 }
 
 export function TerminalWorkspace({
@@ -151,42 +228,113 @@ export function TerminalWorkspace({
   runs,
   agentStatuses = [],
   connectionRevision = 0,
-  suspended = false,
+  activeRunId: requestedActiveRunId,
+  focusedRunId: requestedFocusedRunId,
+  columns = "auto",
+  onSetFocusedRun,
+  theme = "dark",
 }: TerminalWorkspaceProps) {
-  const availableRuns = members
-    .map(
-      (member) =>
-        runs
-          .filter((run) => run.memberId === member.memberId)
-          .sort((left, right) => right.generation - left.generation)[0],
-    )
+  const memberViews = members.map((member) => ({
+    member,
+    status: memberStatusView(agentStatuses, runs, member),
+  }));
+  const availableRuns = memberViews
+    .map(({ status }) => status.run)
     .filter((run): run is AgentRun => run !== undefined);
-  const {
-    preferences: { terminalLayout: layout },
-    setTerminalLayout,
-  } = usePortalPreferences();
-  const [selectedRunId, setSelectedRunId] = useState<string>();
-  const activeRunId = availableRuns.some((run) => run.id === selectedRunId)
-    ? selectedRunId
-    : availableRuns[0]?.id;
-  const memberAlias = (run: AgentRun) =>
-    members.find((member) => member.memberId === run.memberId)?.alias ?? run.memberId;
+  const statusByRunId = new Map(
+    memberViews.flatMap(({ status }) =>
+      status.run === undefined ? [] : [[status.run.id, status]],
+    ),
+  );
+  const groupId = availableRuns[0]?.groupId;
+  const { preferences, updatePreferences } = usePortalPreferences();
+  const pinnedRunIds =
+    groupId === undefined ? [] : (preferences.pinnedRunIdsByGroup[groupId] ?? []);
+  const pinnedSet = new Set(pinnedRunIds);
+  const pinnedOrder = new Map(pinnedRunIds.map((runId, index) => [runId, index]));
+  const orderedRuns = availableRuns
+    .map((run, index) => ({ run, index }))
+    .sort(
+      (left, right) =>
+        Number(pinnedSet.has(right.run.id)) - Number(pinnedSet.has(left.run.id)) ||
+        (pinnedOrder.get(left.run.id) ?? Number.MAX_SAFE_INTEGER) -
+          (pinnedOrder.get(right.run.id) ?? Number.MAX_SAFE_INTEGER) ||
+        left.index - right.index,
+    )
+    .map(({ run }) => run);
+  const focusedRunId = availableRuns.some((run) => run.id === requestedFocusedRunId)
+    ? requestedFocusedRunId
+    : undefined;
+  const completionNotificationMemberIds =
+    groupId === undefined
+      ? []
+      : (preferences.completionNotificationMemberIdsByGroup[groupId] ?? []);
+  const completionNotificationMemberIdSet = new Set(completionNotificationMemberIds);
+  const activeRunId = availableRuns.some((run) => run.id === requestedActiveRunId)
+    ? requestedActiveRunId
+    : undefined;
+  const paneElements = useRef(new Map<string, HTMLDivElement>());
+  useEffect(() => {
+    if (activeRunId === undefined || focusedRunId !== undefined) return;
+    const frame = requestAnimationFrame(() =>
+      paneElements.current.get(activeRunId)?.scrollIntoView?.({ block: "nearest" }),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [activeRunId, focusedRunId]);
+  useEffect(() => {
+    if (focusedRunId === undefined) return;
+    const restoreOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      onSetFocusedRun?.(undefined);
+    };
+    document.addEventListener("keydown", restoreOnEscape);
+    return () => document.removeEventListener("keydown", restoreOnEscape);
+  }, [focusedRunId, onSetFocusedRun]);
+  const togglePinned = (runId: string) => {
+    if (groupId === undefined) return;
+    updatePreferences((current) => {
+      const existing = current.pinnedRunIdsByGroup[groupId] ?? [];
+      const next = existing.includes(runId)
+        ? existing.filter((candidate) => candidate !== runId)
+        : [...existing, runId];
+      return {
+        ...current,
+        pinnedRunIdsByGroup: { ...current.pinnedRunIdsByGroup, [groupId]: next },
+      };
+    });
+  };
+  const toggleCompletionNotifications = (memberId: string) => {
+    if (groupId === undefined) return;
+    updatePreferences((current) => {
+      const existing = current.completionNotificationMemberIdsByGroup[groupId] ?? [];
+      const next = existing.includes(memberId)
+        ? existing.filter((candidate) => candidate !== memberId)
+        : [...existing, memberId];
+      return {
+        ...current,
+        completionNotificationMemberIdsByGroup: {
+          ...current.completionNotificationMemberIdsByGroup,
+          [groupId]: next,
+        },
+      };
+    });
+  };
+  const memberForRun = (run: AgentRun) =>
+    members.find((member) => member.groupId === run.groupId && member.memberId === run.memberId);
+  const memberAlias = (run: AgentRun) => memberForRun(run)?.alias ?? run.memberId;
   const memberRole = (run: AgentRun) => {
-    const roleId = members.find((member) => member.memberId === run.memberId)?.roleId;
+    const roleId = memberForRun(run)?.roleId;
     return roleId === undefined ? undefined : roles[roleId];
   };
   const memberKind = (run: AgentRun) => {
-    const member = members.find((candidate) => candidate.memberId === run.memberId);
+    const member = memberForRun(run);
     const integrationId =
       member === undefined
         ? undefined
         : config?.groups[run.groupId]?.agents[member.id]?.integrationId;
     return integrationId === undefined ? undefined : config?.integrations[integrationId]?.kind;
   };
-  const displayStatus = (run: AgentRun) =>
-    agentStatuses.find(
-      (status) => status.groupId === run.groupId && status.memberId === run.memberId,
-    )?.state ?? run.status;
 
   if (availableRuns.length === 0) {
     return (
@@ -200,73 +348,47 @@ export function TerminalWorkspace({
 
   return (
     <div className="terminal-workspace">
-      <div className="terminal-toolbar">
-        <div className="terminal-tabs" role="tablist" aria-label="Agent terminals">
-          {availableRuns.map((run) => (
-            <div className="terminal-tab-item" role="presentation" key={run.id}>
-              <button
-                type="button"
-                className={`terminal-tab-select ${roleColorClass(memberRole(run))}`}
-                role="tab"
-                aria-selected={run.id === activeRunId}
-                onClick={() => setSelectedRunId(run.id)}
-              >
-                <span
-                  className={`status-dot status-${displayStatus(run)}`}
-                  title={displayStatus(run).replaceAll("_", " ")}
-                  aria-label={`${displayStatus(run).replaceAll("_", " ")} agent status`}
-                />
-                <span>{memberAlias(run)}</span>
-                <RoleIdentity role={memberRole(run)} compact />
-              </button>
-            </div>
-          ))}
-        </div>
-        <div className="segmented-control" role="group" aria-label="Terminal layout">
-          <button
-            type="button"
-            aria-label="Tabbed terminal layout"
-            title="Tabbed terminal layout"
-            aria-pressed={layout === "tabs"}
-            onClick={() => setTerminalLayout("tabs")}
-          >
-            <Rows3 aria-hidden="true" size={16} />
-          </button>
-          <button
-            type="button"
-            aria-label="Grid terminal layout"
-            title="Grid terminal layout"
-            aria-pressed={layout === "grid"}
-            onClick={() => setTerminalLayout("grid")}
-          >
-            <Grid2X2 aria-hidden="true" size={16} />
-          </button>
-        </div>
-      </div>
-      <div className={`terminal-layout terminal-layout-${layout}`}>
-        {availableRuns
-          .filter((run) => layout === "grid" || run.id === activeRunId)
-          .map((run) => (
-            <TerminalPane
+      <div
+        className={`terminal-layout terminal-layout-${focusedRunId === undefined ? columns : "focused"}`}
+      >
+        {orderedRuns.map((run) => {
+          const visible = focusedRunId === undefined || run.id === focusedRunId;
+          const status = statusByRunId.get(run.id);
+          return (
+            <div
+              className={`terminal-pane-slot${run.id === activeRunId ? " terminal-pane-slot-active" : ""}`}
               key={run.id}
-              client={client}
-              run={run}
-              alias={memberAlias(run)}
-              memberId={run.memberId}
-              kind={memberKind(run)}
-              role={memberRole(run)}
-              connectionRevision={connectionRevision}
-              suspended={suspended}
-            />
-          ))}
+              hidden={!visible}
+              ref={(element) => {
+                if (element === null) paneElements.current.delete(run.id);
+                else paneElements.current.set(run.id, element);
+              }}
+            >
+              <TerminalPane
+                client={client}
+                run={run}
+                alias={memberAlias(run)}
+                memberId={run.memberId}
+                kind={memberKind(run)}
+                role={memberRole(run)}
+                connectionRevision={connectionRevision}
+                visible={visible}
+                theme={theme}
+                completionNotificationsEnabled={completionNotificationMemberIdSet.has(run.memberId)}
+                pinned={pinnedSet.has(run.id)}
+                focused={focusedRunId === run.id}
+                statusKey={status?.key ?? "unknown"}
+                statusLabel={status?.label ?? "Unknown"}
+                onToggleCompletionNotifications={() => toggleCompletionNotifications(run.memberId)}
+                onTogglePinned={() => togglePinned(run.id)}
+                onToggleFocus={() =>
+                  onSetFocusedRun?.(focusedRunId === run.id ? undefined : run.id)
+                }
+              />
+            </div>
+          );
+        })}
       </div>
-      {availableRuns.length > 0 && (
-        <div className="terminal-mode-note">
-          <CircleAlert aria-hidden="true" size={14} />
-          One live terminal client is allowed per run. If ttyd asks to reconnect, close the other
-          open terminal view first.
-        </div>
-      )}
     </div>
   );
 }

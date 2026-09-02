@@ -1,0 +1,9 @@
+{
+  "type": "subscription.started",
+  "version": 1,
+  "cursor": 0,
+  "highWater": 42,
+  "earliestAvailable": 1,
+  "instanceId": "instance_fixture",
+  "daemonEpoch": 1
+}

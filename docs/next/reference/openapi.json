@@ -1,0 +1,2081 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Nanasa control API",
+    "version": "0.1.0-next.11.0"
+  },
+  "x-generator-version": 1,
+  "paths": {
+    "/api/v1/meta": {
+      "get": {
+        "operationId": "meta.get",
+        "summary": "Read daemon protocol metadata",
+        "tags": [
+          "metadata"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/schema/openapi.json": {
+      "get": {
+        "operationId": "schema.openapi",
+        "summary": "Read the generated OpenAPI document",
+        "tags": [
+          "metadata"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/schema/events.json": {
+      "get": {
+        "operationId": "schema.events",
+        "summary": "Read the generated event-frame JSON Schema",
+        "tags": [
+          "metadata"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/schema/extensions.json": {
+      "get": {
+        "operationId": "schema.extensions",
+        "summary": "Read generated provider extension schema and capability references",
+        "tags": [
+          "metadata"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/auth/bootstrap": {
+      "post": {
+        "operationId": "auth.bootstrap",
+        "summary": "Exchange a one-use portal bootstrap token",
+        "tags": [
+          "auth"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "operator_bootstrap_invalid"
+        ]
+      }
+    },
+    "/api/v1/auth/session": {
+      "get": {
+        "operationId": "auth.session",
+        "summary": "Read the current operator session",
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "operator_unauthorized"
+        ]
+      }
+    },
+    "/api/v1/auth/portal": {
+      "post": {
+        "operationId": "auth.portal",
+        "summary": "Create a one-use portal bootstrap token",
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "operator_unauthorized"
+        ]
+      }
+    },
+    "/api/v1/auth/revoke": {
+      "post": {
+        "operationId": "auth.revoke",
+        "summary": "Revoke the current operator session",
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "operator_unauthorized"
+        ]
+      }
+    },
+    "/api/v1/config": {
+      "get": {
+        "operationId": "config.get",
+        "summary": "Read the version 2 configuration",
+        "tags": [
+          "config"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/config/status": {
+      "get": {
+        "operationId": "config.status",
+        "summary": "Read configuration diagnostics",
+        "tags": [
+          "config"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/snapshot": {
+      "get": {
+        "operationId": "snapshot.get",
+        "summary": "Read an atomic control-plane snapshot",
+        "tags": [
+          "metadata"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/service": {
+      "get": {
+        "operationId": "service.status",
+        "summary": "Read project-local service health and continuity policy",
+        "tags": [
+          "service"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/service/restart-plan": {
+      "post": {
+        "operationId": "service.planRestart",
+        "summary": "Create a typed browser reconnect and resnapshot plan",
+        "tags": [
+          "service"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "optional",
+        "x-errors": []
+      }
+    },
+    "/api/v1/remote": {
+      "get": {
+        "operationId": "remote.status",
+        "summary": "Read exact loopback remote discovery identity",
+        "tags": [
+          "remote"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/provider-states": {
+      "get": {
+        "operationId": "state.list",
+        "summary": "List provider-state bindings",
+        "tags": [
+          "state"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/provider-states/:bindingId": {
+      "get": {
+        "operationId": "state.get",
+        "summary": "Read one provider-state binding",
+        "tags": [
+          "state"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "provider_state_not_found"
+        ]
+      },
+      "delete": {
+        "operationId": "state.delete",
+        "summary": "Mark one provider-state binding deleted",
+        "tags": [
+          "state"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "optional",
+        "x-errors": [
+          "provider_state_not_found"
+        ]
+      }
+    },
+    "/api/v1/provider-states/:bindingId/retain": {
+      "post": {
+        "operationId": "state.retain",
+        "summary": "Retain one provider-state binding",
+        "tags": [
+          "state"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "optional",
+        "x-errors": [
+          "provider_state_not_found"
+        ]
+      }
+    },
+    "/api/v1/trust": {
+      "get": {
+        "operationId": "trust.list",
+        "summary": "List redacted repository trust decisions",
+        "tags": [
+          "trust"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/catalog/providers": {
+      "get": {
+        "operationId": "extensions.catalog",
+        "summary": "List metadata-only provider extension catalog entries",
+        "tags": [
+          "extension"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/extensions": {
+      "get": {
+        "operationId": "extensions.list",
+        "summary": "List installed and available provider extensions",
+        "tags": [
+          "extension"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/extensions/:extensionId": {
+      "get": {
+        "operationId": "extensions.inspect",
+        "summary": "Inspect one provider extension",
+        "tags": [
+          "extension"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "extension_not_found"
+        ]
+      },
+      "delete": {
+        "operationId": "extensions.remove",
+        "summary": "Remove lock ownership without deleting provider-owned data",
+        "tags": [
+          "extension"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "extension_referenced",
+          "extension_active_runs"
+        ]
+      }
+    },
+    "/api/v1/extensions/:extensionId/plan": {
+      "get": {
+        "operationId": "extensions.plan",
+        "summary": "Preview permissions, commands, ownership, and mutations",
+        "tags": [
+          "extension"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "extension_not_found"
+        ]
+      }
+    },
+    "/api/v1/extensions/:extensionId/health": {
+      "get": {
+        "operationId": "extensions.health",
+        "summary": "Read provider extension health and drift",
+        "tags": [
+          "extension"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "extension_not_found"
+        ]
+      }
+    },
+    "/api/v1/extensions/:extensionId/trust": {
+      "post": {
+        "operationId": "extensions.trust",
+        "summary": "Trust one exact provider extension plan",
+        "tags": [
+          "extension"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "extension_plan_stale"
+        ]
+      }
+    },
+    "/api/v1/extensions/:extensionId/install": {
+      "post": {
+        "operationId": "extensions.install",
+        "summary": "Install or update one trusted declarative provider extension",
+        "tags": [
+          "extension"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "extension_trust_required",
+          "extension_plan_stale",
+          "extension_active_runs"
+        ]
+      }
+    },
+    "/api/v1/extensions/:extensionId/repair": {
+      "post": {
+        "operationId": "extensions.repair",
+        "summary": "Repair only Nanasa-owned provider extension state",
+        "tags": [
+          "extension"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "extension_not_installed",
+          "extension_active_runs"
+        ]
+      }
+    },
+    "/api/v1/extensions/:extensionId/disable": {
+      "post": {
+        "operationId": "extensions.disable",
+        "summary": "Disable a stopped provider extension",
+        "tags": [
+          "extension"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "extension_not_installed",
+          "extension_active_runs"
+        ]
+      }
+    },
+    "/api/v1/extensions/:extensionId/rollback": {
+      "post": {
+        "operationId": "extensions.rollback",
+        "summary": "Roll back to the previous exact provider extension generation",
+        "tags": [
+          "extension"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "extension_rollback_unavailable",
+          "extension_active_runs"
+        ]
+      }
+    },
+    "/api/v1/groups": {
+      "get": {
+        "operationId": "groups.list",
+        "summary": "List groups in canonical order",
+        "tags": [
+          "group"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      },
+      "post": {
+        "operationId": "groups.create",
+        "summary": "Create a group",
+        "tags": [
+          "group"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "validation_error"
+        ]
+      }
+    },
+    "/api/v1/groups/:groupId": {
+      "get": {
+        "operationId": "groups.get",
+        "summary": "Read one group",
+        "tags": [
+          "group"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "group_not_found"
+        ]
+      },
+      "patch": {
+        "operationId": "groups.update",
+        "summary": "Update a group",
+        "tags": [
+          "group"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "group_not_found",
+          "active_run_group_change_requires_restart"
+        ]
+      },
+      "delete": {
+        "operationId": "groups.delete",
+        "summary": "Delete a stopped group",
+        "tags": [
+          "group"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "group_not_found"
+        ]
+      }
+    },
+    "/api/v1/group-order": {
+      "put": {
+        "operationId": "groups.reorder",
+        "summary": "Replace canonical group order",
+        "tags": [
+          "group"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "topology_order_stale"
+        ]
+      }
+    },
+    "/api/v1/groups/:groupId/agents": {
+      "get": {
+        "operationId": "agents.list",
+        "summary": "List configured agents in canonical order",
+        "tags": [
+          "agent"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "group_not_found"
+        ]
+      },
+      "post": {
+        "operationId": "agents.create",
+        "summary": "Create a configured agent",
+        "tags": [
+          "agent"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "group_not_found",
+          "integration_not_found"
+        ]
+      }
+    },
+    "/api/v1/groups/:groupId/agents/:agentId": {
+      "get": {
+        "operationId": "agents.get",
+        "summary": "Read one configured agent",
+        "tags": [
+          "agent"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "agent_not_found"
+        ]
+      },
+      "patch": {
+        "operationId": "agents.update",
+        "summary": "Update a configured agent",
+        "tags": [
+          "agent"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "agent_not_found",
+          "active_run_agent_change_requires_restart"
+        ]
+      },
+      "delete": {
+        "operationId": "agents.delete",
+        "summary": "Delete a configured agent",
+        "tags": [
+          "agent"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "agent_not_found"
+        ]
+      }
+    },
+    "/api/v1/groups/:groupId/agent-order": {
+      "put": {
+        "operationId": "agents.reorder",
+        "summary": "Replace canonical agent order",
+        "tags": [
+          "agent"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "topology_order_stale"
+        ]
+      }
+    },
+    "/api/v1/groups/:groupId/agents/:agentId/reparent": {
+      "post": {
+        "operationId": "agents.reparent",
+        "summary": "Move a stopped agent between groups",
+        "tags": [
+          "agent"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "active_run_reparent_forbidden",
+          "topology_order_stale"
+        ]
+      }
+    },
+    "/api/v1/groups/:groupId/agents/:agentId/checkout": {
+      "put": {
+        "operationId": "agents.assignCheckout",
+        "summary": "Assign a checkout to a stopped agent",
+        "tags": [
+          "checkout"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "active_run_checkout_change_forbidden",
+          "checkout_not_found"
+        ]
+      }
+    },
+    "/api/v1/roles": {
+      "get": {
+        "operationId": "roles.list",
+        "summary": "List role definitions",
+        "tags": [
+          "role"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/roles/:roleId": {
+      "get": {
+        "operationId": "roles.get",
+        "summary": "Read one role definition",
+        "tags": [
+          "role"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "role_not_found"
+        ]
+      }
+    },
+    "/api/v1/roles/:roleId/presentation": {
+      "patch": {
+        "operationId": "roles.updatePresentation",
+        "summary": "Update role presentation",
+        "tags": [
+          "role"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "role_not_found"
+        ]
+      }
+    },
+    "/api/v1/runs": {
+      "get": {
+        "operationId": "runs.list",
+        "summary": "List runs with bounded filters",
+        "tags": [
+          "run"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/runs/:runId": {
+      "get": {
+        "operationId": "runs.get",
+        "summary": "Read one run",
+        "tags": [
+          "run"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "run_not_found"
+        ]
+      }
+    },
+    "/api/v1/groups/:groupId/agents/:agentId/run": {
+      "post": {
+        "operationId": "runs.start",
+        "summary": "Start an agent run",
+        "tags": [
+          "run"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "run_already_active",
+          "agent_not_found"
+        ]
+      },
+      "delete": {
+        "operationId": "runs.stop",
+        "summary": "Stop an agent run",
+        "tags": [
+          "run"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "run_not_found"
+        ]
+      }
+    },
+    "/api/v1/runs/:runId/restart": {
+      "post": {
+        "operationId": "runs.restart",
+        "summary": "Atomically restart one run",
+        "tags": [
+          "run"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "run_not_found",
+          "run_replaced"
+        ]
+      }
+    },
+    "/api/v1/groups/:groupId/runs/start-all": {
+      "post": {
+        "operationId": "runs.startAll",
+        "summary": "Start every configured agent",
+        "tags": [
+          "run"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "group_not_found"
+        ]
+      }
+    },
+    "/api/v1/groups/:groupId/runs/stop-all": {
+      "post": {
+        "operationId": "runs.stopAll",
+        "summary": "Stop every active group run",
+        "tags": [
+          "run"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "group_not_found"
+        ]
+      }
+    },
+    "/api/v1/groups/:groupId/runs/restart-all": {
+      "post": {
+        "operationId": "runs.restartAll",
+        "summary": "Restart every active group run",
+        "tags": [
+          "run"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "group_not_found"
+        ]
+      }
+    },
+    "/api/v1/runs/:runId/interrupt": {
+      "post": {
+        "operationId": "runs.interrupt",
+        "summary": "Interrupt one run with Ctrl+C",
+        "tags": [
+          "run"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "run_not_running",
+          "terminal_unavailable"
+        ]
+      }
+    },
+    "/api/v1/statuses": {
+      "get": {
+        "operationId": "statuses.list",
+        "summary": "List semantic agent statuses",
+        "tags": [
+          "status"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/groups/:groupId/members/:memberId/status": {
+      "get": {
+        "operationId": "statuses.get",
+        "summary": "Read detailed semantic status",
+        "tags": [
+          "status"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "membership_not_found"
+        ]
+      }
+    },
+    "/api/v1/groups/:groupId/members/:memberId/status/acknowledge": {
+      "post": {
+        "operationId": "statuses.acknowledge",
+        "summary": "Acknowledge the latest completion",
+        "tags": [
+          "status"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "optional",
+        "x-errors": [
+          "membership_not_found"
+        ]
+      }
+    },
+    "/api/v1/groups/:groupId/messages": {
+      "post": {
+        "operationId": "messages.submit",
+        "summary": "Submit a durable group message",
+        "tags": [
+          "message"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 6356992,
+        "x-idempotency": "optional",
+        "x-errors": [
+          "message_body_too_large",
+          "membership_revision_stale"
+        ]
+      },
+      "get": {
+        "operationId": "messages.list",
+        "summary": "Read bounded visible message history",
+        "tags": [
+          "message"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "invalid_message_cursor"
+        ]
+      },
+      "delete": {
+        "operationId": "messages.clear",
+        "summary": "Clear retained message history",
+        "tags": [
+          "message"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "optional",
+        "x-errors": [
+          "delivery_lease_active"
+        ]
+      }
+    },
+    "/api/v1/messages/:messageId/deliveries": {
+      "get": {
+        "operationId": "messages.deliveries",
+        "summary": "Read per-recipient delivery outcomes",
+        "tags": [
+          "message"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "message_not_found"
+        ]
+      }
+    },
+    "/api/v1/agent-actions": {
+      "post": {
+        "operationId": "actions.create",
+        "summary": "Create a durable exact-target action",
+        "tags": [
+          "action"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "required",
+        "x-errors": [
+          "agent_action_target_offline",
+          "agent_action_reporter_unavailable"
+        ]
+      }
+    },
+    "/api/v1/agent-actions/:actionId": {
+      "get": {
+        "operationId": "actions.get",
+        "summary": "Read one durable action",
+        "tags": [
+          "action"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "agent_action_not_found"
+        ]
+      }
+    },
+    "/api/v1/groups/:groupId/action-workspace": {
+      "get": {
+        "operationId": "actions.workspace",
+        "summary": "Read bounded action and wait state",
+        "tags": [
+          "action"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/agent-actions/:actionId/cancel": {
+      "post": {
+        "operationId": "actions.cancel",
+        "summary": "Cancel a caller-owned pending action",
+        "tags": [
+          "action"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "optional",
+        "x-errors": [
+          "agent_action_cancel_requires_ack"
+        ]
+      }
+    },
+    "/api/v1/agent-actions/:actionId/wait": {
+      "post": {
+        "operationId": "actions.wait",
+        "summary": "Wait for an exact action state",
+        "tags": [
+          "action"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "agent_action_not_found"
+        ]
+      }
+    },
+    "/api/v1/open-waits": {
+      "get": {
+        "operationId": "waits.list",
+        "summary": "List open provider waits",
+        "tags": [
+          "wait"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/open-waits/:waitId/reply": {
+      "post": {
+        "operationId": "waits.reply",
+        "summary": "Reply to one exact provider wait",
+        "tags": [
+          "wait"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "open_wait_replaced",
+          "open_wait_reply_channel_unsupported"
+        ]
+      }
+    },
+    "/api/v1/runs/:runId/terminal": {
+      "get": {
+        "operationId": "terminal.status",
+        "summary": "Read terminal endpoint status",
+        "tags": [
+          "terminal"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "run_not_found"
+        ]
+      }
+    },
+    "/api/v1/runs/:runId/terminal/read": {
+      "get": {
+        "operationId": "terminal.read",
+        "summary": "Read bounded terminal history",
+        "tags": [
+          "terminal"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "terminal_unavailable",
+          "run_replaced"
+        ]
+      }
+    },
+    "/api/v1/terminal-checkpoints": {
+      "get": {
+        "operationId": "terminal.checkpoints.list",
+        "summary": "List owner terminal checkpoints",
+        "tags": [
+          "terminal"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/runs/:runId/terminal/checkpoints": {
+      "post": {
+        "operationId": "terminal.checkpoints.create",
+        "summary": "Capture an owner terminal checkpoint",
+        "tags": [
+          "terminal"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "terminal_checkpoint_disabled"
+        ]
+      }
+    },
+    "/api/v1/terminal-checkpoints/:checkpointId": {
+      "get": {
+        "operationId": "terminal.checkpoints.get",
+        "summary": "Read one owner terminal checkpoint",
+        "tags": [
+          "terminal"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "terminal_checkpoint_not_found"
+        ]
+      },
+      "delete": {
+        "operationId": "terminal.checkpoints.delete",
+        "summary": "Delete one owner terminal checkpoint",
+        "tags": [
+          "terminal"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "terminal_checkpoint_not_found"
+        ]
+      }
+    },
+    "/api/v1/artifact-preview": {
+      "get": {
+        "operationId": "artifact.preview",
+        "summary": "Read a bounded repository artifact preview",
+        "tags": [
+          "terminal"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "artifact_path_required",
+          "artifact_not_found"
+        ]
+      }
+    },
+    "/api/v1/terminal-stream/:runId": {
+      "get": {
+        "operationId": "terminal.stream",
+        "summary": "Open the versioned terminal WebSocket",
+        "tags": [
+          "terminal"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "terminal_unavailable"
+        ],
+        "x-transport": "websocket"
+      }
+    },
+    "/api/v1/consoles": {
+      "get": {
+        "operationId": "consoles.list",
+        "summary": "List ephemeral consoles",
+        "tags": [
+          "console"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      },
+      "post": {
+        "operationId": "consoles.create",
+        "summary": "Create an ephemeral console",
+        "tags": [
+          "console"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/consoles/:consoleId": {
+      "get": {
+        "operationId": "consoles.get",
+        "summary": "Read one ephemeral console",
+        "tags": [
+          "console"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "console_not_found"
+        ]
+      },
+      "delete": {
+        "operationId": "consoles.delete",
+        "summary": "Delete an ephemeral console",
+        "tags": [
+          "console"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "console_not_found"
+        ]
+      }
+    },
+    "/api/v1/repositories": {
+      "get": {
+        "operationId": "repositories.list",
+        "summary": "List discovered repositories",
+        "tags": [
+          "checkout"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/repositories/:repositoryId/checkouts": {
+      "get": {
+        "operationId": "checkouts.list",
+        "summary": "List repository checkouts",
+        "tags": [
+          "checkout"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/checkouts/open": {
+      "post": {
+        "operationId": "checkouts.open",
+        "summary": "Open a managed checkout",
+        "tags": [
+          "checkout"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "checkout_not_found",
+          "worktree_operation_in_progress"
+        ]
+      }
+    },
+    "/api/v1/repositories/:repositoryId/worktrees": {
+      "get": {
+        "operationId": "worktrees.list",
+        "summary": "List managed worktrees",
+        "tags": [
+          "worktree"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/worktrees": {
+      "post": {
+        "operationId": "worktrees.create",
+        "summary": "Create a provenance-fenced worktree",
+        "tags": [
+          "worktree"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "worktree_operation_in_progress",
+          "worktree_path_conflict"
+        ]
+      }
+    },
+    "/api/v1/worktrees/:worktreeId": {
+      "delete": {
+        "operationId": "worktrees.delete",
+        "summary": "Remove a provenance-fenced worktree",
+        "tags": [
+          "worktree"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "worktree_not_found",
+          "dirty_worktree_requires_force",
+          "worktree_identity_changed"
+        ]
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "operationId": "events.subscribe",
+        "summary": "Subscribe to bounded replayable events",
+        "tags": [
+          "events"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "invalid_event_sequence",
+          "event_cursor_expired"
+        ],
+        "x-transport": "websocket"
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "operatorSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "nanasa-session"
+      }
+    }
+  }
+}

@@ -31,7 +31,6 @@ type AudienceKind = Audience["kind"];
 
 export const MESSAGE_HISTORY_KEY = "nanasa.message-history.v1";
 export const MESSAGE_HISTORY_CLEARED_KEY = "nanasa.message-history-cleared.v1";
-export const MESSAGE_OVERLAY_OPEN_KEY = "nanasa.message-overlay-open.v1";
 const MAX_MESSAGE_HISTORY = 100;
 const intentDescriptions: Record<MessageIntent, string> = {
   inform: "Share context or a status update. No response is required.",
@@ -43,14 +42,6 @@ const intentDescriptions: Record<MessageIntent, string> = {
 interface MessageHistoryEntry {
   storedAt: string;
   submission: MessageSubmissionResult;
-}
-
-function loadOverlayOpen(): boolean {
-  try {
-    return window.localStorage.getItem(MESSAGE_OVERLAY_OPEN_KEY) === "true";
-  } catch {
-    return false;
-  }
 }
 
 export interface MessageDraft {
@@ -76,7 +67,6 @@ export function buildMessageCommand(group: Group, draft: MessageDraft): SubmitMe
     audience,
     body: { contentType: "text/markdown", text: draft.body },
     delivery: {},
-    hop: 0,
   });
 }
 
@@ -94,7 +84,9 @@ function OutcomeRow({
     <li className={`outcome-row outcome-${outcome.status}`}>
       <ActorAvatar name={alias} memberId={outcome.recipientMemberId} />
       <span className="outcome-recipient">{alias}</span>
-      <strong>{outcome.status}</strong>
+      <strong>
+        {outcome.status === "terminal_injected" ? "terminal injected" : outcome.status}
+      </strong>
       {outcome.attempts > 1 && (
         <span>
           {outcome.attempts === 2 ? "Retried once" : `Retried ${outcome.attempts - 1} times`}
@@ -239,8 +231,8 @@ interface MessageWorkspaceProps {
   members: GroupMembership[];
   historyMembers?: GroupMembership[];
   messageState?: GroupMessageState;
-  unreadCount?: number;
   client?: PortalClient;
+  presentation?: "quick" | "route";
   onReadThrough?(sequence: number): void;
   onSubmit(command: SubmitMessageCommand): Promise<MessageSubmissionResult>;
 }
@@ -307,12 +299,11 @@ export function MessageWorkspace({
   members,
   historyMembers = members,
   messageState,
-  unreadCount = 0,
   client = api,
+  presentation = "quick",
   onReadThrough,
   onSubmit,
 }: MessageWorkspaceProps) {
-  const [open, setOpen] = useState(loadOverlayOpen);
   const [composing, setComposing] = useState(false);
   const [audienceKind, setAudienceKind] = useState<AudienceKind>("dm");
   const [recipientIds, setRecipientIds] = useState<string[]>(
@@ -326,6 +317,7 @@ export function MessageWorkspace({
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
+  const [promptWhenReady, setPromptWhenReady] = useState(false);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const contextKey = `${group.id}:${members.map((member) => member.memberId).join(",")}`;
@@ -371,7 +363,7 @@ export function MessageWorkspace({
   }, []);
 
   useEffect(() => {
-    if (messageState === undefined) return;
+    if (messageState === undefined || presentation !== "route") return;
     let cancelled = false;
     void client
       .loadMessages(group.id, { limit: DEFAULT_MESSAGE_PAGE_SIZE })
@@ -418,36 +410,8 @@ export function MessageWorkspace({
     messageState?.latestGroupSeq,
     messageState?.activeDeliveryCount,
     messageState?.failedRecipientMemberIds.join(","),
+    presentation,
   ]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(MESSAGE_OVERLAY_OPEN_KEY, String(open));
-    } catch {
-      // The overlay remains usable when browser storage is blocked.
-    }
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || composing || confirmingClear) return;
-      const overlay = document.getElementById("message-overlay");
-      const target = event.target;
-      if (
-        target instanceof Node &&
-        target !== launcherRef.current &&
-        overlay?.contains(target) !== true
-      ) {
-        return;
-      }
-      event.preventDefault();
-      setOpen(false);
-      requestAnimationFrame(() => launcherRef.current?.focus());
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [composing, confirmingClear, open]);
 
   useEffect(() => {
     const dialog = composerDialogRef.current;
@@ -494,8 +458,10 @@ export function MessageWorkspace({
   const latestMessageId = groupHistory.at(-1)?.submission.message.id;
 
   useEffect(() => {
-    if (open && messageState !== undefined) onReadThrough?.(messageState.latestGroupSeq);
-  }, [messageState?.latestGroupSeq, onReadThrough, open]);
+    if (presentation === "route" && messageState !== undefined) {
+      onReadThrough?.(messageState.latestGroupSeq);
+    }
+  }, [messageState?.latestGroupSeq, onReadThrough, presentation]);
 
   const scrollToLatest = () => {
     const viewport = historyRef.current;
@@ -505,10 +471,10 @@ export function MessageWorkspace({
   };
 
   useEffect(() => {
-    if (!open) return;
+    if (presentation !== "route") return;
     const frame = requestAnimationFrame(scrollToLatest);
     return () => cancelAnimationFrame(frame);
-  }, [group.id, open]);
+  }, [group.id, presentation]);
 
   useEffect(() => {
     const previous = previousTimelineRef.current;
@@ -631,8 +597,32 @@ export function MessageWorkspace({
         ...current.filter((outcome) => outcome.messageId !== submission.message.id),
         ...submission.deliveryOutcomes,
       ]);
+      if (promptWhenReady) {
+        const outcomes = await Promise.allSettled(
+          targetMemberIds.map((memberId) =>
+            client.createAgentAction({
+              kind: "prompt",
+              groupId: group.id,
+              memberId,
+              prompt: body,
+              messageId: submission.message.id,
+              conversationId: submission.message.conversationId,
+              allowWorking: false,
+            }),
+          ),
+        );
+        const failures = outcomes.filter((outcome) => outcome.status === "rejected");
+        if (failures.length > 0) {
+          setError(
+            `${failures.length} prompt action${failures.length === 1 ? "" : "s"} could not be created`,
+          );
+        } else {
+          setError(undefined);
+        }
+      } else {
+        setError(undefined);
+      }
       setBody("");
-      setError(undefined);
       setComposing(false);
     } catch (cause) {
       if (contextVersionRef.current !== submittedContextVersion) return;
@@ -659,25 +649,21 @@ export function MessageWorkspace({
 
   return (
     <>
-      <button
-        ref={launcherRef}
-        type="button"
-        className="message-launcher"
-        aria-label="Messages"
-        aria-expanded={open}
-        aria-controls="message-overlay"
-        title={open ? "Close messages" : "Open messages"}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <MessageCircle aria-hidden="true" size={20} />
-        {unreadCount > 0 && (
-          <span className="message-launcher-badge" aria-label={`${unreadCount} unread messages`}>
-            {unreadCount > 99 ? "99+" : unreadCount}
-          </span>
-        )}
-      </button>
-      {open && (
-        <section id="message-overlay" className="message-overlay" aria-label="Messages overlay">
+      {presentation === "quick" && (
+        <button
+          ref={launcherRef}
+          type="button"
+          className="message-launcher quick-message-launcher"
+          aria-label={`Compose message to ${group.name}`}
+          title={`Compose message to ${group.name}`}
+          disabled={members.length === 0}
+          onClick={() => setComposing(true)}
+        >
+          <MessageCircle aria-hidden="true" size={20} />
+        </button>
+      )}
+      {presentation === "route" && (
+        <section className="message-route" aria-label="Group messages">
           <section className="message-panel" aria-label="Messages">
             <header className="message-panel-header">
               <div className="message-toolbar-title">
@@ -699,18 +685,6 @@ export function MessageWorkspace({
                   onClick={() => setConfirmingClear(true)}
                 >
                   <Trash2 aria-hidden="true" size={15} />
-                </button>
-                <button
-                  type="button"
-                  className="icon-button"
-                  aria-label="Close messages"
-                  title="Close messages"
-                  onClick={() => {
-                    setOpen(false);
-                    requestAnimationFrame(() => launcherRef.current?.focus());
-                  }}
-                >
-                  <X aria-hidden="true" size={15} />
                 </button>
               </div>
             </header>
@@ -877,6 +851,14 @@ export function MessageWorkspace({
                 placeholder="Send scoped context or a concrete request..."
                 required
               />
+            </label>
+            <label className="prompt-when-ready-option">
+              <input
+                type="checkbox"
+                checked={promptWhenReady}
+                onChange={(event) => setPromptWhenReady(event.target.checked)}
+              />
+              Prompt when ready (creates exact durable work separately from delivery)
             </label>
             {messageTooLarge && (
               <p className="form-error" role="alert">

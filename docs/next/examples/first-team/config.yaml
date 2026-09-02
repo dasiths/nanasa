@@ -1,0 +1,48 @@
+version: 2
+repository:
+  path: .
+  checkout: { kind: current }
+instructions:
+  - .nanasa/instructions/global.md
+integrations:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+    command: [copilot]
+    providerState: { scope: membership }
+    credentials: { kind: provider-managed }
+roles:
+  implementor:
+    name: Implementor
+    description: Implements assigned changes and checks the result
+    instructions:
+      - .nanasa/instructions/implementor.md
+    permissionPolicy: inherit
+  reviewer:
+    name: Reviewer
+    description: Reviews changes without modifying files
+    instructions:
+      - .nanasa/instructions/reviewer.md
+    permissionPolicy: read-only
+groups:
+  first-team:
+    name: First team
+    instructions:
+      - .nanasa/instructions/team.md
+    agents:
+      agent_builder:
+        memberId: copilot.builder
+        name: Builder
+        integrationId: copilot
+        roleId: implementor
+        instructions:
+          - .nanasa/instructions/builder.md
+        order: 0
+      agent_reviewer:
+        memberId: copilot.reviewer
+        name: Reviewer
+        integrationId: copilot
+        roleId: reviewer
+        instructions:
+          - .nanasa/instructions/review-agent.md
+        order: 1

@@ -1,22 +1,39 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAX_MESSAGE_TEXT_BYTES } from "@nanasa/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { loadNanasaConfig } from "../src/config.js";
+import { loadNanasaConfig } from "../src/config-loader.js";
 import { createDaemon as createDaemonBase, type DaemonOptions } from "../src/server.js";
 
 const temporaryDirectories: string[] = [];
 const repositoryByDataPath = new Map<string, string>();
 
-function createDaemon(options: DaemonOptions = {}) {
+async function createDaemon(options: DaemonOptions = {}) {
   const key = options.dataPath ?? `memory-${temporaryDirectories.length}`;
   let repository = repositoryByDataPath.get(key);
   if (repository === undefined) {
     repository = mkdtempSync(join(tmpdir(), "nanasa-api-config-"));
     temporaryDirectories.push(repository);
-    mkdirSync(join(repository, ".git"));
+    execFileSync("git", ["init", "--quiet", repository]);
+    execFileSync(
+      "git",
+      [
+        "-C",
+        repository,
+        "-c",
+        "user.name=Nanasa Test",
+        "-c",
+        "user.email=nanasa@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "initial",
+      ],
+      { stdio: "ignore" },
+    );
     mkdirSync(join(repository, ".nanasa"));
     mkdirSync(join(repository, ".nanasa", "instructions"));
     writeFileSync(
@@ -33,19 +50,20 @@ function createDaemon(options: DaemonOptions = {}) {
     );
     writeFileSync(
       join(repository, ".nanasa", "config.yaml"),
-      `integrations:
+      `version: 2
+integrations:
   copilot:
     name: GitHub Copilot
     kind: copilot
     command: [copilot]
     cwd: .
-    agentConfigHome: { scope: integration }
+    providerState: { scope: integration }
   claude-copilot:
     name: Claude Code via Copilot
     kind: claude-code
     command: [make, claude-copilot]
     cwd: .
-    agentConfigHome: { scope: integration }
+    providerState: { scope: integration }
 roles:
   reviewer:
     name: Reviewer
@@ -56,7 +74,61 @@ messages: { retentionPerGroup: 1000 }
     );
     repositoryByDataPath.set(key, repository);
   }
-  return createDaemonBase({ ...options, loadedConfig: loadNanasaConfig(repository) });
+  const daemon = await createDaemonBase({ ...options, loadedConfig: loadNanasaConfig(repository) });
+  const rawInject = daemon.app.inject.bind(daemon.app);
+  const bootstrapToken = daemon.bootstrapFragment.slice("nanasa-bootstrap=".length);
+  const bootstrap = await rawInject({
+    method: "POST",
+    url: "/api/v1/auth/bootstrap",
+    payload: { token: bootstrapToken },
+  });
+  const cookie = bootstrap.headers["set-cookie"]?.split(";", 1)[0];
+  const csrfToken = bootstrap.json<{ csrfToken: string }>().csrfToken;
+  const authenticatedInject = ((optionsOrUrl: Parameters<typeof rawInject>[0]) => {
+    if (typeof optionsOrUrl === "string") {
+      const url =
+        optionsOrUrl.startsWith("/api/") && !optionsOrUrl.startsWith("/api/v1/")
+          ? optionsOrUrl.replace("/api/", "/api/v1/")
+          : optionsOrUrl;
+      return rawInject({
+        method: "GET",
+        url,
+        headers: cookie === undefined ? {} : { cookie },
+      });
+    }
+    const url =
+      optionsOrUrl.url.startsWith("/api/") && !optionsOrUrl.url.startsWith("/api/v1/")
+        ? optionsOrUrl.url.replace("/api/", "/api/v1/")
+        : optionsOrUrl.url;
+    return rawInject({
+      ...optionsOrUrl,
+      url,
+      headers: {
+        ...optionsOrUrl.headers,
+        ...(cookie === undefined ? {} : { cookie }),
+        "x-nanasa-csrf": csrfToken,
+      },
+    });
+  }) as typeof daemon.app.inject;
+  daemon.app.inject = authenticatedInject;
+  const rawInjectWs = daemon.app.injectWS.bind(daemon.app);
+  daemon.app.injectWS = ((path, headers, options) =>
+    rawInjectWs(
+      path.startsWith("/api/") && !path.startsWith("/api/v1/")
+        ? path.replace("/api/", "/api/v1/")
+        : path,
+      {
+        ...headers,
+        headers: {
+          ...((headers as { headers?: Record<string, string> }).headers ?? {}),
+          host: "localhost",
+          origin: "http://localhost",
+          ...(cookie === undefined ? {} : { cookie }),
+        },
+      },
+      options,
+    )) as typeof daemon.app.injectWS;
+  return daemon;
 }
 
 function temporaryDatabase(): string {
@@ -73,6 +145,47 @@ afterEach(() => {
 });
 
 describe("daemon REST API", () => {
+  it("discovers checkouts and manages provenance-fenced worktrees through routes", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const snapshot = (await daemon.app.inject({ method: "GET", url: "/api/snapshot" })).json<{
+      repositories: Array<{ id: string; primaryCheckoutId: string }>;
+      checkouts: Array<{ id: string; repositoryId: string; kind: string }>;
+    }>();
+    expect(snapshot.repositories).toHaveLength(1);
+    expect(snapshot.checkouts).toEqual([
+      expect.objectContaining({
+        id: snapshot.repositories[0]!.primaryCheckoutId,
+        repositoryId: snapshot.repositories[0]!.id,
+        kind: "primary",
+      }),
+    ]);
+    const created = await daemon.app.inject({
+      method: "POST",
+      url: "/api/worktrees",
+      payload: {
+        sourceCheckoutId: snapshot.checkouts[0]!.id,
+        branch: "feature/api-worktree",
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const result = created.json<{
+      worktree: { id: string; operationGeneration: number; state: string };
+      checkout: { kind: string };
+    }>();
+    expect(result).toMatchObject({ worktree: { state: "ready" }, checkout: { kind: "linked" } });
+    const removed = await daemon.app.inject({
+      method: "DELETE",
+      url: `/api/worktrees/${result.worktree.id}`,
+      payload: {
+        force: false,
+        expectedOperationGeneration: result.worktree.operationGeneration,
+      },
+    });
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json()).toMatchObject({ worktree: { state: "removed" } });
+    await daemon.app.close();
+  });
+
   it("projects direct roles and requires restart for launch or prompt changes", async () => {
     const daemon = await createDaemon({ dataPath: ":memory:" });
     const group = (
@@ -190,10 +303,10 @@ describe("daemon REST API", () => {
     const reordered = await daemon.app.inject({
       method: "PUT",
       url: `/api/groups/${group.id}/agent-order`,
-      payload: { agentIds, expectedAgentRevision: 3 },
+      payload: { agentIds, expectedOrderRevision: 4 },
     });
     expect(reordered.statusCode).toBe(200);
-    expect(reordered.json()).toEqual({ groupId: group.id, agentIds, agentRevision: 3 });
+    expect(reordered.json()).toEqual({ groupId: group.id, agentIds, orderRevision: 5 });
     expect(daemon.store.getSnapshot()).toMatchObject({
       groups: [{ id: group.id, membershipRevision: 3 }],
       memberships: [
@@ -220,10 +333,10 @@ describe("daemon REST API", () => {
     const stale = await daemon.app.inject({
       method: "PUT",
       url: `/api/groups/${group.id}/agent-order`,
-      payload: { agentIds, expectedAgentRevision: 2 },
+      payload: { agentIds, expectedOrderRevision: 4 },
     });
     expect(stale.statusCode).toBe(409);
-    expect(stale.json()).toMatchObject({ code: "agent_order_stale" });
+    expect(stale.json()).toMatchObject({ code: "topology_order_stale" });
     await daemon.app.close();
   });
 
@@ -247,7 +360,6 @@ describe("daemon REST API", () => {
     const renamedGroup = await daemon.app.inject({
       method: "PATCH",
       url: `/api/groups/${group.id}`,
-      headers: { "idempotency-key": "rename-group" },
       payload: { name: "Renamed group" },
     });
     expect(renamedGroup.statusCode).toBe(200);
@@ -271,7 +383,6 @@ describe("daemon REST API", () => {
     const removedAgent = await daemon.app.inject({
       method: "DELETE",
       url: `/api/groups/${group.id}/agents/${agent.id}`,
-      headers: { "idempotency-key": "remove-agent" },
     });
     expect(removedAgent.statusCode).toBe(200);
     expect(removedAgent.json()).toEqual({
@@ -290,7 +401,6 @@ describe("daemon REST API", () => {
     const deleted = await daemon.app.inject({
       method: "DELETE",
       url: `/api/groups/${group.id}`,
-      headers: { "idempotency-key": "delete-group" },
     });
     expect(deleted.statusCode).toBe(200);
     expect(deleted.json()).toEqual({
@@ -308,7 +418,7 @@ describe("daemon REST API", () => {
     await daemon.app.close();
   });
 
-  it("exposes group Start All with validated idempotency outcomes", async () => {
+  it("exposes group Start All without claiming idempotency for tmux effects", async () => {
     const daemon = await createDaemon({ dataPath: ":memory:" });
     const startAll = vi.spyOn(daemon.coordinator, "startAll").mockResolvedValue({
       groupId: "group-one",
@@ -325,7 +435,6 @@ describe("daemon REST API", () => {
     const response = await daemon.app.inject({
       method: "POST",
       url: "/api/groups/group-one/runs/start-all",
-      headers: { "idempotency-key": "start-team" },
       payload: { cols: 100, rows: 30 },
     });
 
@@ -334,7 +443,7 @@ describe("daemon REST API", () => {
       groupId: "group-one",
       outcomes: [{ memberId: "alpha", status: "already-running" }],
     });
-    expect(startAll).toHaveBeenCalledWith("group-one", { cols: 100, rows: 30 }, "start-team");
+    expect(startAll).toHaveBeenCalledWith("group-one", { cols: 100, rows: 30 });
     await daemon.app.close();
   });
 
@@ -367,7 +476,7 @@ describe("daemon REST API", () => {
     await daemon.app.close();
   });
 
-  it("supports idempotent operator commands and restores their results after restart", async () => {
+  it("restores transactionally idempotent message outcomes after restart", async () => {
     const dataPath = temporaryDatabase();
     const first = await createDaemon({ dataPath });
 
@@ -377,13 +486,10 @@ describe("daemon REST API", () => {
     const createGroup = {
       method: "POST" as const,
       url: "/api/groups",
-      headers: { "idempotency-key": "create-review-group" },
       payload: { name: "Review group" },
     };
     const groupResponse = await first.app.inject(createGroup);
-    const replayedGroupResponse = await first.app.inject(createGroup);
     expect(groupResponse.statusCode).toBe(201);
-    expect(replayedGroupResponse.json()).toEqual(groupResponse.json());
     const group = groupResponse.json<{ id: string }>();
 
     for (const name of ["reviewer", "tester"]) {
@@ -404,16 +510,33 @@ describe("daemon REST API", () => {
         sender: { kind: "operator", operatorId: "operator_1" },
         audience: { kind: "group", membershipRevision: 2 },
         body: { contentType: "text/markdown", text: "Review this API." },
-        delivery: { mode: "steer" },
-        hop: 0,
+        delivery: {},
       },
     });
     expect(messageResponse.statusCode).toBe(201);
     const submission = messageResponse.json<{
-      message: { id: string };
+      message: { id: string; sender: { kind: string; operatorId: string } };
       deliveryOutcomes: unknown[];
     }>();
+    expect(submission.message.sender).toEqual({
+      kind: "operator",
+      operatorId: "operator-local-portal",
+    });
     expect(submission.deliveryOutcomes).toHaveLength(2);
+    const messageReplay = await first.app.inject({
+      method: "POST",
+      url: `/api/groups/${group.id}/messages`,
+      headers: { "idempotency-key": "broadcast-review" },
+      payload: {
+        intent: "request",
+        sender: { kind: "operator", operatorId: "operator_1" },
+        audience: { kind: "group", membershipRevision: 2 },
+        body: { contentType: "text/markdown", text: "Review this API." },
+        delivery: {},
+      },
+    });
+    expect(messageReplay.headers["idempotency-replayed"]).toBe("true");
+    expect(messageReplay.json()).toEqual(messageResponse.json());
 
     const deliveriesResponse = await first.app.inject({
       method: "GET",
@@ -423,6 +546,21 @@ describe("daemon REST API", () => {
     await first.app.close();
 
     const reopened = await createDaemon({ dataPath });
+    const restartReplay = await reopened.app.inject({
+      method: "POST",
+      url: `/api/groups/${group.id}/messages`,
+      headers: { "idempotency-key": "broadcast-review" },
+      payload: {
+        intent: "request",
+        sender: { kind: "operator", operatorId: "operator_1" },
+        audience: { kind: "group", membershipRevision: 2 },
+        body: { contentType: "text/markdown", text: "Review this API." },
+        delivery: {},
+      },
+    });
+    expect(restartReplay.statusCode).toBe(201);
+    expect(restartReplay.headers["idempotency-replayed"]).toBe("true");
+    expect(restartReplay.json()).toEqual(messageResponse.json());
     const snapshot = (await reopened.app.inject({ method: "GET", url: "/api/snapshot" })).json<{
       groups: unknown[];
       memberships: unknown[];
@@ -446,6 +584,157 @@ describe("daemon REST API", () => {
     });
     expect(snapshot.config.integrations.copilot).not.toHaveProperty("adapter");
     await reopened.app.close();
+  });
+
+  it("centralizes digest, route, principal, concurrency, and failure idempotency semantics", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const request = {
+      method: "POST" as const,
+      url: "/api/v1/service/restart-plan",
+      headers: { "idempotency-key": "central-plan" },
+      payload: { reason: "upgrade" },
+    };
+    const first = await daemon.app.inject(request);
+    const replay = await daemon.app.inject(request);
+    expect(first.statusCode).toBe(200);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.headers["idempotency-replayed"]).toBe("true");
+    expect(replay.json()).toEqual(first.json());
+
+    const mismatch = await daemon.app.inject({
+      ...request,
+      payload: { reason: "rollback" },
+    });
+    expect(mismatch.statusCode).toBe(409);
+    expect(mismatch.json()).toMatchObject({ code: "idempotency_request_conflict" });
+
+    const routeScoped = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/provider-states/missing/retain",
+      headers: { "idempotency-key": "central-plan" },
+      payload: {},
+    });
+    expect(routeScoped.statusCode).toBe(404);
+
+    const credential = readFileSync(join(daemon.runtimePath, "operator-secret")).toString(
+      "base64url",
+    );
+    const principalScoped = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/service/restart-plan",
+      headers: {
+        authorization: `Bearer ${credential}`,
+        "idempotency-key": "central-plan",
+      },
+      payload: { reason: "upgrade" },
+    });
+    expect(principalScoped.statusCode).toBe(200);
+
+    const concurrentRequest = {
+      method: "POST" as const,
+      url: "/api/v1/service/restart-plan",
+      headers: { "idempotency-key": "concurrent-plan" },
+      payload: { reason: "operator-restart" },
+    };
+    const concurrent = await Promise.all([
+      daemon.app.inject(concurrentRequest),
+      daemon.app.inject(concurrentRequest),
+    ]);
+    expect(concurrent.map((item) => item.statusCode)).toEqual([200, 200]);
+    expect(
+      concurrent.filter((item) => item.headers["idempotency-replayed"] === "true"),
+    ).toHaveLength(1);
+
+    const originalLifecycle = daemon.store.setProviderStateLifecycle.bind(daemon.store);
+    vi.spyOn(daemon.store, "setProviderStateLifecycle")
+      .mockImplementationOnce(() => {
+        throw new Error("transient fault");
+      })
+      .mockImplementation(originalLifecycle);
+    const failed = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/provider-states/missing/retain",
+      headers: { "idempotency-key": "transient-retry" },
+      payload: {},
+    });
+    expect(failed.statusCode).toBe(500);
+    const replayedFailure = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/provider-states/missing/retain",
+      headers: { "idempotency-key": "transient-retry" },
+      payload: {},
+    });
+    expect(replayedFailure.statusCode).toBe(404);
+    expect(replayedFailure.headers["idempotency-replayed"]).toBeUndefined();
+    const providerStateTime = "2026-08-30T00:00:00.000Z";
+    daemon.store.upsertProviderState({
+      id: "missing",
+      integrationId: "copilot",
+      scope: "integration",
+      storageReference: "/tmp/nanasa-provider-state",
+      credentialReference: { kind: "provider-managed" },
+      lifecycle: "active",
+      createdAt: providerStateTime,
+      updatedAt: providerStateTime,
+    });
+    const transientRetry = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/provider-states/missing/retain",
+      headers: { "idempotency-key": "transient-retry" },
+      payload: {},
+    });
+    expect(transientRetry.statusCode).toBe(200);
+    expect(transientRetry.headers["idempotency-replayed"]).toBeUndefined();
+    expect(transientRetry.json()).toMatchObject({ id: "missing", lifecycle: "retained" });
+
+    const stableRequest = {
+      method: "POST" as const,
+      url: "/api/v1/service/restart-plan",
+      headers: { "idempotency-key": "stable-validation" },
+      payload: { reason: "not-a-reason" },
+    };
+    const stableFailure = await daemon.app.inject(stableRequest);
+    const stableReplay = await daemon.app.inject(stableRequest);
+    expect(stableFailure.statusCode).toBe(400);
+    expect(stableFailure.json()).toMatchObject({ code: "validation_error" });
+    expect(stableReplay.statusCode).toBe(400);
+    expect(stableReplay.headers["idempotency-replayed"]).toBe("true");
+    expect(stableReplay.json()).toEqual(stableFailure.json());
+    await daemon.app.close();
+  });
+
+  it("enforces declared idempotency policy before state-changing handlers", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const required = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/agent-actions",
+      payload: {
+        kind: "prompt",
+        groupId: "missing",
+        memberId: "missing",
+        prompt: "Must not reach domain validation",
+      },
+    });
+    expect(required.statusCode).toBe(400);
+    expect(required.json()).toMatchObject({ code: "idempotency_key_required" });
+
+    const forbidden = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/auth/revoke",
+      headers: { "idempotency-key": "unsupported-revoke-key" },
+      payload: {},
+    });
+    expect(forbidden.statusCode).toBe(400);
+    expect(forbidden.json()).toMatchObject({ code: "idempotency_not_supported" });
+    const rawInterrupt = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/runs/missing/interrupt",
+      headers: { "idempotency-key": "unsafe-effect" },
+      payload: { operatorId: "operator", reason: "Stop" },
+    });
+    expect(rawInterrupt.statusCode).toBe(400);
+    expect(rawInterrupt.json()).toMatchObject({ code: "idempotency_not_supported" });
+    await daemon.app.close();
   });
 
   it("exposes config status and rejects unconfigured or arbitrary agent launch data", async () => {
@@ -502,7 +791,7 @@ describe("daemon REST API", () => {
         sender: { kind: "operator", operatorId: "operator_1" },
         audience: { kind: "group", membershipRevision: 1 },
         body: { contentType: "text/plain", text: "No recipients." },
-        delivery: { mode: "queue" },
+        delivery: {},
       },
     });
     expect(staleBroadcast.statusCode).toBe(409);
@@ -515,7 +804,7 @@ describe("daemon REST API", () => {
         sender: { kind: "agent", memberId: "missing", runId: "missing" },
         audience: { kind: "dm", memberId: "missing" },
         body: { contentType: "text/plain", text: "Stop." },
-        delivery: { mode: "queue" },
+        delivery: {},
       },
     });
     expect(unauthorizedControl.statusCode).toBe(400);
@@ -584,7 +873,10 @@ describe("portal static assets", () => {
         },
       },
     );
-    expect(JSON.parse(await eventFrame)).toMatchObject({ type: "group.created" });
+    expect(JSON.parse(await eventFrame)).toMatchObject({
+      type: "subscription.started",
+      instanceId: daemon.guard.instanceId,
+    });
     eventSocket.terminate();
 
     await daemon.app.close();
@@ -612,7 +904,6 @@ describe("portal static assets", () => {
           audience: { kind: "dm", memberId: agent.memberId },
           body: { contentType: "text/plain", text },
           delivery: {},
-          hop: 0,
         },
       });
 
@@ -652,6 +943,105 @@ describe("portal static assets", () => {
     await daemon.app.close();
   });
 
+  it("serves complete declarative extension lifecycle and generated references", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const catalog = await daemon.app.inject({ method: "GET", url: "/api/v1/extensions" });
+    expect(catalog.statusCode).toBe(200);
+    expect(catalog.json()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          descriptor: expect.objectContaining({
+            metadata: expect.objectContaining({ id: "nanasa.copilot" }),
+          }),
+          installed: true,
+          enabled: true,
+        }),
+      ]),
+    );
+    const inspect = await daemon.app.inject({
+      method: "GET",
+      url: "/api/v1/extensions/nanasa.copilot",
+    });
+    expect(inspect.statusCode).toBe(200);
+    const details = inspect.json<{
+      plan: {
+        planDigest: string;
+        configRevision: string;
+        lockRevision: number;
+        requiresStoppedRuns: boolean;
+      };
+    }>();
+    expect(details.plan).toMatchObject({ requiresStoppedRuns: false });
+    expect(
+      (
+        await daemon.app.inject({
+          method: "GET",
+          url: "/api/v1/extensions/nanasa.copilot/health",
+        })
+      ).json(),
+    ).toMatchObject({ extensionId: "nanasa.copilot", state: "current" });
+    const reference = (
+      await daemon.app.inject({ method: "GET", url: "/api/v1/schema/extensions.json" })
+    ).json<{ strategies: { adapter: string[] }; permissions: string[]; descriptors: unknown[] }>();
+    expect(reference.strategies.adapter).toContain("copilot-adapter-v1");
+    expect(reference.permissions).toContain("runtime:launch-provider");
+    expect(reference.descriptors).toHaveLength(4);
+
+    const trust = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/extensions/nanasa.copilot/trust",
+      payload: {
+        planDigest: details.plan.planDigest,
+        configRevision: details.plan.configRevision,
+      },
+    });
+    expect(trust.statusCode).toBe(200);
+    expect(trust.json()).not.toHaveProperty("token");
+    const disabled = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/extensions/nanasa.copilot/disable",
+      payload: { expectedLockRevision: details.plan.lockRevision },
+    });
+    expect(disabled.statusCode).toBe(200);
+    expect(disabled.json()).toMatchObject({ catalog: { health: { state: "disabled" } } });
+    const afterDisable = disabled.json<{ plan: { lockRevision: number } }>();
+    const repairPlan = (
+      await daemon.app.inject({
+        method: "GET",
+        url: "/api/v1/extensions/nanasa.copilot/plan",
+      })
+    ).json<{ planDigest: string; configRevision: string; lockRevision: number }>();
+    const repairTrust = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/extensions/nanasa.copilot/trust",
+      payload: {
+        planDigest: repairPlan.planDigest,
+        configRevision: repairPlan.configRevision,
+      },
+    });
+    expect(repairTrust.statusCode).toBe(200);
+    const repaired = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/extensions/nanasa.copilot/repair",
+      payload: {
+        planDigest: repairPlan.planDigest,
+        configRevision: repairPlan.configRevision,
+        expectedLockRevision: afterDisable.plan.lockRevision,
+      },
+    });
+    expect(repaired.statusCode).toBe(200);
+    const remove = await daemon.app.inject({
+      method: "DELETE",
+      url: "/api/v1/extensions/nanasa.copilot",
+      payload: {
+        expectedLockRevision: repaired.json<{ plan: { lockRevision: number } }>().plan.lockRevision,
+      },
+    });
+    expect(remove.statusCode).toBe(409);
+    expect(remove.json()).toMatchObject({ code: "extension_referenced" });
+    await daemon.app.close();
+  });
+
   it("requires a portal asset path when static serving is enabled", async () => {
     await expect(createDaemon({ dataPath: ":memory:", servePortal: true })).rejects.toThrow(
       "portalAssetsPath is required",
@@ -681,20 +1071,26 @@ describe("domain event WebSocket", () => {
       {},
       {
         onInit(client) {
-          client.once("message", (data) => resolveReplay(data.toString()));
+          client.on("message", (data) => {
+            const frame = JSON.parse(data.toString()) as { type: string };
+            if (frame.type === "domain.event") resolveReplay(data.toString());
+          });
         },
       },
     );
     expect(JSON.parse(await replay)).toMatchObject({
-      sequence: 2,
-      type: "agent-profile.created",
+      type: "domain.event",
+      event: { sequence: 2, type: "agent-profile.created" },
     });
 
     const live = new Promise<string>((resolve) => {
       socket.once("message", (data) => resolve(data.toString()));
     });
     daemon.store.createGroup({ name: "Second" });
-    expect(JSON.parse(await live)).toMatchObject({ sequence: 3, type: "group.created" });
+    expect(JSON.parse(await live)).toMatchObject({
+      type: "domain.event",
+      event: { sequence: 3, type: "group.created" },
+    });
 
     await new Promise<void>((resolve) => {
       socket.once("close", resolve);
