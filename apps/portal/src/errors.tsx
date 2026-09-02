@@ -1,4 +1,4 @@
-import { ErrorPayloadSchema, type ErrorPayload } from "@nanasa/contracts";
+import { type ErrorPayload, ErrorPayloadSchema } from "@nanasa/contracts";
 import { ControlClientError } from "@nanasa/control-client";
 import { TriangleAlert, X } from "lucide-react";
 

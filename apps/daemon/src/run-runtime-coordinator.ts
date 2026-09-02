@@ -2,9 +2,9 @@ import type {
   AgentRun,
   DeleteGroupResult,
   GroupMembership,
+  NativeRecoveryPolicy,
   StartGroupRunsCommand,
   StartGroupRunsResult,
-  NativeRecoveryPolicy,
 } from "@nanasa/contracts";
 
 import { DeliveryDispatcher } from "./delivery-dispatcher.js";

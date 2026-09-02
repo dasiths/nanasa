@@ -25,8 +25,8 @@ import {
   X,
 } from "lucide-react";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
-import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 import { api, type PortalClient } from "../api.js";
+import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 
 type AudienceKind = Audience["kind"];
 

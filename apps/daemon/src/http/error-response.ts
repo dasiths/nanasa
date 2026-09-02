@@ -1,9 +1,9 @@
 import {
+  type ErrorPayload,
   ErrorPayloadSchema,
   MAX_MESSAGE_REQUEST_BYTES,
   MAX_MESSAGE_TEXT_BYTES,
   OVERSIZED_MESSAGE_GUIDANCE,
-  type ErrorPayload,
 } from "@nanasa/contracts";
 import { ExtensionPackageError } from "../extensions/extension-package-loader.js";
 import { DomainError } from "../store.js";

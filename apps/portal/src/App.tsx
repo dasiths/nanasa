@@ -33,7 +33,7 @@ import {
 import { AdHocConsoleDialog } from "./components/ad-hoc-console-dialog.js";
 import { type AddAgentInput, GroupTree } from "./components/group-tree.js";
 import { MessageWorkspace } from "./components/message-workspace.js";
-import { ErrorNotice, portalErrorFromCode, type PortalError, toPortalError } from "./errors.js";
+import { ErrorNotice, type PortalError, portalErrorFromCode, toPortalError } from "./errors.js";
 import { useAttentionWorkspaces } from "./hooks/use-attention-workspaces.js";
 import { useMessageReadCursors } from "./hooks/use-message-read-cursors.js";
 import {

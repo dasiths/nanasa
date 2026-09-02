@@ -50,7 +50,7 @@ import {
 import { createPortal } from "react-dom";
 
 import { copyToClipboard } from "../copy-to-clipboard.js";
-import { ErrorNotice, portalErrorFromCode, type PortalError, toPortalError } from "../errors.js";
+import { ErrorNotice, type PortalError, portalErrorFromCode, toPortalError } from "../errors.js";
 import { memberStatusView } from "../member-status.js";
 import { RoleIdentity } from "./role-identity.js";
 
