@@ -118,6 +118,8 @@ function client(): PortalClient {
     cancelAgentAction: vi.fn(),
     replyOpenWait: vi.fn(),
     acknowledgeCompletion: vi.fn(),
+    listAttentionDismissals: vi.fn().mockResolvedValue({ dismissals: [] }),
+    dismissAttentionItems: vi.fn().mockResolvedValue({ dismissals: [] }),
     loadMessages: vi.fn(),
     clearMessages: vi.fn(),
     getTerminalEndpointStatus: vi.fn(async (runId) => ready(runId)),
@@ -539,6 +541,8 @@ describe("TerminalWorkspace", () => {
     expect(screen.getByLabelText("Working agent status")).toHaveAttribute("title", "Working");
     expect(screen.getByLabelText("Done agent status")).toHaveClass("status-done");
     expect(screen.getByLabelText("Starting agent status")).toHaveClass("status-starting");
+    expect(document.querySelectorAll(".status-dot")).toHaveLength(3);
+    expect(document.querySelector(".connection-dot")).toBeNull();
   });
 
   it("projects updating, successful restart, and detailed uncertain recovery responsively", async () => {
@@ -666,7 +670,61 @@ describe("TerminalWorkspace", () => {
       "The agent is using the latest setup. Its previous terminal remains in history.",
     );
     fireEvent.click(screen.getByRole("button", { name: "Dismiss Builder restart notice" }));
-    expect(screen.queryByRole("complementary", { name: "Builder restarted" })).toBeNull();
+    await waitFor(() =>
+      expect(screen.queryByRole("complementary", { name: "Builder restarted" })).toBeNull(),
+    );
+
+    await waitFor(() =>
+      expect(window.localStorage.getItem("nanasa.portal.preferences.v2")).toContain(transition.id),
+    );
+    view.unmount();
+    const remounted = render(
+      <TerminalWorkspace
+        client={client()}
+        members={[member]}
+        runs={[
+          {
+            ...run,
+            id: "run-two",
+            generation: 2,
+            recoveryPhase: "recovered",
+            providerUpdate: {
+              ...transition,
+              state: "completed",
+              outcome: "restarted",
+              replacementRunId: "run-two",
+              completedAt: timestamp,
+            },
+          },
+        ]}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("complementary", { name: "Builder restarted" })).toBeNull(),
+    );
+    remounted.rerender(
+      <TerminalWorkspace
+        client={client()}
+        members={[member]}
+        runs={[
+          {
+            ...run,
+            id: "run-three",
+            generation: 3,
+            recoveryPhase: "recovered",
+            providerUpdate: {
+              ...transition,
+              id: "transition-two",
+              state: "completed",
+              outcome: "restarted",
+              replacementRunId: "run-three",
+              completedAt: timestamp,
+            },
+          },
+        ]}
+      />,
+    );
+    expect(await screen.findByRole("complementary", { name: "Builder restarted" })).toBeVisible();
 
     Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
   });
@@ -766,7 +824,7 @@ describe("TerminalWorkspace", () => {
     });
   });
 
-  it("opts a member into future completion notifications across run restarts", async () => {
+  it("opts a member into future completion alerts across run restarts", async () => {
     const member = {
       id: "agent-one",
       groupId: "group-one",
@@ -798,9 +856,9 @@ describe("TerminalWorkspace", () => {
 
     await screen.findByTestId("owned-xterm");
     const enable = await screen.findByRole("button", {
-      name: "Enable completion notifications for Builder",
+      name: "Enable completion alerts for Builder",
     });
-    expect(enable).toHaveAttribute("title", "Enable completion notifications for Builder");
+    expect(enable).toHaveAttribute("title", "Enable completion alerts for Builder");
     expect(enable).toHaveAttribute("aria-pressed", "false");
     const paneButtons = enable.parentElement?.querySelectorAll("button");
     expect(
@@ -808,16 +866,16 @@ describe("TerminalWorkspace", () => {
         .map((button) => button.getAttribute("aria-label"))
         .filter((label) => label !== "Copy agent name member-one"),
     ).toEqual([
-      "Enable completion notifications for Builder",
+      "Enable completion alerts for Builder",
       "Pin Builder terminal",
       "Focus Builder terminal",
     ]);
 
     fireEvent.click(enable);
     const disable = await screen.findByRole("button", {
-      name: "Disable completion notifications for Builder",
+      name: "Disable completion alerts for Builder",
     });
-    expect(disable).toHaveAttribute("title", "Disable completion notifications for Builder");
+    expect(disable).toHaveAttribute("title", "Disable completion alerts for Builder");
     expect(disable).toHaveAttribute("aria-pressed", "true");
     expect(
       JSON.parse(window.localStorage.getItem("nanasa.portal.preferences.v2") ?? "{}"),
@@ -830,7 +888,7 @@ describe("TerminalWorkspace", () => {
     );
     expect(
       await screen.findByRole("button", {
-        name: "Disable completion notifications for Builder",
+        name: "Disable completion alerts for Builder",
       }),
     ).toHaveAttribute("aria-pressed", "true");
   });

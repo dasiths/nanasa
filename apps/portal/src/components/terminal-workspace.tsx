@@ -57,7 +57,9 @@ function TerminalPane({
   focused,
   statusKey,
   statusLabel,
+  restartNoticeDismissed,
   onRecover,
+  onDismissRestartNotice,
   onToggleCompletionNotifications,
   onTogglePinned,
   onToggleFocus,
@@ -76,7 +78,9 @@ function TerminalPane({
   focused: boolean;
   statusKey: string;
   statusLabel: string;
+  restartNoticeDismissed: boolean;
   onRecover?(forceIndeterminate: boolean): Promise<void>;
+  onDismissRestartNotice(): void;
   onToggleCompletionNotifications(): void;
   onTogglePinned(): void;
   onToggleFocus(): void;
@@ -98,7 +102,6 @@ function TerminalPane({
   const [confirmForce, setConfirmForce] = useState(false);
   const [recoveryBusy, setRecoveryBusy] = useState<"check" | "force">();
   const [recoveryError, setRecoveryError] = useState<PortalError>();
-  const [noticeDismissed, setNoticeDismissed] = useState(false);
   const detail = status?.error?.message;
   const stateLabel =
     endpointState === undefined || endpointState === "ready"
@@ -110,10 +113,6 @@ function TerminalPane({
         className={`status-dot status-${statusKey}`}
         title={statusLabel}
         aria-label={`${statusLabel} agent status`}
-      />
-      <span
-        className={`connection-dot connection-${endpointState ?? "starting"}`}
-        aria-hidden="true"
       />
       <strong>{alias}</strong>
       {kind !== undefined && (
@@ -140,8 +139,8 @@ function TerminalPane({
       <button
         type="button"
         className="icon-button"
-        aria-label={`${completionNotificationsEnabled ? "Disable" : "Enable"} completion notifications for ${alias}`}
-        title={`${completionNotificationsEnabled ? "Disable" : "Enable"} completion notifications for ${alias}`}
+        aria-label={`${completionNotificationsEnabled ? "Disable" : "Enable"} completion alerts for ${alias}`}
+        title={`${completionNotificationsEnabled ? "Disable" : "Enable"} completion alerts for ${alias}`}
         aria-pressed={completionNotificationsEnabled}
         onClick={onToggleCompletionNotifications}
       >
@@ -321,7 +320,7 @@ function TerminalPane({
             memberIdentity={memberIdentity}
             paneActions={paneActions}
           />
-          {updateSucceeded && !noticeDismissed && (
+          {updateSucceeded && !restartNoticeDismissed && (
             <aside className="provider-update-success" aria-label={`${alias} restarted`}>
               <CheckCircle2 aria-hidden="true" size={17} />
               <div>
@@ -334,7 +333,7 @@ function TerminalPane({
                 type="button"
                 className="icon-button"
                 aria-label={`Dismiss ${alias} restart notice`}
-                onClick={() => setNoticeDismissed(true)}
+                onClick={onDismissRestartNotice}
               >
                 <X aria-hidden="true" size={14} />
               </button>
@@ -483,6 +482,7 @@ export function TerminalWorkspace({
       ? []
       : (preferences.completionNotificationMemberIdsByGroup[groupId] ?? []);
   const completionNotificationMemberIdSet = new Set(completionNotificationMemberIds);
+  const dismissedProviderUpdateIdSet = new Set(preferences.dismissedProviderUpdateIds);
   const activeRunId = displayedRuns.some((run) => run.id === requestedActiveRunId)
     ? requestedActiveRunId
     : undefined;
@@ -604,12 +604,26 @@ export function TerminalWorkspace({
                 focused={focusedRunId === run.id}
                 statusKey={status?.key ?? "unknown"}
                 statusLabel={status?.label ?? "Unknown"}
+                restartNoticeDismissed={
+                  run.providerUpdate === undefined ||
+                  dismissedProviderUpdateIdSet.has(run.providerUpdate.id)
+                }
                 onRecover={async (forceIndeterminate) => {
                   const agentId = agentIdForRun(run);
                   if (agentId === undefined || onRecoverAgent === undefined) return;
                   await onRecoverAgent(run.groupId, agentId, forceIndeterminate);
                 }}
                 onToggleCompletionNotifications={() => toggleCompletionNotifications(run.memberId)}
+                onDismissRestartNotice={() => {
+                  const updateId = run.providerUpdate?.id;
+                  if (updateId === undefined) return;
+                  updatePreferences((current) => ({
+                    ...current,
+                    dismissedProviderUpdateIds: [
+                      ...new Set([...current.dismissedProviderUpdateIds, updateId]),
+                    ].slice(-100),
+                  }));
+                }}
                 onTogglePinned={() => togglePinned(run.id)}
                 onToggleFocus={() =>
                   onSetFocusedRun?.(focusedRunId === run.id ? undefined : run.id)

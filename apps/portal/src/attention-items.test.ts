@@ -485,6 +485,32 @@ describe("deriveAttentionItems", () => {
     expect(attentionReviewCount(items)).toBe(5);
   });
 
+  it("keeps a pending completion visible while the agent works on a later turn", () => {
+    const owner = member("builder");
+    const ownerRun = run(owner);
+    const items = deriveAttentionItems(
+      snapshot({
+        memberships: [owner],
+        runs: [ownerRun],
+        agentStatuses: [
+          status(owner, ownerRun, {
+            state: "working",
+            phase: "model",
+            completionRevision: 2,
+            completionPending: true,
+          }),
+        ],
+      }),
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "completion",
+      completionRevision: 2,
+      status: { state: "working" },
+    });
+  });
+
   it("reuses member status precedence rather than emitting overlapping semantic kinds", () => {
     const owner = member("builder");
     const ownerRun = run(owner);

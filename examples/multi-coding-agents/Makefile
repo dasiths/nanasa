@@ -44,7 +44,7 @@ help:
 		'  make doctor         Validate the example and provider commands' \
 		'  make start          Build and run the example with MCP enabled' \
 		'  make run            Alias for make start' \
-		'  make first-run      Install, prepare, diagnose, and start in order' \
+		'  make first-run      Install, prepare, diagnose, and print next steps' \
 		'  make dev            Run daemon and portal source watchers' \
 		'  make reset-alpha    Back up and replace stale alpha state' \
 		'' \
@@ -97,7 +97,12 @@ first-run:
 	@$(MAKE) --no-print-directory init
 	@$(MAKE) --no-print-directory setup
 	@$(MAKE) --no-print-directory doctor
-	@$(MAKE) --no-print-directory start
+	@printf '%s\n' \
+		'' \
+		'Preparation complete. Authenticate each provider before starting agents:' \
+		'  make auth' \
+		'  make proxy-start' \
+		'  make start'
 
 dev:
 	@$(call run_with_registry_env,cd "$(PRODUCT_ROOT)" && NANASA_REPO_ROOT="$(EXAMPLE_ROOT)" NANASA_MCP_ENABLED=true pnpm dev)

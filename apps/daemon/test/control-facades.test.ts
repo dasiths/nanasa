@@ -66,6 +66,7 @@ describe("typed control facade registries", () => {
       "state.retain",
       "state.delete",
       "statuses.acknowledge",
+      "attentionDismissals.dismiss",
       "messages.submit",
       "messages.clear",
       "actions.create",

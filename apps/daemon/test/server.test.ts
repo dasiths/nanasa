@@ -152,6 +152,24 @@ afterEach(() => {
 });
 
 describe("daemon REST API", () => {
+  it("round-trips durable Attention dismissals through authenticated routes", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const dismissed = await daemon.app.inject({
+      method: "POST",
+      url: "/api/v1/attention-dismissals",
+      payload: { itemIds: ["attention:health|run:1"] },
+    });
+    expect(dismissed.statusCode).toBe(200);
+    expect(dismissed.json()).toEqual({
+      dismissals: [expect.objectContaining({ itemId: "attention:health|run:1" })],
+    });
+
+    const listed = await daemon.app.inject("/api/v1/attention-dismissals");
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toEqual(dismissed.json());
+    await daemon.app.close();
+  });
+
   it("discovers checkouts and manages provenance-fenced worktrees through routes", async () => {
     const daemon = await createDaemon({ dataPath: ":memory:" });
     const snapshot = (await daemon.app.inject({ method: "GET", url: "/api/snapshot" })).json<{

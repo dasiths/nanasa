@@ -616,6 +616,9 @@ export function reduceAgentStatus(
       };
       break;
     case "turn.settled":
+      if (input.data.activeCount === 0) {
+        next = { ...next, openTools: [] };
+      }
       if (next.openWaits.length > 0) {
         next = resumeAfterWait(next);
       } else if ((input.data.activeCount ?? 0) > 0 || next.openTools.length > 0) {

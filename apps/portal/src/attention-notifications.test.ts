@@ -275,6 +275,36 @@ describe("Attention notification transitions", () => {
     expect(result.current.toasts).toMatchObject([{ id: "completion-revision-two", tier: "quiet" }]);
   });
 
+  it("delivers a completion alert only for the enabled agent", () => {
+    const initial = {
+      ...hookProps([]),
+      preferences: {
+        ...preferences,
+        completionNotificationMemberIdsByGroup: { "group-one": ["project-manager"] },
+      },
+    };
+    const { result, rerender } = renderHook(
+      (props: ReturnType<typeof hookProps>) => useAttentionNotifications(props),
+      { initialProps: initial },
+    );
+    const projectManager = item("completion", "pm-completion", {
+      memberId: "project-manager",
+      label: "Project Manager",
+      title: "Project Manager · Completion ready",
+    });
+    const engineer = item("completion", "engineer-completion", {
+      memberId: "engineer-one",
+      label: "Engineer 1",
+      title: "Engineer 1 · Completion ready",
+    });
+
+    rerender({ ...initial, items: [projectManager, engineer] });
+
+    expect(result.current.toasts).toMatchObject([
+      { id: "pm-completion", item: { memberId: "project-manager" } },
+    ]);
+  });
+
   it("suppresses a visible completion pane but not an unrelated run", () => {
     const initial = {
       ...hookProps([], {

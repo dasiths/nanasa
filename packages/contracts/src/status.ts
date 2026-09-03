@@ -212,6 +212,26 @@ export const AgentStatusTransitionSchema = z
   .strict();
 export type AgentStatusTransition = z.infer<typeof AgentStatusTransitionSchema>;
 
+export const AttentionDismissalSchema = z
+  .object({
+    itemId: z.string().trim().min(1).max(2_048),
+    dismissedAt: TimestampSchema,
+  })
+  .strict();
+export type AttentionDismissal = z.infer<typeof AttentionDismissalSchema>;
+
+export const AttentionDismissalListSchema = z
+  .object({ dismissals: z.array(AttentionDismissalSchema).max(500) })
+  .strict();
+export type AttentionDismissalList = z.infer<typeof AttentionDismissalListSchema>;
+
+export const DismissAttentionItemsCommandSchema = z
+  .object({
+    itemIds: z.array(z.string().trim().min(1).max(2_048)).min(1).max(500),
+  })
+  .strict();
+export type DismissAttentionItemsCommand = z.infer<typeof DismissAttentionItemsCommandSchema>;
+
 export const RuntimeObservationSchema = z
   .object({
     id: IdentifierSchema,

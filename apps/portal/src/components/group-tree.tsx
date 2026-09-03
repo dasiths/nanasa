@@ -22,12 +22,12 @@ import {
   ChevronDown,
   ChevronRight,
   CircleStop,
+  Command,
   Copy,
   EllipsisVertical,
   Info,
   MailWarning,
   MoveRight,
-  Palette,
   Pencil,
   Play,
   Plus,
@@ -67,6 +67,7 @@ interface GroupTreeProps {
   config: NanasaConfig;
   repositoryNavigation?: ReactNode;
   utilities?: ReactNode;
+  onOpenCommandPalette?(): void;
   selectedGroupId?: string;
   unreadCounts: ReadonlyMap<string, number>;
   busyAction?: string;
@@ -80,7 +81,6 @@ interface GroupTreeProps {
   onAddAgent(input: AddAgentInput): Promise<void>;
   onRenameAgent(groupId: string, agentId: string, name: string): Promise<void>;
   onUpdateAgent?(groupId: string, agentId: string, command: UpdateGroupAgentCommand): Promise<void>;
-  onUpdateRolePresentation?(roleId: string, command: UpdateRolePresentationCommand): Promise<void>;
   onReorderAgents?(groupId: string, command: ReorderGroupAgentsCommand): Promise<void>;
   onReorderGroups?(groupIds: string[], expectedOrderRevision: number): Promise<void>;
   onReparentAgent?(sourceGroupId: string, agentId: string, targetGroupId: string): Promise<void>;
@@ -710,7 +710,7 @@ function RolePresentationSection({
   );
 }
 
-function RoleSettingsDialog({
+export function RoleSettingsDialog({
   roles,
   onClose,
   onUpdate,
@@ -935,7 +935,7 @@ function AgentSettingsDialog({
   );
 }
 
-function AddAgentDialog({
+export function AddAgentDialog({
   group,
   config,
   onAdd,
@@ -1060,6 +1060,7 @@ export function GroupTree({
   config,
   repositoryNavigation,
   utilities,
+  onOpenCommandPalette,
   selectedGroupId,
   busyAction,
   onSelectGroup,
@@ -1072,7 +1073,6 @@ export function GroupTree({
   onAddAgent,
   onRenameAgent,
   onUpdateAgent,
-  onUpdateRolePresentation,
   onReorderAgents,
   onReorderGroups,
   onReparentAgent,
@@ -1086,7 +1086,6 @@ export function GroupTree({
   );
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [showAddAgent, setShowAddAgent] = useState(false);
-  const [showRoleSettings, setShowRoleSettings] = useState(false);
   const [settingsGroupId, setSettingsGroupId] = useState<string>();
   const [editTarget, setEditTarget] = useState<EditTarget>();
   const [settingsTarget, setSettingsTarget] = useState<{
@@ -1173,15 +1172,17 @@ export function GroupTree({
           <strong className="brand">Nanasa</strong>
         </div>
         <div className="rail-heading-actions">
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="Role settings"
-            title="Role settings"
-            onClick={() => setShowRoleSettings(true)}
-          >
-            <Palette aria-hidden="true" size={16} />
-          </button>
+          {onOpenCommandPalette !== undefined && (
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Open command palette"
+              title="Open command palette"
+              onClick={onOpenCommandPalette}
+            >
+              <Command aria-hidden="true" size={16} />
+            </button>
+          )}
           <button
             type="button"
             className="icon-button"
@@ -1220,10 +1221,16 @@ export function GroupTree({
               );
               return member === undefined ? [] : [{ agentId, agent, member }];
             });
+          const teamWorking = agents.some(
+            ({ member }) =>
+              memberStatusView(snapshot.agentStatuses, snapshot.runs, member).key === "working",
+          );
           const expanded = expandedGroups.has(group.id);
           return (
             <div className="tree-group" key={group.id}>
-              <div className={`tree-group-row ${selectedGroupId === group.id ? "selected" : ""}`}>
+              <div
+                className={`tree-group-row${selectedGroupId === group.id ? " selected" : ""}${teamWorking ? " team-working" : ""}`}
+              >
                 <button
                   type="button"
                   className="tree-toggle"
@@ -1251,6 +1258,7 @@ export function GroupTree({
                   <button
                     type="button"
                     className="tree-select"
+                    title={teamWorking ? `${group.name} has agents working` : undefined}
                     aria-current={selectedGroupId === group.id ? "page" : undefined}
                     onClick={() => {
                       onSelectGroup(group.id);
@@ -1382,6 +1390,12 @@ export function GroupTree({
                     const deliveryFailed =
                       failedRecipientsByGroup.get(group.id)?.has(member.memberId) === true;
                     const action = runAction(run);
+                    const recoveryRetryAt =
+                      run?.recoveryNotBefore !== undefined &&
+                      activeRecoveryPhases.has(run.recoveryPhase) &&
+                      Date.parse(run.recoveryNotBefore) > Date.now()
+                        ? run.recoveryNotBefore
+                        : undefined;
                     const actionKey = `${group.id}:${agentId}`;
                     const integration = config.integrations[agent.integrationId];
                     const checkout = snapshot.checkouts.find(
@@ -1435,8 +1449,8 @@ export function GroupTree({
                             <RoleIdentity role={role} />
                             <small title={statusTitle || undefined}>
                               {statusLabel}
-                              {run?.recoveryNotBefore !== undefined &&
-                                ` · retry ${new Date(run.recoveryNotBefore).toLocaleTimeString()}`}
+                              {recoveryRetryAt !== undefined &&
+                                ` · retry ${new Date(recoveryRetryAt).toLocaleTimeString()}`}
                             </small>
                           </button>
                         )}
@@ -1872,13 +1886,6 @@ export function GroupTree({
           instructions={config.groups[settingsGroupId]?.instructions ?? []}
           onClose={() => setSettingsGroupId(undefined)}
           onUpdate={(command) => onUpdateGroup(settingsGroupId, command)}
-        />
-      )}
-      {showRoleSettings && onUpdateRolePresentation !== undefined && (
-        <RoleSettingsDialog
-          roles={config.roles}
-          onClose={() => setShowRoleSettings(false)}
-          onUpdate={onUpdateRolePresentation}
         />
       )}
       {showAddAgent && selectedGroupId !== undefined && (

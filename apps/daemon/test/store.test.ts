@@ -19,6 +19,25 @@ afterEach(() => {
 });
 
 describe("NanasaStore persistence", () => {
+  it("persists attention dismissals by operator across reopen", () => {
+    const directory = mkdtempSync(join(tmpdir(), "nanasa-attention-dismissals-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "nanasa.sqlite");
+    const store = new NanasaStore(databasePath);
+
+    expect(store.dismissAttentionItems("operator_1", ["attention:health|run:1"])).toEqual([
+      expect.objectContaining({ itemId: "attention:health|run:1" }),
+    ]);
+    expect(store.listAttentionDismissals("operator_2")).toEqual([]);
+    store.close();
+
+    const reopened = new NanasaStore(databasePath);
+    expect(reopened.listAttentionDismissals("operator_1")).toEqual([
+      expect.objectContaining({ itemId: "attention:health|run:1" }),
+    ]);
+    reopened.close();
+  });
+
   it("persists all domain state and append-only events across reopen", () => {
     const directory = mkdtempSync(join(tmpdir(), "nanasa-store-"));
     temporaryDirectories.push(directory);
@@ -216,6 +235,9 @@ describe("NanasaStore persistence", () => {
       recoveryNotBefore: cooldown,
     });
     expect(reopened.listEvents().map((event) => event.type)).toContain("run.recovery-changed");
+    expect(
+      reopened.transitionRunRecovery(run.id, run.generation, "recovered").recoveryNotBefore,
+    ).toBeUndefined();
     reopened.updateRunStatus(run.id, "stopping");
     expect(() => reopened.transitionRunRecovery(run.id, run.generation, "recovered")).toThrowError(
       expect.objectContaining({ code: "recovery_generation_fenced" }),

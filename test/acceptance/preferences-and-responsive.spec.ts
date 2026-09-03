@@ -233,7 +233,9 @@ test("recovery results remain bounded and operable in portrait and landscape", a
   await page.setViewportSize({ width: 360, height: 800 });
   await page.goto(nanasa.portalUrl);
 
-  await page.getByRole("button", { name: "Check agent tools in Recovery layout team" }).click();
+  await page
+    .getByRole("button", { name: "Check setup and restart needs for Recovery layout team" })
+    .click();
   const trigger = page.getByRole("button", { name: "View results" });
   await expect(trigger).toBeVisible();
   await trigger.click();

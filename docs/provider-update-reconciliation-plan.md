@@ -527,7 +527,7 @@ tmux manipulation.
    success notices. The custom Claude launcher displayed `Needs approval`, the
    exact command, `Not now`, and `Approve and restart`.
 * After approval, all four agents reached `Idle` with connected terminals. A
-   portal `Check tools` dry run reported four agents kept running, zero restarted,
+   portal `Check agent setup` dry run reported four agents kept running, zero restarted,
    zero needing approval, and zero failed.
 * The CLI dry run reported the same mixed pre-approval state in plain language.
 * Full contract, control-client, daemon, portal, and packaged CLI test suites

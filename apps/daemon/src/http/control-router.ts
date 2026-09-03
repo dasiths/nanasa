@@ -8,6 +8,7 @@ import {
   AgentRunSchema,
   AgentStatusDetailSchema,
   AgentStatusSummarySchema,
+  AttentionDismissalListSchema,
   ApproveCustomLaunchConsentCommandSchema,
   AssignAgentCheckoutCommandSchema,
   BrowserRestartFrameSchema,
@@ -21,6 +22,7 @@ import {
   CustomLaunchConsentListQuerySchema,
   DeleteGroupResultSchema,
   DenyCustomLaunchConsentCommandSchema,
+  DismissAttentionItemsCommandSchema,
   EventServerFrameSchema,
   ExtensionLifecycleCommandSchema,
   InstallProviderExtensionCommandSchema,
@@ -718,6 +720,21 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
         principal.operatorId,
       ),
     );
+  });
+  register("attentionDismissals.list", (request) => {
+    const principal = operatorPrincipal(services, request);
+    return AttentionDismissalListSchema.parse({
+      dismissals: services.store.listAttentionDismissals(principal.operatorId),
+    });
+  });
+  register("attentionDismissals.dismiss", (request) => {
+    const principal = operatorPrincipal(services, request);
+    const command = DismissAttentionItemsCommandSchema.parse(
+      routeBody(controlRoute("attentionDismissals.dismiss"), request),
+    );
+    return AttentionDismissalListSchema.parse({
+      dismissals: services.store.dismissAttentionItems(principal.operatorId, command.itemIds),
+    });
   });
 
   register("messages.submit", (request, reply) => {

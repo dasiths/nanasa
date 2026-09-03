@@ -16,6 +16,7 @@ export interface PortalPreferences {
   pinnedRunIdsByGroup: Record<string, string[]>;
   completionNotificationMemberIdsByGroup: Record<string, string[]>;
   terminalColumnsByGroup: Record<string, TerminalColumnsPreference>;
+  dismissedProviderUpdateIds: string[];
   railCollapsed: boolean;
   density: "comfortable" | "compact";
   motion: MotionPreference;
@@ -37,6 +38,7 @@ export const defaultPortalPreferences: PortalPreferences = {
   pinnedRunIdsByGroup: {},
   completionNotificationMemberIdsByGroup: {},
   terminalColumnsByGroup: {},
+  dismissedProviderUpdateIds: [],
   railCollapsed: false,
   density: "comfortable",
   motion: "system",
@@ -130,6 +132,15 @@ export function parsePortalPreferences(value: string | null): PortalPreferences 
         parsed.completionNotificationMemberIdsByGroup,
       ),
       terminalColumnsByGroup: terminalColumnsRecord(parsed.terminalColumnsByGroup),
+      dismissedProviderUpdateIds: Array.isArray(parsed.dismissedProviderUpdateIds)
+        ? [
+            ...new Set(
+              parsed.dismissedProviderUpdateIds.filter(
+                (item): item is string => typeof item === "string" && item.length > 0,
+              ),
+            ),
+          ].slice(-100)
+        : [],
       railCollapsed: parsed.railCollapsed === true,
       density: parsed.density === "compact" ? "compact" : "comfortable",
       motion: ["system", "reduce", "full"].includes(String(parsed.motion))

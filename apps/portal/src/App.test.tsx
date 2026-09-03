@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App.js";
 import type { PortalClient } from "./api.js";
+import { deriveAttentionItems } from "./attention-items.js";
 import { GroupTree } from "./components/group-tree.js";
 import {
   buildMessageCommand,
@@ -381,6 +382,8 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     cancelAgentAction: vi.fn(),
     replyOpenWait: vi.fn(),
     acknowledgeCompletion: vi.fn(),
+    listAttentionDismissals: vi.fn().mockResolvedValue({ dismissals: [] }),
+    dismissAttentionItems: vi.fn().mockResolvedValue({ dismissals: [] }),
     loadMessages: vi.fn().mockResolvedValue({
       groupId: "group-backend",
       messages: [],
@@ -1124,6 +1127,7 @@ describe("portal application", () => {
     await waitFor(() =>
       expect(client.updateGroup).toHaveBeenCalledWith("group-backend", { name: "Platform" }),
     );
+
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Actions for group Backend" })).toHaveFocus(),
     );
@@ -1139,6 +1143,22 @@ describe("portal application", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Actions for agent Reviewer" })).toHaveFocus(),
     );
+  });
+
+  it("opens Add agent for the selected team from the header icon", async () => {
+    const user = userEvent.setup();
+    render(<App client={createClient()} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    const addAgent = screen.getByRole("button", { name: "Add agent to Backend" });
+    expect(addAgent).toHaveTextContent("");
+    expect(addAgent).toHaveAttribute("title", "Add agent to Backend");
+    await user.click(addAgent);
+
+    const dialog = screen.getByRole("dialog", { name: "Add agent" });
+    expect(within(dialog).getByText("Backend")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Close Add agent" }));
+    expect(screen.queryByRole("dialog", { name: "Add agent" })).not.toBeInTheDocument();
   });
 
   it("prevents concurrent inline rename submissions", async () => {
@@ -1252,7 +1272,13 @@ describe("portal application", () => {
     render(<App client={client} />);
 
     await screen.findByRole("heading", { name: "Backend" });
-    await user.click(screen.getByRole("button", { name: "Role settings" }));
+    await user.click(screen.getByLabelText("Portal utilities", { selector: "summary" }));
+    await user.click(
+      within(screen.getByRole("navigation", { name: "Portal utilities" })).getByRole("link", {
+        name: "Preferences",
+      }),
+    );
+    await user.click(await screen.findByRole("button", { name: "Edit role presentation" }));
     const dialog = screen.getByRole("dialog", { name: "Role presentation" });
     await user.selectOptions(within(dialog).getByLabelText("Icon"), "scan-search");
     await user.selectOptions(within(dialog).getByLabelText("Color"), "rose");
@@ -1651,7 +1677,9 @@ describe("portal application", () => {
       .mockResolvedValueOnce({ groupId: "group-backend", dryRun: false, outcomes: [outcome] });
     render(<App client={client} />);
 
-    await user.click(await screen.findByRole("button", { name: "Check agent tools in Backend" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Check setup and restart needs for Backend" }),
+    );
 
     expect(client.recoverGroupRuns).toHaveBeenNthCalledWith(1, "group-backend", {
       dryRun: true,
@@ -1698,7 +1726,9 @@ describe("portal application", () => {
     });
     render(<App client={client} />);
 
-    await user.click(await screen.findByRole("button", { name: "Check agent tools in Backend" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Check setup and restart needs for Backend" }),
+    );
     await waitFor(() => expect(client.recoverGroupRuns).toHaveBeenCalledOnce());
 
     expect(screen.queryByRole("button", { name: "View results" })).toBeNull();
@@ -1728,6 +1758,49 @@ describe("portal application", () => {
 
     expect(screen.queryByRole("button", { name: "View results" })).toBeNull();
     expect(screen.queryByRole("dialog", { name: /Team recovery/ })).toBeNull();
+  });
+
+  it("keeps Start all visible but disabled when every group member is active", async () => {
+    const client = createClient();
+    vi.mocked(client.loadSnapshot).mockResolvedValue({
+      ...snapshot,
+      runs: [activeRun(memberships[0]!), activeRun(memberships[1]!)],
+    });
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    const startAll = screen.getByRole("button", {
+      name: "Start all non-running agents in Backend",
+    });
+    expect(startAll).toBeDisabled();
+    expect(startAll).toHaveAttribute("title", "All agents are active in Backend");
+    expect(startAll).toHaveTextContent("");
+    expect(screen.getByRole("button", { name: "Open command palette" })).toHaveTextContent("");
+    expect(
+      screen.getByRole("button", { name: "Check setup and restart needs for Backend" }),
+    ).toHaveTextContent("");
+  });
+
+  it("hides team-scoped header actions on global routes", async () => {
+    const user = userEvent.setup();
+    render(<App client={createClient()} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    await user.click(screen.getByLabelText("Portal utilities", { selector: "summary" }));
+    await user.click(
+      within(screen.getByRole("navigation", { name: "Portal utilities" })).getByRole("link", {
+        name: "Preferences",
+      }),
+    );
+    await screen.findByRole("heading", { name: "Preferences", level: 2 });
+
+    expect(screen.queryByRole("button", { name: "Add agent to Backend" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Check setup and restart needs for Backend" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Start all non-running agents in Backend" }),
+    ).not.toBeInTheDocument();
   });
 
   it("approves an exact terminal request and retries the same member start", async () => {
@@ -1953,6 +2026,7 @@ describe("portal application", () => {
         "title",
         "daemon_restart",
       );
+      expect(screen.queryByText(/retry \d/)).not.toBeInTheDocument();
       expect(
         screen.getByRole("button", {
           name: `View details for Builder, status ${statusLabel}`,
@@ -2154,6 +2228,10 @@ describe("portal application", () => {
     await screen.findByRole("heading", { name: "Backend" });
 
     expect(screen.getByText("1 working")).toBeInTheDocument();
+    expect(screen.queryByText("0 starting")).not.toBeInTheDocument();
+    expect(screen.getByTitle("Configured agents")).toHaveTextContent("2 agents");
+    expect(screen.getByTitle("Live terminals")).toHaveTextContent("2 live");
+    expect(screen.getByTitle("Agents currently working")).toHaveTextContent("1 working");
     expect(screen.queryByText(/waiting$/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/needs attention/)).not.toBeInTheDocument();
     expect(
@@ -2164,6 +2242,36 @@ describe("portal application", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "View details for Reviewer, status Working" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Collapse Backend" }).closest(".tree-group-row"),
+    ).toHaveClass("team-working");
+    fireEvent.click(screen.getByRole("button", { name: "Collapse Backend" }));
+    await screen.findByRole("button", { name: "Expand Backend" });
+    expect(
+      screen.getByRole("button", { name: "Expand Backend" }).closest(".tree-group-row"),
+    ).toHaveClass("team-working");
+  });
+
+  it("shows transient starting status only while an agent is starting", async () => {
+    const client = createClient();
+    vi.mocked(client.loadSnapshot).mockResolvedValue({
+      ...snapshot,
+      runs: [
+        activeRun(memberships[0]!, {
+          status: "starting",
+          recoveryPhase: "resuming",
+        }),
+      ],
+      agentStatuses: [],
+    });
+
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+
+    expect(screen.getByTitle("Agents starting or recovering")).toHaveTextContent("1 starting");
+    expect(
+      screen.getByLabelText("2 agents, 0 live terminals, 0 working, 1 starting or recovering"),
     ).toBeInTheDocument();
   });
 
@@ -2194,6 +2302,9 @@ describe("portal application", () => {
     await screen.findByRole("heading", { name: "Backend" });
 
     expect(screen.getByText("0 working")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Collapse Backend" }).closest(".tree-group-row"),
+    ).not.toHaveClass("team-working");
     expect(screen.queryByText(/needs attention/)).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "View details for Builder, status Done" }),
@@ -2207,6 +2318,53 @@ describe("portal application", () => {
       }),
     ).toBeInTheDocument();
     await waitFor(() => expect(document.title).toBe("(1) Backend Terminals · Nanasa"));
+  });
+
+  it("loads Attention dismissals from the daemon when browser storage is empty", async () => {
+    window.history.replaceState({}, "", "/attention");
+    const client = createClient();
+    const completion = completionAttentionSnapshot(3);
+    const dismissedItem = deriveAttentionItems(completion)[0]!;
+    vi.mocked(client.loadSnapshot).mockResolvedValue(completion);
+    vi.mocked(client.listAttentionDismissals).mockResolvedValue({
+      dismissals: [{ itemId: dismissedItem.id, dismissedAt: timestamp }],
+    });
+
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { level: 1, name: "Attention" });
+    await waitFor(() => expect(client.listAttentionDismissals).toHaveBeenCalledOnce());
+    expect(
+      screen.queryByText("Completion revision 3 is ready for review."),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open Attention" })).toBeInTheDocument();
+    expect(window.localStorage.getItem(PORTAL_PREFERENCES_KEY)).toBeNull();
+  });
+
+  it("persists an Attention dismissal before removing the item", async () => {
+    window.history.replaceState({}, "", "/attention");
+    const user = userEvent.setup();
+    const client = createClient();
+    const completion = completionAttentionSnapshot(3);
+    const dismissedItem = deriveAttentionItems(completion)[0]!;
+    vi.mocked(client.loadSnapshot).mockResolvedValue(completion);
+    vi.mocked(client.dismissAttentionItems).mockResolvedValue({
+      dismissals: [{ itemId: dismissedItem.id, dismissedAt: timestamp }],
+    });
+
+    render(<App client={client} />);
+    const dismiss = await screen.findByRole("button", {
+      name: "Dismiss Builder · Completion ready",
+    });
+    await user.click(dismiss);
+
+    await waitFor(() =>
+      expect(client.dismissAttentionItems).toHaveBeenCalledWith({ itemIds: [dismissedItem.id] }),
+    );
+    expect(
+      screen.queryByText("Completion revision 3 is ready for review."),
+    ).not.toBeInTheDocument();
+    expect(window.localStorage.getItem(PORTAL_PREFERENCES_KEY)).toBeNull();
   });
 
   it("offers Start for a normally stopped desired-stopped run", async () => {
@@ -2343,6 +2501,14 @@ describe("portal application", () => {
     expect(within(palette).getByRole("button", { name: /Open About Nanasa/ })).toBeInTheDocument();
     await user.click(within(palette).getByRole("button", { name: "Close command palette" }));
 
+    await user.click(screen.getByLabelText("Portal utilities", { selector: "summary" }));
+    expect(
+      within(screen.getByRole("navigation", { name: "Portal utilities" })).queryByRole("button", {
+        name: "Commands",
+      }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByLabelText("Portal utilities", { selector: "summary" }));
+
     const mobileTrigger = screen.getByRole("button", { name: "Open application menu" });
     await user.click(mobileTrigger);
     const drawer = screen.getByRole("dialog", { name: "Nanasa" });
@@ -2351,6 +2517,10 @@ describe("portal application", () => {
       "href",
       "/settings",
     );
+    expect(within(drawer).getByRole("button", { name: "Commands" })).toBeInTheDocument();
+    expect(
+      within(drawer).queryByRole("button", { name: "Role presentation" }),
+    ).not.toBeInTheDocument();
     await user.click(within(drawer).getByRole("button", { name: "Close menu" }));
     expect(screen.queryByRole("dialog", { name: "Nanasa" })).not.toBeInTheDocument();
     await waitFor(() => expect(mobileTrigger).toHaveFocus());

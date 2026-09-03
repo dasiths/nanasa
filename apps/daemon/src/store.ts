@@ -21,6 +21,9 @@ import {
   AgentStatusEventInputSchema,
   type AgentStatusSummary,
   AgentStatusSummarySchema,
+  type AttentionDismissal,
+  AttentionDismissalListSchema,
+  AttentionDismissalSchema,
   type Checkout,
   CheckoutSchema,
   type ClearMessageHistoryResult,
@@ -2141,7 +2144,6 @@ export class NanasaStore {
         input.generation !== run.generation ||
         session === undefined ||
         input.providerId !== profile.agentType ||
-        input.adapterId !== profile.kind ||
         input.providerId !== session.providerId ||
         input.adapterId !== session.adapterId ||
         input.reporterId !== session.reporterId ||
@@ -2332,6 +2334,50 @@ export class NanasaStore {
     return completed.acknowledgement;
   }
 
+  public listAttentionDismissals(operatorId: string): AttentionDismissal[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT item_id AS itemId, dismissed_at AS dismissedAt
+         FROM attention_dismissals
+         WHERE operator_id = ?
+         ORDER BY dismissed_at ASC, item_id ASC`,
+      )
+      .all(operatorId);
+    return AttentionDismissalListSchema.parse({ dismissals: rows }).dismissals;
+  }
+
+  public dismissAttentionItems(
+    operatorId: string,
+    itemIds: readonly string[],
+  ): AttentionDismissal[] {
+    const dismissedAt = new Date().toISOString();
+    const dismissals = [...new Set(itemIds)].map((itemId) =>
+      AttentionDismissalSchema.parse({ itemId, dismissedAt }),
+    );
+    this.#transaction(() => {
+      const statement = this.#database.prepare(
+        `INSERT INTO attention_dismissals (operator_id, item_id, dismissed_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(operator_id, item_id) DO UPDATE SET dismissed_at = excluded.dismissed_at`,
+      );
+      for (const dismissal of dismissals) {
+        statement.run(operatorId, dismissal.itemId, dismissal.dismissedAt);
+      }
+      this.#database
+        .prepare(
+          `DELETE FROM attention_dismissals
+           WHERE operator_id = ? AND item_id NOT IN (
+             SELECT item_id FROM attention_dismissals
+             WHERE operator_id = ?
+             ORDER BY dismissed_at DESC, item_id DESC
+             LIMIT 500
+           )`,
+        )
+        .run(operatorId, operatorId);
+    });
+    return this.listAttentionDismissals(operatorId);
+  }
+
   public reportAgentProgress(
     identity: AgentStatusIdentity,
     report: AgentProgressReportCommand,
@@ -2442,7 +2488,8 @@ export class NanasaStore {
       );
     }
     const recoveryAttempts = current.recoveryAttempts + (options.incrementAttempt === true ? 1 : 0);
-    const recoveryNotBefore = options.recoveryNotBefore ?? current.recoveryNotBefore;
+    const recoveryNotBefore =
+      phase === "recovered" ? undefined : (options.recoveryNotBefore ?? current.recoveryNotBefore);
     const recoveryReason = options.reason ?? current.recoveryReason;
     const { result, event } = this.#transaction(() => {
       const updated = this.#database
@@ -5272,7 +5319,7 @@ export class NanasaStore {
       statusRevision: state.statusRevision,
       completionRevision: state.completionRevision,
       operatorAcknowledgedCompletionRevision: acknowledgedRevision,
-      completionPending: statusState === "idle" && state.completionRevision > acknowledgedRevision,
+      completionPending: state.completionRevision > acknowledgedRevision,
       interactiveReady: state.interactiveReady,
       staleAuthority: state.staleAuthority,
       authorityKind: state.authorityKind,

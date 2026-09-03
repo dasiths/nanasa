@@ -45,6 +45,7 @@ function props(
     commands: [],
     onNavigate: vi.fn(),
     onRefresh: vi.fn(),
+    onDismissAttentionItems: vi.fn().mockResolvedValue(true),
     onPatchPreferences: vi.fn(),
   } as unknown as Parameters<typeof PortalRoutePanel>[0];
 }
@@ -410,6 +411,168 @@ describe("projected status route panels", () => {
     resolveRefresh();
   });
 
+  it("acknowledges every completion in the current Attention scope", async () => {
+    const builder = membership("group-done", "Builder");
+    const reviewer = membership("group-done", "Reviewer");
+    const builderRun = run(builder);
+    const reviewerRun = run(reviewer);
+    const acknowledgeCompletion = vi.fn().mockResolvedValue(undefined);
+    const onRefresh = vi.fn().mockResolvedValue(undefined);
+    render(
+      <PortalRoutePanel
+        {...props("attention", { acknowledgeCompletion } as unknown as PortalClient)}
+        preferences={defaultPortalPreferences}
+        onRefresh={onRefresh}
+        snapshot={snapshot(
+          [builder, reviewer],
+          [builderRun, reviewerRun],
+          [
+            status(builder, builderRun, {
+              state: "idle",
+              completionRevision: 2,
+              completionPending: true,
+            }),
+            status(reviewer, reviewerRun, {
+              state: "idle",
+              completionRevision: 3,
+              completionPending: true,
+            }),
+          ],
+        )}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Dismiss Builder · Completion ready" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Dismiss Reviewer · Completion ready" }),
+    ).toBeVisible();
+    screen.getByRole("button", { name: "Acknowledge all completions" }).click();
+
+    await waitFor(() =>
+      expect(acknowledgeCompletion.mock.calls).toEqual([
+        ["group-done", "builder"],
+        ["group-done", "reviewer"],
+      ]),
+    );
+    expect(screen.queryByText("Builder · Completion ready")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reviewer · Completion ready")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("2 completions acknowledged.");
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
+  it("resurfaces a new completion revision after the previous item was dismissed", () => {
+    const builder = membership("group-done", "Builder");
+    const builderRun = run(builder);
+    const onDismissAttentionItems = vi.fn().mockResolvedValue(true);
+    const completionSnapshot = (completionRevision: number) =>
+      snapshot(
+        [builder],
+        [builderRun],
+        [
+          status(builder, builderRun, {
+            state: "idle",
+            completionRevision,
+            completionPending: true,
+          }),
+        ],
+      );
+    const base = {
+      ...props("attention", {} as PortalClient),
+      preferences: defaultPortalPreferences,
+      onDismissAttentionItems,
+      snapshot: completionSnapshot(2),
+      attentionItems: deriveAttentionItems(completionSnapshot(2)),
+    };
+    const view = render(<PortalRoutePanel {...base} />);
+
+    screen.getByRole("button", { name: "Dismiss Builder · Completion ready" }).click();
+    const dismissedId = onDismissAttentionItems.mock.calls[0]?.[0]?.[0];
+    expect(dismissedId).toEqual(expect.any(String));
+    view.rerender(
+      <PortalRoutePanel
+        {...base}
+        attentionItems={deriveAttentionItems(completionSnapshot(2)).filter(
+          (item) => item.id !== dismissedId,
+        )}
+      />,
+    );
+    expect(screen.queryByText("Builder · Completion ready")).not.toBeInTheDocument();
+
+    view.rerender(
+      <PortalRoutePanel
+        {...base}
+        snapshot={completionSnapshot(3)}
+        attentionItems={deriveAttentionItems(completionSnapshot(3)).filter(
+          (item) => item.id !== dismissedId,
+        )}
+      />,
+    );
+    expect(screen.getByText("Completion revision 3 is ready for review.")).toBeInTheDocument();
+  });
+
+  it("dismisses every restart update in the current Attention scope", async () => {
+    const builder = membership("group-update", "Builder");
+    const reviewer = membership("group-update", "Reviewer");
+    const builderRun = run(builder);
+    const reviewerRun = run(reviewer);
+    const restarted = (currentRun: AgentRun, updateId: string) => ({
+      ...currentRun,
+      providerUpdate: {
+        id: updateId,
+        runId: currentRun.id,
+        generation: currentRun.generation,
+        memberId: currentRun.memberId,
+        providerId: "copilot",
+        previousSnapshotDigest: "a".repeat(64),
+        currentSnapshotDigest: "b".repeat(64),
+        state: "completed" as const,
+        outcome: "restarted" as const,
+        replacementRunId: currentRun.id,
+        detectedAt: timestamp,
+        updatedAt: timestamp,
+        completedAt: timestamp,
+      },
+    });
+    const onPatchPreferences = vi.fn();
+    const onDismissAttentionItems = vi.fn().mockResolvedValue(true);
+    const base = {
+      ...props("attention", {} as PortalClient),
+      preferences: defaultPortalPreferences,
+      onPatchPreferences,
+      onDismissAttentionItems,
+      snapshot: snapshot(
+        [builder, reviewer],
+        [restarted(builderRun, "update-builder"), restarted(reviewerRun, "update-reviewer")],
+        [],
+      ),
+    };
+    const view = render(<PortalRoutePanel {...base} />);
+
+    expect(screen.getByText("Recent updates")).toBeInTheDocument();
+    screen.getByRole("button", { name: "Dismiss all updates" }).click();
+    expect(onDismissAttentionItems).toHaveBeenCalledWith([expect.any(String), expect.any(String)]);
+    await waitFor(() =>
+      expect(onPatchPreferences).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dismissedProviderUpdateIds: ["update-builder", "update-reviewer"],
+        }),
+      ),
+    );
+
+    view.rerender(
+      <PortalRoutePanel
+        {...base}
+        preferences={{
+          ...defaultPortalPreferences,
+          dismissedProviderUpdateIds: ["update-builder", "update-reviewer"],
+        }}
+      />,
+    );
+    expect(screen.queryByText("Recent updates")).not.toBeInTheDocument();
+  });
+
   it("keeps exact wait and cancellation controls safe in group Attention", async () => {
     const owner = membership("group-scope", "Builder", "builder");
     const ownerRun = run(owner);
@@ -472,6 +635,8 @@ describe("projected status route panels", () => {
     const replyOpenWait = vi.fn().mockResolvedValue({ ...exactWait, state: "replying" });
     const cancelAgentAction = vi.fn().mockResolvedValue({ ...action, state: "cancelled" });
     const reload = vi.fn().mockResolvedValue(undefined);
+    const onPatchPreferences = vi.fn();
+    const onDismissAttentionItems = vi.fn().mockResolvedValue(true);
     const client = { replyOpenWait, cancelAgentAction } as unknown as PortalClient;
     const routeProps = {
       ...props("attention", client),
@@ -492,6 +657,8 @@ describe("projected status route panels", () => {
         ],
       ]),
       onReloadAttentionWorkspace: reload,
+      onPatchPreferences,
+      onDismissAttentionItems,
     };
     window.history.replaceState({}, "", `/groups/${owner.groupId}/activity#action-action-1`);
 
@@ -501,6 +668,12 @@ describe("projected status route panels", () => {
     expect(screen.getByRole("button", { name: "All 1" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Requires response 1" })).toBeInTheDocument();
     expect(screen.getByText("1 active action")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss all review items" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Active actions" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Dismiss Builder · Requires response" }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Dismiss Builder created action" })).toBeVisible();
     expect(screen.getByText("Unable to load Attention details")).toBeInTheDocument();
     expect(screen.getByText("portal_operation_failed")).toBeInTheDocument();
     await waitFor(() => expect(document.getElementById("action-action-1")).toHaveFocus());
@@ -522,6 +695,70 @@ describe("projected status route panels", () => {
     await waitFor(() => expect(cancelAgentAction).toHaveBeenCalledWith("action-1"));
     expect(screen.getByRole("button", { name: "Cancellation requested" })).toBeDisabled();
     expect(reload).toHaveBeenCalledWith(owner.groupId);
+
+    screen.getByRole("button", { name: "Dismiss Builder created action" }).click();
+    expect(onDismissAttentionItems).toHaveBeenLastCalledWith([expect.any(String)]);
+  });
+
+  it("separates timestamped terminal actions from active work", () => {
+    const owner = membership("group-history", "Builder", "builder");
+    const ownerRun = run(owner);
+    const stalled: AgentAction = {
+      version: 1,
+      id: "action-stalled",
+      kind: "prompt",
+      principal: { kind: "operator", operatorId: "operator-one" },
+      target: {
+        groupId: owner.groupId,
+        memberId: owner.memberId,
+        runId: ownerRun.id,
+        generation: ownerRun.generation,
+        daemonEpoch: 1,
+        reporterSessionId: "session-one",
+        reporterId: "reporter-one",
+        reporterEpoch: "epoch-one",
+        baselineStatusRevision: 1,
+        baselineCompletionRevision: 0,
+      },
+      idempotencyKey: "stalled-key",
+      requestDigest: "b".repeat(64),
+      prompt: "Continue",
+      allowWorking: false,
+      state: "stalled",
+      queueDeadlineAt: timestamp,
+      error: {
+        code: "agent_prompt_stalled",
+        message: "Reporter did not acknowledge",
+        retryable: false,
+      },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    const input = snapshot([owner], [ownerRun], []);
+    const workspace: AgentActionWorkspace = {
+      groupId: owner.groupId,
+      actions: [stalled],
+      attempts: [],
+      acknowledgements: [],
+      openWaits: [],
+    };
+
+    render(
+      <PortalRoutePanel
+        {...props("attention", {} as PortalClient)}
+        snapshot={input}
+        attentionItems={deriveAttentionItems(input, [workspace])}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Actions" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Recent history" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Active actions" })).not.toBeInTheDocument();
+    expect(screen.getByText("Builder · Prompt action")).toBeVisible();
+    expect(screen.getByText("Stalled")).toBeVisible();
+    expect(screen.getByText("Reporter did not acknowledge")).toBeVisible();
+    expect(screen.getByText(/^Ended /)).toHaveAttribute("datetime", timestamp);
+    expect(screen.getByRole("button", { name: "Dismiss history" })).toBeVisible();
   });
 
   it("routes delivery summaries to group Messages without inventing a message ID", () => {

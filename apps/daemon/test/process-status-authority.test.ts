@@ -19,7 +19,7 @@ afterEach(() => {
 const reporterAuthority = {
   reporterPolicy: async () => ({
     integrationId: "claude-code",
-    adapterId: "claude-code",
+    adapterId: "nanasa.claude-code-v2",
     reporterId: "claude-hooks",
     source: "claude-code",
     reporterVersion: "2",
@@ -81,7 +81,7 @@ function report(
     version: 2 as const,
     eventId: `event-${sequence}`,
     providerId: "claude-code",
-    adapterId: "claude-code",
+    adapterId: "nanasa.claude-code-v2",
     reporterId: "claude-hooks",
     source: "claude-code" as const,
     protocolVersion: 2 as const,

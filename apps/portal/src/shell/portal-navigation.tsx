@@ -4,6 +4,7 @@ import {
   Bot,
   Boxes,
   CircleHelp,
+  Command,
   GitBranch,
   Info,
   Laptop,
@@ -279,6 +280,7 @@ export function MobileNavigationDialog({
   onSetTheme,
   onLink,
   onSelectGroup,
+  onOpenCommandPalette,
   onClose,
 }: {
   open: boolean;
@@ -291,6 +293,7 @@ export function MobileNavigationDialog({
   onSetTheme(theme: ThemePreference): void;
   onLink: PortalLinkHandler;
   onSelectGroup(groupId: string, section: WorkspaceSection): void;
+  onOpenCommandPalette(): void;
   onClose(): void;
 }) {
   const currentDestination = route.kind === "global" ? route.destination : undefined;
@@ -425,6 +428,17 @@ export function MobileNavigationDialog({
             </button>
           </div>
           <nav className="portal-navigation-list" aria-label="Portal utilities">
+            <button
+              type="button"
+              className="portal-nav-link"
+              onClick={() => {
+                onClose();
+                onOpenCommandPalette();
+              }}
+            >
+              <Command aria-hidden="true" size={15} />
+              <span>Commands</span>
+            </button>
             {utilities.map((destination) => (
               <DestinationLink
                 key={destination.id}

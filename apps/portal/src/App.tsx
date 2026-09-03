@@ -10,14 +10,19 @@ import type {
   UpdateRolePresentationCommand,
 } from "@nanasa/contracts";
 import {
+  Activity,
   ArrowLeft,
   Bell,
+  Bot,
   Cable,
-  Command,
   Grid2X2,
+  LoaderCircle,
   Menu,
   Play,
+  RadioTower,
   RefreshCw,
+  ScanSearch,
+  UserPlus,
   Users,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -33,7 +38,12 @@ import {
   useAttentionNotifications,
 } from "./attention-notifications.js";
 import { AdHocConsoleDialog } from "./components/ad-hoc-console-dialog.js";
-import { type AddAgentInput, GroupTree } from "./components/group-tree.js";
+import {
+  type AddAgentInput,
+  AddAgentDialog,
+  GroupTree,
+  RoleSettingsDialog,
+} from "./components/group-tree.js";
 import { MessageWorkspace } from "./components/message-workspace.js";
 import { TeamRecoveryResults } from "./components/team-recovery-results.js";
 import { ErrorNotice, type PortalError, toPortalError } from "./errors.js";
@@ -200,6 +210,8 @@ export function App({ client = api }: AppProps) {
   const appliedTheme = useAppliedTheme(preferences.theme);
   const { route, navigate, link } = usePortalRouter();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [roleSettingsOpen, setRoleSettingsOpen] = useState(false);
+  const [addAgentGroupId, setAddAgentGroupId] = useState<string>();
   const [busyAction, setBusyAction] = useState<string>();
   const [actionError, setActionError] = useState<PortalError>();
   const [startAllResult, setStartAllResult] = useState<StartGroupRunsResult>();
@@ -212,6 +224,10 @@ export function App({ client = api }: AppProps) {
   const [terminalConnectionRevision, setTerminalConnectionRevision] = useState(0);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
+  const [dismissedAttentionItemIds, setDismissedAttentionItemIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [attentionDismissalsReady, setAttentionDismissalsReady] = useState(false);
   const startAllInFlight = useRef(new Map<string, Promise<void>>());
   const previousEventStatus = useRef(eventStatus);
   const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -249,6 +265,9 @@ export function App({ client = api }: AppProps) {
     ({ key }) => key === "starting" || key === "updating",
   ).length;
   const workingCount = memberStatusViews.filter(({ key }) => key === "working").length;
+  const hasStartableMembers = memberStatusViews.some(
+    ({ run }) => run === undefined || run.status === "stopped" || run.status === "failed",
+  );
   const selectedMessageState = snapshot?.messageGroups?.find(
     (state) => state.groupId === selectedGroupId,
   );
@@ -273,17 +292,40 @@ export function App({ client = api }: AppProps) {
     snapshot === undefined ? undefined : `${snapshot.instanceId}:${snapshot.daemonEpoch}`,
     snapshot?.sequence,
   );
-  const attentionItems = useMemo(
-    () =>
-      snapshot === undefined
-        ? []
-        : deriveAttentionItems(snapshot, {
-            workspaces: attentionWorkspaces.workspaces,
-            unreadCounts,
-            launchConsents: launchConsents.latestRequests,
-          }),
-    [attentionWorkspaces.workspaces, launchConsents.latestRequests, snapshot, unreadCounts],
-  );
+  useEffect(() => {
+    let active = true;
+    setAttentionDismissalsReady(false);
+    void client.listAttentionDismissals().then(
+      ({ dismissals }) => {
+        if (!active) return;
+        setDismissedAttentionItemIds(new Set(dismissals.map(({ itemId }) => itemId)));
+        setAttentionDismissalsReady(true);
+      },
+      (cause: unknown) => {
+        if (!active) return;
+        setActionError(toPortalError(cause, "Unable to load Attention dismissals"));
+        setAttentionDismissalsReady(true);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [client]);
+  const attentionItems = useMemo(() => {
+    if (snapshot === undefined || !attentionDismissalsReady) return [];
+    return deriveAttentionItems(snapshot, {
+      workspaces: attentionWorkspaces.workspaces,
+      unreadCounts,
+      launchConsents: launchConsents.latestRequests,
+    }).filter((item) => !dismissedAttentionItemIds.has(item.id));
+  }, [
+    attentionDismissalsReady,
+    attentionWorkspaces.workspaces,
+    dismissedAttentionItemIds,
+    launchConsents.latestRequests,
+    snapshot,
+    unreadCounts,
+  ]);
   const attentionCountsByGroup = useMemo(
     () => attentionReviewCountsByGroup(attentionItems),
     [attentionItems],
@@ -315,6 +357,7 @@ export function App({ client = api }: AppProps) {
     items: attentionItems,
     ready:
       snapshot !== undefined &&
+      attentionDismissalsReady &&
       attentionWorkspaces.ready &&
       attentionWorkspaces.errors.size === 0 &&
       !launchConsents.loading &&
@@ -329,6 +372,17 @@ export function App({ client = api }: AppProps) {
     },
     navigate,
   });
+
+  const dismissAttentionItems = async (itemIds: readonly string[]): Promise<boolean> => {
+    try {
+      const result = await client.dismissAttentionItems({ itemIds: [...itemIds] });
+      setDismissedAttentionItemIds(new Set(result.dismissals.map(({ itemId }) => itemId)));
+      return true;
+    } catch (cause) {
+      setActionError(toPortalError(cause, "Unable to persist Attention dismissal"));
+      return false;
+    }
+  };
 
   useEffect(() => {
     if (snapshot === undefined) return;
@@ -738,7 +792,6 @@ export function App({ client = api }: AppProps) {
             onAddAgent={addAgent}
             onRenameAgent={renameAgent}
             onUpdateAgent={updateAgent}
-            onUpdateRolePresentation={updateRolePresentation}
             onReorderAgents={reorderAgents}
             onReorderGroups={reorderGroups}
             onReparentAgent={reparentAgent}
@@ -746,6 +799,7 @@ export function App({ client = api }: AppProps) {
             onStartRun={startRun}
             onStopRun={stopRun}
             onOpenConsole={() => setConsoleOpen(true)}
+            onOpenCommandPalette={() => setPaletteOpen(true)}
           />
         </aside>
       }
@@ -765,24 +819,32 @@ export function App({ client = api }: AppProps) {
                 </h1>
                 <p
                   className="group-status-summary"
-                  aria-label={`${members.length} agents, ${runningCount} live terminals, ${startingCount} starting, ${workingCount} working`}
+                  aria-label={`${members.length} agents, ${runningCount} live terminals, ${workingCount} working${startingCount > 0 ? `, ${startingCount} starting or recovering` : ""}`}
                 >
-                  <span className="group-status-agents">{members.length} agents</span>
+                  <span className="group-status-agents" title="Configured agents">
+                    <Bot aria-hidden="true" size={12} />
+                    {members.length} agents
+                  </span>
                   <span
                     className={`group-status-live${runningCount === 0 ? " group-status-empty" : ""}`}
+                    title="Live terminals"
                   >
+                    <RadioTower aria-hidden="true" size={12} />
                     {runningCount} live
                   </span>
                   <span
-                    className={`group-status-starting${startingCount === 0 ? " group-status-empty" : ""}`}
-                  >
-                    {startingCount} starting
-                  </span>
-                  <span
                     className={`group-status-working${workingCount === 0 ? " group-status-empty" : ""}`}
+                    title="Agents currently working"
                   >
+                    <Activity aria-hidden="true" size={12} />
                     {workingCount} working
                   </span>
+                  {startingCount > 0 && (
+                    <span className="group-status-starting" title="Agents starting or recovering">
+                      <LoaderCircle className="spin" aria-hidden="true" size={12} />
+                      {startingCount} starting
+                    </span>
+                  )}
                 </p>
               </div>
             </>
@@ -844,39 +906,44 @@ export function App({ client = api }: AppProps) {
               </span>
             )}
           </a>
-          <button
-            type="button"
-            className="compact-button command-palette-button"
-            aria-label="Open command palette"
-            onClick={() => setPaletteOpen(true)}
-          >
-            <Command aria-hidden="true" size={15} />
-            <span>Commands</span>
-          </button>
-          {selectedGroup !== undefined && (
+          {route.kind === "group" && selectedGroup !== undefined && (
             <button
               type="button"
-              className="compact-button recovery-check-button"
-              aria-label={`Check agent tools in ${selectedGroup.name}`}
-              title={`Preview agent tool recovery in ${selectedGroup.name}`}
+              className="compact-button header-icon-button add-agent-button"
+              aria-label={`Add agent to ${selectedGroup.name}`}
+              title={`Add agent to ${selectedGroup.name}`}
+              onClick={() => setAddAgentGroupId(selectedGroup.id)}
+            >
+              <UserPlus aria-hidden="true" size={15} />
+            </button>
+          )}
+          {route.kind === "group" && selectedGroup !== undefined && (
+            <button
+              type="button"
+              className="compact-button header-icon-button recovery-check-button"
+              aria-label={`Check setup and restart needs for ${selectedGroup.name}`}
+              title="Check whether running agents need a restart for updated prompts, hooks, MCP, or provider tools. Preview only; makes no changes."
               disabled={recoveringGroupId === selectedGroup.id || members.length === 0}
               onClick={() => void recoverGroup(selectedGroup.id, true).catch(() => undefined)}
             >
-              <RefreshCw
-                className={recoveringGroupId === selectedGroup.id ? "spin" : undefined}
-                aria-hidden="true"
-                size={15}
-              />
-              <span>Check tools</span>
+              {recoveringGroupId === selectedGroup.id ? (
+                <RefreshCw className="spin" aria-hidden="true" size={15} />
+              ) : (
+                <ScanSearch aria-hidden="true" size={15} />
+              )}
             </button>
           )}
-          {selectedGroup !== undefined && (
+          {route.kind === "group" && selectedGroup !== undefined && (
             <button
               type="button"
-              className="compact-button start-all-button"
+              className="compact-button header-icon-button start-all-button"
               aria-label={`Start all non-running agents in ${selectedGroup.name}`}
-              title={`Start all non-running agents in ${selectedGroup.name}`}
-              disabled={startingAllGroupId === selectedGroup.id || members.length === 0}
+              title={
+                hasStartableMembers
+                  ? `Start all non-running agents in ${selectedGroup.name}`
+                  : `All agents are active in ${selectedGroup.name}`
+              }
+              disabled={startingAllGroupId === selectedGroup.id || !hasStartableMembers}
               onClick={() => void startAll(selectedGroup.id).catch(() => undefined)}
             >
               {startingAllGroupId === selectedGroup.id ? (
@@ -884,7 +951,6 @@ export function App({ client = api }: AppProps) {
               ) : (
                 <Play aria-hidden="true" size={15} />
               )}
-              <span>Start all</span>
             </button>
           )}
           <span className={`event-status event-${eventStatus}`} title="Domain event connection">
@@ -953,6 +1019,8 @@ export function App({ client = api }: AppProps) {
                 onRefresh={refresh}
                 onReloadAttentionWorkspace={attentionWorkspaces.reloadGroup}
                 onApproveLaunchConsent={approveLaunchConsent}
+                onDismissAttentionItems={dismissAttentionItems}
+                onOpenRoleSettings={() => setRoleSettingsOpen(true)}
                 onPatchPreferences={patchPreferences}
               />
             </Suspense>
@@ -1077,6 +1145,8 @@ export function App({ client = api }: AppProps) {
                   onRefresh={refresh}
                   onReloadAttentionWorkspace={attentionWorkspaces.reloadGroup}
                   onApproveLaunchConsent={approveLaunchConsent}
+                  onDismissAttentionItems={dismissAttentionItems}
+                  onOpenRoleSettings={() => setRoleSettingsOpen(true)}
                   onPatchPreferences={patchPreferences}
                 />
               </Suspense>
@@ -1099,8 +1169,24 @@ export function App({ client = api }: AppProps) {
           setSelectedGroup(groupId, section);
           navigate(groupRoute(groupId, section));
         }}
+        onOpenCommandPalette={() => setPaletteOpen(true)}
         onClose={() => setMobileNavigationOpen(false)}
       />
+      {roleSettingsOpen && (
+        <RoleSettingsDialog
+          roles={config.roles}
+          onClose={() => setRoleSettingsOpen(false)}
+          onUpdate={updateRolePresentation}
+        />
+      )}
+      {addAgentGroupId !== undefined && (
+        <AddAgentDialog
+          group={snapshot.groups.find((group) => group.id === addAgentGroupId)!}
+          config={config}
+          onAdd={addAgent}
+          onClose={() => setAddAgentGroupId(undefined)}
+        />
+      )}
       <CommandPalette
         open={paletteOpen}
         commands={commands}

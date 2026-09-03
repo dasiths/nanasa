@@ -94,6 +94,11 @@ used by Engineer 2.
 Use `make -C examples/multi-coding-agents auth` to run all four flows in order.
 Do not commit anything created under `.nanasa/integrations`.
 
+The `first-run` target stops after setup and diagnostics, then prints the three
+commands required to authenticate providers, start the gateway, and start
+Nanasa. It does not launch unauthenticated agents. Portal authentication is a
+separate browser login and does not replace these provider flows.
+
 ## Start the example
 
 Start the LiteLLM gateway first because Engineer 2 uses it:

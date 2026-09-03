@@ -9,6 +9,8 @@ import {
   AgentRunSchema,
   type AgentStatusDetail,
   AgentStatusDetailSchema,
+  type AttentionDismissalList,
+  AttentionDismissalListSchema,
   type ApproveCustomLaunchConsentCommand,
   ApproveCustomLaunchConsentCommandSchema,
   type AssignAgentCheckoutCommand,
@@ -42,6 +44,7 @@ import {
   DeleteGroupResultSchema,
   type DenyCustomLaunchConsentCommand,
   DenyCustomLaunchConsentCommandSchema,
+  type DismissAttentionItemsCommand,
   type ExtensionLifecycleCommand,
   type ExtensionTrustReceipt,
   ExtensionTrustReceiptSchema,
@@ -245,6 +248,8 @@ export interface PortalClient {
   cancelAgentAction(actionId: string): Promise<AgentAction>;
   replyOpenWait(waitId: string, command: ReplyOpenWaitCommand): Promise<OpenWait>;
   acknowledgeCompletion(groupId: string, memberId: string): Promise<AgentStatusDetail>;
+  listAttentionDismissals(): Promise<AttentionDismissalList>;
+  dismissAttentionItems(command: DismissAttentionItemsCommand): Promise<AttentionDismissalList>;
   loadMessages(
     groupId: string,
     options?: { limit?: number; before?: number; after?: number },
@@ -532,6 +537,14 @@ export const api: PortalClient = {
       `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/status/acknowledge`,
       AgentStatusDetailSchema,
       commandInit("POST", {}, crypto.randomUUID()),
+    ),
+  listAttentionDismissals: () =>
+    request(`${CONTROL_API_PREFIX}/attention-dismissals`, AttentionDismissalListSchema),
+  dismissAttentionItems: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/attention-dismissals`,
+      AttentionDismissalListSchema,
+      commandInit("POST", command, crypto.randomUUID()),
     ),
   loadMessages: (groupId, options = {}) => {
     const query = new URLSearchParams();

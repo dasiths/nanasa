@@ -28,6 +28,7 @@ describe("portal preferences v2", () => {
       pinnedRunIdsByGroup: { group: ["run"] },
       completionNotificationMemberIdsByGroup: { group: ["member"] },
       terminalColumnsByGroup: { group: 3, automatic: "auto" },
+      dismissedProviderUpdateIds: [],
       notifications: { inApp: true, desktop: false, sound: false },
     });
     expect(parsePortalPreferences('{"theme":"neon","motion":"unsafe"}')).toMatchObject({
@@ -41,7 +42,20 @@ describe("portal preferences v2", () => {
     expect(parsePortalPreferences('{"version":2,"theme":"dark"}')).toMatchObject({
       theme: "dark",
       completionNotificationMemberIdsByGroup: {},
+      dismissedProviderUpdateIds: [],
     });
+  });
+
+  it("parses a bounded set of dismissed provider updates", () => {
+    const identifiers = Array.from({ length: 105 }, (_, index) => `update-${index}`);
+    expect(
+      parsePortalPreferences(
+        JSON.stringify({
+          ...defaultPortalPreferences,
+          dismissedProviderUpdateIds: [...identifiers, "update-104", 3],
+        }),
+      ).dismissedProviderUpdateIds,
+    ).toEqual(identifiers.slice(-100));
   });
 
   it("removes deleted group and run identifiers without changing presentation", () => {

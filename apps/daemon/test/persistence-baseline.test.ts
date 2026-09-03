@@ -55,6 +55,7 @@ describe("database baseline", () => {
         "actions",
         "action_attempts",
         "action_acknowledgements",
+        "attention_dismissals",
         "open_waits",
         "provider_state",
         "overlays",
@@ -162,6 +163,34 @@ describe("database baseline", () => {
     expect(
       migrated
         .prepare("SELECT strict FROM pragma_table_list WHERE name = 'provider_update_transitions'")
+        .get(),
+    ).toEqual({ strict: 1 });
+    migrated.close();
+  });
+
+  it("migrates schema 12 databases to durable attention dismissals", () => {
+    const path = join(directory(), "nanasa-v12.sqlite");
+    const database = new DatabaseSync(path);
+    database.exec(`
+      CREATE TABLE schema_metadata (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        schema_version INTEGER NOT NULL,
+        initialized_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO schema_metadata VALUES (1, 12, '2026-09-03T00:00:00.000Z');
+      PRAGMA user_version = 12;
+    `);
+    database.close();
+
+    openNanasaDatabase(path).close();
+    const migrated = new DatabaseSync(path, { readOnly: true });
+    expect(
+      (migrated.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
+    ).toBe(DATABASE_SCHEMA_VERSION);
+    expect(tableNames(migrated)).toContain("attention_dismissals");
+    expect(
+      migrated
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'attention_dismissals'")
         .get(),
     ).toEqual({ strict: 1 });
     migrated.close();

@@ -1577,6 +1577,48 @@
         ]
       }
     },
+    "/api/v1/attention-dismissals": {
+      "get": {
+        "operationId": "attentionDismissals.list",
+        "summary": "List durable Attention dismissals for the operator",
+        "tags": [
+          "status"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      },
+      "post": {
+        "operationId": "attentionDismissals.dismiss",
+        "summary": "Persist Attention dismissals for the operator",
+        "tags": [
+          "status"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "optional",
+        "x-errors": []
+      }
+    },
     "/api/v1/groups/:groupId/messages": {
       "post": {
         "operationId": "messages.submit",

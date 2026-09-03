@@ -9,6 +9,8 @@ import {
   AgentStatusDetailSchema,
   type AgentStatusSummary,
   AgentStatusSummarySchema,
+  type AttentionDismissalList,
+  AttentionDismissalListSchema,
   type ApproveCustomLaunchConsentCommand,
   type CancelCustomLaunchConsentCommand,
   type ClearMessageHistoryResult,
@@ -24,6 +26,7 @@ import {
   type DeliveryOutcome,
   DeliveryOutcomeSchema,
   type DenyCustomLaunchConsentCommand,
+  type DismissAttentionItemsCommand,
   type MessagePage,
   MessagePageSchema,
   type MessageSubmissionResult,
@@ -190,6 +193,22 @@ export class OperationsResource {
       path("groups", groupId, "members", memberId, "status", "acknowledge"),
       AgentStatusDetailSchema,
       commandInit("POST", {}, key),
+    );
+  }
+
+  public listAttentionDismissals(): Promise<AttentionDismissalList> {
+    return request(this.client, path("attention-dismissals"), AttentionDismissalListSchema);
+  }
+
+  public dismissAttentionItems(
+    command: DismissAttentionItemsCommand,
+    key?: string,
+  ): Promise<AttentionDismissalList> {
+    return request(
+      this.client,
+      path("attention-dismissals"),
+      AttentionDismissalListSchema,
+      commandInit("POST", command, key),
     );
   }
 

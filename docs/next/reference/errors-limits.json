@@ -204,6 +204,8 @@
     "statuses.acknowledge": [
       "membership_not_found"
     ],
+    "attentionDismissals.list": [],
+    "attentionDismissals.dismiss": [],
     "messages.submit": [
       "message_body_too_large",
       "membership_revision_stale"
@@ -357,6 +359,8 @@
     "statuses.list": 65536,
     "statuses.get": 65536,
     "statuses.acknowledge": 65536,
+    "attentionDismissals.list": 65536,
+    "attentionDismissals.dismiss": 65536,
     "messages.submit": 6356992,
     "messages.list": 65536,
     "messages.clear": 65536,

@@ -40,6 +40,14 @@ describe("provider state and generated overlays", () => {
         policy: { scope: "membership" },
         credentialReference: { kind: "provider-managed" },
       });
+      const markerPath = join(first.storageReference, "retained-state.json");
+      writeFileSync(markerPath, '{"preference":"provider-owned"}\n', { mode: 0o600 });
+      const firstReplacement = states.resolve({
+        membershipId: "agent_one",
+        integrationId: "copilot",
+        policy: { scope: "membership" },
+        credentialReference: { kind: "provider-managed" },
+      });
       const shared = states.resolve({
         membershipId: "agent_one",
         integrationId: "pi",
@@ -53,6 +61,8 @@ describe("provider state and generated overlays", () => {
         credentialReference: { kind: "provider-managed" },
       });
       expect(second.storageReference).not.toBe(first.storageReference);
+      expect(firstReplacement.storageReference).toBe(first.storageReference);
+      expect(readFileSync(markerPath, "utf8")).toBe('{"preference":"provider-owned"}\n');
       expect(sharedAgain.storageReference).toBe(shared.storageReference);
       expect(statSync(first.storageReference).mode & 0o777).toBe(0o700);
       const lifecycle = new ProviderStateLifecycle(states, new GeneratedOverlayTransaction(base));

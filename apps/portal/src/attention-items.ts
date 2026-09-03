@@ -482,7 +482,7 @@ function statusItems(
       continue;
     }
 
-    if (view.key === "done" && run !== undefined && status !== undefined) {
+    if (status?.completionPending === true && run !== undefined) {
       const source = sourceIdentity(
         "completion",
         group.id,

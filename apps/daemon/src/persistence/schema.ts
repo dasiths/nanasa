@@ -3,7 +3,19 @@ import {
   PROVIDER_UPDATE_TRANSITION_SCHEMA_SQL,
 } from "./provider-platform-schema.js";
 
-export const DATABASE_SCHEMA_VERSION = 12;
+export const DATABASE_SCHEMA_VERSION = 13;
+
+export const DATABASE_MIGRATION_12_TO_13_SQL = `
+  CREATE TABLE attention_dismissals (
+    operator_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    dismissed_at TEXT NOT NULL,
+    PRIMARY KEY (operator_id, item_id)
+  ) STRICT;
+
+  CREATE INDEX attention_dismissals_operator_recency
+    ON attention_dismissals (operator_id, dismissed_at DESC);
+`;
 
 export const DATABASE_MIGRATION_11_TO_12_SQL = PROVIDER_UPDATE_TRANSITION_SCHEMA_SQL;
 
@@ -256,6 +268,16 @@ export const DATABASE_BASELINE_SQL = `
     acknowledged_at TEXT NOT NULL,
     PRIMARY KEY (operator_id, run_id, generation)
   ) STRICT;
+
+  CREATE TABLE attention_dismissals (
+    operator_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    dismissed_at TEXT NOT NULL,
+    PRIMARY KEY (operator_id, item_id)
+  ) STRICT;
+
+  CREATE INDEX attention_dismissals_operator_recency
+    ON attention_dismissals (operator_id, dismissed_at DESC);
 
   CREATE TABLE screen_observations (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
