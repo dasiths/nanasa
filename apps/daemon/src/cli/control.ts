@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { ErrorPayloadSchema, type ErrorPayload } from "@nanasa/contracts";
+import { type ErrorPayload, ErrorPayloadSchema } from "@nanasa/contracts";
 import { ControlClientError } from "@nanasa/control-client";
 import WebSocket from "ws";
 import { authenticateAgent, CliAdminError, doctorIntegrations } from "../cli-admin.js";

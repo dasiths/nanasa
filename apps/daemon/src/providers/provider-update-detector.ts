@@ -1,6 +1,6 @@
 import {
-  ProviderUpdatePlanSchema,
   type ProviderUpdatePlan,
+  ProviderUpdatePlanSchema,
   type RunProviderBinding,
 } from "@nanasa/contracts";
 

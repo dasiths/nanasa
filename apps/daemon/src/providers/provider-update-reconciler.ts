@@ -1,4 +1,3 @@
-import { ProviderUpdateRecoveryCommandSchema } from "@nanasa/contracts";
 import type {
   AgentRun,
   NativeRecoveryPolicy,
@@ -8,6 +7,7 @@ import type {
   ProviderUpdateSafeError,
   StartAgentRunResult,
 } from "@nanasa/contracts";
+import { ProviderUpdateRecoveryCommandSchema } from "@nanasa/contracts";
 
 import type { NativeSessionService } from "../native-session-service.js";
 import type { RuntimeLaunchConsentGate } from "../run-runtime-coordinator.js";

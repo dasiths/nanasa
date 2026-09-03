@@ -23,8 +23,8 @@ import { ProviderRunBindingRepository } from "../src/providers/provider-run-bind
 import { ProviderRuntimeIndex } from "../src/providers/provider-runtime-index.js";
 import { ProviderSnapshotRepository } from "../src/providers/provider-snapshot-repository.js";
 import {
-  planProviderUpdate,
   ProviderUpdateDetector,
+  planProviderUpdate,
 } from "../src/providers/provider-update-detector.js";
 import { resolveProviderAdapter } from "../src/providers/resolved-provider-adapter.js";
 

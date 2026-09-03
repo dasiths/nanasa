@@ -1,7 +1,7 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { ErrorPayloadSchema, type ErrorPayload } from "@nanasa/contracts";
+import { type ErrorPayload, ErrorPayloadSchema } from "@nanasa/contracts";
 import { assertLoopbackControlHost } from "./authority-policy.js";
 import { discoverAndLoadNanasaConfig, loadNanasaConfig } from "./config-loader.js";
 import { isLoopbackHost, validateMcpEndpointConfiguration } from "./mcp-config.js";
