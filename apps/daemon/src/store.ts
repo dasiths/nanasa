@@ -24,6 +24,11 @@ import {
   type AttentionDismissal,
   AttentionDismissalListSchema,
   AttentionDismissalSchema,
+  type AttentionEventType,
+  AttentionEventTypeSchema,
+  type AttentionSubscriptionOverride,
+  AttentionSubscriptionOverrideSchema,
+  type AttentionSubscriptionsSnapshot,
   type Checkout,
   CheckoutSchema,
   type ClearMessageHistoryResult,
@@ -66,6 +71,7 @@ import {
   type MessageSubmissionResult,
   MessageSubmissionResultSchema,
   type NanasaConfig,
+  NanasaConfigSchema,
   type OpenWait,
   OpenWaitSchema,
   type PortalSnapshot,
@@ -102,6 +108,10 @@ import {
   type ProcessStatusObservation,
   reduceAgentStatus,
 } from "./agent-status-reducer.js";
+import {
+  resolveAttentionSubscriptionsSnapshot,
+  resolveMemberAttentionSubscriptions,
+} from "./attention-subscription-policy.js";
 import { dockerMemberName, formatMemberId, type MemberNameGenerator } from "./member-id.js";
 import { orderedAgentEntries } from "./membership-order.js";
 import { openNanasaDatabase } from "./persistence/database.js";
@@ -1209,6 +1219,9 @@ export class NanasaStore {
       DeleteGroupResultSchema,
       () => {
         this.#requireGroup(groupId);
+        this.#database
+          .prepare("DELETE FROM attention_subscription_overrides WHERE group_id = ?")
+          .run(groupId);
         for (const column of ["reply_to", "root_id", "causation_id"] as const) {
           this.#database
             .prepare(
@@ -1506,6 +1519,11 @@ export class NanasaStore {
       }
 
       const timestamp = new Date().toISOString();
+      this.#database
+        .prepare(
+          "DELETE FROM attention_subscription_overrides WHERE group_id = ? AND member_id = ?",
+        )
+        .run(groupId, memberId);
       this.#database
         .prepare("UPDATE memberships SET state = 'removed', removed_at = ? WHERE id = ?")
         .run(timestamp, existing.id);
@@ -2376,6 +2394,71 @@ export class NanasaStore {
         .run(operatorId, operatorId);
     });
     return this.listAttentionDismissals(operatorId);
+  }
+
+  public listAttentionSubscriptions(operatorId: string): AttentionSubscriptionsSnapshot {
+    const members = this.#database
+      .prepare(
+        `SELECT group_id AS groupId, member_id AS memberId
+         FROM memberships WHERE state = 'active'
+         ORDER BY group_id, order_index, member_id`,
+      )
+      .all() as Array<{ groupId: string; memberId: string }>;
+    return resolveAttentionSubscriptionsSnapshot(
+      this.#attentionConfig(),
+      members,
+      this.#listAttentionSubscriptionOverrides(operatorId),
+    );
+  }
+
+  public setAttentionSubscription(
+    operatorId: string,
+    groupId: string,
+    memberId: string,
+    eventType: AttentionEventType,
+    enabled: boolean,
+  ) {
+    const parsedEventType = AttentionEventTypeSchema.parse(eventType);
+    this.#requireActiveMembership(groupId, memberId);
+    const updatedAt = new Date().toISOString();
+    const event = this.#transaction(() => {
+      this.#database
+        .prepare(
+          `INSERT INTO attention_subscription_overrides
+             (operator_id, group_id, member_id, event_type, enabled, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(operator_id, group_id, member_id, event_type) DO UPDATE SET
+             enabled = excluded.enabled,
+             updated_at = excluded.updated_at`,
+        )
+        .run(operatorId, groupId, memberId, parsedEventType, enabled ? 1 : 0, updatedAt);
+      return this.#appendEvent("attention.subscription-updated", "membership", memberId, {
+        groupId,
+        memberId,
+        eventType: parsedEventType,
+        enabled,
+      });
+    });
+    this.#publish(event);
+    return this.#memberAttentionSubscriptions(operatorId, groupId, memberId);
+  }
+
+  public resetAttentionSubscriptions(operatorId: string, groupId: string, memberId: string) {
+    this.#requireActiveMembership(groupId, memberId);
+    const event = this.#transaction(() => {
+      this.#database
+        .prepare(
+          `DELETE FROM attention_subscription_overrides
+           WHERE operator_id = ? AND group_id = ? AND member_id = ?`,
+        )
+        .run(operatorId, groupId, memberId);
+      return this.#appendEvent("attention.subscriptions-reset", "membership", memberId, {
+        groupId,
+        memberId,
+      });
+    });
+    this.#publish(event);
+    return this.#memberAttentionSubscriptions(operatorId, groupId, memberId);
   }
 
   public reportAgentProgress(
@@ -5412,6 +5495,45 @@ export class NanasaStore {
     return this.#database
       .prepare("SELECT * FROM memberships WHERE group_id = ? AND member_id = ?")
       .get(groupId, memberId) as unknown as MembershipRow | undefined;
+  }
+
+  #requireActiveMembership(groupId: string, memberId: string): MembershipRow {
+    const row = this.#getMembershipRow(groupId, memberId);
+    if (row === undefined || row.state !== "active") {
+      throw new DomainError("membership_not_found", "Membership not found", 404);
+    }
+    return row;
+  }
+
+  #attentionConfig(): NanasaConfig {
+    return this.#config ?? NanasaConfigSchema.parse({ version: 2, integrations: {} });
+  }
+
+  #listAttentionSubscriptionOverrides(operatorId: string): AttentionSubscriptionOverride[] {
+    return this.#database
+      .prepare(
+        `SELECT operator_id AS operatorId, group_id AS groupId, member_id AS memberId,
+                event_type AS eventType, enabled, updated_at AS updatedAt
+         FROM attention_subscription_overrides
+         WHERE operator_id = ?
+         ORDER BY group_id, member_id, event_type`,
+      )
+      .all(operatorId)
+      .map((row) => {
+        const value = row as Record<string, unknown>;
+        return AttentionSubscriptionOverrideSchema.parse({
+          ...value,
+          enabled: value.enabled === 1,
+        });
+      });
+  }
+
+  #memberAttentionSubscriptions(operatorId: string, groupId: string, memberId: string) {
+    return resolveMemberAttentionSubscriptions(
+      this.#attentionConfig(),
+      { groupId, memberId },
+      this.#listAttentionSubscriptionOverrides(operatorId),
+    );
   }
 
   #hydrateGroup(row: GroupRow): Group {

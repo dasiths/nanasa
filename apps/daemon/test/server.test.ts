@@ -170,6 +170,53 @@ describe("daemon REST API", () => {
     await daemon.app.close();
   });
 
+  it("sets and resets effective Attention subscriptions through authenticated routes", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const group = (
+      await daemon.app.inject({ method: "POST", url: "/api/groups", payload: { name: "Team" } })
+    ).json<{ id: string }>();
+    const member = (
+      await daemon.app.inject({
+        method: "POST",
+        url: `/api/groups/${group.id}/agents`,
+        payload: { name: "Builder", integrationId: "copilot" },
+      })
+    ).json<{ memberId: string }>();
+
+    const updated = await daemon.app.inject({
+      method: "PUT",
+      url: `/api/v1/groups/${group.id}/members/${member.memberId}/attention-subscriptions/completion`,
+      payload: { enabled: false },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toMatchObject({
+      groupId: group.id,
+      memberId: member.memberId,
+      subscriptions: expect.arrayContaining([
+        { eventType: "completion", enabled: false, source: "operator-override" },
+      ]),
+    });
+
+    const listed = await daemon.app.inject("/api/v1/attention-subscriptions");
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().members).toEqual(
+      expect.arrayContaining([expect.objectContaining({ memberId: member.memberId })]),
+    );
+
+    const reset = await daemon.app.inject({
+      method: "DELETE",
+      url: `/api/v1/groups/${group.id}/members/${member.memberId}/attention-subscriptions`,
+      payload: {},
+    });
+    expect(reset.statusCode).toBe(200);
+    expect(reset.json().subscriptions).toEqual(
+      expect.arrayContaining([
+        { eventType: "completion", enabled: true, source: "repository-default" },
+      ]),
+    );
+    await daemon.app.close();
+  });
+
   it("discovers checkouts and manages provenance-fenced worktrees through routes", async () => {
     const daemon = await createDaemon({ dataPath: ":memory:" });
     const snapshot = (await daemon.app.inject({ method: "GET", url: "/api/snapshot" })).json<{

@@ -1,4 +1,5 @@
 import type {
+  AttentionSubscriptionsSnapshot,
   CustomLaunchConsentRequest,
   ProviderUpdateOutcome,
   ProviderUpdateRecoveryResult,
@@ -32,6 +33,7 @@ import {
   attentionReviewCount,
   attentionReviewCountsByGroup,
   deriveAttentionItems,
+  filterAttentionItemsBySubscriptions,
 } from "./attention-items.js";
 import {
   deriveVisibleTerminalRunIds,
@@ -39,8 +41,8 @@ import {
 } from "./attention-notifications.js";
 import { AdHocConsoleDialog } from "./components/ad-hoc-console-dialog.js";
 import {
-  type AddAgentInput,
   AddAgentDialog,
+  type AddAgentInput,
   GroupTree,
   RoleSettingsDialog,
 } from "./components/group-tree.js";
@@ -228,6 +230,9 @@ export function App({ client = api }: AppProps) {
     () => new Set(),
   );
   const [attentionDismissalsReady, setAttentionDismissalsReady] = useState(false);
+  const [attentionSubscriptions, setAttentionSubscriptions] =
+    useState<AttentionSubscriptionsSnapshot>();
+  const [attentionSubscriptionsReady, setAttentionSubscriptionsReady] = useState(false);
   const startAllInFlight = useRef(new Map<string, Promise<void>>());
   const previousEventStatus = useRef(eventStatus);
   const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -311,16 +316,45 @@ export function App({ client = api }: AppProps) {
       active = false;
     };
   }, [client]);
+  useEffect(() => {
+    let active = true;
+    setAttentionSubscriptionsReady(false);
+    void client.listAttentionSubscriptions().then(
+      (subscriptions) => {
+        if (!active) return;
+        setAttentionSubscriptions(subscriptions);
+        setAttentionSubscriptionsReady(true);
+      },
+      (cause: unknown) => {
+        if (!active) return;
+        setActionError(toPortalError(cause, "Unable to load Attention subscriptions"));
+        setAttentionSubscriptionsReady(true);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [client]);
   const attentionItems = useMemo(() => {
-    if (snapshot === undefined || !attentionDismissalsReady) return [];
-    return deriveAttentionItems(snapshot, {
+    if (
+      snapshot === undefined ||
+      !attentionDismissalsReady ||
+      attentionSubscriptions === undefined
+    ) {
+      return [];
+    }
+    const candidates = deriveAttentionItems(snapshot, {
       workspaces: attentionWorkspaces.workspaces,
       unreadCounts,
       launchConsents: launchConsents.latestRequests,
-    }).filter((item) => !dismissedAttentionItemIds.has(item.id));
+    });
+    return filterAttentionItemsBySubscriptions(candidates, attentionSubscriptions).filter(
+      (item) => !dismissedAttentionItemIds.has(item.id),
+    );
   }, [
     attentionDismissalsReady,
     attentionWorkspaces.workspaces,
+    attentionSubscriptions,
     dismissedAttentionItemIds,
     launchConsents.latestRequests,
     snapshot,
@@ -358,6 +392,8 @@ export function App({ client = api }: AppProps) {
     ready:
       snapshot !== undefined &&
       attentionDismissalsReady &&
+      attentionSubscriptionsReady &&
+      attentionSubscriptions !== undefined &&
       attentionWorkspaces.ready &&
       attentionWorkspaces.errors.size === 0 &&
       !launchConsents.loading &&
@@ -368,7 +404,6 @@ export function App({ client = api }: AppProps) {
     visibleTerminalRunIds,
     preferences: {
       ...preferences.notifications,
-      completionNotificationMemberIdsByGroup: preferences.completionNotificationMemberIdsByGroup,
     },
     navigate,
   });
@@ -384,6 +419,35 @@ export function App({ client = api }: AppProps) {
     }
   };
 
+  const replaceMemberAttentionSubscriptions = (
+    memberSubscriptions: AttentionSubscriptionsSnapshot["members"][number],
+  ) => {
+    setAttentionSubscriptions((current) => {
+      if (current === undefined) return current;
+      const members = current.members.filter(
+        (member) =>
+          member.groupId !== memberSubscriptions.groupId ||
+          member.memberId !== memberSubscriptions.memberId,
+      );
+      return { ...current, members: [...members, memberSubscriptions] };
+    });
+  };
+  const setMemberAttentionSubscription = async (
+    groupId: string,
+    memberId: string,
+    eventType: Parameters<PortalClient["setAttentionSubscription"]>[2],
+    enabled: boolean,
+  ) => {
+    const updated = await client.setAttentionSubscription(groupId, memberId, eventType, {
+      enabled,
+    });
+    replaceMemberAttentionSubscriptions(updated);
+  };
+  const resetMemberAttentionSubscriptions = async (groupId: string, memberId: string) => {
+    const updated = await client.resetAttentionSubscriptions(groupId, memberId);
+    replaceMemberAttentionSubscriptions(updated);
+  };
+
   useEffect(() => {
     if (snapshot === undefined) return;
     const resources = new Map<string, ReadonlySet<string>>();
@@ -393,18 +457,7 @@ export function App({ client = api }: AppProps) {
         new Set(snapshot.runs.filter((run) => run.groupId === group.id).map((run) => run.id)),
       );
     }
-    const memberResources = new Map<string, ReadonlySet<string>>();
-    for (const group of snapshot.groups) {
-      memberResources.set(
-        group.id,
-        new Set(
-          snapshot.memberships
-            .filter((member) => member.groupId === group.id && member.state === "active")
-            .map((member) => member.memberId),
-        ),
-      );
-    }
-    reconcileResources(resources, memberResources);
+    reconcileResources(resources);
   }, [reconcileResources, snapshot]);
 
   useEffect(() => {
@@ -744,6 +797,8 @@ export function App({ client = api }: AppProps) {
       notifications={attentionNotifications.toasts}
       onOpenNotification={attentionNotifications.openToast}
       onDismissNotification={attentionNotifications.dismissToast}
+      onPauseNotification={attentionNotifications.pauseToast}
+      onResumeNotification={attentionNotifications.resumeToast}
       rail={
         <aside className="group-rail" aria-label="Groups and agents">
           <GroupTree
@@ -1051,6 +1106,7 @@ export function App({ client = api }: AppProps) {
                   roles={config.roles}
                   runs={runs}
                   agentStatuses={snapshot.agentStatuses ?? []}
+                  attentionSubscriptions={attentionSubscriptions?.members ?? []}
                   launchConsents={launchConsents.latestRequests.filter(
                     (request) => request.groupId === selectedGroup.id,
                   )}
@@ -1069,6 +1125,8 @@ export function App({ client = api }: AppProps) {
                   onApproveLaunchConsent={approveLaunchConsent}
                   onCancelLaunchConsent={cancelLaunchConsent}
                   onRecoverAgent={recoverAgent}
+                  onSetAttentionSubscription={setMemberAttentionSubscription}
+                  onResetAttentionSubscriptions={resetMemberAttentionSubscriptions}
                   connectionRevision={terminalConnectionRevision}
                   theme={appliedTheme}
                   columns={preferences.terminalColumnsByGroup[selectedGroup.id] ?? "auto"}

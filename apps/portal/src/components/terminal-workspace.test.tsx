@@ -120,6 +120,9 @@ function client(): PortalClient {
     acknowledgeCompletion: vi.fn(),
     listAttentionDismissals: vi.fn().mockResolvedValue({ dismissals: [] }),
     dismissAttentionItems: vi.fn().mockResolvedValue({ dismissals: [] }),
+    listAttentionSubscriptions: vi.fn(),
+    setAttentionSubscription: vi.fn(),
+    resetAttentionSubscriptions: vi.fn(),
     loadMessages: vi.fn(),
     clearMessages: vi.fn(),
     getTerminalEndpointStatus: vi.fn(async (runId) => ready(runId)),
@@ -824,7 +827,8 @@ describe("TerminalWorkspace", () => {
     });
   });
 
-  it("opts a member into future completion alerts across run restarts", async () => {
+  it("configures server-backed Attention subscriptions from the terminal bell", async () => {
+    const user = userEvent.setup();
     const member = {
       id: "agent-one",
       groupId: "group-one",
@@ -850,46 +854,104 @@ describe("TerminalWorkspace", () => {
       terminal: { serverName: "nanasa", sessionId: "$1", windowId: "@1", paneId: "%1" },
       startedAt: timestamp,
     });
-    const view = render(
-      <TerminalWorkspace client={client()} members={[member]} runs={[createRun("run-one", 1)]} />,
+    const subscriptions = {
+      groupId: member.groupId,
+      memberId: member.memberId,
+      subscriptions: [
+        {
+          eventType: "response-required" as const,
+          enabled: true,
+          source: "repository-default" as const,
+        },
+        {
+          eventType: "agent-health" as const,
+          enabled: true,
+          source: "repository-default" as const,
+        },
+        { eventType: "completion" as const, enabled: true, source: "agent-config" as const },
+        {
+          eventType: "delivery-failure" as const,
+          enabled: true,
+          source: "repository-default" as const,
+        },
+        {
+          eventType: "action-state" as const,
+          enabled: false,
+          source: "repository-default" as const,
+        },
+        {
+          eventType: "provider-update-failed" as const,
+          enabled: true,
+          source: "repository-default" as const,
+        },
+        {
+          eventType: "provider-update-succeeded" as const,
+          enabled: false,
+          source: "repository-default" as const,
+        },
+        {
+          eventType: "unread-message" as const,
+          enabled: false,
+          source: "repository-default" as const,
+        },
+      ],
+    };
+    const setSubscription = vi.fn().mockResolvedValue(undefined);
+    const resetSubscriptions = vi.fn().mockResolvedValue(undefined);
+    render(
+      <TerminalWorkspace
+        client={client()}
+        members={[member]}
+        runs={[createRun("run-one", 1)]}
+        attentionSubscriptions={[subscriptions]}
+        onSetAttentionSubscription={setSubscription}
+        onResetAttentionSubscriptions={resetSubscriptions}
+      />,
     );
 
     await screen.findByTestId("owned-xterm");
-    const enable = await screen.findByRole("button", {
-      name: "Enable completion alerts for Builder",
+    const bell = await screen.findByRole("button", {
+      name: "Configure Attention for Builder, 5 events subscribed",
     });
-    expect(enable).toHaveAttribute("title", "Enable completion alerts for Builder");
-    expect(enable).toHaveAttribute("aria-pressed", "false");
-    const paneButtons = enable.parentElement?.querySelectorAll("button");
-    expect(
-      [...Array.from(paneButtons ?? [])]
-        .map((button) => button.getAttribute("aria-label"))
-        .filter((label) => label !== "Copy agent name member-one"),
-    ).toEqual([
-      "Enable completion alerts for Builder",
-      "Pin Builder terminal",
-      "Focus Builder terminal",
+    await user.click(bell);
+    const menu = screen.getByRole("dialog", { name: "Builder Attention subscriptions" });
+    expect(menu).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: /Completes work/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Changes action state/ })).not.toBeChecked();
+    expect(screen.getAllByText("config").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "Subscribe all" }));
+    await waitFor(() => expect(setSubscription).toHaveBeenCalledTimes(3));
+    expect(setSubscription.mock.calls).toEqual([
+      [member.groupId, member.memberId, "action-state", true],
+      [member.groupId, member.memberId, "provider-update-succeeded", true],
+      [member.groupId, member.memberId, "unread-message", true],
     ]);
 
-    fireEvent.click(enable);
-    const disable = await screen.findByRole("button", {
-      name: "Disable completion alerts for Builder",
-    });
-    expect(disable).toHaveAttribute("title", "Disable completion alerts for Builder");
-    expect(disable).toHaveAttribute("aria-pressed", "true");
-    expect(
-      JSON.parse(window.localStorage.getItem("nanasa.portal.preferences.v2") ?? "{}"),
-    ).toMatchObject({
-      completionNotificationMemberIdsByGroup: { "group-one": ["member-one"] },
-    });
+    setSubscription.mockClear();
+    await user.click(screen.getByRole("button", { name: "Unsubscribe all" }));
+    await waitFor(() => expect(setSubscription).toHaveBeenCalledTimes(5));
+    expect(setSubscription.mock.calls).toEqual([
+      [member.groupId, member.memberId, "response-required", false],
+      [member.groupId, member.memberId, "agent-health", false],
+      [member.groupId, member.memberId, "completion", false],
+      [member.groupId, member.memberId, "delivery-failure", false],
+      [member.groupId, member.memberId, "provider-update-failed", false],
+    ]);
 
-    view.rerender(
-      <TerminalWorkspace client={client()} members={[member]} runs={[createRun("run-two", 2)]} />,
+    setSubscription.mockClear();
+    await user.click(screen.getByRole("checkbox", { name: /Changes action state/ }));
+    expect(setSubscription).toHaveBeenCalledWith(
+      member.groupId,
+      member.memberId,
+      "action-state",
+      true,
     );
-    expect(
-      await screen.findByRole("button", {
-        name: "Disable completion alerts for Builder",
-      }),
-    ).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("button", { name: "Reset to config defaults" }));
+    expect(resetSubscriptions).toHaveBeenCalledWith(member.groupId, member.memberId);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Builder Attention subscriptions" })).toBeNull();
+    expect(bell).toHaveFocus();
   });
 });

@@ -87,6 +87,7 @@ const config: NanasaConfig = {
           name: "Builder",
           integrationId: "copilot",
           instructions: [],
+          attention: {},
           order: 0,
         },
         "reviewer-agent": {
@@ -95,6 +96,7 @@ const config: NanasaConfig = {
           integrationId: "copilot",
           roleId: "reviewer",
           instructions: [],
+          attention: {},
           order: 1,
         },
       },
@@ -108,12 +110,25 @@ const config: NanasaConfig = {
           name: "Auditor",
           integrationId: "copilot",
           instructions: [],
+          attention: {},
           order: 0,
         },
       },
     },
   },
   messages: { retentionPerGroup: 1_000 },
+  attention: {
+    defaults: {
+      "response-required": true,
+      "agent-health": true,
+      completion: true,
+      "delivery-failure": true,
+      "action-state": false,
+      "provider-update-failed": true,
+      "provider-update-succeeded": false,
+      "unread-message": false,
+    },
+  },
   integrations: {
     copilot: {
       id: "copilot",
@@ -384,6 +399,20 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     acknowledgeCompletion: vi.fn(),
     listAttentionDismissals: vi.fn().mockResolvedValue({ dismissals: [] }),
     dismissAttentionItems: vi.fn().mockResolvedValue({ dismissals: [] }),
+    listAttentionSubscriptions: vi.fn().mockResolvedValue({
+      defaults: config.attention.defaults,
+      members: memberships.map((member) => ({
+        groupId: member.groupId,
+        memberId: member.memberId,
+        subscriptions: Object.entries(config.attention.defaults).map(([eventType, enabled]) => ({
+          eventType,
+          enabled,
+          source: "repository-default",
+        })),
+      })),
+    }),
+    setAttentionSubscription: vi.fn(),
+    resetAttentionSubscriptions: vi.fn(),
     loadMessages: vi.fn().mockResolvedValue({
       groupId: "group-backend",
       messages: [],
@@ -829,7 +858,7 @@ describe("portal application", () => {
     expect(within(notices).getByText("Auditor · Needs approval")).toBeInTheDocument();
   });
 
-  it("uses canonical desktop routes and passes per-agent completion opt-ins", async () => {
+  it("uses canonical desktop routes for admitted items", async () => {
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     const notifications: Array<{
       title: string;
@@ -858,7 +887,6 @@ describe("portal application", () => {
       JSON.stringify({
         ...defaultPortalPreferences,
         notifications: { ...defaultPortalPreferences.notifications, desktop: true },
-        completionNotificationMemberIdsByGroup: { "group-review": ["auditor"] },
       }),
     );
 
@@ -980,14 +1008,14 @@ describe("portal application", () => {
       activeRunId: "run-builder",
       focusAlias: undefined,
       completionMember: memberships[1]!,
-      expectedToast: false,
+      expectedToast: true,
     },
     {
       name: "focused completion pane",
       activeRunId: "run-builder",
       focusAlias: "Reviewer",
       completionMember: memberships[1]!,
-      expectedToast: false,
+      expectedToast: true,
     },
     {
       name: "run hidden by Focus mode",
@@ -997,7 +1025,7 @@ describe("portal application", () => {
       expectedToast: true,
     },
   ])(
-    "uses actual terminal visibility for a completion on the $name",
+    "toasts an admitted completion on the $name",
     async ({ activeRunId, focusAlias, completionMember, expectedToast }) => {
       window.history.replaceState({}, "", "/groups/group-backend/terminals");
       window.localStorage.setItem(
@@ -1005,9 +1033,6 @@ describe("portal application", () => {
         JSON.stringify({
           ...defaultPortalPreferences,
           activeRunByGroup: { "group-backend": activeRunId },
-          completionNotificationMemberIdsByGroup: {
-            "group-backend": [completionMember.memberId],
-          },
         }),
       );
       const client = createClient();
@@ -1480,6 +1505,7 @@ describe("portal application", () => {
               integrationId: "copilot",
               roleId: "reviewer",
               instructions: [".nanasa/instructions/agents/reviewer.md"],
+              attention: {},
               order: 1,
             },
           },
@@ -1562,6 +1588,7 @@ describe("portal application", () => {
               integrationId: "copilot",
               roleId: "reviewer",
               instructions: [],
+              attention: {},
               order: 1,
             },
           },
@@ -1835,7 +1862,7 @@ describe("portal application", () => {
     );
   });
 
-  it("offers exact launch approval directly from Attention", async () => {
+  it("routes exact launch approval from Attention to its consent surface", async () => {
     window.history.replaceState({}, "", "/attention");
     const user = userEvent.setup();
     const client = createClient();
@@ -1857,14 +1884,15 @@ describe("portal application", () => {
     expect(await screen.findByText("Builder · Launch approval required")).toBeInTheDocument();
     const reviewItem = screen.getByText("Builder · Launch approval required").closest("li");
     await user.click(
-      within(reviewItem as HTMLElement).getByRole("button", { name: "Trust and start" }),
+      within(reviewItem as HTMLElement).getByRole("button", { name: "Review consent" }),
     );
+    await user.click(await screen.findByRole("button", { name: "Trust and start builder" }));
 
     await waitFor(() => expect(client.approveLaunchConsent).toHaveBeenCalledTimes(1));
     expect(client.startRun).toHaveBeenCalledWith(request.groupId, request.agentId);
   });
 
-  it("approves update-specific consent and resumes provider recovery", async () => {
+  it("routes update-specific consent to the exact terminal review", async () => {
     window.history.replaceState({}, "", "/attention");
     const user = userEvent.setup();
     const client = createClient();
@@ -1903,14 +1931,12 @@ describe("portal application", () => {
     render(<App client={client} />);
 
     expect(await screen.findByText("Review before restarting Builder")).toBeInTheDocument();
-    await user.click(await screen.findByRole("button", { name: "Approve and restart" }));
-
-    await waitFor(() =>
-      expect(client.recoverAgentRun).toHaveBeenCalledWith(request.groupId, request.agentId, {
-        dryRun: false,
-        forceIndeterminate: false,
-      }),
+    const reviewItem = screen.getByText("Review before restarting Builder").closest("li");
+    await user.click(
+      within(reviewItem as HTMLElement).getByRole("button", { name: "Review consent" }),
     );
+    expect(window.location.pathname).toBe("/groups/group-backend/terminals");
+    expect(window.location.hash).toBe(`#launch-consent-${request.id}`);
     expect(client.startRun).not.toHaveBeenCalled();
   });
 
@@ -2367,6 +2393,39 @@ describe("portal application", () => {
     expect(window.localStorage.getItem(PORTAL_PREFERENCES_KEY)).toBeNull();
   });
 
+  it("keeps an unsubscribed completion out of Attention while preserving status", async () => {
+    window.history.replaceState({}, "", "/attention");
+    const client = createClient();
+    const completion = completionAttentionSnapshot(3);
+    vi.mocked(client.loadSnapshot).mockResolvedValue(completion);
+    vi.mocked(client.listAttentionSubscriptions).mockResolvedValue({
+      defaults: config.attention.defaults,
+      members: completion.memberships.map((member) => ({
+        groupId: member.groupId,
+        memberId: member.memberId,
+        subscriptions: Object.entries(config.attention.defaults).map(([eventType, enabled]) => ({
+          eventType: eventType as keyof typeof config.attention.defaults,
+          enabled: eventType === "completion" ? false : enabled,
+          source: eventType === "completion" ? "operator-override" : "repository-default",
+        })),
+      })),
+    });
+
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { level: 1, name: "Attention" });
+    await waitFor(() => expect(client.listAttentionSubscriptions).toHaveBeenCalledOnce());
+    expect(completion.agentStatuses?.[0]).toMatchObject({
+      completionRevision: 3,
+      completionPending: true,
+    });
+    expect(
+      screen.queryByText("Completion revision 3 is ready for review."),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open Attention" })).toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Attention notifications" })).toBeNull();
+  });
+
   it("offers Start for a normally stopped desired-stopped run", async () => {
     const user = userEvent.setup();
     const stoppedRun: AgentRun = {
@@ -2474,6 +2533,12 @@ describe("portal application", () => {
         .getAllByRole("link")
         .map((link) => link.textContent),
     ).toEqual(["Terminals", "Messages", "Attention", "Overview"]);
+    const groupAttention = within(groupNavigation).getByRole("link", { name: "Attention" });
+    expect(groupAttention).toHaveAttribute("href", "/groups/group-backend/activity");
+    await user.click(groupAttention);
+    await screen.findByRole("heading", { name: "Attention" });
+    expect(screen.getByRole("combobox", { name: "Filter by team" })).toHaveValue("group-backend");
+    expect(screen.getByRole("combobox", { name: "Filter by team" })).toBeDisabled();
 
     const repositoryNavigation = screen.getByRole("navigation", {
       name: "Repository operations",
@@ -2908,7 +2973,7 @@ describe("portal application", () => {
     expect(document.title).toBe("(2) Backend Terminals · Nanasa");
   });
 
-  it("renders exact permission waits separately and sends only closed logical replies", async () => {
+  it("routes exact permission waits to their live terminal", async () => {
     const user = userEvent.setup();
     const client = createClient();
     vi.mocked(client.loadActionWorkspace).mockResolvedValue({
@@ -2948,15 +3013,12 @@ describe("portal application", () => {
     expect(
       within(groupNavigation).getByLabelText("1 review item requires attention in Backend"),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Allow once" }));
-
-    expect(client.replyOpenWait).toHaveBeenCalledWith("wait-1", {
-      expectedRunId: "run-builder",
-      expectedGeneration: 1,
-      expectedReporterEpoch: "epoch-1",
-      expectedStatusRevision: 7,
-      reply: { kind: "allow-once" },
-    });
+    const waitItem = screen.getByText("Allow one command?").closest("li");
+    await user.click(
+      within(waitItem as HTMLElement).getByRole("button", { name: "Open terminal" }),
+    );
+    expect(window.location.pathname).toBe("/groups/group-backend/terminals");
+    expect(client.replyOpenWait).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /send keys/i })).not.toBeInTheDocument();
   });
 

@@ -6,6 +6,8 @@ import type {
   AgentActionWorkspace,
   AgentRun,
   AgentStatusSummary,
+  AttentionEventType,
+  AttentionSubscriptionsSnapshot,
   CustomLaunchConsentRequest,
   Group,
   GroupMembership,
@@ -803,6 +805,50 @@ export function deriveAttentionItems(
     ...deliveryItems(snapshot, groups),
     ...unreadItems(snapshot, groups, options.unreadCounts),
   ].sort(compareAttentionItems);
+}
+
+export function attentionEventType(item: AttentionItem): AttentionEventType {
+  switch (item.kind) {
+    case "launch-consent":
+    case "wait":
+    case "response":
+      return "response-required";
+    case "health":
+      return item.healthType === "provider-update-failed" ||
+        item.healthType === "ownership-uncertain"
+        ? "provider-update-failed"
+        : "agent-health";
+    case "completion":
+      return "completion";
+    case "delivery":
+      return "delivery-failure";
+    case "action":
+      return "action-state";
+    case "provider-update":
+      return "provider-update-succeeded";
+    case "unread":
+      return "unread-message";
+  }
+}
+
+export function filterAttentionItemsBySubscriptions(
+  items: readonly AttentionItem[],
+  policies: AttentionSubscriptionsSnapshot,
+): AttentionItem[] {
+  const memberPolicies = new Map(
+    policies.members.map(
+      (member) => [`${member.groupId}\u0000${member.memberId}`, member.subscriptions] as const,
+    ),
+  );
+  return items.filter((item) => {
+    const eventType = attentionEventType(item);
+    if (item.memberId === undefined) return policies.defaults[eventType];
+    const subscriptions = memberPolicies.get(`${item.groupId}\u0000${item.memberId}`);
+    return (
+      subscriptions?.find((subscription) => subscription.eventType === eventType)?.enabled ??
+      policies.defaults[eventType]
+    );
+  });
 }
 
 export function isAttentionReviewItem(item: AttentionItem): item is AttentionReviewItem {

@@ -576,6 +576,37 @@
                       "maxLength": 4096
                     }
                   },
+                  "attention": {
+                    "default": {},
+                    "type": "object",
+                    "properties": {
+                      "response-required": {
+                        "type": "boolean"
+                      },
+                      "agent-health": {
+                        "type": "boolean"
+                      },
+                      "completion": {
+                        "type": "boolean"
+                      },
+                      "delivery-failure": {
+                        "type": "boolean"
+                      },
+                      "action-state": {
+                        "type": "boolean"
+                      },
+                      "provider-update-failed": {
+                        "type": "boolean"
+                      },
+                      "provider-update-succeeded": {
+                        "type": "boolean"
+                      },
+                      "unread-message": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
                   "order": {
                     "type": "integer",
                     "minimum": 0,

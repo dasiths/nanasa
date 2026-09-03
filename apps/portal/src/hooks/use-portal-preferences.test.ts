@@ -26,11 +26,15 @@ describe("portal preferences v2", () => {
       version: 2,
       theme: "dark",
       pinnedRunIdsByGroup: { group: ["run"] },
-      completionNotificationMemberIdsByGroup: { group: ["member"] },
       terminalColumnsByGroup: { group: 3, automatic: "auto" },
       dismissedProviderUpdateIds: [],
-      notifications: { inApp: true, desktop: false, sound: false },
+      notifications: { desktop: false, sound: false },
     });
+    expect(
+      parsePortalPreferences(
+        '{"version":2,"completionNotificationMemberIdsByGroup":{"group":["member"]},"notifications":{"inApp":false}}',
+      ),
+    ).not.toHaveProperty("completionNotificationMemberIdsByGroup");
     expect(parsePortalPreferences('{"theme":"neon","motion":"unsafe"}')).toMatchObject({
       theme: "system",
       motion: "system",
@@ -41,7 +45,6 @@ describe("portal preferences v2", () => {
     );
     expect(parsePortalPreferences('{"version":2,"theme":"dark"}')).toMatchObject({
       theme: "dark",
-      completionNotificationMemberIdsByGroup: {},
       dismissedProviderUpdateIds: [],
     });
   });
@@ -68,14 +71,9 @@ describe("portal preferences v2", () => {
         lastSectionByGroup: { kept: "activity", deleted: "messages" },
         activeRunByGroup: { kept: "run-kept", deleted: "run-old" },
         pinnedRunIdsByGroup: { kept: ["run-kept", "run-old"], deleted: ["run-old"] },
-        completionNotificationMemberIdsByGroup: {
-          kept: ["member-kept", "member-old"],
-          deleted: ["member-old"],
-        },
         terminalColumnsByGroup: { kept: 3, deleted: 1 },
       },
       new Map([["kept", new Set(["run-kept"])]]),
-      new Map([["kept", new Set(["member-kept"])]]),
     );
     expect(cleaned).toMatchObject({
       theme: "dark",
@@ -83,7 +81,6 @@ describe("portal preferences v2", () => {
       lastSectionByGroup: { kept: "activity" },
       activeRunByGroup: { kept: "run-kept" },
       pinnedRunIdsByGroup: { kept: ["run-kept"] },
-      completionNotificationMemberIdsByGroup: { kept: ["member-kept"] },
       terminalColumnsByGroup: { kept: 3 },
     });
     expect(cleaned).not.toHaveProperty("selectedGroupId");
@@ -127,26 +124,6 @@ describe("portal preferences v2", () => {
     );
     expect(sameGroupPins.pinnedRunIdsByGroup.group).toEqual(["run-one", "run-two", "run-three"]);
 
-    const sameGroupCompletionOptIns = mergePortalPreferenceUpdate(
-      {
-        ...current,
-        completionNotificationMemberIdsByGroup: { group: ["member-one"] },
-      },
-      {
-        ...current,
-        completionNotificationMemberIdsByGroup: { group: ["member-one", "member-three"] },
-      },
-      {
-        ...current,
-        completionNotificationMemberIdsByGroup: { group: ["member-one", "member-two"] },
-      },
-    );
-    expect(sameGroupCompletionOptIns.completionNotificationMemberIdsByGroup.group).toEqual([
-      "member-one",
-      "member-two",
-      "member-three",
-    ]);
-
     const cleanupDoesNotEraseNewer = mergePortalPreferenceUpdate(
       { ...current, activeRunByGroup: { group: "run-old" } },
       current,
@@ -184,13 +161,6 @@ describe("portal preferences v2", () => {
         ...current,
         terminalColumnsByGroup: { ...current.terminalColumnsByGroup, group: 3 },
       })),
-      commitPortalPreferenceUpdate((current) => ({
-        ...current,
-        completionNotificationMemberIdsByGroup: {
-          ...current.completionNotificationMemberIdsByGroup,
-          group: ["member-one"],
-        },
-      })),
     ]);
     expect(
       parsePortalPreferences(window.localStorage.getItem("nanasa.portal.preferences.v2")),
@@ -198,16 +168,15 @@ describe("portal preferences v2", () => {
       pinnedRunIdsByGroup: { group: ["run-one"] },
       activeRunByGroup: { group: "run-two" },
       terminalColumnsByGroup: { group: 3 },
-      completionNotificationMemberIdsByGroup: { group: ["member-one"] },
     });
   });
 
-  it("synchronizes a completion toggle written by another browser tab", async () => {
+  it("synchronizes browser notification preferences written by another tab", async () => {
     window.localStorage.setItem(PORTAL_PREFERENCES_KEY, JSON.stringify(defaultPortalPreferences));
     const { result } = renderHook(() => usePortalPreferences());
     const fromOtherTab = {
       ...defaultPortalPreferences,
-      completionNotificationMemberIdsByGroup: { group: ["member-one"] },
+      notifications: { ...defaultPortalPreferences.notifications, desktop: true },
     };
 
     act(() => {
@@ -221,10 +190,6 @@ describe("portal preferences v2", () => {
       );
     });
 
-    await waitFor(() =>
-      expect(result.current.preferences.completionNotificationMemberIdsByGroup).toEqual({
-        group: ["member-one"],
-      }),
-    );
+    await waitFor(() => expect(result.current.preferences.notifications.desktop).toBe(true));
   });
 });

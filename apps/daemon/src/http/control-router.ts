@@ -8,9 +8,11 @@ import {
   AgentRunSchema,
   AgentStatusDetailSchema,
   AgentStatusSummarySchema,
-  AttentionDismissalListSchema,
   ApproveCustomLaunchConsentCommandSchema,
   AssignAgentCheckoutCommandSchema,
+  AttentionDismissalListSchema,
+  AttentionEventTypeSchema,
+  AttentionSubscriptionsSnapshotSchema,
   BrowserRestartFrameSchema,
   CancelCustomLaunchConsentCommandSchema,
   CheckoutSchema,
@@ -27,6 +29,7 @@ import {
   ExtensionLifecycleCommandSchema,
   InstallProviderExtensionCommandSchema,
   InterruptAgentRunCommandSchema,
+  MemberAttentionSubscriptionsSchema,
   OpenCheckoutCommandSchema,
   OpenWaitSchema,
   ProviderStateBindingSchema,
@@ -49,6 +52,7 @@ import {
   RevokeCustomLaunchConsentCommandSchema,
   RoleDefinitionSchema,
   type ServiceDescriptor,
+  SetAttentionSubscriptionCommandSchema,
   StartAgentRunCommandSchema,
   StartGroupRunsCommandSchema,
   StartGroupRunsResultSchema,
@@ -735,6 +739,39 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     return AttentionDismissalListSchema.parse({
       dismissals: services.store.dismissAttentionItems(principal.operatorId, command.itemIds),
     });
+  });
+  register("attentionSubscriptions.list", (request) => {
+    const principal = operatorPrincipal(services, request);
+    return AttentionSubscriptionsSnapshotSchema.parse(
+      services.store.listAttentionSubscriptions(principal.operatorId),
+    );
+  });
+  register("attentionSubscriptions.set", (request) => {
+    const principal = operatorPrincipal(services, request);
+    const params = record(request.params);
+    const command = SetAttentionSubscriptionCommandSchema.parse(
+      routeBody(controlRoute("attentionSubscriptions.set"), request),
+    );
+    return MemberAttentionSubscriptionsSchema.parse(
+      services.store.setAttentionSubscription(
+        principal.operatorId,
+        params.groupId ?? "",
+        params.memberId ?? "",
+        AttentionEventTypeSchema.parse(params.eventType),
+        command.enabled,
+      ),
+    );
+  });
+  register("attentionSubscriptions.reset", (request) => {
+    const principal = operatorPrincipal(services, request);
+    const params = record(request.params);
+    return MemberAttentionSubscriptionsSchema.parse(
+      services.store.resetAttentionSubscriptions(
+        principal.operatorId,
+        params.groupId ?? "",
+        params.memberId ?? "",
+      ),
+    );
   });
 
   register("messages.submit", (request, reply) => {

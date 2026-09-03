@@ -19,6 +19,56 @@ afterEach(() => {
 });
 
 describe("NanasaStore persistence", () => {
+  it("persists isolated Attention subscription overrides across reopen", () => {
+    const directory = mkdtempSync(join(tmpdir(), "nanasa-attention-subscriptions-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "nanasa.sqlite");
+    const store = new NanasaStore(databasePath);
+    const group = store.createGroup({ name: "Team" });
+    const profile = store.createInternalAgentProfile({
+      name: "Builder",
+      agentType: "copilot",
+      kind: "copilot",
+      command: "copilot",
+      args: [],
+      environment: {},
+    });
+    store.addMembership(group.id, {
+      memberId: "builder",
+      agentProfileId: profile.id,
+      alias: "Builder",
+    });
+
+    expect(
+      store.setAttentionSubscription("operator_1", group.id, "builder", "completion", false),
+    ).toMatchObject({
+      subscriptions: expect.arrayContaining([
+        { eventType: "completion", enabled: false, source: "operator-override" },
+      ]),
+    });
+    expect(store.listAttentionSubscriptions("operator_2").members[0]?.subscriptions).toEqual(
+      expect.arrayContaining([
+        { eventType: "completion", enabled: true, source: "repository-default" },
+      ]),
+    );
+    store.close();
+
+    const reopened = new NanasaStore(databasePath);
+    expect(reopened.listAttentionSubscriptions("operator_1").members[0]?.subscriptions).toEqual(
+      expect.arrayContaining([
+        { eventType: "completion", enabled: false, source: "operator-override" },
+      ]),
+    );
+    expect(
+      reopened.resetAttentionSubscriptions("operator_1", group.id, "builder").subscriptions,
+    ).toEqual(
+      expect.arrayContaining([
+        { eventType: "completion", enabled: true, source: "repository-default" },
+      ]),
+    );
+    reopened.close();
+  });
+
   it("persists attention dismissals by operator across reopen", () => {
     const directory = mkdtempSync(join(tmpdir(), "nanasa-attention-dismissals-"));
     temporaryDirectories.push(directory);

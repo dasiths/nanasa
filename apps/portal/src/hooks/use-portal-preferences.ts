@@ -14,14 +14,13 @@ export interface PortalPreferences {
   lastSectionByGroup: Record<string, WorkspaceSection>;
   activeRunByGroup: Record<string, string>;
   pinnedRunIdsByGroup: Record<string, string[]>;
-  completionNotificationMemberIdsByGroup: Record<string, string[]>;
   terminalColumnsByGroup: Record<string, TerminalColumnsPreference>;
   dismissedProviderUpdateIds: string[];
   railCollapsed: boolean;
   density: "comfortable" | "compact";
   motion: MotionPreference;
   contrast: ContrastPreference;
-  notifications: { inApp: boolean; desktop: boolean; sound: boolean };
+  notifications: { desktop: boolean; sound: boolean };
   mobileGroupFilter: string;
   seenRelease?: string;
 }
@@ -36,14 +35,13 @@ export const defaultPortalPreferences: PortalPreferences = {
   lastSectionByGroup: {},
   activeRunByGroup: {},
   pinnedRunIdsByGroup: {},
-  completionNotificationMemberIdsByGroup: {},
   terminalColumnsByGroup: {},
   dismissedProviderUpdateIds: [],
   railCollapsed: false,
   density: "comfortable",
   motion: "system",
   contrast: "system",
-  notifications: { inApp: true, desktop: false, sound: false },
+  notifications: { desktop: false, sound: false },
   mobileGroupFilter: "",
 };
 
@@ -128,9 +126,6 @@ export function parsePortalPreferences(value: string | null): PortalPreferences 
       ]),
       activeRunByGroup: stringRecord(parsed.activeRunByGroup),
       pinnedRunIdsByGroup: stringArrayRecord(parsed.pinnedRunIdsByGroup),
-      completionNotificationMemberIdsByGroup: stringArrayRecord(
-        parsed.completionNotificationMemberIdsByGroup,
-      ),
       terminalColumnsByGroup: terminalColumnsRecord(parsed.terminalColumnsByGroup),
       dismissedProviderUpdateIds: Array.isArray(parsed.dismissedProviderUpdateIds)
         ? [
@@ -150,7 +145,6 @@ export function parsePortalPreferences(value: string | null): PortalPreferences 
         ? (parsed.contrast as ContrastPreference)
         : "system",
       notifications: {
-        inApp: notifications.inApp !== false,
         desktop: notifications.desktop === true,
         sound: notifications.sound === true,
       },
@@ -208,7 +202,6 @@ const RESOURCE_RECORD_FIELDS = [
   "lastSectionByGroup",
   "activeRunByGroup",
   "pinnedRunIdsByGroup",
-  "completionNotificationMemberIdsByGroup",
   "terminalColumnsByGroup",
 ] as const;
 
@@ -244,7 +237,7 @@ export function mergePortalPreferenceUpdate(
       ...Object.keys(updatedRecord),
     ])) {
       if (equal(currentRecord[resourceId], updatedRecord[resourceId])) continue;
-      if (field === "pinnedRunIdsByGroup" || field === "completionNotificationMemberIdsByGroup") {
+      if (field === "pinnedRunIdsByGroup") {
         const before = (currentRecord[resourceId] ?? []) as string[];
         const after = (updatedRecord[resourceId] ?? []) as string[];
         const latest = (mergedRecord[resourceId] ?? []) as string[];
@@ -268,7 +261,7 @@ export function mergePortalPreferenceUpdate(
     Object.assign(merged, { [field]: mergedRecord });
   }
   const notifications = { ...stored.notifications };
-  for (const field of ["inApp", "desktop", "sound"] as const) {
+  for (const field of ["desktop", "sound"] as const) {
     if (current.notifications[field] !== updated.notifications[field]) {
       notifications[field] = updated.notifications[field];
     }
@@ -280,7 +273,6 @@ export function mergePortalPreferenceUpdate(
 export function cleanStalePortalPreferences(
   preferences: PortalPreferences,
   groups: ReadonlyMap<string, ReadonlySet<string>>,
-  membersByGroup?: ReadonlyMap<string, ReadonlySet<string>>,
 ): PortalPreferences {
   const groupIds = new Set(groups.keys());
   const selectedGroupId =
@@ -304,16 +296,6 @@ export function cleanStalePortalPreferences(
         .map(([groupId, runIds]) => [
           groupId,
           runIds.filter((runId) => groups.get(groupId)?.has(runId) === true),
-        ]),
-    ),
-    completionNotificationMemberIdsByGroup: Object.fromEntries(
-      Object.entries(preferences.completionNotificationMemberIdsByGroup)
-        .filter(([groupId]) => groupIds.has(groupId))
-        .map(([groupId, memberIds]) => [
-          groupId,
-          membersByGroup === undefined
-            ? memberIds
-            : memberIds.filter((memberId) => membersByGroup.get(groupId)?.has(memberId) === true),
         ]),
     ),
     terminalColumnsByGroup: Object.fromEntries(
@@ -375,12 +357,9 @@ export function usePortalPreferences() {
     [updatePreferences],
   );
   const reconcileResources = useCallback(
-    (
-      groups: ReadonlyMap<string, ReadonlySet<string>>,
-      membersByGroup?: ReadonlyMap<string, ReadonlySet<string>>,
-    ) => {
+    (groups: ReadonlyMap<string, ReadonlySet<string>>) => {
       const observed = preferences;
-      const cleaned = cleanStalePortalPreferences(observed, groups, membersByGroup);
+      const cleaned = cleanStalePortalPreferences(observed, groups);
       if (cleaned === observed) return;
       void commitPortalPreferenceUpdate((stored) =>
         mergePortalPreferenceUpdate(observed, cleaned, stored),

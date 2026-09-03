@@ -188,6 +188,7 @@ export class TopologyService {
                   name: command.name.trim(),
                   integrationId: command.integrationId,
                   instructions: command.instructions ?? [],
+                  attention: {},
                   ...(command.roleId === undefined ? {} : { roleId: command.roleId }),
                 },
               }),

@@ -9,9 +9,12 @@ import {
   AgentStatusDetailSchema,
   type AgentStatusSummary,
   AgentStatusSummarySchema,
+  type ApproveCustomLaunchConsentCommand,
   type AttentionDismissalList,
   AttentionDismissalListSchema,
-  type ApproveCustomLaunchConsentCommand,
+  type AttentionEventType,
+  type AttentionSubscriptionsSnapshot,
+  AttentionSubscriptionsSnapshotSchema,
   type CancelCustomLaunchConsentCommand,
   type ClearMessageHistoryResult,
   ClearMessageHistoryResultSchema,
@@ -27,6 +30,8 @@ import {
   DeliveryOutcomeSchema,
   type DenyCustomLaunchConsentCommand,
   type DismissAttentionItemsCommand,
+  type MemberAttentionSubscriptions,
+  MemberAttentionSubscriptionsSchema,
   type MessagePage,
   MessagePageSchema,
   type MessageSubmissionResult,
@@ -42,6 +47,7 @@ import {
   ProviderUpdateRecoveryResultSchema,
   type ReplyOpenWaitCommand,
   type RevokeCustomLaunchConsentCommand,
+  type SetAttentionSubscriptionCommand,
   type StartAgentRunResult,
   StartAgentRunResultSchema,
   type StartGroupRunsResult,
@@ -209,6 +215,42 @@ export class OperationsResource {
       path("attention-dismissals"),
       AttentionDismissalListSchema,
       commandInit("POST", command, key),
+    );
+  }
+
+  public listAttentionSubscriptions(): Promise<AttentionSubscriptionsSnapshot> {
+    return request(
+      this.client,
+      path("attention-subscriptions"),
+      AttentionSubscriptionsSnapshotSchema,
+    );
+  }
+
+  public setAttentionSubscription(
+    groupId: string,
+    memberId: string,
+    eventType: AttentionEventType,
+    command: SetAttentionSubscriptionCommand,
+    key?: string,
+  ): Promise<MemberAttentionSubscriptions> {
+    return request(
+      this.client,
+      path("groups", groupId, "members", memberId, "attention-subscriptions", eventType),
+      MemberAttentionSubscriptionsSchema,
+      commandInit("PUT", command, key),
+    );
+  }
+
+  public resetAttentionSubscriptions(
+    groupId: string,
+    memberId: string,
+    key?: string,
+  ): Promise<MemberAttentionSubscriptions> {
+    return request(
+      this.client,
+      path("groups", groupId, "members", memberId, "attention-subscriptions"),
+      MemberAttentionSubscriptionsSchema,
+      commandInit("DELETE", {}, key),
     );
   }
 

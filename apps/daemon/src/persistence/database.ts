@@ -6,6 +6,7 @@ import {
   DATABASE_MIGRATION_10_TO_11_SQL,
   DATABASE_MIGRATION_11_TO_12_SQL,
   DATABASE_MIGRATION_12_TO_13_SQL,
+  DATABASE_MIGRATION_13_TO_14_SQL,
   DATABASE_SCHEMA_VERSION,
 } from "./schema.js";
 
@@ -80,6 +81,10 @@ function migrateDatabase(database: DatabaseSync, version: number): void {
   }
   if (currentVersion === 12) {
     applyMigration(database, currentVersion, DATABASE_MIGRATION_12_TO_13_SQL);
+    currentVersion = 13;
+  }
+  if (currentVersion === 13) {
+    applyMigration(database, currentVersion, DATABASE_MIGRATION_13_TO_14_SQL);
   }
 }
 

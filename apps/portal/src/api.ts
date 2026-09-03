@@ -9,12 +9,15 @@ import {
   AgentRunSchema,
   type AgentStatusDetail,
   AgentStatusDetailSchema,
-  type AttentionDismissalList,
-  AttentionDismissalListSchema,
   type ApproveCustomLaunchConsentCommand,
   ApproveCustomLaunchConsentCommandSchema,
   type AssignAgentCheckoutCommand,
   AssignAgentCheckoutCommandSchema,
+  type AttentionDismissalList,
+  AttentionDismissalListSchema,
+  type AttentionEventType,
+  type AttentionSubscriptionsSnapshot,
+  AttentionSubscriptionsSnapshotSchema,
   type BrowserRestartFrame,
   BrowserRestartFrameSchema,
   type CancelCustomLaunchConsentCommand,
@@ -53,6 +56,8 @@ import {
   GroupMembershipSchema,
   GroupSchema,
   type InstallProviderExtensionCommand,
+  type MemberAttentionSubscriptions,
+  MemberAttentionSubscriptionsSchema,
   type MessagePage,
   MessagePageSchema,
   type MessageSubmissionResult,
@@ -101,6 +106,7 @@ import {
   RoleDefinitionSchema,
   type ServiceDescriptor,
   ServiceDescriptorSchema,
+  type SetAttentionSubscriptionCommand,
   type StartAgentRunResult,
   StartAgentRunResultSchema,
   type StartGroupRunsResult,
@@ -250,6 +256,17 @@ export interface PortalClient {
   acknowledgeCompletion(groupId: string, memberId: string): Promise<AgentStatusDetail>;
   listAttentionDismissals(): Promise<AttentionDismissalList>;
   dismissAttentionItems(command: DismissAttentionItemsCommand): Promise<AttentionDismissalList>;
+  listAttentionSubscriptions(): Promise<AttentionSubscriptionsSnapshot>;
+  setAttentionSubscription(
+    groupId: string,
+    memberId: string,
+    eventType: AttentionEventType,
+    command: SetAttentionSubscriptionCommand,
+  ): Promise<MemberAttentionSubscriptions>;
+  resetAttentionSubscriptions(
+    groupId: string,
+    memberId: string,
+  ): Promise<MemberAttentionSubscriptions>;
   loadMessages(
     groupId: string,
     options?: { limit?: number; before?: number; after?: number },
@@ -545,6 +562,20 @@ export const api: PortalClient = {
       `${CONTROL_API_PREFIX}/attention-dismissals`,
       AttentionDismissalListSchema,
       commandInit("POST", command, crypto.randomUUID()),
+    ),
+  listAttentionSubscriptions: () =>
+    request(`${CONTROL_API_PREFIX}/attention-subscriptions`, AttentionSubscriptionsSnapshotSchema),
+  setAttentionSubscription: (groupId, memberId, eventType, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/attention-subscriptions/${encodeURIComponent(eventType)}`,
+      MemberAttentionSubscriptionsSchema,
+      commandInit("PUT", command, crypto.randomUUID()),
+    ),
+  resetAttentionSubscriptions: (groupId, memberId) =>
+    request(
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/attention-subscriptions`,
+      MemberAttentionSubscriptionsSchema,
+      commandInit("DELETE", {}, crypto.randomUUID()),
     ),
   loadMessages: (groupId, options = {}) => {
     const query = new URLSearchParams();

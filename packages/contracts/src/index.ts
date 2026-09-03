@@ -1,4 +1,5 @@
 export * from "./actions.js";
+export * from "./attention.js";
 export * from "./canonical-json.js";
 export * from "./config.js";
 export * from "./control.js";

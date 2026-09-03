@@ -3,6 +3,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   AgentKindSchema,
+  AttentionSubscriptionConfigSchema,
   CONFIG_VERSION,
   type ConfigDiagnostic,
   type ConfigStatus,
@@ -10,6 +11,7 @@ import {
   ConfiguredGroupSchema,
   ConfiguredProviderExtensionSchema,
   CredentialProfileReferenceSchema,
+  DEFAULT_ATTENTION_SUBSCRIPTIONS,
   DesiredModelPolicySchema,
   ExtensionIdSchema,
   InstructionPathSchema,
@@ -93,6 +95,9 @@ export const AuthoredNanasaConfigSchema = z
     roles: z.record(RoleIdSchema, RoleDefinitionSchema).default({}),
     groups: z.record(z.string().trim().min(1).max(128), ConfiguredGroupSchema).default({}),
     messages: MessageConfigSchema.default({ retentionPerGroup: 1_000 }),
+    attention: AttentionSubscriptionConfigSchema.default({
+      defaults: DEFAULT_ATTENTION_SUBSCRIPTIONS,
+    }),
   })
   .strict();
 

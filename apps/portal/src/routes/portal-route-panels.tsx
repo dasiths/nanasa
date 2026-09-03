@@ -12,23 +12,15 @@ import type {
   ServiceDescriptor,
   TerminalCheckpoint,
 } from "@nanasa/contracts";
-import { Bell, CheckCheck, RefreshCw, X } from "lucide-react";
+import { Bell, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { PortalClient } from "../api.js";
 import {
   type ActionAttentionItem,
   ATTENTION_CATEGORY_LABELS,
   type AttentionItem,
-  type AttentionReviewCategory,
-  attentionCategoryCount,
   attentionItemsForScope,
-  attentionReviewCount,
-  type CompletionAttentionItem,
   deriveAttentionItems,
-  type HealthAttentionItem,
-  type LaunchConsentAttentionItem,
-  type ProviderUpdateAttentionItem,
-  type WaitAttentionItem,
 } from "../attention-items.js";
 import { CheckoutWorkspace } from "../components/checkout-workspace.js";
 import { ExtensionsWorkspace } from "../components/extensions-workspace.js";
@@ -60,280 +52,22 @@ interface PortalRoutePanelProps {
   onPatchPreferences(next: Partial<PortalPreferences>): void;
 }
 
-const cancellableStates = new Set(["created", "deferred"]);
-
-function WaitReply({
-  item,
-  client,
-  onChanged,
-}: {
-  item: WaitAttentionItem;
-  client: PortalClient;
-  onChanged(): Promise<void>;
-}) {
-  const { wait } = item;
-  const [answer, setAnswer] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const [error, setError] = useState<PortalError>();
-  const submit = async (reply: Parameters<PortalClient["replyOpenWait"]>[1]["reply"]) => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await client.replyOpenWait(wait.id, {
-        expectedRunId: wait.runId,
-        expectedGeneration: wait.generation,
-        expectedReporterEpoch: wait.reporterEpoch,
-        expectedStatusRevision: wait.openedStatusRevision,
-        reply,
-      });
-      setSubmitted(true);
-      await onChanged();
-    } catch (cause) {
-      setError(toPortalError(cause, "Unable to send the exact wait reply"));
-    } finally {
-      setBusy(false);
-    }
-  };
-  const disabled = busy || submitted || wait.state === "replying";
-  return (
-    <div className="attention-control-stack">
-      {wait.kind === "permission" ? (
-        <div className="workflow-actions">
-          <button type="button" disabled={disabled} onClick={() => void submit({ kind: "deny" })}>
-            Deny
-          </button>
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => void submit({ kind: "allow-once" })}
-          >
-            Allow once
-          </button>
-        </div>
-      ) : wait.kind === "plan_approval" ? (
-        <div className="workflow-actions">
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => void submit({ kind: "reject-plan" })}
-          >
-            Reject
-          </button>
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => void submit({ kind: "approve-plan" })}
-          >
-            Approve
-          </button>
-        </div>
-      ) : (
-        <form
-          className="workflow-actions"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void submit({ kind: "answer", text: answer });
-          }}
-        >
-          <input
-            aria-label={`Answer ${wait.summary}`}
-            value={answer}
-            onChange={(event) => setAnswer(event.target.value)}
-            disabled={disabled}
-            required
-          />
-          <button type="submit" disabled={disabled || answer.trim().length === 0}>
-            Reply
-          </button>
-        </form>
-      )}
-      {(submitted || wait.state === "replying") && (
-        <small role="status">Reply submitted. Waiting for the reporter to close this wait.</small>
-      )}
-      {error !== undefined && <ErrorNotice error={error} className="attention-control-error" />}
-    </div>
-  );
-}
-
-function CompletionControls({
-  item,
-  client,
-  onNavigate,
-  onRefresh,
-  onAcknowledged,
-}: {
-  item: CompletionAttentionItem;
-  client: PortalClient;
-  onNavigate(path: string): void;
-  onRefresh(): Promise<void>;
-  onAcknowledged(item: CompletionAttentionItem): void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const [error, setError] = useState<PortalError>();
-  const acknowledge = async () => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await client.acknowledgeCompletion(item.groupId, item.memberId);
-      setSubmitted(true);
-      onAcknowledged(item);
-      await onRefresh();
-    } catch (cause) {
-      setError(toPortalError(cause, "Unable to acknowledge completion"));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="attention-control-stack">
-      <div className="workflow-actions">
-        <button type="button" disabled={busy || submitted} onClick={() => void acknowledge()}>
-          {submitted ? "Acknowledged" : "Acknowledge"}
-        </button>
-        <button type="button" onClick={() => onNavigate(item.targetPath)}>
-          Open agent
-        </button>
-      </div>
-      {error !== undefined && <ErrorNotice error={error} className="attention-control-error" />}
-    </div>
-  );
-}
-
-function LaunchConsentControls({
-  item,
-  onApprove,
-  onNavigate,
-}: {
-  item: LaunchConsentAttentionItem;
-  onApprove?(request: CustomLaunchConsentRequest): Promise<void>;
-  onNavigate(path: string): void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [approved, setApproved] = useState(false);
-  const [error, setError] = useState<PortalError>();
-  const approve = async () => {
-    if (onApprove === undefined) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      await onApprove(item.request);
-      setApproved(true);
-    } catch (cause) {
-      setError(toPortalError(cause, "Unable to trust and start this launcher"));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="attention-control-stack">
-      <div className="workflow-actions">
-        <button type="button" onClick={() => onNavigate(item.targetPath)}>
-          {item.providerUpdate ? "View details" : "Review launcher"}
-        </button>
-        {item.consentState === "pending" && (
-          <button type="button" disabled={busy || approved} onClick={() => void approve()}>
-            {approved
-              ? "Starting"
-              : busy
-                ? "Approving..."
-                : item.providerUpdate
-                  ? "Approve and restart"
-                  : "Trust and start"}
-          </button>
-        )}
-      </div>
-      {error !== undefined && <ErrorNotice error={error} className="attention-control-error" />}
-    </div>
-  );
-}
-
-function ProviderUpdateHealthControls({
-  item,
-  agentId,
-  client,
-  onNavigate,
-  onRefresh,
-}: {
-  item: HealthAttentionItem;
-  agentId: string;
-  client: PortalClient;
-  onNavigate(path: string): void;
-  onRefresh(): Promise<void>;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<PortalError>();
-  const checkAgain = async () => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await client.recoverAgentRun(item.groupId, agentId, {
-        dryRun: false,
-        forceIndeterminate: false,
-      });
-      await onRefresh();
-    } catch (cause) {
-      setError(toPortalError(cause, "Unable to check the agent setup"));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="attention-control-stack">
-      <div className="workflow-actions">
-        <button type="button" onClick={() => onNavigate(item.targetPath)}>
-          View details
-        </button>
-        <button type="button" disabled={busy} onClick={() => void checkAgain()}>
-          <RefreshCw className={busy ? "spin" : undefined} aria-hidden="true" size={14} />
-          Check again
-        </button>
-      </div>
-      {error !== undefined && <ErrorNotice error={error} className="attention-control-error" />}
-    </div>
-  );
-}
-
-function ActionControls({
-  item,
-  client,
-  onChanged,
-}: {
-  item: ActionAttentionItem;
-  client: PortalClient;
-  onChanged(): Promise<void>;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const [error, setError] = useState<PortalError>();
-  const cancel = async () => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await client.cancelAgentAction(item.action.id);
-      setSubmitted(true);
-      await onChanged();
-    } catch (cause) {
-      setError(toPortalError(cause, "Unable to cancel this action"));
-    } finally {
-      setBusy(false);
-    }
-  };
-  if (!cancellableStates.has(item.action.state)) return null;
-  return (
-    <div className="attention-control-stack">
-      <button type="button" disabled={busy || submitted} onClick={() => void cancel()}>
-        {submitted ? "Cancellation requested" : "Cancel"}
-      </button>
-      {error !== undefined && <ErrorNotice error={error} className="attention-control-error" />}
-    </div>
-  );
-}
-
 function actionStateLabel(state: string): string {
   const label = state.replaceAll("-", " ");
   return `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
+}
+
+function actionDisplayState(item: ActionAttentionItem): string {
+  if (item.action.error?.code === "agent_prompt_stalled") return "Delivery unconfirmed";
+  return actionStateLabel(item.action.state);
+}
+
+function actionErrorMessage(item: ActionAttentionItem): string | undefined {
+  const error = item.action.error;
+  if (error?.code === "agent_prompt_stalled") {
+    return `Nanasa sent this prompt to ${item.label}, but could not confirm that the agent received it. The prompt may still have run.`;
+  }
+  return error?.message;
 }
 
 function actionKindLabel(kind: string): string {
@@ -341,57 +75,83 @@ function actionKindLabel(kind: string): string {
   return `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
 }
 
-function ActionRow({
-  item,
-  client,
-  onChanged,
-  onDismiss,
-}: {
-  item: ActionAttentionItem;
-  client: PortalClient;
-  onChanged(): Promise<void>;
-  onDismiss(): void;
-}) {
-  const fragment = item.targetPath.split("#")[1];
-  const stateLabel = actionStateLabel(item.action.state);
-  const updatedAt = new Date(item.action.updatedAt).toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-  return (
-    <li className="workflow-row progress-row" id={fragment} tabIndex={-1}>
-      <div className="action-history-main">
-        <div className="action-history-title">
-          <strong>
-            {item.label} · {actionKindLabel(item.action.kind)} action
-          </strong>
-          <span className="action-state" data-state={item.action.state}>
-            {stateLabel}
-          </span>
-        </div>
-        <small>
-          {item.group.name} · {item.attempts.length} attempts · {item.acknowledgements.length}{" "}
-          acknowledgements
-        </small>
-        <time dateTime={item.action.updatedAt}>
-          {item.active ? "Updated" : "Ended"} {updatedAt}
-        </time>
-        {item.action.error !== undefined && <p>{item.action.error.message}</p>}
-      </div>
-      <div className="attention-item-actions">
-        <ActionControls item={item} client={client} onChanged={onChanged} />
-        <button
-          type="button"
-          title={`Dismiss this ${item.active ? "active action" : "history record"}${item.active ? " without cancelling it" : ""}`}
-          aria-label={`Dismiss ${item.label} ${stateLabel.toLowerCase()} action`}
-          onClick={onDismiss}
-        >
-          <X aria-hidden="true" size={14} />
-          Dismiss
-        </button>
-      </div>
-    </li>
-  );
+type AttentionInboxView = "needs" | "active" | "history" | "all";
+
+function attentionInboxView(item: AttentionItem): Exclude<AttentionInboxView, "all"> {
+  if (item.counted) return "needs";
+  if (item.kind === "action" && item.active) return "active";
+  return "history";
+}
+
+function attentionDestination(item: AttentionItem): { label: string; path: string } {
+  if (item.kind === "delivery" || item.kind === "unread") {
+    return { label: "Open messages", path: item.targetPath };
+  }
+  if (item.kind === "launch-consent") {
+    return { label: "Review consent", path: item.targetPath };
+  }
+  if (item.kind === "provider-update") {
+    return { label: "Open setup", path: item.targetPath };
+  }
+  if ((item.kind === "wait" || item.kind === "action") && item.runId !== undefined) {
+    return {
+      label: "Open terminal",
+      path: `/groups/${encodeURIComponent(item.groupId)}/terminals/${encodeURIComponent(item.runId)}`,
+    };
+  }
+  return { label: "Open terminal", path: item.targetPath };
+}
+
+function attentionStateLabel(item: AttentionItem): string {
+  switch (item.kind) {
+    case "launch-consent":
+      return item.consentState === "pending" ? "Approval required" : "Denied";
+    case "wait":
+      return "Response required";
+    case "response":
+      return item.responseType === "approval" ? "Approval required" : "Input required";
+    case "health":
+      return item.healthType === "stuck"
+        ? "Stuck"
+        : item.healthType === "failed"
+          ? "Failed"
+          : "Needs help";
+    case "completion":
+      return "Ready";
+    case "delivery":
+      return "Delivery failed";
+    case "action":
+      return actionDisplayState(item);
+    case "provider-update":
+      return "Restarted";
+    case "unread":
+      return "Unread";
+  }
+}
+
+function attentionItemTimestamp(item: AttentionItem): string | undefined {
+  switch (item.kind) {
+    case "launch-consent":
+      return item.request.requestedAt;
+    case "wait":
+      return item.wait.updatedAt;
+    case "response":
+    case "health":
+    case "completion":
+      return item.status?.observedAt;
+    case "action":
+      return item.action.updatedAt;
+    case "provider-update":
+      return item.run.providerUpdate?.updatedAt;
+    case "delivery":
+    case "unread":
+      return undefined;
+  }
+}
+
+function formatAttentionTime(timestamp: string | undefined): string | undefined {
+  if (timestamp === undefined) return undefined;
+  return new Date(timestamp).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
 function GroupSettingsPanel({
@@ -487,16 +247,12 @@ function GroupSettingsPanel({
 function AttentionPanel({
   route,
   snapshot,
-  config,
   group,
-  client,
   attentionItems,
   attentionWorkspaceLoading,
   attentionWorkspaceErrors,
   onNavigate,
-  onRefresh,
   onReloadAttentionWorkspace,
-  onApproveLaunchConsent,
   onDismissAttentionItems,
   preferences,
   onPatchPreferences,
@@ -504,58 +260,28 @@ function AttentionPanel({
   PortalRoutePanelProps,
   | "route"
   | "snapshot"
-  | "config"
   | "group"
-  | "client"
   | "attentionItems"
   | "attentionWorkspaceLoading"
   | "attentionWorkspaceErrors"
   | "onNavigate"
-  | "onRefresh"
   | "onReloadAttentionWorkspace"
-  | "onApproveLaunchConsent"
   | "onDismissAttentionItems"
   | "preferences"
   | "onPatchPreferences"
 >) {
-  const [filter, setFilter] = useState<"all" | AttentionReviewCategory>("all");
-  const [suppressedCompletionIds, setSuppressedCompletionIds] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
-  const [completionAnnouncement, setCompletionAnnouncement] = useState<{
-    itemId: string;
-    message: string;
-  }>();
-  const [bulkCompletionBusy, setBulkCompletionBusy] = useState(false);
-  const [bulkCompletionError, setBulkCompletionError] = useState<PortalError>();
+  const [view, setView] = useState<AttentionInboxView>("needs");
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState<"all" | AttentionItem["category"]>("all");
+  const routeTeamFilter = route.kind === "group" ? route.groupId : "all";
+  const [teamFilter, setTeamFilter] = useState(routeTeamFilter);
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
   const allItems = attentionItems ?? deriveAttentionItems(snapshot);
   const scope =
     route.kind === "group"
       ? ({ kind: "group", groupId: route.groupId } as const)
       : ({ kind: "repository" } as const);
-  const dismissedProviderUpdateIds = new Set(preferences.dismissedProviderUpdateIds ?? []);
-  const scopedItems = attentionItemsForScope(allItems, scope).filter((item) => {
-    if (item.kind === "completion") return !suppressedCompletionIds.has(item.id);
-    if (item.kind !== "provider-update") return true;
-    const updateId = item.run.providerUpdate?.id;
-    return updateId === undefined || !dismissedProviderUpdateIds.has(updateId);
-  });
-  const reviewItems = scopedItems.filter(
-    (item) => item.counted && (filter === "all" || item.category === filter),
-  );
-  const progressItems = scopedItems.filter(
-    (item): item is ActionAttentionItem => item.kind === "action",
-  );
-  const providerUpdates = scopedItems.filter(
-    (item): item is ProviderUpdateAttentionItem => item.kind === "provider-update",
-  );
-  const completionItems = scopedItems.filter(
-    (item): item is CompletionAttentionItem => item.kind === "completion",
-  );
-  const activeActions = progressItems.filter((item) => item.active);
-  const actionHistory = progressItems
-    .filter((item) => !item.active)
-    .sort((left, right) => Date.parse(right.action.updatedAt) - Date.parse(left.action.updatedAt));
+  const scopedItems = attentionItemsForScope(allItems, scope);
   const relevantGroupIds =
     scope.kind === "group" ? [scope.groupId] : snapshot.groups.map((item) => item.id);
   const loading = relevantGroupIds.filter((groupId) => attentionWorkspaceLoading?.has(groupId));
@@ -563,14 +289,45 @@ function AttentionPanel({
     const error = attentionWorkspaceErrors?.get(groupId);
     return error === undefined ? [] : [{ groupId, error }];
   });
-  const filters: Array<{ id: "all" | AttentionReviewCategory; label: string; count: number }> = [
-    { id: "all", label: "All", count: attentionReviewCount(scopedItems) },
-    ...(["response", "health", "completion", "delivery"] as const).map((category) => ({
-      id: category,
-      label: ATTENTION_CATEGORY_LABELS[category],
-      count: attentionCategoryCount(scopedItems, category),
-    })),
+  const views: Array<{ id: AttentionInboxView; label: string; count: number }> = [
+    {
+      id: "needs",
+      label: "Needs action",
+      count: scopedItems.filter((item) => item.counted).length,
+    },
+    {
+      id: "active",
+      label: "Active",
+      count: scopedItems.filter((item) => item.kind === "action" && item.active).length,
+    },
+    {
+      id: "history",
+      label: "History",
+      count: scopedItems.filter((item) => attentionInboxView(item) === "history").length,
+    },
+    { id: "all", label: "All", count: scopedItems.length },
   ];
+  const categories = [...new Set(scopedItems.map((item) => item.category))];
+  const teams =
+    scope.kind === "group"
+      ? snapshot.groups.filter((item) => item.id === scope.groupId)
+      : [...new Map(scopedItems.map((item) => [item.groupId, item.group])).values()];
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const visibleItems = scopedItems.filter((item) => {
+    if (view !== "all" && attentionInboxView(item) !== view) return false;
+    if (typeFilter !== "all" && item.category !== typeFilter) return false;
+    if (teamFilter !== "all" && item.groupId !== teamFilter) return false;
+    if (normalizedSearch.length === 0) return true;
+    return [
+      item.title,
+      item.summary,
+      item.label,
+      item.group.name,
+      ATTENTION_CATEGORY_LABELS[item.category],
+      attentionStateLabel(item),
+    ].some((value) => value.toLocaleLowerCase().includes(normalizedSearch));
+  });
+  const selectedItems = scopedItems.filter((item) => selectedIds.has(item.id));
 
   useEffect(() => {
     const fragment = window.location.hash.slice(1);
@@ -578,8 +335,17 @@ function AttentionPanel({
     const target = scopedItems.find((item) => item.targetPath.split("#")[1] === fragment);
     if (target === undefined) return;
     if (target.kind !== "wait" && target.kind !== "action") return;
-    if (target.kind === "wait" && filter !== target.category) {
-      setFilter(target.category);
+    const targetView = attentionInboxView(target);
+    if (
+      view !== targetView ||
+      search !== "" ||
+      typeFilter !== "all" ||
+      teamFilter !== routeTeamFilter
+    ) {
+      setView(targetView);
+      setSearch("");
+      setTypeFilter("all");
+      setTeamFilter(routeTeamFilter);
       return;
     }
     const frame = requestAnimationFrame(() => {
@@ -588,90 +354,117 @@ function AttentionPanel({
       element?.scrollIntoView?.({ block: "center" });
     });
     return () => cancelAnimationFrame(frame);
-  }, [filter, scopedItems]);
+  }, [routeTeamFilter, scopedItems, search, teamFilter, typeFilter, view]);
+
+  useEffect(() => {
+    setTeamFilter(routeTeamFilter);
+  }, [routeTeamFilter]);
+
+  useEffect(() => {
+    const currentIds = new Set(scopedItems.map((item) => item.id));
+    setSelectedIds((current) => {
+      const retained = new Set([...current].filter((id) => currentIds.has(id)));
+      return retained.size === current.size ? current : retained;
+    });
+  }, [scopedItems]);
 
   const reload = (groupId: string) => onReloadAttentionWorkspace?.(groupId) ?? Promise.resolve();
   const dismissAttentionItems = async (items: readonly AttentionItem[]) => {
     const persisted = await onDismissAttentionItems(items.map(({ id }) => id));
-    if (!persisted) return;
+    if (!persisted) return false;
     const providerUpdateIds = items.flatMap((item) => {
       if (item.kind !== "provider-update") return [];
       const updateId = item.run.providerUpdate?.id;
       return updateId === undefined ? [] : [updateId];
     });
-    if (providerUpdateIds.length === 0) return;
-    onPatchPreferences({
-      dismissedProviderUpdateIds: [
-        ...new Set([...(preferences.dismissedProviderUpdateIds ?? []), ...providerUpdateIds]),
-      ].slice(-100),
-    });
-  };
-  const acknowledgeAllCompletions = async () => {
-    setBulkCompletionBusy(true);
-    setBulkCompletionError(undefined);
-    try {
-      const results = await Promise.allSettled(
-        completionItems.map((item) => client.acknowledgeCompletion(item.groupId, item.memberId)),
-      );
-      const acknowledged = completionItems.filter(
-        (_, index) => results[index]?.status === "fulfilled",
-      );
-      if (acknowledged.length > 0) {
-        setSuppressedCompletionIds(
-          (current) => new Set([...current, ...acknowledged.map((item) => item.id)]),
-        );
-        setCompletionAnnouncement({
-          itemId: acknowledged.map((item) => item.id).join(":"),
-          message: `${acknowledged.length} ${acknowledged.length === 1 ? "completion" : "completions"} acknowledged.`,
-        });
-        await onRefresh();
-      }
-      const failed = results.length - acknowledged.length;
-      if (failed > 0) {
-        setBulkCompletionError(
-          toPortalError(
-            undefined,
-            `Unable to acknowledge ${failed} ${failed === 1 ? "completion" : "completions"}.`,
-            "completion_acknowledgement_failed",
-          ),
-        );
-      }
-    } catch (cause) {
-      setBulkCompletionError(toPortalError(cause, "Unable to refresh acknowledged completions"));
-    } finally {
-      setBulkCompletionBusy(false);
+    if (providerUpdateIds.length > 0) {
+      onPatchPreferences({
+        dismissedProviderUpdateIds: [
+          ...new Set([...(preferences.dismissedProviderUpdateIds ?? []), ...providerUpdateIds]),
+        ].slice(-100),
+      });
     }
+    return true;
   };
-  const dismissAllUpdates = () => {
-    void dismissAttentionItems(providerUpdates);
+  const dismissSelected = async () => {
+    if (await dismissAttentionItems(selectedItems)) setSelectedIds(new Set());
   };
   return (
     <RouteSurface
       title="Attention"
       eyebrow={group?.name ?? "Global operations"}
-      description="Review responses, agent health, completed work, and failed deliveries. Completion alerts control popups; completed work remains here until acknowledged."
+      description="Your subscribed inbox for agent requests, progress, completions, delivery issues, and updates."
     >
-      <p
-        key={completionAnnouncement?.itemId}
-        className="visually-hidden"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-      >
-        {completionAnnouncement?.message ?? ""}
-      </p>
-      <div className="attention-filters" role="group" aria-label="Attention category filters">
-        {filters.map((item) => (
+      <div className="attention-filters" role="group" aria-label="Attention inbox views">
+        {views.map((item) => (
           <button
             type="button"
             key={item.id}
-            aria-pressed={filter === item.id}
-            onClick={() => setFilter(item.id)}
+            aria-pressed={view === item.id}
+            onClick={() => setView(item.id)}
           >
             {item.label} <span>{item.count}</span>
           </button>
         ))}
       </div>
+      <div className="attention-inbox-toolbar">
+        <label className="attention-search">
+          <span>Search</span>
+          <input
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search Attention"
+          />
+        </label>
+        <label>
+          <span>Type</span>
+          <select
+            aria-label="Filter by type"
+            value={typeFilter}
+            onChange={(event) =>
+              setTypeFilter(event.target.value as "all" | AttentionItem["category"])
+            }
+          >
+            <option value="all">All types</option>
+            {categories.map((category) => (
+              <option value={category} key={category}>
+                {ATTENTION_CATEGORY_LABELS[category]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Team</span>
+          <select
+            aria-label="Filter by team"
+            value={teamFilter}
+            disabled={scope.kind === "group"}
+            onChange={(event) => setTeamFilter(event.target.value)}
+          >
+            {scope.kind === "repository" && <option value="all">All teams</option>}
+            {teams.map((team) => (
+              <option value={team.id} key={team.id}>
+                {team.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {selectedItems.length > 0 && (
+        <div className="attention-selection" role="group" aria-label="Selected Attention items">
+          <strong>{selectedItems.length} selected</strong>
+          <div>
+            <button type="button" onClick={() => void dismissSelected()}>
+              <X aria-hidden="true" size={14} />
+              Dismiss selected
+            </button>
+            <button type="button" onClick={() => setSelectedIds(new Set())}>
+              Clear selection
+            </button>
+          </div>
+        </div>
+      )}
       {loading.length > 0 && (
         <p className="attention-loading" role="status">
           Loading exact waits and action progress for {loading.length}{" "}
@@ -694,149 +487,72 @@ function AttentionPanel({
           ))}
         </section>
       )}
-      <section className="attention-review-section" aria-labelledby="attention-review-heading">
-        <div className="attention-section-heading">
-          <h3 id="attention-review-heading">Review items</h3>
-          <div className="attention-heading-actions">
-            {completionItems.length > 0 && (
-              <button
-                type="button"
-                disabled={bulkCompletionBusy}
-                onClick={() => void acknowledgeAllCompletions()}
+      {visibleItems.length === 0 ? (
+        <Empty text="No Attention items match this view." />
+      ) : (
+        <ul className="attention-inbox-list">
+          {visibleItems.map((item) => {
+            const fragment = item.targetPath.split("#")[1];
+            const destination = attentionDestination(item);
+            const timestamp = attentionItemTimestamp(item);
+            const diagnostic = item.kind === "action" ? actionErrorMessage(item) : undefined;
+            return (
+              <li
+                className={`attention-inbox-row attention-${attentionInboxView(item)}`}
+                id={fragment}
+                key={item.id}
+                tabIndex={fragment === undefined ? undefined : -1}
               >
-                <CheckCheck aria-hidden="true" size={14} />
-                {bulkCompletionBusy ? "Acknowledging..." : "Acknowledge all completions"}
-              </button>
-            )}
-            {reviewItems.length > 0 && (
-              <button
-                type="button"
-                title="Dismiss these review items without resolving them"
-                onClick={() => void dismissAttentionItems(reviewItems)}
-              >
-                <X aria-hidden="true" size={14} />
-                {filter === "all"
-                  ? "Dismiss all review items"
-                  : `Dismiss all ${ATTENTION_CATEGORY_LABELS[filter].toLowerCase()}`}
-              </button>
-            )}
-          </div>
-        </div>
-        {bulkCompletionError !== undefined && (
-          <ErrorNotice error={bulkCompletionError} className="attention-control-error" />
-        )}
-        {reviewItems.length === 0 ? (
-          <Empty text="No review items match this category." />
-        ) : (
-          <ul className="workflow-list attention-list">
-            {reviewItems.map((item) => {
-              const fragment = item.targetPath.split("#")[1];
-              return (
-                <li
-                  className={`workflow-row attention-item attention-${item.category}`}
-                  id={fragment}
-                  key={item.id}
-                  tabIndex={fragment === undefined ? undefined : -1}
-                >
-                  <div className="attention-item-main">
+                <label className="attention-row-select">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${item.title}`}
+                    checked={selectedIds.has(item.id)}
+                    onChange={(event) => {
+                      setSelectedIds((current) => {
+                        const next = new Set(current);
+                        if (event.target.checked) next.add(item.id);
+                        else next.delete(item.id);
+                        return next;
+                      });
+                    }}
+                  />
+                </label>
+                <span className="attention-state-indicator" aria-hidden="true" />
+                <div className="attention-inbox-main">
+                  <div className="attention-inbox-title">
                     <strong>{item.title}</strong>
-                    <small>
-                      {item.group.name} · {ATTENTION_CATEGORY_LABELS[item.category]}
-                    </small>
-                    <p>{item.summary}</p>
+                    <span className="attention-state-badge">{attentionStateLabel(item)}</span>
                   </div>
-                  <div className="attention-item-actions">
-                    {item.kind === "launch-consent" ? (
-                      <LaunchConsentControls
-                        item={item}
-                        {...(onApproveLaunchConsent === undefined
-                          ? {}
-                          : { onApprove: onApproveLaunchConsent })}
-                        onNavigate={onNavigate}
-                      />
-                    ) : item.kind === "wait" ? (
-                      <WaitReply
-                        item={item}
-                        client={client}
-                        onChanged={() => reload(item.groupId)}
-                      />
-                    ) : item.kind === "completion" ? (
-                      <CompletionControls
-                        item={item}
-                        client={client}
-                        onNavigate={onNavigate}
-                        onRefresh={onRefresh}
-                        onAcknowledged={(completion) => {
-                          setSuppressedCompletionIds(
-                            (current) => new Set([...current, completion.id]),
-                          );
-                          setCompletionAnnouncement({
-                            itemId: completion.id,
-                            message: `Completion acknowledged for ${completion.label}.`,
-                          });
-                        }}
-                      />
-                    ) : item.kind === "health" &&
-                      (item.healthType === "provider-update-failed" ||
-                        item.healthType === "ownership-uncertain") ? (
-                      <ProviderUpdateHealthControls
-                        item={item}
-                        agentId={
-                          Object.entries(config.groups[item.groupId]?.agents ?? {}).find(
-                            ([, agent]) => agent.memberId === item.memberId,
-                          )?.[0] ?? item.member.id
-                        }
-                        client={client}
-                        onNavigate={onNavigate}
-                        onRefresh={onRefresh}
-                      />
-                    ) : (
-                      <button type="button" onClick={() => onNavigate(item.targetPath)}>
-                        {item.kind === "delivery" ? "Open Messages" : "Open terminal"}
-                      </button>
+                  <small className="attention-inbox-meta">
+                    <span>{item.group.name}</span>
+                    <span>{ATTENTION_CATEGORY_LABELS[item.category]}</span>
+                    {item.kind === "action" && <span>{actionKindLabel(item.action.kind)}</span>}
+                    {timestamp !== undefined && (
+                      <time dateTime={timestamp}>{formatAttentionTime(timestamp)}</time>
                     )}
-                    <button
-                      type="button"
-                      title="Dismiss this item without resolving it"
-                      aria-label={`Dismiss ${item.title}`}
-                      onClick={() => void dismissAttentionItems([item])}
+                  </small>
+                  <p>{item.summary}</p>
+                  {item.kind === "action" && diagnostic !== undefined && (
+                    <p
+                      className="attention-diagnostic"
+                      title={
+                        item.action.error === undefined
+                          ? undefined
+                          : `Diagnostic code: ${item.action.error.code}`
+                      }
                     >
-                      <X aria-hidden="true" size={14} />
-                      Dismiss
-                    </button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
-      {providerUpdates.length > 0 && (
-        <section
-          className="workflow-card attention-updates"
-          aria-labelledby="attention-updates-heading"
-        >
-          <div className="attention-section-heading">
-            <h3 id="attention-updates-heading">Recent updates</h3>
-            <button type="button" onClick={dismissAllUpdates}>
-              <X aria-hidden="true" size={14} />
-              Dismiss all updates
-            </button>
-          </div>
-          <ul className="workflow-list">
-            {providerUpdates.map((item) => (
-              <li className="workflow-row" key={item.id}>
-                <div>
-                  <strong>{item.title}</strong>
-                  <small>{item.summary}</small>
+                      {diagnostic}
+                      {item.action.error !== undefined && <code>{item.action.error.code}</code>}
+                    </p>
+                  )}
                 </div>
                 <div className="attention-item-actions">
-                  <button type="button" onClick={() => onNavigate(item.targetPath)}>
-                    Open agent
+                  <button type="button" onClick={() => onNavigate(destination.path)}>
+                    {destination.label}
                   </button>
                   <button
                     type="button"
-                    title="Dismiss this item"
                     aria-label={`Dismiss ${item.title}`}
                     onClick={() => void dismissAttentionItems([item])}
                   >
@@ -845,71 +561,10 @@ function AttentionPanel({
                   </button>
                 </div>
               </li>
-            ))}
-          </ul>
-        </section>
+            );
+          })}
+        </ul>
       )}
-      <section
-        className="workflow-card attention-progress"
-        aria-labelledby="attention-actions-heading"
-      >
-        <div className="attention-section-heading">
-          <h3 id="attention-actions-heading">Actions</h3>
-          {activeActions.length > 0 && (
-            <span className="progress-count">
-              {activeActions.length} active {activeActions.length === 1 ? "action" : "actions"}
-            </span>
-          )}
-        </div>
-        {progressItems.length === 0 ? (
-          <p>No active or recent actions in this scope.</p>
-        ) : (
-          <div className="action-groups">
-            {activeActions.length > 0 && (
-              <section className="action-group" aria-labelledby="active-actions-heading">
-                <h4 id="active-actions-heading">Active actions</h4>
-                <ul className="workflow-list">
-                  {activeActions.map((item) => (
-                    <ActionRow
-                      key={item.id}
-                      item={item}
-                      client={client}
-                      onChanged={() => reload(item.groupId)}
-                      onDismiss={() => void dismissAttentionItems([item])}
-                    />
-                  ))}
-                </ul>
-              </section>
-            )}
-            {actionHistory.length > 0 && (
-              <section className="action-group" aria-labelledby="action-history-heading">
-                <div className="attention-section-heading">
-                  <h4 id="action-history-heading">Recent history</h4>
-                  <button
-                    type="button"
-                    title="Dismiss all action history records"
-                    onClick={() => void dismissAttentionItems(actionHistory)}
-                  >
-                    <X aria-hidden="true" size={14} />
-                    Dismiss history
-                  </button>
-                </div>
-                <ul className="workflow-list">
-                  {actionHistory.map((item) => (
-                    <ActionRow
-                      key={item.id}
-                      item={item}
-                      client={client}
-                      onChanged={() => reload(item.groupId)}
-                      onDismiss={() => void dismissAttentionItems([item])}
-                    />
-                  ))}
-                </ul>
-              </section>
-            )}
-          </div>
-        )}
-      </section>
     </RouteSurface>
   );
 }
@@ -1112,6 +767,9 @@ function SettingsPanel({
   onOpenRoleSettings,
   onPatchPreferences,
 }: Pick<PortalRoutePanelProps, "preferences" | "onOpenRoleSettings" | "onPatchPreferences">) {
+  const [notificationPermission, setNotificationPermission] = useState<
+    NotificationPermission | "unsupported"
+  >(() => (!("Notification" in window) ? "unsupported" : Notification.permission));
   const setNotification = (key: keyof PortalPreferences["notifications"], value: boolean) =>
     onPatchPreferences({ notifications: { ...preferences.notifications, [key]: value } });
   const requestNotifications = async () => {
@@ -1119,9 +777,27 @@ function SettingsPanel({
       setNotification("desktop", false);
       return;
     }
-    if (!("Notification" in window)) return;
+    if (!("Notification" in window) || Notification.permission === "denied") return;
     const permission = await Notification.requestPermission();
+    setNotificationPermission(permission);
     setNotification("desktop", permission === "granted");
+  };
+  const notificationStatus =
+    notificationPermission === "unsupported"
+      ? "Unsupported"
+      : notificationPermission === "denied"
+        ? "Blocked"
+        : preferences.notifications.desktop && notificationPermission === "granted"
+          ? "On"
+          : notificationPermission === "default"
+            ? "Permission required"
+            : "Off";
+  const testNotification = () => {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    new Notification("Nanasa browser notifications", {
+      body: "Subscribed Attention items can appear here while the portal is open.",
+      silent: true,
+    });
   };
   return (
     <RouteSurface
@@ -1194,14 +870,7 @@ function SettingsPanel({
         </fieldset>
         <fieldset>
           <legend>Notifications</legend>
-          <label>
-            <input
-              type="checkbox"
-              checked={preferences.notifications.inApp}
-              onChange={(event) => setNotification("inApp", event.target.checked)}
-            />{" "}
-            In-app attention notices
-          </label>
+          <p>Subscribed Attention items always show a temporary in-app toast.</p>
           <label>
             <input
               type="checkbox"
@@ -1215,6 +884,15 @@ function SettingsPanel({
               ? "Disable desktop notifications"
               : "Request desktop notifications"}
           </button>
+          <p role="status">Browser notifications: {notificationStatus}</p>
+          <button
+            type="button"
+            disabled={!preferences.notifications.desktop || notificationPermission !== "granted"}
+            onClick={testNotification}
+          >
+            Send test notification
+          </button>
+          <small>Keep a Nanasa portal tab open to receive browser notifications.</small>
         </fieldset>
       </div>
     </RouteSurface>

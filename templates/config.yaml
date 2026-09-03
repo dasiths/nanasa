@@ -10,6 +10,16 @@ terminal:
     retentionSeconds: 86400
     sensitivity: repository-private
 instructions: []
+attention:
+  defaults:
+    response-required: true
+    agent-health: true
+    completion: true
+    delivery-failure: true
+    action-state: false
+    provider-update-failed: true
+    provider-update-succeeded: false
+    unread-message: false
 integrations:
   copilot:
     name: GitHub Copilot

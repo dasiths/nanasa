@@ -2,9 +2,11 @@ import type {
   AgentKind,
   AgentRun,
   AgentStatusSummary,
+  AttentionEventType,
   CustomLaunchConsentRequest,
   GroupMembership,
   NanasaConfig,
+  MemberAttentionSubscriptions,
   RoleDefinition,
   TerminalEndpointState,
 } from "@nanasa/contracts";
@@ -42,6 +44,231 @@ const endpointLabels: Record<Exclude<TerminalEndpointState, "ready">, string> = 
   stopped: "Terminal stopped",
 };
 
+const attentionSubscriptionLabels: Array<{
+  eventType: AttentionEventType;
+  label: string;
+  detail: string;
+}> = [
+  {
+    eventType: "response-required",
+    label: "Needs a response",
+    detail: "Questions, permissions, and approvals",
+  },
+  {
+    eventType: "agent-health",
+    label: "Fails or becomes stuck",
+    detail: "Agent health requires investigation",
+  },
+  { eventType: "completion", label: "Completes work", detail: "A new result is ready" },
+  {
+    eventType: "delivery-failure",
+    label: "Has a delivery failure",
+    detail: "A message could not be delivered",
+  },
+  {
+    eventType: "action-state",
+    label: "Changes action state",
+    detail: "Started, completed, or unconfirmed",
+  },
+  {
+    eventType: "provider-update-failed",
+    label: "Provider update fails",
+    detail: "Setup requires investigation",
+  },
+  {
+    eventType: "provider-update-succeeded",
+    label: "Provider update succeeds",
+    detail: "A new setup was activated",
+  },
+  {
+    eventType: "unread-message",
+    label: "Has unread messages",
+    detail: "New group messages are waiting",
+  },
+];
+
+function AttentionSubscriptionMenu({
+  alias,
+  subscriptions,
+  onSet,
+  onReset,
+}: {
+  alias: string;
+  subscriptions: MemberAttentionSubscriptions | undefined;
+  onSet(eventType: AttentionEventType, enabled: boolean): Promise<void>;
+  onReset(): Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busyEvent, setBusyEvent] = useState<AttentionEventType>();
+  const [bulkTarget, setBulkTarget] = useState<boolean>();
+  const [resetting, setResetting] = useState(false);
+  const [error, setError] = useState<PortalError>();
+  const controlRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const enabledCount =
+    subscriptions?.subscriptions.filter((subscription) => subscription.enabled).length ?? 0;
+  const subscriptionCount = subscriptions?.subscriptions.length ?? 0;
+  const busy = busyEvent !== undefined || bulkTarget !== undefined || resetting;
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !controlRef.current?.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      buttonRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const setSubscription = async (eventType: AttentionEventType, enabled: boolean) => {
+    setBusyEvent(eventType);
+    setError(undefined);
+    try {
+      await onSet(eventType, enabled);
+    } catch (cause) {
+      setError(toPortalError(cause, "Unable to update Attention subscriptions"));
+    } finally {
+      setBusyEvent(undefined);
+    }
+  };
+  const reset = async () => {
+    setResetting(true);
+    setError(undefined);
+    try {
+      await onReset();
+    } catch (cause) {
+      setError(toPortalError(cause, "Unable to reset Attention subscriptions"));
+    } finally {
+      setResetting(false);
+    }
+  };
+  const setAllSubscriptions = async (enabled: boolean) => {
+    const changes =
+      subscriptions?.subscriptions.filter((subscription) => subscription.enabled !== enabled) ?? [];
+    if (changes.length === 0) return;
+    setBulkTarget(enabled);
+    setError(undefined);
+    try {
+      for (const subscription of changes) {
+        await onSet(subscription.eventType, enabled);
+      }
+    } catch (cause) {
+      setError(toPortalError(cause, "Unable to update Attention subscriptions"));
+    } finally {
+      setBulkTarget(undefined);
+    }
+  };
+
+  return (
+    <div className="attention-subscription-control" ref={controlRef}>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={`Configure Attention for ${alias}, ${enabledCount} ${enabledCount === 1 ? "event" : "events"} subscribed`}
+        title={`Configure Attention for ${alias}`}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onClick={() => setOpen((current) => !current)}
+        ref={buttonRef}
+      >
+        {enabledCount > 0 ? (
+          <BellRing aria-hidden="true" size={12} />
+        ) : (
+          <BellOff aria-hidden="true" size={12} />
+        )}
+      </button>
+      {open && (
+        <section
+          className="attention-subscription-menu"
+          role="dialog"
+          aria-label={`${alias} Attention subscriptions`}
+        >
+          <div className="attention-subscription-heading">
+            <div>
+              <span className="eyebrow">Terminal bell</span>
+              <strong>{alias} Attention</strong>
+            </div>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Close Attention subscriptions"
+              onClick={() => {
+                setOpen(false);
+                buttonRef.current?.focus();
+              }}
+            >
+              <X aria-hidden="true" size={13} />
+            </button>
+          </div>
+          <p>Subscribed events enter Attention and show a temporary toast.</p>
+          <div className="attention-subscription-bulk" role="group" aria-label="Bulk subscriptions">
+            <button
+              type="button"
+              disabled={subscriptions === undefined || busy || enabledCount === subscriptionCount}
+              onClick={() => void setAllSubscriptions(true)}
+            >
+              {bulkTarget === true ? "Subscribing..." : "Subscribe all"}
+            </button>
+            <button
+              type="button"
+              disabled={subscriptions === undefined || busy || enabledCount === 0}
+              onClick={() => void setAllSubscriptions(false)}
+            >
+              {bulkTarget === false ? "Unsubscribing..." : "Unsubscribe all"}
+            </button>
+          </div>
+          <div className="attention-subscription-options">
+            {attentionSubscriptionLabels.map(({ eventType, label, detail }) => {
+              const subscription = subscriptions?.subscriptions.find(
+                (candidate) => candidate.eventType === eventType,
+              );
+              return (
+                <label key={eventType}>
+                  <input
+                    type="checkbox"
+                    checked={subscription?.enabled ?? false}
+                    disabled={subscription === undefined || busy}
+                    onChange={(event) =>
+                      void setSubscription(eventType, event.currentTarget.checked)
+                    }
+                  />
+                  <span>
+                    <strong>{label}</strong>
+                    <small>{detail}</small>
+                  </span>
+                  <span className="subscription-source">
+                    {subscription?.source === "operator-override" ? "override" : "config"}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            className="attention-subscription-reset"
+            disabled={subscriptions === undefined || busy}
+            onClick={() => void reset()}
+          >
+            {resetting ? "Resetting..." : "Reset to config defaults"}
+          </button>
+          {error !== undefined && <ErrorNotice error={error} className="attention-control-error" />}
+        </section>
+      )}
+    </div>
+  );
+}
+
 function TerminalPane({
   client,
   run,
@@ -52,7 +279,7 @@ function TerminalPane({
   connectionRevision,
   visible,
   theme,
-  completionNotificationsEnabled,
+  attentionSubscriptions,
   pinned,
   focused,
   statusKey,
@@ -60,7 +287,8 @@ function TerminalPane({
   restartNoticeDismissed,
   onRecover,
   onDismissRestartNotice,
-  onToggleCompletionNotifications,
+  onSetAttentionSubscription,
+  onResetAttentionSubscriptions,
   onTogglePinned,
   onToggleFocus,
 }: {
@@ -73,7 +301,7 @@ function TerminalPane({
   connectionRevision: number;
   visible: boolean;
   theme: "light" | "dark";
-  completionNotificationsEnabled: boolean;
+  attentionSubscriptions: MemberAttentionSubscriptions | undefined;
   pinned: boolean;
   focused: boolean;
   statusKey: string;
@@ -81,7 +309,8 @@ function TerminalPane({
   restartNoticeDismissed: boolean;
   onRecover?(forceIndeterminate: boolean): Promise<void>;
   onDismissRestartNotice(): void;
-  onToggleCompletionNotifications(): void;
+  onSetAttentionSubscription(eventType: AttentionEventType, enabled: boolean): Promise<void>;
+  onResetAttentionSubscriptions(): Promise<void>;
   onTogglePinned(): void;
   onToggleFocus(): void;
 }) {
@@ -136,20 +365,12 @@ function TerminalPane({
   );
   const paneActions = (
     <>
-      <button
-        type="button"
-        className="icon-button"
-        aria-label={`${completionNotificationsEnabled ? "Disable" : "Enable"} completion alerts for ${alias}`}
-        title={`${completionNotificationsEnabled ? "Disable" : "Enable"} completion alerts for ${alias}`}
-        aria-pressed={completionNotificationsEnabled}
-        onClick={onToggleCompletionNotifications}
-      >
-        {completionNotificationsEnabled ? (
-          <BellRing aria-hidden="true" size={12} />
-        ) : (
-          <BellOff aria-hidden="true" size={12} />
-        )}
-      </button>
+      <AttentionSubscriptionMenu
+        alias={alias}
+        subscriptions={attentionSubscriptions}
+        onSet={onSetAttentionSubscription}
+        onReset={onResetAttentionSubscriptions}
+      />
       <button
         type="button"
         className="icon-button"
@@ -387,6 +608,7 @@ interface TerminalWorkspaceProps {
   roles?: NanasaConfig["roles"];
   runs: AgentRun[];
   agentStatuses?: AgentStatusSummary[];
+  attentionSubscriptions?: MemberAttentionSubscriptions[];
   connectionRevision?: number;
   activeRunId?: string;
   focusedRunId?: string;
@@ -397,6 +619,13 @@ interface TerminalWorkspaceProps {
   onApproveLaunchConsent?(request: CustomLaunchConsentRequest): Promise<void>;
   onCancelLaunchConsent?(request: CustomLaunchConsentRequest): Promise<void>;
   onRecoverAgent?(groupId: string, agentId: string, forceIndeterminate: boolean): Promise<void>;
+  onSetAttentionSubscription?(
+    groupId: string,
+    memberId: string,
+    eventType: AttentionEventType,
+    enabled: boolean,
+  ): Promise<void>;
+  onResetAttentionSubscriptions?(groupId: string, memberId: string): Promise<void>;
   onSetFocusedRun?(runId: string | undefined): void;
   theme?: "light" | "dark";
 }
@@ -408,6 +637,7 @@ export function TerminalWorkspace({
   roles = {},
   runs,
   agentStatuses = [],
+  attentionSubscriptions = [],
   connectionRevision = 0,
   activeRunId: requestedActiveRunId,
   focusedRunId: requestedFocusedRunId,
@@ -418,6 +648,8 @@ export function TerminalWorkspace({
   onApproveLaunchConsent = async () => undefined,
   onCancelLaunchConsent = async () => undefined,
   onRecoverAgent,
+  onSetAttentionSubscription = async () => undefined,
+  onResetAttentionSubscriptions = async () => undefined,
   onSetFocusedRun,
   theme = "dark",
 }: TerminalWorkspaceProps) {
@@ -477,11 +709,6 @@ export function TerminalWorkspace({
   const focusedRunId = displayedRuns.some((run) => run.id === requestedFocusedRunId)
     ? requestedFocusedRunId
     : undefined;
-  const completionNotificationMemberIds =
-    groupId === undefined
-      ? []
-      : (preferences.completionNotificationMemberIdsByGroup[groupId] ?? []);
-  const completionNotificationMemberIdSet = new Set(completionNotificationMemberIds);
   const dismissedProviderUpdateIdSet = new Set(preferences.dismissedProviderUpdateIds);
   const activeRunId = displayedRuns.some((run) => run.id === requestedActiveRunId)
     ? requestedActiveRunId
@@ -514,22 +741,6 @@ export function TerminalWorkspace({
       return {
         ...current,
         pinnedRunIdsByGroup: { ...current.pinnedRunIdsByGroup, [groupId]: next },
-      };
-    });
-  };
-  const toggleCompletionNotifications = (memberId: string) => {
-    if (groupId === undefined) return;
-    updatePreferences((current) => {
-      const existing = current.completionNotificationMemberIdsByGroup[groupId] ?? [];
-      const next = existing.includes(memberId)
-        ? existing.filter((candidate) => candidate !== memberId)
-        : [...existing, memberId];
-      return {
-        ...current,
-        completionNotificationMemberIdsByGroup: {
-          ...current.completionNotificationMemberIdsByGroup,
-          [groupId]: next,
-        },
       };
     });
   };
@@ -599,7 +810,9 @@ export function TerminalWorkspace({
                 connectionRevision={connectionRevision}
                 visible={visible}
                 theme={theme}
-                completionNotificationsEnabled={completionNotificationMemberIdSet.has(run.memberId)}
+                attentionSubscriptions={attentionSubscriptions.find(
+                  (policy) => policy.groupId === run.groupId && policy.memberId === run.memberId,
+                )}
                 pinned={pinnedSet.has(run.id)}
                 focused={focusedRunId === run.id}
                 statusKey={status?.key ?? "unknown"}
@@ -613,7 +826,12 @@ export function TerminalWorkspace({
                   if (agentId === undefined || onRecoverAgent === undefined) return;
                   await onRecoverAgent(run.groupId, agentId, forceIndeterminate);
                 }}
-                onToggleCompletionNotifications={() => toggleCompletionNotifications(run.memberId)}
+                onSetAttentionSubscription={(eventType, enabled) =>
+                  onSetAttentionSubscription(run.groupId, run.memberId, eventType, enabled)
+                }
+                onResetAttentionSubscriptions={() =>
+                  onResetAttentionSubscriptions(run.groupId, run.memberId)
+                }
                 onDismissRestartNotice={() => {
                   const updateId = run.providerUpdate?.id;
                   if (updateId === undefined) return;

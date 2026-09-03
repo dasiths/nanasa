@@ -206,6 +206,13 @@
     ],
     "attentionDismissals.list": [],
     "attentionDismissals.dismiss": [],
+    "attentionSubscriptions.list": [],
+    "attentionSubscriptions.set": [
+      "membership_not_found"
+    ],
+    "attentionSubscriptions.reset": [
+      "membership_not_found"
+    ],
     "messages.submit": [
       "message_body_too_large",
       "membership_revision_stale"
@@ -361,6 +368,9 @@
     "statuses.acknowledge": 65536,
     "attentionDismissals.list": 65536,
     "attentionDismissals.dismiss": 65536,
+    "attentionSubscriptions.list": 65536,
+    "attentionSubscriptions.set": 65536,
+    "attentionSubscriptions.reset": 65536,
     "messages.submit": 6356992,
     "messages.list": 65536,
     "messages.clear": 65536,

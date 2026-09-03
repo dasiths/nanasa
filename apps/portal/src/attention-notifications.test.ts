@@ -59,10 +59,8 @@ function item(
 
 const agentDirectory: PortalRoute = { kind: "global", destination: "agents" };
 const preferences = {
-  inApp: true,
   desktop: false,
   sound: false,
-  completionNotificationMemberIdsByGroup: {},
 };
 
 function hookProps(items: readonly AttentionItem[], route: PortalRoute = agentDirectory) {
@@ -96,8 +94,9 @@ describe("typed Attention notification policy", () => {
     );
     expect(attentionNotificationTier(item("delivery"))).toBe("standard");
     expect(attentionNotificationTier(item("completion"))).toBe("quiet");
-    expect(attentionNotificationTier(item("action"))).toBe("none");
-    expect(attentionNotificationTier(item("unread"))).toBe("none");
+    expect(attentionNotificationTier(item("action"))).toBe("quiet");
+    expect(attentionNotificationTier(item("provider-update"))).toBe("quiet");
+    expect(attentionNotificationTier(item("unread"))).toBe("quiet");
   });
 
   it("recognizes only the exact screen that owns an item", () => {
@@ -184,7 +183,7 @@ describe("typed Attention notification policy", () => {
 });
 
 describe("Attention notification transitions", () => {
-  it("seeds hydration, resets by daemon identity, and never replays visible-target items", () => {
+  it("seeds hydration, resets by daemon identity, and never replays admitted items", () => {
     const wait = item("wait");
     const { result, rerender } = renderHook(
       (props: ReturnType<typeof hookProps>) => useAttentionNotifications(props),
@@ -196,9 +195,9 @@ describe("Attention notification transitions", () => {
       ...hookProps([wait, item("delivery")]),
       route: { kind: "global", destination: "attention" },
     });
-    expect(result.current.toasts).toEqual([]);
+    expect(result.current.toasts.map((toast) => toast.id)).toEqual(["attention:delivery"]);
     rerender(hookProps([wait, item("delivery")]));
-    expect(result.current.toasts).toEqual([]);
+    expect(result.current.toasts.map((toast) => toast.id)).toEqual(["attention:delivery"]);
 
     rerender({ ...hookProps([wait, item("delivery")]), hydrationKey: "instance-one:2" });
     expect(result.current.toasts).toEqual([]);
@@ -207,46 +206,56 @@ describe("Attention notification transitions", () => {
   it("shows bounded in-app toasts with working Open and Dismiss actions", () => {
     const initial = {
       ...hookProps([]),
-      preferences: {
-        ...preferences,
-        completionNotificationMemberIdsByGroup: { "group-one": ["member-one"] },
-      },
+      preferences,
     };
     const { result, rerender } = renderHook(
       (props: ReturnType<typeof hookProps>) => useAttentionNotifications(props),
       { initialProps: initial },
     );
-    const additions = [
-      item("wait", "one"),
-      item("delivery", "two"),
-      item("completion", "three"),
-      item("response", "four"),
-    ];
+    const additions = [item("wait", "one"), item("delivery", "two"), item("completion", "three")];
     rerender({ ...initial, items: additions });
-    expect(result.current.toasts.map((toast) => toast.id)).toEqual(["two", "three", "four"]);
+    expect(result.current.toasts.map((toast) => toast.id)).toEqual(["one", "two", "three"]);
+
+    rerender({ ...initial, items: [...additions, item("response", "four")] });
+    expect(result.current.toasts.map((toast) => toast.id)).toEqual(["four", "one", "two", "three"]);
 
     act(() => result.current.openToast(result.current.toasts[0]!));
-    expect(initial.navigate).toHaveBeenCalledWith("/groups/group-one/messages");
-    expect(result.current.toasts.map((toast) => toast.id)).toEqual(["three", "four"]);
+    expect(initial.navigate).toHaveBeenCalledWith("/groups/group-one/terminals/run-one");
+    expect(result.current.toasts.map((toast) => toast.id)).toEqual(["one", "two", "three"]);
 
     act(() => result.current.dismissToast("three"));
-    expect(result.current.toasts.map((toast) => toast.id)).toEqual(["four"]);
+    expect(result.current.toasts.map((toast) => toast.id)).toEqual(["one", "two"]);
   });
 
-  it("records additions while in-app notices are disabled", () => {
-    const initial = { ...hookProps([]), preferences: { ...preferences, inApp: false } };
+  it("pauses and resumes toast expiry independently", () => {
+    vi.useFakeTimers();
+    const initial = hookProps([]);
+    const { result, rerender } = renderHook(
+      (props: ReturnType<typeof hookProps>) => useAttentionNotifications(props),
+      { initialProps: initial },
+    );
+    rerender({ ...initial, items: [item("response", "paused")] });
+    act(() => result.current.pauseToast("paused"));
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(result.current.toasts.map((toast) => toast.id)).toEqual(["paused"]);
+    act(() => result.current.resumeToast("paused"));
+    act(() => vi.advanceTimersByTime(5_000));
+    expect(result.current.toasts).toEqual([]);
+    vi.useRealTimers();
+  });
+
+  it("always delivers admitted items as in-app toasts", () => {
+    const initial = hookProps([]);
     const { result, rerender } = renderHook(
       (props: ReturnType<typeof hookProps>) => useAttentionNotifications(props),
       { initialProps: initial },
     );
     const completion = item("completion");
     rerender({ ...initial, items: [completion] });
-    expect(result.current.toasts).toEqual([]);
-    rerender({ ...hookProps([completion]), preferences });
-    expect(result.current.toasts).toEqual([]);
+    expect(result.current.toasts.map((toast) => toast.id)).toEqual([completion.id]);
   });
 
-  it("records disabled completions so enabling notifications only applies to future revisions", () => {
+  it("does not replay an admitted item ID after removal and reappearance", () => {
     const initial = hookProps([]);
     const { result, rerender } = renderHook(
       (props: ReturnType<typeof hookProps>) => useAttentionNotifications(props),
@@ -254,35 +263,22 @@ describe("Attention notification transitions", () => {
     );
     const existingCompletion = item("completion", "completion-revision-one");
     rerender({ ...initial, items: [existingCompletion] });
-    expect(result.current.toasts).toEqual([]);
-
-    const enabledPreferences = {
-      ...preferences,
-      completionNotificationMemberIdsByGroup: { "group-one": ["member-one"] },
-    };
-    rerender({ ...initial, items: [existingCompletion], preferences: enabledPreferences });
-    expect(result.current.toasts).toEqual([]);
-    rerender({ ...initial, items: [], preferences: enabledPreferences });
-    rerender({ ...initial, items: [existingCompletion], preferences: enabledPreferences });
+    expect(result.current.toasts.map((toast) => toast.id)).toEqual(["completion-revision-one"]);
+    act(() => result.current.dismissToast("completion-revision-one"));
+    rerender({ ...initial, items: [] });
+    rerender({ ...initial, items: [existingCompletion] });
     expect(result.current.toasts).toEqual([]);
 
     const futureCompletion = item("completion", "completion-revision-two");
     rerender({
       ...initial,
       items: [existingCompletion, futureCompletion],
-      preferences: enabledPreferences,
     });
     expect(result.current.toasts).toMatchObject([{ id: "completion-revision-two", tier: "quiet" }]);
   });
 
-  it("delivers a completion alert only for the enabled agent", () => {
-    const initial = {
-      ...hookProps([]),
-      preferences: {
-        ...preferences,
-        completionNotificationMemberIdsByGroup: { "group-one": ["project-manager"] },
-      },
-    };
+  it("delivers every completion admitted by upstream subscription policy", () => {
+    const initial = hookProps([]);
     const { result, rerender } = renderHook(
       (props: ReturnType<typeof hookProps>) => useAttentionNotifications(props),
       { initialProps: initial },
@@ -302,10 +298,11 @@ describe("Attention notification transitions", () => {
 
     expect(result.current.toasts).toMatchObject([
       { id: "pm-completion", item: { memberId: "project-manager" } },
+      { id: "engineer-completion", item: { memberId: "engineer-one" } },
     ]);
   });
 
-  it("suppresses a visible completion pane but not an unrelated run", () => {
+  it("delivers visible-target and unrelated admitted items", () => {
     const initial = {
       ...hookProps([], {
         kind: "group",
@@ -313,10 +310,7 @@ describe("Attention notification transitions", () => {
         section: "terminals",
       }),
       visibleTerminalRunIds: new Set(["run-one"]),
-      preferences: {
-        ...preferences,
-        completionNotificationMemberIdsByGroup: { "group-one": ["member-one"] },
-      },
+      preferences,
     };
     const { result, rerender } = renderHook(
       (props: ReturnType<typeof hookProps>) => useAttentionNotifications(props),
@@ -325,14 +319,17 @@ describe("Attention notification transitions", () => {
 
     const visibleCompletion = item("completion", "visible-completion");
     rerender({ ...initial, items: [visibleCompletion] });
-    expect(result.current.toasts).toEqual([]);
+    expect(result.current.toasts.map((toast) => toast.id)).toEqual(["visible-completion"]);
 
     const unrelatedCompletion = item("completion", "unrelated-completion", {
       runId: "run-two",
       targetPath: "/groups/group-one/terminals/run-two",
     });
     rerender({ ...initial, items: [visibleCompletion, unrelatedCompletion] });
-    expect(result.current.toasts).toMatchObject([{ id: "unrelated-completion", tier: "quiet" }]);
+    expect(result.current.toasts).toMatchObject([
+      { id: "unrelated-completion", tier: "quiet" },
+      { id: "visible-completion", tier: "quiet" },
+    ]);
   });
 
   it("delivers hidden standard items to desktop and sounds only for urgent items", async () => {
@@ -382,10 +379,8 @@ describe("Attention notification transitions", () => {
     const initial = {
       ...hookProps([]),
       preferences: {
-        inApp: true,
         desktop: true,
         sound: true,
-        completionNotificationMemberIdsByGroup: { "group-one": ["member-one"] },
       },
     };
     const { rerender } = renderHook(
@@ -406,7 +401,7 @@ describe("Attention notification transitions", () => {
       ...initial,
       items: [delivery, wait, item("completion"), item("action"), item("unread")],
     });
-    await waitFor(() => expect(notifications).toHaveLength(3));
+    await waitFor(() => expect(notifications).toHaveLength(5));
     expect(notifications[2]).toBe("Builder · completion");
     expect(oscillator.start).toHaveBeenCalledOnce();
   });

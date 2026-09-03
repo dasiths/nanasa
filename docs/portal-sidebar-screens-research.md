@@ -1,13 +1,13 @@
 ---
-title: Portal Sidebar Screen Research
-description: Research findings and consolidation recommendations for the portal operations and system screens
+title: Portal Screen Research
+description: Research findings and consolidation recommendations for the portal group, operations, and system screens
 ms.date: 2026-09-03
 ms.topic: concept
 ---
 
 ## Decision summary
 
-The seven destinations do not represent seven equally substantial user workflows.
+The assessed destinations do not represent equally substantial user workflows.
 They currently divide into four coherent product areas:
 
 1. Operator work that needs a response
@@ -31,18 +31,25 @@ easy to reach. Extensions is also a real management workflow, although
 justify a standalone route. Diagnostics, Service, and Remote access are too
 fragmented and sparse to justify separate navigation entries.
 
+The group Overview screen should be removed in its current form. It presents no
+unique group workflow, repeats details already available in agent controls, and
+labels repository-wide retention settings as group information. If a fourth
+group tab is needed later, it should be an actionable Team settings screen, not
+a passive runtime dump.
+
 ## Research scope and method
 
-The assessment covers the sidebar destinations shown under Repository
-operations and System:
+The assessment covers the current group Overview plus the sidebar destinations
+shown under Repository operations and System:
 
-1. Attention
-2. All agents
-3. Checkouts
-4. Extensions
-5. Diagnostics
-6. Service
-7. Remote access
+1. Group Overview
+2. Attention
+3. All agents
+4. Checkouts
+5. Extensions
+6. Diagnostics
+7. Service
+8. Remote access
 
 Evidence came from four sources:
 
@@ -63,6 +70,94 @@ and serves `/api/v1/attention-dismissals`, but the running daemon returns 404 fo
 that route and the running portal does not request it during startup. Live
 behavior is therefore recorded separately from current-source behavior.
 
+The Group Overview reassessment also uses the rendered screen supplied on
+September 3, 2026 and the current working-tree implementation. The source and
+the supplied screen agree on its structure and content.
+
+## 1. Group Overview
+
+### What it does
+
+Overview is the fourth group-level tab after Terminals, Messages, and Attention.
+Its internal route section is still named `settings`, although it renders a
+read-only `GroupSettingsPanel` in
+[portal-route-panels.tsx](../apps/portal/src/routes/portal-route-panels.tsx#L157).
+It contains three cards:
+
+* Models and provider state lists every active member's resolved or configured
+  model, provider-state scope, and requested-model source
+* Recovery lists every run ever retained for the group, with recovery phase,
+  outcome or reason, and attempt count
+* Retention shows message and terminal-checkpoint limits from repository
+  configuration
+
+The screen has no controls, drill-down links, filters, or remediation actions.
+Actual editable group settings, name and instruction files, already live in the
+group action menu's `GroupSettingsDialog` in
+[group-tree.tsx](../apps/portal/src/components/group-tree.tsx#L528).
+
+### Functional assessment
+
+The screen renders the data it requests, but it does not turn that data into a
+reliable group summary.
+
+The Models card mostly displays "provider default" in the supplied screen. It
+does not name the provider, role, checkout, or reason an operator should care
+about the model source. Agent details already expose integration, role,
+checkout, status, activity, and recovery state in
+[group-tree.tsx](../apps/portal/src/components/group-tree.tsx#L1474).
+
+The Recovery card is the largest defect. It maps every historical run for the
+group without sorting, grouping, or limiting the results. Repeated internal IDs
+such as `musing-kilby` occupy the page, while aliases such as "Engineer 2" are
+not used. Normal restart records look like unresolved incidents, and the list
+will continue growing with run history. The group tree and team recovery result
+banner already expose current recovery state and actionable retry behavior.
+
+The Retention card is misplaced. `messages.retentionPerGroup` and
+`terminal.checkpoints` are repository-wide configuration values. They are not
+overrides owned by the selected group. Showing them here suggests a group-level
+policy that users cannot change on this screen.
+
+There is no focused component test for `GroupSettingsPanel`. Existing tests
+only assert that Overview appears in navigation. This matches the screen's low
+behavioral content but leaves its historical-run projection unguarded.
+
+### Consumer value
+
+The screen does not answer a distinct operator question:
+
+* "What is running?" is answered by the group header and Terminals
+* "What needs me?" is answered by Attention
+* "What happened?" is answered by Messages, Attention history, and agent details
+* "How is this team configured?" is partially answered by the group and agent
+  settings dialogs, not Overview
+
+At present, Overview is an implementation-state inspection page presented as a
+product workflow. Its information density is deceptive: the large cards contain
+many values, but few support a decision or action.
+
+### Recommendation
+
+Remove Overview from group navigation now. Redirect existing
+`/groups/:groupId/settings` URLs to the group Terminals route so bookmarks do not
+fail. Keep group configuration accessible through a clearly labeled settings
+button or menu in the group header.
+
+Redistribute the small amount of useful content:
+
+* Keep current agent status, model, provider, checkout, and recovery detail in
+  the existing agent details surface
+* Show active recovery only, as a group header indicator or recovery result
+  banner; do not show raw historical runs in routine navigation
+* Move repository retention policy to System health or repository settings
+
+If a dedicated fourth tab becomes necessary, replace Overview with **Team
+settings**. It should edit group name and instructions, show the agent roster
+with role, provider, model, and checkout, and link to relevant provider or
+checkout management. Recovery history and retention constants should not be in
+that screen.
+
 ## Shared navigation and page structure
 
 The destination registry in
@@ -78,7 +173,7 @@ access each render one small status card. Diagnostics is a collection of data
 that belongs to several different ownership domains.
 
 All routes use the same shell and `RouteSurface` pattern in
-[portal-route-panels.tsx](../apps/portal/src/routes/portal-route-panels.tsx#L1303).
+[portal-route-panels.tsx](../apps/portal/src/routes/portal-route-panels.tsx#L1037).
 This produces a shell-level heading followed by a second, identical route
 heading. For example, "Remote access" appears as both the page heading and the
 article heading before the actual status. The repeated title, eyebrow, and
@@ -102,7 +197,7 @@ The shared UX should be simplified by letting the shell own the route title and
 by making the left rail contextual. System administration should not compete
 with the group tree for horizontal space.
 
-## 1. Attention
+## 2. Attention
 
 ### What it does
 
@@ -119,34 +214,59 @@ review queue:
 The current implementation derives these items in
 [attention-items.ts](../apps/portal/src/attention-items.ts#L267) and renders both
 global and group-scoped views through the same `AttentionPanel` in
-[portal-route-panels.tsx](../apps/portal/src/routes/portal-route-panels.tsx#L441).
+[portal-route-panels.tsx](../apps/portal/src/routes/portal-route-panels.tsx#L247).
 That reuse is good. Global Attention and group Attention are not duplicate
 implementations; they are two scopes over the same queue.
 
-The screen supports replies, launch approval, completion acknowledgment,
-provider recovery, action cancellation, navigation to the responsible terminal
-or message thread, and durable dismissal. Exact waits and actions are loaded per
-group by
+The redesigned screen uses one continuous inbox with Needs action, Active,
+History, and All views. It supports search, event-type and team filters, row
+selection, durable individual or bulk dismissal, and contextual navigation to
+the responsible terminal, messages, or consent surface. Exact waits and actions
+are loaded per group by
 [use-attention-workspaces.ts](../apps/portal/src/hooks/use-attention-workspaces.ts#L14).
+
+Repository defaults, agent configuration, and durable operator overrides now
+decide which event types enter Attention. The effective subscription policy is
+resolved by
+[attention-subscription-policy.ts](../apps/daemon/src/attention-subscription-policy.ts#L18)
+and applied before badges and notifications in
+[App.tsx](../apps/portal/src/App.tsx#L338).
 
 ### Functional assessment
 
-Current source is functional and has meaningful component coverage. Tests cover
-status precedence, provider recovery, bulk completion acknowledgment, new
-completion revisions, provider updates, wait replies, cancellation, and failed
-delivery routing in
-[portal-route-panels.test.tsx](../apps/portal/src/routes/portal-route-panels.test.tsx#L238).
+Current source has meaningful component coverage for inbox views, search,
+filters, destination routing, selection, durable dismissal, partial-load
+errors, and action diagnostics in
+[portal-route-panels.test.tsx](../apps/portal/src/routes/portal-route-panels.test.tsx#L277).
+
+The redesign deliberately removed inline reply, approval, completion
+acknowledgment, recovery, and action cancellation controls. Each row now has
+exactly two actions: open the destination or dismiss the item. This makes the
+list consistent, but "Needs action" is now a triage label rather than an
+actionable queue. The portal client still exposes wait reply, action
+cancellation, and completion acknowledgment methods, but the current portal has
+no remaining call sites for those methods. Unless the terminal destination can
+perform the same domain action, those workflows have become unreachable from
+the portal.
+
+Per-agent subscriptions are controlled from an eight-option bell dialog in each
+terminal pane. A subscription controls inbox admission and notification
+delivery together. Disabling agent health therefore removes current failures or
+stuck states from Attention and its badge; it does not merely silence a toast.
+The control needs stronger language than "Configure Attention" to communicate
+that consequence. Eight per-agent toggles, Subscribe all, Unsubscribe all, and
+Reset to config defaults are too much policy for a compact terminal toolbar.
 
 The live instance has a visible inconsistency. Its navigation badge and document
 title report one item, and the group tree shows a stuck Project Manager, while
 the Attention filters report zero and the review list is empty. Waiting for
 workspace loading did not change the result and no partial-load error appeared.
 
-The live mismatch is consistent with version skew rather than evidence that the
-current source still has the defect. Current source includes durable Attention
-dismissals in
-[App.tsx](../apps/portal/src/App.tsx#L291) and daemon routes in
-[route-registry.ts](../apps/daemon/src/http/route-registry.ts#L941). The served
+The earlier live mismatch is consistent with version skew rather than evidence
+that the current source still has the defect. Current source includes durable
+Attention dismissals in
+[App.tsx](../apps/portal/src/App.tsx#L302) and daemon routes in
+[route-registry.ts](../apps/daemon/src/http/route-registry.ts#L944). The served
 portal and daemon predate those changes.
 
 ### Portal fit
@@ -157,22 +277,31 @@ than system structure. The global badge, notification behavior, and direct
 links into the responsible group make it the natural starting point for
 supervising multiple agents.
 
-The current empty state uses most of the screen for an empty review area and a
-separate empty Progress card. A single calm empty state would communicate the
-same result with less visual weight. When items exist, the category filters and
-separate progress region are justified.
+The unified list is a material improvement over separate review, update, and
+progress sections. Search and team filtering become valuable at repository
+scale. On a group route, however, the disabled Team selector adds no value and
+should not render. Search, four views, a type selector, and a team selector are
+too much permanent chrome for small inboxes; secondary filters should collapse
+until item volume warrants them.
 
 ### Recommendation
 
 Keep Attention as the default Operations view and preserve group-scoped
-Attention. Put the enhanced global agent directory in a neighboring Agents tab
-or view rather than mixing agent inventory into the review queue.
+Attention. Restore resolution at the destination before considering the inbox
+complete. Prefer one primary row action such as Review, with Dismiss in an
+overflow menu, rather than giving a destructive hide action equal visual weight.
+
+Simplify subscriptions to three operator-facing levels per agent: Important
+only, All activity, and Custom. Keep response requests, health failures,
+completion, delivery failure, and failed provider updates in Important by
+default. Put the eight-event Custom editor in agent settings, not the terminal
+toolbar. The bell can show the current level and link to that editor.
 
 Before judging the remaining live UX, rebuild and restart the portal and daemon
 from the same source revision. Add one acceptance test that asserts the badge,
 filter total, and rendered review rows agree for the same snapshot.
 
-## 2. All agents
+## 3. All agents
 
 ### What it does
 
@@ -180,14 +309,14 @@ All agents maps active memberships across every group to projected status and
 the latest run. Each row shows the alias, status label, effective model when
 available, and an Open agent action. The action routes directly to the selected
 run's terminal. The implementation is a small read-only projection in
-[portal-route-panels.tsx](../apps/portal/src/routes/portal-route-panels.tsx#L823).
+[portal-route-panels.tsx](../apps/portal/src/routes/portal-route-panels.tsx#L572).
 
 ### Functional assessment
 
 The live route rendered four agents and each Open agent button was available.
 Current source has a focused test for exact group and run routing and projected
 labels in
-[portal-route-panels.test.tsx](../apps/portal/src/routes/portal-route-panels.test.tsx#L732).
+[portal-route-panels.test.tsx](../apps/portal/src/routes/portal-route-panels.test.tsx#L657).
 
 The screen is functional, but its information value is low. In the live data,
 all four rows displayed "provider model pending." Rows do not display group,
@@ -219,7 +348,7 @@ route as an Agents view within Operations and make it a real cross-group tool:
 This gives Attention and Agents complementary purposes: work queue versus
 inventory. It also avoids turning Attention into an overloaded dashboard.
 
-## 3. Checkouts
+## 4. Checkouts
 
 ### What it does
 
@@ -272,7 +401,7 @@ Keep Checkouts separate. Improve the existing workspace instead of merging it:
 * Replace the first-repository assumption if multi-repository snapshots are a
   supported product direction
 
-## 4. Extensions
+## 5. Extensions
 
 ### What it does
 
@@ -285,7 +414,7 @@ The UI is implemented in
 
 The daemon separates planning, health inspection, trust, and lifecycle
 mutations in
-[route-registry.ts](../apps/daemon/src/http/route-registry.ts#L435). Mutations
+[route-registry.ts](../apps/daemon/src/http/route-registry.ts#L438). Mutations
 use exact plan digests and lock revisions, reject stale plans, and block unsafe
 changes while provider runs are active. Removal preserves provider state,
 authentication, sessions, and changed files.
@@ -330,12 +459,12 @@ State, and Lifecycle. Select an installed or unhealthy provider before an
 unavailable unconfigured provider. Reflect active-run blockers directly in the
 action area with a link to the affected agents.
 
-## 5. Diagnostics
+## 6. Diagnostics
 
 ### What it does
 
 Diagnostics aggregates four independent sources in
-[portal-route-panels.tsx](../apps/portal/src/routes/portal-route-panels.tsx#L888):
+[portal-route-panels.tsx](../apps/portal/src/routes/portal-route-panels.tsx#L614):
 
 * Daemon metadata and event sequence
 * Configuration status and parser diagnostics
@@ -384,7 +513,7 @@ Until that consolidation lands, rename Delete marker to an outcome-focused
 label such as "Mark for cleanup," explain retained files, add confirmation and
 error handling, and allow each section to load independently.
 
-## 6. Service
+## 7. Service
 
 ### What it does
 
@@ -394,7 +523,7 @@ activation. Its only action requests a browser reconnect plan from
 `/api/v1/service/restart-plan`.
 
 The HTTP action does not restart the daemon. The route definition in
-[route-registry.ts](../apps/daemon/src/http/route-registry.ts#L286) returns a
+[route-registry.ts](../apps/daemon/src/http/route-registry.ts#L301) returns a
 typed frame describing retry delay, resnapshot requirements, and PTY handoff.
 Actual install, start, stop, and restart operations exist in the daemon's
 systemd service implementation in
@@ -427,7 +556,7 @@ continuity" if it remains non-mutating, and disable it when the service is not
 installed. If browser-triggered restart is intentionally out of scope, make the
 boundary explicit rather than presenting an incomplete command flow.
 
-## 7. Remote access
+## 8. Remote access
 
 ### What it does
 
@@ -478,6 +607,13 @@ Keep group-scoped Attention where it is. Preserve `/attention` and `/agents` as
 redirects or aliases so bookmarks, notifications, and command palette actions
 remain stable.
 
+### Group workspace
+
+Use three default tabs: Terminals, Messages, and Attention. Remove the passive
+Overview tab. Keep a group settings command in the header for name and
+instruction changes. Add a Team settings route only when configuration grows
+enough to require a full page.
+
 ### Checkouts
 
 Keep `/checkouts` as a dedicated repository workspace. It is a cohesive,
@@ -512,18 +648,22 @@ System health section until external links and operator habits have migrated.
 
 ## Recommended delivery order
 
-1. Rebuild the live portal and daemon from one revision, then add the Attention
-   badge-to-list acceptance assertion.
-2. Add confirmation, busy state, outcome-focused labels, and error rendering to
+1. Remove Group Overview, preserve its URL as a redirect, and keep the existing
+  settings dialog discoverable from the group header.
+2. Verify every Attention destination can complete the required response,
+  approval, acknowledgment, recovery, or cancellation workflow.
+3. Rebuild the live portal and daemon from one revision, then add the Attention
+  badge-to-list acceptance assertion.
+4. Add confirmation, busy state, outcome-focused labels, and error rendering to
    provider-state and checkpoint mutations.
-3. Create System health from the existing Diagnostics, Service, and Remote
+5. Create System health from the existing Diagnostics, Service, and Remote
    components without changing daemon contracts.
-4. Rename Extensions to Providers and move provider-state lifecycle into it.
-5. Turn All agents into the Operations Agents view and add group-aware search,
+6. Rename Extensions to Providers and move provider-state lifecycle into it.
+7. Turn All agents into the Operations Agents view and add group-aware search,
    filters, and richer status context.
-6. Remove duplicate route headings and make the desktop group rail contextual
+8. Remove duplicate route headings and make the desktop group rail contextual
    on administration screens.
-7. Preserve old URLs as aliases and update command palette destinations only
+9. Preserve old URLs as aliases and update command palette destinations only
    after the replacement routes are stable.
 
 This sequence addresses correctness and destructive-action clarity first, then

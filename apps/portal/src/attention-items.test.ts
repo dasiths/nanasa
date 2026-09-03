@@ -16,6 +16,7 @@ import {
   attentionActiveProgressCount,
   attentionCategoryCount,
   attentionCounts,
+  attentionEventType,
   attentionItemsByCategory,
   attentionItemsForScope,
   attentionReviewCount,
@@ -23,6 +24,7 @@ import {
   attentionReviewItems,
   attentionUnreadMessageCount,
   deriveAttentionItems,
+  filterAttentionItemsBySubscriptions,
   groupAttentionItems,
   repositoryAttentionItems,
 } from "./attention-items.js";
@@ -872,5 +874,57 @@ describe("attention sorting, filtering, and counts", () => {
       ["group-a", 4],
       ["group-b", 1],
     ]);
+  });
+
+  it("filters Attention candidates through exact-member subscriptions", () => {
+    const owner = member("builder");
+    const ownerRun = run(owner);
+    const items = deriveAttentionItems(snapshot({ memberships: [owner], runs: [ownerRun] }), [
+      workspace("group-a", {
+        actions: [action(owner, ownerRun, "active")],
+      }),
+    ]);
+    const actionItem = items.find((item) => item.kind === "action");
+    expect(actionItem === undefined ? undefined : attentionEventType(actionItem)).toBe(
+      "action-state",
+    );
+    expect(
+      filterAttentionItemsBySubscriptions(items, {
+        defaults: {
+          "response-required": true,
+          "agent-health": true,
+          completion: true,
+          "delivery-failure": true,
+          "action-state": false,
+          "provider-update-failed": true,
+          "provider-update-succeeded": false,
+          "unread-message": false,
+        },
+        members: [
+          {
+            groupId: owner.groupId,
+            memberId: owner.memberId,
+            subscriptions: [
+              { eventType: "response-required", enabled: true, source: "repository-default" },
+              { eventType: "agent-health", enabled: true, source: "repository-default" },
+              { eventType: "completion", enabled: true, source: "repository-default" },
+              { eventType: "delivery-failure", enabled: true, source: "repository-default" },
+              { eventType: "action-state", enabled: false, source: "operator-override" },
+              {
+                eventType: "provider-update-failed",
+                enabled: true,
+                source: "repository-default",
+              },
+              {
+                eventType: "provider-update-succeeded",
+                enabled: false,
+                source: "repository-default",
+              },
+              { eventType: "unread-message", enabled: false, source: "repository-default" },
+            ],
+          },
+        ],
+      }),
+    ).toEqual([]);
   });
 });

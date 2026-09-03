@@ -1619,6 +1619,76 @@
         "x-errors": []
       }
     },
+    "/api/v1/attention-subscriptions": {
+      "get": {
+        "operationId": "attentionSubscriptions.list",
+        "summary": "List effective Attention subscriptions for the operator",
+        "tags": [
+          "status"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/groups/:groupId/members/:memberId/attention-subscriptions/:eventType": {
+      "put": {
+        "operationId": "attentionSubscriptions.set",
+        "summary": "Set one operator Attention subscription override",
+        "tags": [
+          "status"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "optional",
+        "x-errors": [
+          "membership_not_found"
+        ]
+      }
+    },
+    "/api/v1/groups/:groupId/members/:memberId/attention-subscriptions": {
+      "delete": {
+        "operationId": "attentionSubscriptions.reset",
+        "summary": "Reset operator Attention subscriptions to config defaults",
+        "tags": [
+          "status"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "optional",
+        "x-errors": [
+          "membership_not_found"
+        ]
+      }
+    },
     "/api/v1/groups/:groupId/messages": {
       "post": {
         "operationId": "messages.submit",

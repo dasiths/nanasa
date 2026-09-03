@@ -172,6 +172,18 @@ ${integrationFields}`);
         },
       },
       instructions: [],
+      attention: {
+        defaults: {
+          "response-required": true,
+          "agent-health": true,
+          completion: true,
+          "delivery-failure": true,
+          "action-state": false,
+          "provider-update-failed": true,
+          "provider-update-succeeded": false,
+          "unread-message": false,
+        },
+      },
       roles: {},
       extensions: {},
       integrations: {
@@ -193,6 +205,31 @@ ${integrationFields}`);
       },
       groups: {},
       messages: { retentionPerGroup: 1_000 },
+    });
+  });
+
+  it("loads authored Attention defaults", () => {
+    const repository = temporaryRepository(`${minimalConfig()}attention:
+  defaults:
+    response-required: false
+    agent-health: false
+    completion: false
+    delivery-failure: false
+    action-state: false
+    provider-update-failed: false
+    provider-update-succeeded: false
+    unread-message: false
+`);
+
+    expect(loadNanasaConfig(repository).config.attention.defaults).toEqual({
+      "response-required": false,
+      "agent-health": false,
+      completion: false,
+      "delivery-failure": false,
+      "action-state": false,
+      "provider-update-failed": false,
+      "provider-update-succeeded": false,
+      "unread-message": false,
     });
   });
 

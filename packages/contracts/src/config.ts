@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  AgentAttentionSubscriptionConfigSchema,
+  AttentionSubscriptionConfigSchema,
+  DEFAULT_ATTENTION_SUBSCRIPTIONS,
+} from "./attention.js";
 import { ConfiguredAgentIdSchema, IdentifierSchema, RoleIdSchema } from "./control.js";
 import { ExtensionIdSchema, SemanticVersionSchema } from "./extensions.js";
 import {
@@ -148,6 +153,7 @@ export const ConfiguredAgentSchema = z
     checkoutId: IdentifierSchema.optional(),
     desiredModel: z.string().trim().min(1).max(256).optional(),
     instructions: z.array(InstructionPathSchema).max(32).default([]),
+    attention: AgentAttentionSubscriptionConfigSchema.default({}),
     order: z.number().int().nonnegative().max(255).optional(),
   })
   .strict();
@@ -225,6 +231,9 @@ export const NanasaConfigSchema = z
     groups: z.record(IdentifierSchema, ConfiguredGroupSchema).default({}),
     messages: MessageConfigSchema.default({
       retentionPerGroup: DEFAULT_MESSAGE_RETENTION_PER_GROUP,
+    }),
+    attention: AttentionSubscriptionConfigSchema.default({
+      defaults: DEFAULT_ATTENTION_SUBSCRIPTIONS,
     }),
   })
   .strict()

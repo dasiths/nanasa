@@ -11,6 +11,8 @@ export function PortalShell({
   notifications = [],
   onOpenNotification,
   onDismissNotification,
+  onPauseNotification,
+  onResumeNotification,
   children,
 }: PropsWithChildren<{
   rail: ReactNode;
@@ -21,6 +23,8 @@ export function PortalShell({
   notifications?: readonly AttentionToast[];
   onOpenNotification?(toast: AttentionToast): void;
   onDismissNotification?(id: string): void;
+  onPauseNotification?(id: string): void;
+  onResumeNotification?(id: string): void;
 }>) {
   return (
     <LiveAnnouncer>
@@ -43,7 +47,18 @@ export function PortalShell({
             aria-live="polite"
           >
             {notifications.map((toast) => (
-              <article className={`attention-toast attention-toast-${toast.tier}`} key={toast.id}>
+              <article
+                className={`attention-toast attention-toast-${toast.tier}`}
+                key={toast.id}
+                onMouseEnter={() => onPauseNotification?.(toast.id)}
+                onMouseLeave={() => onResumeNotification?.(toast.id)}
+                onFocus={() => onPauseNotification?.(toast.id)}
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget)) {
+                    onResumeNotification?.(toast.id);
+                  }
+                }}
+              >
                 <div>
                   <strong>{toast.item.title}</strong>
                   <span>{toast.item.group.name}</span>

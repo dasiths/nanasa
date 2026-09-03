@@ -11,6 +11,8 @@ import {
   AgentStatusDetailSchema,
   AgentStatusEventInputSchema,
   AgentStatusStateSchema,
+  ATTENTION_EVENT_TYPES,
+  AttentionEventTypeSchema,
   CheckoutSchema,
   ConfigStatusSchema,
   ControlMetadataSchema,
@@ -944,6 +946,16 @@ describe("configuration contracts", () => {
       enabled: false,
       sensitivity: "repository-private",
     });
+    expect(parsed.attention.defaults).toEqual({
+      "response-required": true,
+      "agent-health": true,
+      completion: true,
+      "delivery-failure": true,
+      "action-state": false,
+      "provider-update-failed": true,
+      "provider-update-succeeded": false,
+      "unread-message": false,
+    });
     expect(parsed.integrations.copilot).toMatchObject({
       providerState: { scope: "membership" },
       credentials: { kind: "provider-managed" },
@@ -1032,7 +1044,39 @@ describe("configuration contracts", () => {
       integrationId: "copilot",
       roleId: "reviewer",
       instructions: [],
+      attention: {},
       order: 0,
+    });
+    expect(ATTENTION_EVENT_TYPES).toHaveLength(8);
+    expect(AttentionEventTypeSchema.safeParse("provider-hook-stop").success).toBe(false);
+
+    const subscribed = NanasaConfigSchema.parse({
+      version: 2,
+      integrations: config.integrations,
+      attention: {
+        defaults: {
+          ...parsed.attention.defaults,
+          completion: false,
+        },
+      },
+      groups: {
+        group_one: {
+          name: "Team",
+          agents: {
+            agent_one: {
+              memberId: "copilot.reviewer",
+              name: "Reviewer",
+              integrationId: "copilot",
+              attention: { completion: true, "action-state": true },
+            },
+          },
+        },
+      },
+    });
+    expect(subscribed.attention.defaults.completion).toBe(false);
+    expect(subscribed.groups.group_one?.agents.agent_one.attention).toEqual({
+      completion: true,
+      "action-state": true,
     });
     expect(
       NanasaConfigSchema.safeParse({

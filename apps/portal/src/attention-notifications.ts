@@ -3,20 +3,20 @@ import type { AttentionItem } from "./attention-items.js";
 import { claimNotificationDelivery, playAttentionSound } from "./notification-sound.js";
 import type { PortalRoute } from "./router/portal-router.js";
 
-export type AttentionNotificationTier = "urgent" | "standard" | "quiet" | "none";
+export type AttentionNotificationTier = "urgent" | "standard" | "quiet";
 
 export interface AttentionToast {
   id: string;
   item: AttentionItem;
-  tier: Exclude<AttentionNotificationTier, "none">;
+  tier: AttentionNotificationTier;
   createdAt: number;
+  remainingMs: number;
+  expiresAt?: number | undefined;
 }
 
 interface AttentionNotificationPreferences {
-  inApp: boolean;
   desktop: boolean;
   sound: boolean;
-  completionNotificationMemberIdsByGroup: Record<string, string[]>;
 }
 
 interface UseAttentionNotificationsOptions {
@@ -35,18 +35,8 @@ interface VisibleTerminalRunOptions {
   focusedRunId?: string;
 }
 
-const TOAST_LIMIT = 3;
-const TOAST_LIFETIME_MS = 8_000;
-
-function completionNotificationsEnabled(
-  item: AttentionItem,
-  preferences: AttentionNotificationPreferences,
-): boolean {
-  return (
-    item.kind !== "completion" ||
-    (preferences.completionNotificationMemberIdsByGroup[item.groupId] ?? []).includes(item.memberId)
-  );
-}
+const TOAST_LIMIT = 4;
+const TOAST_LIFETIME_MS = 5_000;
 
 export function attentionNotificationTier(item: AttentionItem): AttentionNotificationTier {
   switch (item.kind) {
@@ -63,7 +53,7 @@ export function attentionNotificationTier(item: AttentionItem): AttentionNotific
     case "action":
     case "provider-update":
     case "unread":
-      return "none";
+      return "quiet";
   }
 }
 
@@ -162,6 +152,32 @@ export function useAttentionNotifications({
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
 
+  const pauseToast = useCallback((id: string) => {
+    const now = Date.now();
+    setToasts((current) =>
+      current.map((toast) =>
+        toast.id !== id || toast.expiresAt === undefined
+          ? toast
+          : {
+              ...toast,
+              remainingMs: Math.max(0, toast.expiresAt - now),
+              expiresAt: undefined,
+            },
+      ),
+    );
+  }, []);
+
+  const resumeToast = useCallback((id: string) => {
+    const now = Date.now();
+    setToasts((current) =>
+      current.map((toast) =>
+        toast.id !== id || toast.expiresAt !== undefined
+          ? toast
+          : { ...toast, expiresAt: now + toast.remainingMs },
+      ),
+    );
+  }, []);
+
   const openToast = useCallback(
     (toast: AttentionToast) => {
       dismissToast(toast.id);
@@ -184,36 +200,34 @@ export function useAttentionNotifications({
     previousIds.current = new Set([...previousIds.current, ...currentIds]);
     if (additions.length === 0) return;
 
-    const visible = document.visibilityState === "visible";
-    if (visible) {
-      if (!preferences.inApp) return;
-      const createdAt = Date.now();
-      const nextToasts = additions.flatMap((item): AttentionToast[] => {
-        if (!completionNotificationsEnabled(item, preferences)) return [];
-        const tier = attentionNotificationTier(item);
-        return tier === "none" || routeOwnsAttentionItem(route, item, visibleTerminalRunIds)
-          ? []
-          : [{ id: item.id, item, tier, createdAt }];
+    const createdAt = Date.now();
+    const nextToasts = additions.map((item): AttentionToast => {
+      const tier = attentionNotificationTier(item);
+      return {
+        id: item.id,
+        item,
+        tier,
+        createdAt,
+        remainingMs: TOAST_LIFETIME_MS,
+        expiresAt: createdAt + TOAST_LIFETIME_MS,
+      };
+    });
+    if (nextToasts.length > 0) {
+      setToasts((current) => {
+        const addedIds = new Set(nextToasts.map((toast) => toast.id));
+        return [...nextToasts, ...current.filter((toast) => !addedIds.has(toast.id))].slice(
+          0,
+          TOAST_LIMIT,
+        );
       });
-      if (nextToasts.length > 0) {
-        setToasts((current) => {
-          const addedIds = new Set(nextToasts.map((toast) => toast.id));
-          return [...current.filter((toast) => !addedIds.has(toast.id)), ...nextToasts].slice(
-            -TOAST_LIMIT,
-          );
-        });
-      }
-      return;
     }
 
-    for (const item of additions) {
+    const portalInForeground =
+      document.visibilityState === "visible" &&
+      (typeof document.hasFocus !== "function" || document.hasFocus());
+    for (const item of portalInForeground ? [] : additions) {
       const tier = attentionNotificationTier(item);
-      if (
-        preferences.desktop &&
-        ((item.kind === "completion" && completionNotificationsEnabled(item, preferences)) ||
-          tier === "urgent" ||
-          tier === "standard")
-      ) {
+      if (preferences.desktop) {
         void deliverAttentionDesktopNotification(item, navigate);
       }
       if (item.kind !== "completion" && tier === "urgent" && preferences.sound) {
@@ -225,8 +239,6 @@ export function useAttentionNotifications({
     items,
     navigate,
     preferences.desktop,
-    preferences.completionNotificationMemberIdsByGroup,
-    preferences.inApp,
     preferences.sound,
     ready,
     route,
@@ -234,17 +246,19 @@ export function useAttentionNotifications({
   ]);
 
   useEffect(() => {
-    if (toasts.length === 0) return;
-    const delay = Math.max(
-      0,
-      Math.min(...toasts.map((toast) => toast.createdAt + TOAST_LIFETIME_MS)) - Date.now(),
+    const active = toasts.flatMap((toast) =>
+      toast.expiresAt === undefined ? [] : [toast.expiresAt],
     );
+    if (active.length === 0) return;
+    const delay = Math.max(0, Math.min(...active) - Date.now());
     const timeout = window.setTimeout(() => {
       const now = Date.now();
-      setToasts((current) => current.filter((toast) => toast.createdAt + TOAST_LIFETIME_MS > now));
+      setToasts((current) =>
+        current.filter((toast) => toast.expiresAt === undefined || toast.expiresAt > now),
+      );
     }, delay);
     return () => window.clearTimeout(timeout);
   }, [toasts]);
 
-  return { toasts, dismissToast, openToast };
+  return { toasts, dismissToast, openToast, pauseToast, resumeToast };
 }

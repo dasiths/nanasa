@@ -12,6 +12,16 @@ terminal:
 instructions:
   - .nanasa/instructions/nanasa-mcp.md
   - .nanasa/instructions/team.md
+attention:
+  defaults:
+    response-required: false
+    agent-health: false
+    completion: false
+    delivery-failure: false
+    action-state: false
+    provider-update-failed: false
+    provider-update-succeeded: false
+    unread-message: false
 integrations:
   copilot:
     name: GitHub Copilot
@@ -98,6 +108,12 @@ groups:
         integrationId: copilot
         roleId: project-manager
         instructions: []
+        attention:
+          response-required: true
+          agent-health: true
+          completion: true
+          delivery-failure: true
+          provider-update-failed: true
         order: 0
       agent_0ae65cd2-985d-498c-9399-0978bae77827:
         memberId: keen-hawking
