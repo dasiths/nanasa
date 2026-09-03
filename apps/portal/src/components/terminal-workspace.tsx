@@ -2,6 +2,7 @@ import type {
   AgentKind,
   AgentRun,
   AgentStatusSummary,
+  CustomLaunchConsentRequest,
   GroupMembership,
   NanasaConfig,
   RoleDefinition,
@@ -10,6 +11,7 @@ import type {
 import {
   BellOff,
   BellRing,
+  CheckCircle2,
   CircleAlert,
   LoaderCircle,
   Maximize2,
@@ -17,12 +19,13 @@ import {
   Monitor,
   Pin,
   RefreshCw,
+  X,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import type { PortalClient } from "../api.js";
 import { copyToClipboard } from "../copy-to-clipboard.js";
-import { ErrorNotice } from "../errors.js";
+import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 import {
   type TerminalColumnsPreference,
   usePortalPreferences,
@@ -30,6 +33,7 @@ import {
 import { useTerminalEndpoint } from "../hooks/use-terminal-endpoint.js";
 import { memberStatusView } from "../member-status.js";
 import { TerminalConsole } from "../terminal/terminal-console.js";
+import { LaunchConsentPane } from "./launch-consent-pane.js";
 import { RoleIdentity, roleColorClass } from "./role-identity.js";
 
 const endpointLabels: Record<Exclude<TerminalEndpointState, "ready">, string> = {
@@ -53,6 +57,7 @@ function TerminalPane({
   focused,
   statusKey,
   statusLabel,
+  onRecover,
   onToggleCompletionNotifications,
   onTogglePinned,
   onToggleFocus,
@@ -71,6 +76,7 @@ function TerminalPane({
   focused: boolean;
   statusKey: string;
   statusLabel: string;
+  onRecover?(forceIndeterminate: boolean): Promise<void>;
   onToggleCompletionNotifications(): void;
   onTogglePinned(): void;
   onToggleFocus(): void;
@@ -78,6 +84,21 @@ function TerminalPane({
   const runRevision = `${run.generation}:${run.status}:${run.terminal?.paneId ?? "pending"}:${connectionRevision}`;
   const { status, loading, error, retry } = useTerminalEndpoint(client, run.id, runRevision);
   const endpointState = status?.state;
+  const providerUpdate = run.providerUpdate;
+  const updateInProgress =
+    providerUpdate?.state === "pending" || providerUpdate?.state === "in-progress";
+  const updateNeedsHelp =
+    providerUpdate?.state === "completed" &&
+    (providerUpdate.outcome === "failed" || providerUpdate.outcome === "ownership-uncertain");
+  const updateSucceeded =
+    providerUpdate?.state === "completed" &&
+    providerUpdate.outcome === "restarted" &&
+    providerUpdate.replacementRunId === run.id;
+  const [showUpdateDetails, setShowUpdateDetails] = useState(false);
+  const [confirmForce, setConfirmForce] = useState(false);
+  const [recoveryBusy, setRecoveryBusy] = useState<"check" | "force">();
+  const [recoveryError, setRecoveryError] = useState<PortalError>();
+  const [noticeDismissed, setNoticeDismissed] = useState(false);
   const detail = status?.error?.message;
   const stateLabel =
     endpointState === undefined || endpointState === "ready"
@@ -155,23 +176,171 @@ function TerminalPane({
     </>
   );
 
+  const recover = async (forceIndeterminate: boolean) => {
+    if (onRecover === undefined) return;
+    setRecoveryBusy(forceIndeterminate ? "force" : "check");
+    setRecoveryError(undefined);
+    try {
+      await onRecover(forceIndeterminate);
+      setConfirmForce(false);
+    } catch (cause) {
+      setRecoveryError(toPortalError(cause, "Unable to check the agent setup"));
+    } finally {
+      setRecoveryBusy(undefined);
+    }
+  };
+
+  if (updateInProgress) {
+    return (
+      <section className={`terminal-pane ${roleColorClass(role)}`} aria-label={`Updating ${alias}`}>
+        <div className="terminal-statusbar">{identity}</div>
+        <div className="terminal-state provider-update-state" role="status">
+          <LoaderCircle className="spin" aria-hidden="true" size={22} />
+          <strong>Updating {alias}</strong>
+          <span>Agent tools changed. Nanasa is restarting {alias} with the latest setup.</span>
+        </div>
+      </section>
+    );
+  }
+
+  if (updateNeedsHelp && providerUpdate !== undefined) {
+    const uncertain = providerUpdate.outcome === "ownership-uncertain";
+    return (
+      <section
+        className={`terminal-pane provider-update-help-pane ${roleColorClass(role)}`}
+        aria-label={`${alias} needs help`}
+      >
+        <div className="terminal-statusbar">{identity}</div>
+        <div className="terminal-state provider-update-state" role="alert">
+          <CircleAlert aria-hidden="true" size={22} />
+          <strong>{alias} needs help</strong>
+          <span>
+            {uncertain
+              ? "Nanasa cannot safely confirm which process belongs to this agent. It will not stop anything automatically."
+              : (providerUpdate.safeError?.message ??
+                "Nanasa could not restart this agent with the latest setup.")}
+          </span>
+          <div className="provider-update-actions">
+            <button type="button" onClick={() => setShowUpdateDetails((visible) => !visible)}>
+              {showUpdateDetails ? "Hide details" : "View details"}
+            </button>
+            <button
+              type="button"
+              disabled={recoveryBusy !== undefined || onRecover === undefined}
+              onClick={() => void recover(false)}
+            >
+              <RefreshCw
+                className={recoveryBusy === "check" ? "spin" : undefined}
+                aria-hidden="true"
+                size={15}
+              />
+              Check again
+            </button>
+          </div>
+          {showUpdateDetails && (
+            <div className="provider-update-details">
+              <dl>
+                <div>
+                  <dt>Previous setup ID</dt>
+                  <dd>{providerUpdate.previousSnapshotDigest}</dd>
+                </div>
+                <div>
+                  <dt>Current setup ID</dt>
+                  <dd>{providerUpdate.currentSnapshotDigest}</dd>
+                </div>
+                <div>
+                  <dt>Run</dt>
+                  <dd>{providerUpdate.runId}</dd>
+                </div>
+                <div>
+                  <dt>Generation</dt>
+                  <dd>{providerUpdate.generation}</dd>
+                </div>
+              </dl>
+              {uncertain && !confirmForce && (
+                <button
+                  type="button"
+                  className="danger-action"
+                  disabled={recoveryBusy !== undefined || onRecover === undefined}
+                  onClick={() => setConfirmForce(true)}
+                >
+                  Stop the old process and restart
+                </button>
+              )}
+              {uncertain && confirmForce && (
+                <div
+                  className="provider-update-confirmation"
+                  role="dialog"
+                  aria-label="Restart without verification?"
+                  aria-modal="true"
+                >
+                  <strong>Restart without verification?</strong>
+                  <p>
+                    Nanasa could not verify the old process. Continuing may stop the wrong process.
+                  </p>
+                  <div>
+                    <button type="button" onClick={() => setConfirmForce(false)}>
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="danger-action"
+                      disabled={recoveryBusy !== undefined}
+                      onClick={() => void recover(true)}
+                    >
+                      {recoveryBusy === "force" ? "Restarting..." : "Stop and restart"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {recoveryError !== undefined && (
+            <ErrorNotice error={recoveryError} className="terminal-endpoint-error" />
+          )}
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section
       className={`terminal-pane ${status?.state === "ready" ? "terminal-pane-ready" : ""} ${roleColorClass(role)}`}
       aria-label={`${alias} (${memberId}) terminal`}
     >
       {status?.state === "ready" ? (
-        <TerminalConsole
-          client={client}
-          endpoint={status}
-          runGeneration={run.generation}
-          theme={theme}
-          label={`${alias} (${memberId}) terminal console`}
-          visible={visible}
-          headerIdentity={identity}
-          memberIdentity={memberIdentity}
-          paneActions={paneActions}
-        />
+        <>
+          <TerminalConsole
+            client={client}
+            endpoint={status}
+            runGeneration={run.generation}
+            theme={theme}
+            label={`${alias} (${memberId}) terminal console`}
+            visible={visible}
+            headerIdentity={identity}
+            memberIdentity={memberIdentity}
+            paneActions={paneActions}
+          />
+          {updateSucceeded && !noticeDismissed && (
+            <aside className="provider-update-success" aria-label={`${alias} restarted`}>
+              <CheckCircle2 aria-hidden="true" size={17} />
+              <div>
+                <strong>{alias} restarted</strong>
+                <span>
+                  The agent is using the latest setup. Its previous terminal remains in history.
+                </span>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={`Dismiss ${alias} restart notice`}
+                onClick={() => setNoticeDismissed(true)}
+              >
+                <X aria-hidden="true" size={14} />
+              </button>
+            </aside>
+          )}
+        </>
       ) : (
         <>
           <div className="terminal-statusbar">
@@ -223,6 +392,12 @@ interface TerminalWorkspaceProps {
   activeRunId?: string;
   focusedRunId?: string;
   columns?: TerminalColumnsPreference;
+  launchConsents?: CustomLaunchConsentRequest[];
+  launchConsentsLoading?: boolean;
+  launchConsentsError?: ReactNode;
+  onApproveLaunchConsent?(request: CustomLaunchConsentRequest): Promise<void>;
+  onCancelLaunchConsent?(request: CustomLaunchConsentRequest): Promise<void>;
+  onRecoverAgent?(groupId: string, agentId: string, forceIndeterminate: boolean): Promise<void>;
   onSetFocusedRun?(runId: string | undefined): void;
   theme?: "light" | "dark";
 }
@@ -238,6 +413,12 @@ export function TerminalWorkspace({
   activeRunId: requestedActiveRunId,
   focusedRunId: requestedFocusedRunId,
   columns = "auto",
+  launchConsents = [],
+  launchConsentsLoading = false,
+  launchConsentsError,
+  onApproveLaunchConsent = async () => undefined,
+  onCancelLaunchConsent = async () => undefined,
+  onRecoverAgent,
   onSetFocusedRun,
   theme = "dark",
 }: TerminalWorkspaceProps) {
@@ -248,18 +429,43 @@ export function TerminalWorkspace({
   const availableRuns = memberViews
     .map(({ status }) => status.run)
     .filter((run): run is AgentRun => run !== undefined);
+  const activeRunMemberIds = new Set(
+    availableRuns
+      .filter((run) => ["starting", "running", "stopping"].includes(run.status))
+      .map((run) => run.memberId),
+  );
+  const consentViews = launchConsents.flatMap((request) => {
+    if (request.state === "approved" || activeRunMemberIds.has(request.memberId)) return [];
+    const member = members.find(
+      (candidate) =>
+        candidate.groupId === request.groupId && candidate.memberId === request.memberId,
+    );
+    const update = memberViews.find(({ member: candidate }) => candidate.id === member?.id)?.status
+      .run?.providerUpdate;
+    return member === undefined
+      ? []
+      : [
+          {
+            request,
+            member,
+            providerUpdate: update?.state === "completed" && update.outcome === "approval-required",
+          },
+        ];
+  });
+  const consentMemberIds = new Set(consentViews.map(({ member }) => member.memberId));
+  const displayedRuns = availableRuns.filter((run) => !consentMemberIds.has(run.memberId));
   const statusByRunId = new Map(
     memberViews.flatMap(({ status }) =>
       status.run === undefined ? [] : [[status.run.id, status]],
     ),
   );
-  const groupId = availableRuns[0]?.groupId;
+  const groupId = displayedRuns[0]?.groupId ?? members[0]?.groupId;
   const { preferences, updatePreferences } = usePortalPreferences();
   const pinnedRunIds =
     groupId === undefined ? [] : (preferences.pinnedRunIdsByGroup[groupId] ?? []);
   const pinnedSet = new Set(pinnedRunIds);
   const pinnedOrder = new Map(pinnedRunIds.map((runId, index) => [runId, index]));
-  const orderedRuns = availableRuns
+  const orderedRuns = displayedRuns
     .map((run, index) => ({ run, index }))
     .sort(
       (left, right) =>
@@ -269,7 +475,7 @@ export function TerminalWorkspace({
         left.index - right.index,
     )
     .map(({ run }) => run);
-  const focusedRunId = availableRuns.some((run) => run.id === requestedFocusedRunId)
+  const focusedRunId = displayedRuns.some((run) => run.id === requestedFocusedRunId)
     ? requestedFocusedRunId
     : undefined;
   const completionNotificationMemberIds =
@@ -277,7 +483,7 @@ export function TerminalWorkspace({
       ? []
       : (preferences.completionNotificationMemberIdsByGroup[groupId] ?? []);
   const completionNotificationMemberIdSet = new Set(completionNotificationMemberIds);
-  const activeRunId = availableRuns.some((run) => run.id === requestedActiveRunId)
+  const activeRunId = displayedRuns.some((run) => run.id === requestedActiveRunId)
     ? requestedActiveRunId
     : undefined;
   const paneElements = useRef(new Map<string, HTMLDivElement>());
@@ -342,13 +548,25 @@ export function TerminalWorkspace({
         : config?.groups[run.groupId]?.agents[member.id]?.integrationId;
     return integrationId === undefined ? undefined : config?.integrations[integrationId]?.kind;
   };
+  const agentIdForRun = (run: AgentRun) => {
+    const member = memberForRun(run);
+    return (
+      Object.entries(config?.groups[run.groupId]?.agents ?? {}).find(
+        ([agentId, agent]) => agentId === member?.agentProfileId || agent.memberId === run.memberId,
+      )?.[0] ?? member?.id
+    );
+  };
 
-  if (availableRuns.length === 0) {
+  if (displayedRuns.length === 0 && consentViews.length === 0) {
     return (
       <div className="empty-state terminal-empty">
-        <Monitor aria-hidden="true" size={28} />
-        <h2>No active terminals</h2>
-        <p>Start an agent from the tree to open its tmux terminal.</p>
+        {launchConsentsLoading ? (
+          <LoaderCircle className="spin" aria-hidden="true" size={28} />
+        ) : (
+          <Monitor aria-hidden="true" size={28} />
+        )}
+        <h2>{launchConsentsLoading ? "Loading launch requests" : "No active terminals"}</h2>
+        {launchConsentsError ?? <p>Start an agent from the tree to open its tmux terminal.</p>}
       </div>
     );
   }
@@ -386,11 +604,31 @@ export function TerminalWorkspace({
                 focused={focusedRunId === run.id}
                 statusKey={status?.key ?? "unknown"}
                 statusLabel={status?.label ?? "Unknown"}
+                onRecover={async (forceIndeterminate) => {
+                  const agentId = agentIdForRun(run);
+                  if (agentId === undefined || onRecoverAgent === undefined) return;
+                  await onRecoverAgent(run.groupId, agentId, forceIndeterminate);
+                }}
                 onToggleCompletionNotifications={() => toggleCompletionNotifications(run.memberId)}
                 onTogglePinned={() => togglePinned(run.id)}
                 onToggleFocus={() =>
                   onSetFocusedRun?.(focusedRunId === run.id ? undefined : run.id)
                 }
+              />
+            </div>
+          );
+        })}
+        {consentViews.map(({ request, member, providerUpdate }) => {
+          const role = member.roleId === undefined ? undefined : roles[member.roleId];
+          return (
+            <div className="terminal-pane-slot" key={request.id}>
+              <LaunchConsentPane
+                request={request}
+                member={member}
+                role={role}
+                providerUpdate={providerUpdate}
+                onApprove={onApproveLaunchConsent}
+                onCancel={onCancelLaunchConsent}
               />
             </div>
           );

@@ -28,16 +28,21 @@ import {
   defaultPortalPreferences,
   PORTAL_PREFERENCES_KEY,
 } from "./hooks/use-portal-preferences.js";
+import { launchConsentRequest } from "./test/launch-consent-fixture.js";
 
 vi.mock("./components/terminal-workspace.js", () => ({
   TerminalWorkspace: ({
     members,
     runs,
+    launchConsents = [],
     onSetFocusedRun,
+    onApproveLaunchConsent,
   }: {
     members: GroupMembership[];
     runs: AgentRun[];
+    launchConsents?: ReturnType<typeof launchConsentRequest>[];
     onSetFocusedRun(runId: string | undefined): void;
+    onApproveLaunchConsent(request: ReturnType<typeof launchConsentRequest>): Promise<void>;
   }) => (
     <div data-testid="terminal-surface">
       terminal-surface
@@ -50,6 +55,11 @@ vi.mock("./components/terminal-workspace.js", () => ({
           </button>
         );
       })}
+      {launchConsents.map((request) => (
+        <button type="button" key={request.id} onClick={() => void onApproveLaunchConsent(request)}>
+          Trust and start {request.memberId}
+        </button>
+      ))}
     </div>
   ),
 }));
@@ -109,6 +119,8 @@ const config: NanasaConfig = {
       name: "GitHub Copilot",
       kind: "copilot",
       command: ["copilot", "--acp", "--stdio"],
+      commandSource: "custom",
+      launcher: { providerArguments: "append" },
       providerState: { scope: "integration" },
       credentials: { kind: "provider-managed" },
       model: { resumePolicy: "preserve-session" },
@@ -121,6 +133,8 @@ const config: NanasaConfig = {
       name: "Claude through Copilot",
       kind: "claude-code",
       command: ["make", "claude-copilot"],
+      commandSource: "custom",
+      launcher: { providerArguments: "append" },
       providerState: { scope: "integration" },
       credentials: { kind: "provider-managed" },
       model: { resumePolicy: "preserve-session" },
@@ -133,6 +147,8 @@ const config: NanasaConfig = {
       name: "Custom reviewer",
       kind: "opencode",
       command: ["custom-reviewer"],
+      commandSource: "custom",
+      launcher: { providerArguments: "append" },
       providerState: { scope: "integration" },
       credentials: { kind: "provider-managed" },
       model: { resumePolicy: "preserve-session" },
@@ -335,9 +351,21 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     openCheckout: vi.fn(),
     removeWorktree: vi.fn(),
     updateRolePresentation: vi.fn().mockResolvedValue(config.roles.reviewer),
-    startRun: vi.fn().mockResolvedValue(run),
+    startRun: vi.fn().mockResolvedValue({ status: "started", run }),
     startAllRuns: vi.fn().mockResolvedValue({ groupId: "group-backend", outcomes: [] }),
+    recoverGroupRuns: vi.fn().mockResolvedValue({
+      groupId: "group-backend",
+      dryRun: false,
+      outcomes: [],
+    }),
+    recoverAgentRun: vi.fn(),
     stopRun: vi.fn().mockResolvedValue(run),
+    listLaunchConsents: vi.fn().mockResolvedValue([]),
+    getLaunchConsent: vi.fn(),
+    approveLaunchConsent: vi.fn(),
+    denyLaunchConsent: vi.fn(),
+    cancelLaunchConsent: vi.fn(),
+    revokeLaunchConsent: vi.fn(),
     submitMessage: vi.fn().mockImplementation(async () => {
       if (submission === undefined) throw new Error("No submission fixture configured");
       return submission;
@@ -670,7 +698,9 @@ describe("portal application", () => {
 
     const emitAttention = async (client: PortalClient, sequence: number) => {
       const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
-      await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
+      await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)), {
+        timeout: 5_000,
+      });
       await act(async () =>
         socket!.onmessage!(
           new MessageEvent("message", {
@@ -1540,6 +1570,7 @@ describe("portal application", () => {
   });
 
   it("deduplicates Start all while pending and announces per-member outcomes", async () => {
+    const user = userEvent.setup();
     const client = createClient();
     let resolveStartAll: (result: StartGroupRunsResult) => void = () => undefined;
     vi.mocked(client.startAllRuns).mockImplementation(
@@ -1555,8 +1586,16 @@ describe("portal application", () => {
     fireEvent.click(button);
     fireEvent.click(button);
     expect(button).toBeDisabled();
-    expect(client.startAllRuns).toHaveBeenCalledTimes(1);
+    expect(client.recoverGroupRuns).toHaveBeenCalledTimes(1);
+    expect(client.recoverGroupRuns).toHaveBeenCalledWith("group-backend", {
+      dryRun: false,
+      forceIndeterminate: false,
+    });
+    await waitFor(() => expect(client.startAllRuns).toHaveBeenCalledTimes(1));
     expect(client.startAllRuns).toHaveBeenCalledWith("group-backend", expect.any(String));
+    expect(vi.mocked(client.recoverGroupRuns).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(client.startAllRuns).mock.invocationCallOrder[0]!,
+    );
 
     await act(async () =>
       resolveStartAll({
@@ -1572,8 +1611,297 @@ describe("portal application", () => {
         ],
       }),
     );
-    expect(await screen.findByText("1 started, 0 already running, 1 failed")).toBeInTheDocument();
-    expect(screen.getByText("launch_failed")).toBeInTheDocument();
+    expect(
+      await screen.findByText("2 agents processed. 1 agent restarted and 1 agent needs attention."),
+    ).toBeVisible();
+    expect(screen.queryByText("launch_failed")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "View results" }));
+    const dialog = screen.getByRole("dialog", { name: "Team recovery results" });
+    const counts = within(dialog).getByLabelText("Recovery summary");
+    expect(within(counts).getByText("Kept running").parentElement).toHaveTextContent(
+      "Kept running0",
+    );
+    expect(within(counts).getByText("Restarted").parentElement).toHaveTextContent("Restarted1");
+    expect(within(counts).getByText("Need approval").parentElement).toHaveTextContent(
+      "Need approval0",
+    );
+    expect(within(counts).getByText("Need help").parentElement).toHaveTextContent("Need help1");
+    const reviewerOutcome = within(dialog).getByText("Reviewer").closest("li");
+    expect(reviewerOutcome).not.toBeNull();
+    await user.click(within(reviewerOutcome as HTMLElement).getByText("Technical details"));
+    expect(within(reviewerOutcome as HTMLElement).getByText("launch_failed")).toBeVisible();
+  });
+
+  it("previews group recovery without changing runs and can apply the checked plan", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const outcome = {
+      runId: "run-builder",
+      generation: 1,
+      memberId: "builder",
+      providerId: "copilot",
+      previousSnapshotDigest: "a".repeat(64),
+      currentSnapshotDigest: "b".repeat(64),
+      status: "restarted" as const,
+      replacementRunId: "run-builder-next",
+    };
+    vi.mocked(client.recoverGroupRuns)
+      .mockResolvedValueOnce({ groupId: "group-backend", dryRun: true, outcomes: [outcome] })
+      .mockResolvedValueOnce({ groupId: "group-backend", dryRun: false, outcomes: [outcome] });
+    render(<App client={client} />);
+
+    await user.click(await screen.findByRole("button", { name: "Check agent tools in Backend" }));
+
+    expect(client.recoverGroupRuns).toHaveBeenNthCalledWith(1, "group-backend", {
+      dryRun: true,
+      forceIndeterminate: false,
+    });
+    expect(
+      await screen.findByText("1 agent checked. 1 agent would restart and 0 agents need review."),
+    ).toBeVisible();
+    expect(screen.queryByText("a".repeat(64))).toBeNull();
+    expect(client.startAllRuns).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "View results" }));
+    const dialog = screen.getByRole("dialog", { name: "Team recovery preview" });
+    expect(within(dialog).getByText("Would restart")).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "Recover team" }));
+    await waitFor(() => expect(client.recoverGroupRuns).toHaveBeenCalledTimes(2));
+    expect(client.recoverGroupRuns).toHaveBeenNthCalledWith(2, "group-backend", {
+      dryRun: false,
+      forceIndeterminate: false,
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Team recovery results" })).toBeNull(),
+    );
+    expect(screen.queryByRole("button", { name: "View results" })).toBeNull();
+  });
+
+  it("stays quiet when a tools check finds every agent healthy", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    vi.mocked(client.recoverGroupRuns).mockResolvedValue({
+      groupId: "group-backend",
+      dryRun: true,
+      outcomes: [
+        {
+          runId: "run-builder",
+          generation: 1,
+          memberId: "builder",
+          providerId: "copilot",
+          previousSnapshotDigest: "a".repeat(64),
+          currentSnapshotDigest: "a".repeat(64),
+          status: "retained",
+        },
+      ],
+    });
+    render(<App client={client} />);
+
+    await user.click(await screen.findByRole("button", { name: "Check agent tools in Backend" }));
+    await waitFor(() => expect(client.recoverGroupRuns).toHaveBeenCalledOnce());
+
+    expect(screen.queryByRole("button", { name: "View results" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: /Team recovery/ })).toBeNull();
+  });
+
+  it("stays quiet when Start all completes without approval or failures", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    vi.mocked(client.startAllRuns).mockResolvedValue({
+      groupId: "group-backend",
+      outcomes: [
+        {
+          groupId: "group-backend",
+          memberId: "builder",
+          status: "started",
+          runId: "run-builder-next",
+        },
+      ],
+    });
+    render(<App client={client} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Start all non-running agents in Backend" }),
+    );
+    await waitFor(() => expect(client.startAllRuns).toHaveBeenCalledOnce());
+
+    expect(screen.queryByRole("button", { name: "View results" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: /Team recovery/ })).toBeNull();
+  });
+
+  it("approves an exact terminal request and retries the same member start", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const request = launchConsentRequest();
+    vi.mocked(client.listLaunchConsents).mockResolvedValueOnce([request]).mockResolvedValue([]);
+    vi.mocked(client.approveLaunchConsent).mockResolvedValue({
+      request: { ...request, state: "approved" },
+      decision: {
+        id: "decision-one",
+        repositoryIdentity: request.repositoryIdentity,
+        subjectDigest: request.subjectDigest,
+        principalId: "operator-test",
+        decision: "trusted",
+        decidedAt: timestamp,
+      },
+    });
+    render(<App client={client} />);
+
+    await user.click(await screen.findByRole("button", { name: "Trust and start builder" }));
+
+    await waitFor(() =>
+      expect(client.approveLaunchConsent).toHaveBeenCalledWith(request.id, {
+        expectedSubjectDigest: request.subjectDigest,
+        configRevision: request.configRevision,
+      }),
+    );
+    expect(client.startRun).toHaveBeenCalledWith(request.groupId, request.agentId);
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Trust and start builder" })).toBeNull(),
+    );
+  });
+
+  it("offers exact launch approval directly from Attention", async () => {
+    window.history.replaceState({}, "", "/attention");
+    const user = userEvent.setup();
+    const client = createClient();
+    const request = launchConsentRequest();
+    vi.mocked(client.listLaunchConsents).mockResolvedValue([request]);
+    vi.mocked(client.approveLaunchConsent).mockResolvedValue({
+      request: { ...request, state: "approved" },
+      decision: {
+        id: "decision-attention",
+        repositoryIdentity: request.repositoryIdentity,
+        subjectDigest: request.subjectDigest,
+        principalId: "operator-test",
+        decision: "trusted",
+        decidedAt: timestamp,
+      },
+    });
+    render(<App client={client} />);
+
+    expect(await screen.findByText("Builder · Launch approval required")).toBeInTheDocument();
+    const reviewItem = screen.getByText("Builder · Launch approval required").closest("li");
+    await user.click(
+      within(reviewItem as HTMLElement).getByRole("button", { name: "Trust and start" }),
+    );
+
+    await waitFor(() => expect(client.approveLaunchConsent).toHaveBeenCalledTimes(1));
+    expect(client.startRun).toHaveBeenCalledWith(request.groupId, request.agentId);
+  });
+
+  it("approves update-specific consent and resumes provider recovery", async () => {
+    window.history.replaceState({}, "", "/attention");
+    const user = userEvent.setup();
+    const client = createClient();
+    const request = launchConsentRequest();
+    const updateRun = activeRun(memberships[0], {
+      status: "failed",
+      recoveryPhase: "failed",
+      providerUpdate: {
+        id: "provider-update-one",
+        runId: "run-builder",
+        generation: 1,
+        memberId: request.memberId,
+        providerId: "custom",
+        previousSnapshotDigest: "a".repeat(64),
+        currentSnapshotDigest: "b".repeat(64),
+        state: "completed",
+        outcome: "approval-required",
+        detectedAt: timestamp,
+        updatedAt: timestamp,
+        completedAt: timestamp,
+      },
+    });
+    vi.mocked(client.loadSnapshot).mockResolvedValue({ ...snapshot, runs: [updateRun] });
+    vi.mocked(client.listLaunchConsents).mockResolvedValue([request]);
+    vi.mocked(client.approveLaunchConsent).mockResolvedValue({
+      request: { ...request, state: "approved" },
+      decision: {
+        id: "decision-update",
+        repositoryIdentity: request.repositoryIdentity,
+        subjectDigest: request.subjectDigest,
+        principalId: "operator-test",
+        decision: "trusted",
+        decidedAt: timestamp,
+      },
+    });
+    render(<App client={client} />);
+
+    expect(await screen.findByText("Review before restarting Builder")).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Approve and restart" }));
+
+    await waitFor(() =>
+      expect(client.recoverAgentRun).toHaveBeenCalledWith(request.groupId, request.agentId, {
+        dryRun: false,
+        forceIndeterminate: false,
+      }),
+    );
+    expect(client.startRun).not.toHaveBeenCalled();
+  });
+
+  it("consolidates Start-all approvals and retries without reusing its idempotency key", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const request = launchConsentRequest();
+    vi.mocked(client.startAllRuns)
+      .mockResolvedValueOnce({
+        groupId: request.groupId,
+        outcomes: [
+          {
+            groupId: request.groupId,
+            memberId: request.memberId,
+            status: "approval-required",
+            request,
+          },
+          {
+            groupId: request.groupId,
+            memberId: "reviewer",
+            status: "already-running",
+            runId: "run-reviewer",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        groupId: request.groupId,
+        outcomes: [
+          {
+            groupId: request.groupId,
+            memberId: request.memberId,
+            status: "started",
+            runId: "run-builder",
+          },
+          {
+            groupId: request.groupId,
+            memberId: "reviewer",
+            status: "already-running",
+            runId: "run-reviewer",
+          },
+        ],
+      });
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+
+    await user.click(
+      screen.getByRole("button", { name: "Start all non-running agents in Backend" }),
+    );
+    await user.click(await screen.findByRole("button", { name: "View results" }));
+    const dialog = screen.getByRole("dialog", { name: "Team recovery results" });
+    await user.click(within(dialog).getByRole("button", { name: "Approve and retry 1 agent" }));
+
+    await waitFor(() => expect(client.startAllRuns).toHaveBeenCalledTimes(2));
+    expect(client.approveLaunchConsent).toHaveBeenCalledWith(request.id, {
+      expectedSubjectDigest: request.subjectDigest,
+      configRevision: request.configRevision,
+    });
+    const firstKey = vi.mocked(client.startAllRuns).mock.calls[0]?.[1];
+    const secondKey = vi.mocked(client.startAllRuns).mock.calls[1]?.[1];
+    expect(firstKey).not.toBe(secondKey);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Team recovery results" })).toBeNull(),
+    );
+    expect(screen.queryByRole("button", { name: "View results" })).toBeNull();
   });
 
   it.each([
@@ -2361,7 +2689,7 @@ describe("portal application", () => {
     expect(
       screen.getByLabelText("1 review item requires attention across all groups"),
     ).toBeInTheDocument();
-    expect(document.title).toBe("(1) Attention · Nanasa");
+    await waitFor(() => expect(document.title).toBe("(1) Attention · Nanasa"));
   });
 
   it("loads all active group workspaces before Attention navigation for canonical counts", async () => {

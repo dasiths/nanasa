@@ -235,6 +235,75 @@ describe("notification preferences", () => {
 });
 
 describe("projected status route panels", () => {
+  it("offers details and a conservative retry for provider-update health", async () => {
+    const owner = membership("group-update", "Reviewer");
+    const currentRun = run(owner, {
+      status: "failed",
+      recoveryPhase: "failed",
+      providerUpdate: {
+        id: "update-one",
+        runId: "run-group-update-reviewer",
+        generation: 1,
+        memberId: owner.memberId,
+        providerId: "copilot",
+        previousSnapshotDigest: "a".repeat(64),
+        currentSnapshotDigest: "b".repeat(64),
+        state: "completed",
+        outcome: "ownership-uncertain",
+        safeError: {
+          code: "provider_update_ownership_uncertain",
+          message: "Nanasa could not safely identify the old process",
+          retryable: false,
+        },
+        detectedAt: timestamp,
+        updatedAt: timestamp,
+        completedAt: timestamp,
+      },
+    });
+    const recoverAgentRun = vi.fn().mockResolvedValue({});
+    const client = { recoverAgentRun } as unknown as PortalClient;
+    const onRefresh = vi.fn().mockResolvedValue(undefined);
+    const routeProps = {
+      ...props("attention", client),
+      config: {
+        groups: {
+          "group-update": {
+            name: "Update",
+            agents: {
+              "reviewer-agent": {
+                memberId: owner.memberId,
+                name: owner.alias,
+                integrationId: "copilot",
+                instructions: [],
+                order: 0,
+              },
+            },
+          },
+        },
+      },
+      onRefresh,
+      snapshot: snapshot([owner], [currentRun], []),
+    } as unknown as Parameters<typeof PortalRoutePanel>[0];
+    render(<PortalRoutePanel {...routeProps} />);
+
+    const item = screen.getByText("Reviewer needs help").closest("li")!;
+    expect(item).toHaveTextContent(
+      "Nanasa cannot safely confirm which process belongs to this agent.",
+    );
+    within(item).getByRole("button", { name: "View details" }).click();
+    expect(routeProps.onNavigate).toHaveBeenCalledWith(
+      "/groups/group-update/terminals/run-group-update-reviewer",
+    );
+    within(item).getByRole("button", { name: "Check again" }).click();
+    await waitFor(() =>
+      expect(recoverAgentRun).toHaveBeenCalledWith("group-update", "reviewer-agent", {
+        dryRun: false,
+        forceIndeterminate: false,
+      }),
+    );
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
   it("shows only projected attention statuses in precedence order with qualified actions", async () => {
     const doneMember = membership("group-done", "Builder");
     const staleMember = membership("group-stale", "Watcher");

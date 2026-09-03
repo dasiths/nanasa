@@ -5,8 +5,8 @@ import {
   canonicalProviderSnapshotBytes,
   digestProviderSnapshot,
   ImmutableAssetReferenceSchema,
-  ProviderPackageManifestSchema,
   type ProviderGrant,
+  ProviderPackageManifestSchema,
   ProviderPackageRecordSchema,
   ResolvedProviderAdapterSnapshotSchema,
 } from "@nanasa/contracts";
@@ -30,7 +30,6 @@ import {
 
 const BUILTIN_TIMESTAMP = "2026-09-01T00:00:00.000Z";
 const COPILOT_VERSION = "1.0.0";
-const COPILOT_EXTENSION_GENERATION = "nanasa.copilot@1.0.0+builtin.1";
 
 function sha256(value: Uint8Array | string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -188,18 +187,10 @@ function copilotCapabilities(): readonly CapabilityDeclaration[] {
       ownedNamespaces: ["copilot"],
     }),
     capability("recognition", {
-      configuredCommandMatchers: [
-        {
-          executableNames: ["copilot", "copilot.exe"],
-          requiredArgvLiterals: [],
-          wrapperExecutableNames: [],
-        },
-      ],
       observedProcessMatchers: [
         {
           executableNames: ["copilot", "copilot.exe"],
           requiredArgvLiterals: [],
-          wrapperExecutableNames: [],
         },
       ],
       maximumWrapperDepth: 0,
@@ -433,11 +424,12 @@ export async function buildTrustedBuiltinCopilotPackage(): Promise<TrustedBuiltI
   const packageDigest = sha256(
     canonicalJsonBytes({ providerId: "copilot", capabilities, requestedGrants, assets }),
   );
+  const extensionGeneration = `nanasa.copilot@${COPILOT_VERSION}+builtin.${packageDigest.slice(0, 16)}`;
   const manifestDigest = sha256(
     canonicalJsonBytes({ packageDigest, capabilities, requestedGrants, assets }),
   );
   const generation = {
-    id: COPILOT_EXTENSION_GENERATION,
+    id: extensionGeneration,
     extensionId: "nanasa.copilot",
     version: COPILOT_VERSION,
     packageDigest,
@@ -488,7 +480,7 @@ export async function buildTrustedBuiltinCopilotPackage(): Promise<TrustedBuiltI
     providerId: "copilot",
     adapterId: "nanasa.copilot-v2",
     extensionId: "nanasa.copilot",
-    extensionGeneration: COPILOT_EXTENSION_GENERATION,
+    extensionGeneration,
     interpreterVersions: { core: "2.0.0" },
     capabilities: negotiated.capabilities,
     grants: negotiated.grants,

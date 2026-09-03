@@ -80,12 +80,31 @@ const EnvironmentSchema = z.record(
   z.string().max(16_384),
 );
 
+export const IntegrationCommandSourceSchema = z.enum(["builtin", "custom"]);
+export type IntegrationCommandSource = z.infer<typeof IntegrationCommandSourceSchema>;
+export const ProviderArgumentStrategySchema = z.union([
+  z.literal("append"),
+  z
+    .object({
+      kind: z.literal("environment"),
+      name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
+    })
+    .strict(),
+]);
+export type ProviderArgumentStrategy = z.infer<typeof ProviderArgumentStrategySchema>;
+export const IntegrationLauncherSchema = z
+  .object({ providerArguments: ProviderArgumentStrategySchema })
+  .strict();
+export type IntegrationLauncher = z.infer<typeof IntegrationLauncherSchema>;
+
 export const IntegrationConfigSchema = z
   .object({
     id: IntegrationIdSchema,
     name: z.string().trim().min(1).max(100),
     kind: AgentKindSchema,
     command: z.array(z.string().min(1).max(4_096)).min(1).max(64),
+    commandSource: IntegrationCommandSourceSchema,
+    launcher: IntegrationLauncherSchema.optional(),
     cwd: z.string().min(1).max(4_096).optional(),
     providerState: ProviderStatePolicySchema.default({ scope: "membership" }),
     credentials: CredentialProfileReferenceSchema.default({ kind: "provider-managed" }),
@@ -97,7 +116,23 @@ export const IntegrationConfigSchema = z
     extensions: z.array(ExtensionIdSchema).max(32).default([]),
     environment: EnvironmentSchema.default({}),
   })
-  .strict();
+  .strict()
+  .superRefine((integration, context) => {
+    if (integration.commandSource === "builtin" && integration.launcher !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Built-in integration commands may not define a launcher",
+        path: ["launcher"],
+      });
+    }
+    if (integration.commandSource === "custom" && integration.launcher === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Custom integration commands require a launcher",
+        path: ["launcher"],
+      });
+    }
+  });
 export type IntegrationConfig = z.infer<typeof IntegrationConfigSchema>;
 
 export const ConfiguredProviderExtensionSchema = z

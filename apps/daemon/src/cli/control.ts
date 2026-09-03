@@ -49,6 +49,8 @@ interface ParsedOptions {
   idempotencyKey?: string;
   requestId?: string;
   output: "json" | "text";
+  outputExplicit: boolean;
+  forceJson: boolean;
   timeoutMs: number;
   agentId?: string;
   remoteRepo?: string;
@@ -63,7 +65,13 @@ function optionValue(args: readonly string[], index: number, option: string): st
 }
 
 function parseOptions(args: readonly string[]): ParsedOptions {
-  const options: ParsedOptions = { positionals: [], output: "json", timeoutMs: 30_000 };
+  const options: ParsedOptions = {
+    positionals: [],
+    output: "json",
+    outputExplicit: false,
+    forceJson: false,
+    timeoutMs: 30_000,
+  };
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index] as string;
     if (!argument.startsWith("--")) {
@@ -71,7 +79,7 @@ function parseOptions(args: readonly string[]): ParsedOptions {
       continue;
     }
     if (argument === "--json") {
-      options.output = "json";
+      options.forceJson = true;
       continue;
     }
     const value = optionValue(args, index, argument);
@@ -91,6 +99,7 @@ function parseOptions(args: readonly string[]): ParsedOptions {
         throw new CliUsageError("--output must be json or text");
       }
       options.output = value;
+      options.outputExplicit = true;
     } else if (argument === "--timeout") {
       options.timeoutMs = Number(value);
       if (
@@ -129,8 +138,14 @@ function selectCommand(args: readonly string[]): {
 }
 
 function assertArguments(declaration: CliCommandDeclaration, options: ParsedOptions): void {
-  if (options.positionals.length !== declaration.positionals.length) {
-    const suffix = declaration.positionals.map((name) => `<${name}>`).join(" ");
+  const required = declaration.positionals.filter((name) => !name.endsWith("?")).length;
+  if (
+    options.positionals.length < required ||
+    options.positionals.length > declaration.positionals.length
+  ) {
+    const suffix = declaration.positionals
+      .map((name) => (name.endsWith("?") ? `[<${name.slice(0, -1)}>]` : `<${name}>`))
+      .join(" ");
     throw new CliUsageError(
       `Usage: nanasa ${declaration.family} ${declaration.command}${suffix.length === 0 ? "" : ` ${suffix}`}`,
     );
@@ -166,6 +181,52 @@ function outputSuccess(value: unknown, mode: "json" | "text", output: NodeJS.Wri
     return;
   }
   output.write(`${JSON.stringify(value ?? null)}\n`);
+}
+
+type RecoveryOutput = {
+  readonly memberId: string;
+  readonly status:
+    | "retained"
+    | "restarted"
+    | "approval-required"
+    | "ownership-uncertain"
+    | "failed";
+  readonly safeError?: { readonly message: string };
+};
+
+function recoveryOutcomes(value: unknown): readonly RecoveryOutput[] {
+  if (typeof value !== "object" || value === null) return [];
+  const result = value as { readonly outcomes?: unknown };
+  return Array.isArray(result.outcomes)
+    ? (result.outcomes as RecoveryOutput[])
+    : [value as RecoveryOutput];
+}
+
+export function providerRecoveryOutput(value: unknown, dryRun: boolean): string {
+  const outcomes = recoveryOutcomes(value);
+  if (outcomes.length === 0) return "No active runs need recovery";
+  const width = Math.max(...outcomes.map((outcome) => outcome.memberId.length)) + 2;
+  return outcomes
+    .map((outcome) => {
+      let summary: string;
+      if (outcome.status === "retained") summary = dryRun ? "would keep running" : "kept running";
+      else if (outcome.status === "restarted") {
+        summary = dryRun
+          ? "would restart (agent tools changed)"
+          : "restarted (agent tools changed)";
+      } else if (outcome.status === "approval-required") summary = "approval required";
+      else if (outcome.status === "ownership-uncertain") {
+        summary = "failed (Nanasa could not safely identify the old process)";
+      } else summary = `failed (${outcome.safeError?.message ?? "recovery did not complete"})`;
+      return `${outcome.memberId.padEnd(width)}${summary}`;
+    })
+    .join("\n");
+}
+
+export function providerRecoveryExitCode(value: unknown): 0 | 1 | 3 {
+  const statuses = recoveryOutcomes(value).map((outcome) => outcome.status);
+  if (statuses.some((status) => status === "failed" || status === "ownership-uncertain")) return 1;
+  return statuses.includes("approval-required") ? 3 : 0;
 }
 
 export function portalBootstrapUrl(apiUrl: string, fragment: string): string {
@@ -236,7 +297,7 @@ export async function runControlCli(
   args: readonly string[],
   repositoryRoot: string,
   streams: { stdout?: NodeJS.WritableStream; stderr?: NodeJS.WritableStream } = {},
-): Promise<0 | 1 | 2> {
+): Promise<0 | 1 | 2 | 3> {
   const stdout = streams.stdout ?? process.stdout;
   const stderr = streams.stderr ?? process.stderr;
   try {
@@ -361,9 +422,23 @@ export async function runControlCli(
           ? {
               text: portalBootstrapUrl(loaded.apiUrl, (value as { fragment: string }).fragment),
             }
-          : value;
-      outputSuccess(outputValue, options.output === "text" ? "text" : declaration.output, stdout);
-      return 0;
+          : declaration.id === "run.recover" &&
+              !options.forceJson &&
+              (!options.outputExplicit || options.output === "text")
+            ? {
+                text: providerRecoveryOutput(
+                  value,
+                  (options.body as { dryRun?: unknown } | undefined)?.dryRun === true,
+                ),
+              }
+            : value;
+      const outputMode = options.forceJson
+        ? "json"
+        : options.outputExplicit
+          ? options.output
+          : declaration.output;
+      outputSuccess(outputValue, outputMode, stdout);
+      return declaration.id === "run.recover" ? providerRecoveryExitCode(value) : 0;
     } finally {
       clearTimeout(timer);
     }

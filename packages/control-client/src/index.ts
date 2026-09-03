@@ -234,15 +234,16 @@ export class NanasaControlClient {
   }
 
   #authorizedInit(init: RequestInit | undefined, authenticate: boolean): RequestInit | undefined {
-    if (init === undefined) return undefined;
+    if (init === undefined && !authenticate) return undefined;
+    const authorized = init ?? {};
     const headers =
-      typeof init.headers === "object" &&
-      init.headers !== null &&
-      !(init.headers instanceof Headers) &&
-      !Array.isArray(init.headers)
-        ? { ...init.headers }
-        : Object.fromEntries(new Headers(init.headers).entries());
-    const method = (init?.method ?? "GET").toUpperCase();
+      typeof authorized.headers === "object" &&
+      authorized.headers !== null &&
+      !(authorized.headers instanceof Headers) &&
+      !Array.isArray(authorized.headers)
+        ? { ...authorized.headers }
+        : Object.fromEntries(new Headers(authorized.headers).entries());
+    const method = (authorized.method ?? "GET").toUpperCase();
     if (authenticate && this.#operatorToken !== undefined) {
       headers.Authorization = `Bearer ${this.#operatorToken}`;
     }
@@ -254,7 +255,7 @@ export class NanasaControlClient {
       if (this.#csrfToken === undefined) throw new Error("Operator CSRF token is unavailable");
       headers[CSRF_HEADER] = this.#csrfToken;
     }
-    return { ...init, credentials: "same-origin", headers };
+    return { ...authorized, credentials: "same-origin", headers };
   }
 }
 

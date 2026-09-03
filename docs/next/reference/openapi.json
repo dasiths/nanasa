@@ -416,6 +416,154 @@
         "x-errors": []
       }
     },
+    "/api/v1/launch-consents": {
+      "get": {
+        "operationId": "launchConsents.list",
+        "summary": "List bounded redacted custom-launch consent requests",
+        "tags": [
+          "launch-consent"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/launch-consents/:requestId": {
+      "get": {
+        "operationId": "launchConsents.get",
+        "summary": "Inspect one redacted custom-launch consent request",
+        "tags": [
+          "launch-consent"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "launch_consent_not_found"
+        ]
+      }
+    },
+    "/api/v1/launch-consents/:requestId/approve": {
+      "post": {
+        "operationId": "launchConsents.approve",
+        "summary": "Approve one exact current custom-launch consent subject",
+        "tags": [
+          "launch-consent"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "launch_consent_not_found",
+          "launch_consent_not_pending",
+          "launch_consent_stale"
+        ]
+      }
+    },
+    "/api/v1/launch-consents/:requestId/deny": {
+      "post": {
+        "operationId": "launchConsents.deny",
+        "summary": "Deny one exact custom-launch consent subject",
+        "tags": [
+          "launch-consent"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "launch_consent_not_found",
+          "launch_consent_not_pending",
+          "launch_consent_stale"
+        ]
+      }
+    },
+    "/api/v1/launch-consents/:requestId/cancel": {
+      "post": {
+        "operationId": "launchConsents.cancel",
+        "summary": "Cancel one pending custom-launch consent request",
+        "tags": [
+          "launch-consent"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "launch_consent_not_found",
+          "launch_consent_not_pending",
+          "launch_consent_stale"
+        ]
+      }
+    },
+    "/api/v1/trust/:receiptId/revoke": {
+      "post": {
+        "operationId": "launchConsents.revoke",
+        "summary": "Revoke one exact custom-launch trust receipt",
+        "tags": [
+          "launch-consent"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "launch_consent_not_found"
+        ]
+      }
+    },
     "/api/v1/catalog/providers": {
       "get": {
         "operationId": "extensions.catalog",
@@ -1144,7 +1292,10 @@
         "x-idempotency": "forbidden",
         "x-errors": [
           "run_already_active",
-          "agent_not_found"
+          "agent_not_found",
+          "launch_consent_required",
+          "launch_consent_denied",
+          "custom_launcher_permission_floor_unsupported"
         ]
       },
       "delete": {
@@ -1191,7 +1342,65 @@
         "x-idempotency": "forbidden",
         "x-errors": [
           "run_not_found",
-          "run_replaced"
+          "run_replaced",
+          "launch_consent_required",
+          "launch_consent_denied",
+          "custom_launcher_permission_floor_unsupported"
+        ]
+      }
+    },
+    "/api/v1/groups/:groupId/runs/recover": {
+      "post": {
+        "operationId": "runs.recoverGroup",
+        "summary": "Recover active group runs after provider changes",
+        "tags": [
+          "run"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "group_not_found",
+          "provider_update_binding_unavailable",
+          "provider_update_target_changed",
+          "provider_update_recovery_unavailable"
+        ]
+      }
+    },
+    "/api/v1/groups/:groupId/agents/:agentId/run/recover": {
+      "post": {
+        "operationId": "runs.recoverAgent",
+        "summary": "Recover one active agent run after a provider change",
+        "tags": [
+          "run"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "agent_not_found",
+          "run_not_found",
+          "provider_update_binding_unavailable",
+          "provider_update_target_changed",
+          "provider_update_recovery_unavailable"
         ]
       }
     },
@@ -1215,7 +1424,10 @@
         "x-body-limit": 65536,
         "x-idempotency": "forbidden",
         "x-errors": [
-          "group_not_found"
+          "group_not_found",
+          "launch_consent_required",
+          "launch_consent_denied",
+          "custom_launcher_permission_floor_unsupported"
         ]
       }
     },
@@ -1263,7 +1475,10 @@
         "x-body-limit": 65536,
         "x-idempotency": "forbidden",
         "x-errors": [
-          "group_not_found"
+          "group_not_found",
+          "launch_consent_required",
+          "launch_consent_denied",
+          "custom_launcher_permission_floor_unsupported"
         ]
       }
     },

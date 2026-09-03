@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
-import type { OpenWaitReply } from "@nanasa/contracts";
+import type { OpenWaitReply, ProviderArgumentStrategy } from "@nanasa/contracts";
 import type { EffectiveAgentPrompt } from "../instruction-resolver.js";
 import type { ProviderReporterDriverRegistry } from "./provider-reporter-driver-registry.js";
 import type {
@@ -13,7 +13,6 @@ import type { ResolvedProviderAdapter } from "./resolved-provider-adapter.js";
 interface Matcher {
   readonly executableNames: readonly string[];
   readonly requiredArgvLiterals: readonly string[];
-  readonly wrapperExecutableNames: readonly string[];
 }
 
 interface FileRecipe {
@@ -25,6 +24,7 @@ interface FileRecipe {
 
 export interface SnapshotLaunchInput extends ProviderOverlayContext {
   readonly configuredCommand: readonly string[];
+  readonly providerArgumentStrategy?: ProviderArgumentStrategy;
   readonly model?: string;
   readonly nativeSession?: SnapshotNativeSession;
   readonly enforceConfiguredModelOnResume?: boolean;
@@ -78,10 +78,7 @@ function matches(
     command.some((part) => names.has(executableName(part)));
   if (!executableMatches) return false;
   if (matcher.requiredArgvLiterals.some((literal) => !command.includes(literal))) return false;
-  return (
-    matcher.wrapperExecutableNames.length === 0 ||
-    matcher.wrapperExecutableNames.includes(executableName(command[0] ?? ""))
-  );
+  return true;
 }
 
 function json(value: unknown): string {
@@ -94,6 +91,17 @@ function generatedAgentName(membershipId: string): string {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function validateLaunchArguments(argumentsList: readonly string[]): void {
+  if (argumentsList.length > 256) throw new Error("Provider launch exceeds the argument limit");
+  if (
+    argumentsList.some(
+      (argument) => argument.includes("\0") || Buffer.byteLength(argument, "utf8") > 4_096,
+    )
+  ) {
+    throw new Error("Provider launch contains an invalid argument");
+  }
 }
 
 function digest(value: string): string {
@@ -127,16 +135,6 @@ export class ProviderSnapshotEvaluator {
     this.#runtimeAssetPaths = Object.freeze({ ...options.runtimeAssetPaths });
   }
 
-  public matchesConfiguredCommand(command: readonly string[]): boolean {
-    const recognition = capability<{ configuredCommandMatchers: Matcher[] }>(
-      this.#adapter,
-      "recognition",
-    );
-    return recognition.configuredCommandMatchers.some((matcher) =>
-      matches(command, undefined, matcher),
-    );
-  }
-
   public matchesObservedProcess(argv: readonly string[], executable?: string): boolean {
     const recognition = capability<{ observedProcessMatchers: Matcher[] }>(
       this.#adapter,
@@ -150,44 +148,33 @@ export class ProviderSnapshotEvaluator {
   public augmentConfiguredCommand(
     command: readonly string[],
     providerArguments: readonly string[],
+    strategy: ProviderArgumentStrategy = "append",
   ): readonly string[] {
-    if (!this.matchesConfiguredCommand(command)) {
-      throw new Error("Configured command is not eligible for provider augmentation");
-    }
-    const recognition = capability<{ configuredCommandMatchers: Matcher[] }>(
-      this.#adapter,
-      "recognition",
-    );
-    const matched = recognition.configuredCommandMatchers.find((matcher) =>
-      matches(command, undefined, matcher),
-    );
-    const launch = capability<{
-      wrapperArgumentSlot?: number;
-      wrapperArgumentPrefix?: string;
-    }>(this.#adapter, "launch");
-    if (
-      matched?.wrapperExecutableNames.length !== 0 &&
-      launch.wrapperArgumentSlot !== undefined &&
-      launch.wrapperArgumentPrefix !== undefined
-    ) {
-      if (launch.wrapperArgumentSlot > command.length) {
-        throw new Error("Configured wrapper argument slot is outside the command");
-      }
-      const result = [...command];
-      result.splice(
-        launch.wrapperArgumentSlot,
-        0,
-        `${launch.wrapperArgumentPrefix}${providerArguments.map((argument) => shellQuote(argument)).join(" ")}`,
-      );
-      return Object.freeze(result);
-    }
-    if (matched?.wrapperExecutableNames.length !== 0) {
-      throw new Error("Configured wrapper has no declarative argument slot");
-    }
-    if (launch.wrapperArgumentSlot === undefined) {
-      return Object.freeze([...command, ...providerArguments]);
+    validateLaunchArguments(command);
+    validateLaunchArguments(providerArguments);
+    if (strategy !== "append") return Object.freeze([...command]);
+    if (command.length + providerArguments.length > 256) {
+      throw new Error("Provider launch exceeds the argument limit");
     }
     return Object.freeze([...command, ...providerArguments]);
+  }
+
+  public providerArgumentEnvironment(
+    providerArguments: readonly string[],
+    strategy: ProviderArgumentStrategy = "append",
+  ): Readonly<Record<string, string>> {
+    validateLaunchArguments(providerArguments);
+    if (strategy === "append") return Object.freeze({});
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(strategy.name)) {
+      throw new Error("Provider argument environment name is invalid");
+    }
+    const encoded = providerArguments.map((argument) => shellQuote(argument)).join(" ");
+    if (Buffer.byteLength(encoded, "utf8") > 16_384) {
+      throw new Error("Provider argument environment exceeds the size limit");
+    }
+    return Object.freeze({
+      [strategy.name]: encoded,
+    });
   }
 
   public stateEnvironment(stateRoot: string): Readonly<Record<string, string>> {
@@ -517,10 +504,15 @@ export class ProviderSnapshotEvaluator {
       argumentsList.push(...this.modelArguments(input.model));
     }
     return Object.freeze({
-      command: this.augmentConfiguredCommand(input.configuredCommand, argumentsList),
+      command: this.augmentConfiguredCommand(
+        input.configuredCommand,
+        argumentsList,
+        input.providerArgumentStrategy,
+      ),
       environment: Object.freeze({
         ...this.stateEnvironment(input.stateRoot),
         ...overlay.environment,
+        ...this.providerArgumentEnvironment(argumentsList, input.providerArgumentStrategy),
       }),
       overlay,
     });

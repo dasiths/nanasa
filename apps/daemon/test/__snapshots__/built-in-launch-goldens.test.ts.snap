@@ -177,7 +177,6 @@ exports[`table-driven built-in launch characterization > freezes the complete 'c
   ],
   "provider": "claude-code",
   "recognition": {
-    "claudeMakeWrapper": true,
     "direct": true,
     "path": true,
     "unrelated": false,
@@ -216,11 +215,6 @@ exports[`table-driven built-in launch characterization > freezes the complete 'c
   "stateEnvironment": {
     "CLAUDE_CONFIG_DIR": "/state/claude-code",
   },
-  "wrapperCommand": [
-    "make",
-    "claude-copilot",
-    "CLAUDE_ARGS='--settings' '/overlay/claude-code/settings.json' '--mcp-config' '/overlay/claude-code/mcp.json' '--append-system-prompt-file' '/overlay/claude-code/prompts/system.md' '--model' 'provider/model-one'",
-  ],
 }
 `;
 
@@ -424,7 +418,6 @@ exports[`table-driven built-in launch characterization > freezes the complete 'c
   ],
   "provider": "copilot",
   "recognition": {
-    "claudeMakeWrapper": false,
     "direct": true,
     "path": true,
     "unrelated": false,
@@ -463,7 +456,6 @@ exports[`table-driven built-in launch characterization > freezes the complete 'c
     "COPILOT_CACHE_HOME": "/state/copilot/cache",
     "COPILOT_HOME": "/state/copilot",
   },
-  "wrapperCommand": undefined,
 }
 `;
 
@@ -664,7 +656,6 @@ exports[`table-driven built-in launch characterization > freezes the complete 'o
   ],
   "provider": "opencode",
   "recognition": {
-    "claudeMakeWrapper": false,
     "direct": true,
     "path": true,
     "unrelated": false,
@@ -706,7 +697,6 @@ exports[`table-driven built-in launch characterization > freezes the complete 'o
     "XDG_DATA_HOME": "/state/opencode/xdg-data",
     "XDG_STATE_HOME": "/state/opencode/xdg-state",
   },
-  "wrapperCommand": undefined,
 }
 `;
 
@@ -905,7 +895,6 @@ exports[`table-driven built-in launch characterization > freezes the complete 'p
   ],
   "provider": "pi",
   "recognition": {
-    "claudeMakeWrapper": false,
     "direct": true,
     "path": true,
     "unrelated": false,
@@ -942,6 +931,5 @@ exports[`table-driven built-in launch characterization > freezes the complete 'p
   "stateEnvironment": {
     "PI_CODING_AGENT_DIR": "/state/pi",
   },
-  "wrapperCommand": undefined,
 }
 `;

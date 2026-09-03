@@ -224,3 +224,52 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
   expect(groupDialogBounds!.y + groupDialogBounds!.height).toBeLessThanOrEqual(844);
   await groupDialog.getByRole("button", { name: "Cancel" }).click();
 });
+
+test("recovery results remain bounded and operable in portrait and landscape", async ({
+  page,
+  nanasa,
+}) => {
+  await nanasa.seedGroup("Recovery layout team", ["Layout agent"]);
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto(nanasa.portalUrl);
+
+  await page.getByRole("button", { name: "Check agent tools in Recovery layout team" }).click();
+  const trigger = page.getByRole("button", { name: "View results" });
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+
+  const dialog = page.getByRole("dialog", { name: "Team recovery preview" });
+  const body = dialog.locator(".recovery-results-body");
+  const footer = dialog.locator(".recovery-results-footer");
+  await expect(dialog.getByRole("heading", { name: "Agent outcomes" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Recover team" })).toBeVisible();
+
+  const portraitBounds = await dialog.boundingBox();
+  expect(portraitBounds).not.toBeNull();
+  expect(portraitBounds!.x).toBeGreaterThanOrEqual(0);
+  expect(portraitBounds!.y).toBeGreaterThanOrEqual(0);
+  expect(portraitBounds!.x + portraitBounds!.width).toBeLessThanOrEqual(360);
+  expect(portraitBounds!.y + portraitBounds!.height).toBeLessThanOrEqual(800);
+  expect(portraitBounds!.width).toBeGreaterThanOrEqual(340);
+  expect(await body.evaluate((element) => getComputedStyle(element).overflowY)).toBe("auto");
+  expect(
+    await footer.evaluate((element) => ({
+      position: getComputedStyle(element).position,
+      bottom: getComputedStyle(element).bottom,
+    })),
+  ).toEqual({ position: "sticky", bottom: "0px" });
+
+  await page.setViewportSize({ width: 800, height: 360 });
+  const landscapeBounds = await dialog.boundingBox();
+  expect(landscapeBounds).not.toBeNull();
+  expect(landscapeBounds!.x).toBeGreaterThanOrEqual(0);
+  expect(landscapeBounds!.y).toBeGreaterThanOrEqual(0);
+  expect(landscapeBounds!.x + landscapeBounds!.width).toBeLessThanOrEqual(800);
+  expect(landscapeBounds!.y + landscapeBounds!.height).toBeLessThanOrEqual(360);
+  expect(await body.evaluate((element) => getComputedStyle(element).overflowY)).toBe("auto");
+  await expect(dialog.getByRole("button", { name: "Recover team" })).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+});

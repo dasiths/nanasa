@@ -26,6 +26,7 @@ import {
   groupAttentionItems,
   repositoryAttentionItems,
 } from "./attention-items.js";
+import { launchConsentRequest } from "./test/launch-consent-fixture.js";
 
 const timestamp = "2026-08-31T12:00:00.000Z";
 
@@ -279,6 +280,124 @@ function itemOfKind<Kind extends AttentionItem["kind"]>(
 }
 
 describe("deriveAttentionItems", () => {
+  it("projects only the latest actionable launch consent per member", () => {
+    const owner = member("builder", "group-a");
+    const requests = [
+      launchConsentRequest({
+        id: "old-consent",
+        groupId: "group-a",
+        memberId: owner.memberId,
+        state: "denied",
+        requestedAt: "2026-09-02T09:00:00.000Z",
+      }),
+      launchConsentRequest({
+        id: "current-consent",
+        groupId: "group-a",
+        memberId: owner.memberId,
+      }),
+    ];
+
+    const items = deriveAttentionItems(snapshot({ memberships: [owner] }), {
+      launchConsents: requests,
+    });
+
+    expect(items).toHaveLength(1);
+    expect(itemOfKind(items, "launch-consent")).toMatchObject({
+      category: "response",
+      urgency: "high",
+      counted: true,
+      consentState: "pending",
+      request: { id: "current-consent" },
+      targetPath: "/groups/group-a/terminals#launch-consent-current-consent",
+    });
+  });
+
+  it("counts update failures but keeps successful restarts as informational activity", () => {
+    const uncertainOwner = member("reviewer");
+    const restartedOwner = member("builder");
+    const approvalOwner = member("operator");
+    const transition = {
+      id: "update-one",
+      runId: "run-old",
+      generation: 1,
+      memberId: uncertainOwner.memberId,
+      providerId: "copilot",
+      previousSnapshotDigest: "a".repeat(64),
+      currentSnapshotDigest: "b".repeat(64),
+      state: "completed" as const,
+      detectedAt: timestamp,
+      updatedAt: timestamp,
+      completedAt: timestamp,
+    };
+    const uncertainRun = run(uncertainOwner, {
+      status: "failed",
+      recoveryPhase: "failed",
+      providerUpdate: {
+        ...transition,
+        outcome: "ownership-uncertain",
+        safeError: {
+          code: "provider_update_ownership_uncertain",
+          message: "Nanasa could not safely identify the old process",
+          retryable: false,
+        },
+      },
+    });
+    const restartedRun = run(restartedOwner, {
+      id: "run-new",
+      generation: 2,
+      providerUpdate: {
+        ...transition,
+        id: "update-two",
+        memberId: restartedOwner.memberId,
+        outcome: "restarted",
+        replacementRunId: "run-new",
+      },
+    });
+    const approvalRun = run(approvalOwner, {
+      status: "failed",
+      recoveryPhase: "failed",
+      providerUpdate: {
+        ...transition,
+        id: "update-three",
+        memberId: approvalOwner.memberId,
+        outcome: "approval-required",
+      },
+    });
+    const consent = launchConsentRequest({
+      id: "update-consent",
+      groupId: approvalOwner.groupId,
+      memberId: approvalOwner.memberId,
+    });
+
+    const items = deriveAttentionItems(
+      snapshot({
+        memberships: [uncertainOwner, restartedOwner, approvalOwner],
+        runs: [uncertainRun, restartedRun, approvalRun],
+      }),
+      { launchConsents: [consent] },
+    );
+
+    expect(itemOfKind(items, "health")).toMatchObject({
+      healthType: "ownership-uncertain",
+      title: "Reviewer needs help",
+      counted: true,
+      summary:
+        "Nanasa cannot safely confirm which process belongs to this agent. It will not stop anything automatically.",
+    });
+    expect(itemOfKind(items, "provider-update")).toMatchObject({
+      title: "Builder restarted",
+      counted: false,
+      category: "updates",
+    });
+    expect(itemOfKind(items, "launch-consent")).toMatchObject({
+      title: "Review before restarting Operator",
+      providerUpdate: true,
+      counted: true,
+    });
+    expect(items.filter((item) => item.kind === "response")).toHaveLength(0);
+    expect(attentionReviewCount(items)).toBe(2);
+  });
+
   it("projects each counted semantic kind and neutral unread metadata", () => {
     const responseMember = member("response");
     const failedMember = member("failed");

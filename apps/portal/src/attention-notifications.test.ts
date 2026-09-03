@@ -20,7 +20,7 @@ function item(
     sourceIdentity: `${kind}:source`,
     kind,
     category:
-      kind === "wait" || kind === "response"
+      kind === "launch-consent" || kind === "wait" || kind === "response"
         ? "response"
         : kind === "action"
           ? "progress"
@@ -85,6 +85,7 @@ afterEach(() => {
 
 describe("typed Attention notification policy", () => {
   it("maps every source kind and health subtype to its required tier", () => {
+    expect(attentionNotificationTier(item("launch-consent"))).toBe("urgent");
     expect(attentionNotificationTier(item("wait"))).toBe("urgent");
     expect(attentionNotificationTier(item("response"))).toBe("urgent");
     expect(attentionNotificationTier(item("health", "failed", { healthType: "failed" }))).toBe(
@@ -101,10 +102,18 @@ describe("typed Attention notification policy", () => {
 
   it("recognizes only the exact screen that owns an item", () => {
     const wait = item("wait");
+    const consent = item("launch-consent", "consent", { runId: undefined });
     const health = item("health", "health", { healthType: "failed" });
     const delivery = item("delivery");
     expect(
       routeOwnsAttentionItem({ kind: "global", destination: "attention" }, wait, new Set()),
+    ).toBe(true);
+    expect(
+      routeOwnsAttentionItem(
+        { kind: "group", groupId: "group-one", section: "terminals" },
+        consent,
+        new Set(),
+      ),
     ).toBe(true);
     expect(
       routeOwnsAttentionItem(

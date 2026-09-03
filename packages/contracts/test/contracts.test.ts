@@ -17,6 +17,12 @@ import {
   CreateGroupAgentCommandSchema,
   CreateWorktreeCommandSchema,
   CredentialProfileReferenceSchema,
+  CustomLaunchConsentDecisionResultSchema,
+  CustomLaunchConsentDecisionSchema,
+  CustomLaunchConsentErrorCodeSchema,
+  CustomLaunchConsentLifecycleEventPayloadSchema,
+  CustomLaunchConsentRequestSchema,
+  CustomLaunchConsentSubjectSchema,
   DeleteGroupResultSchema,
   DeliveryOutcomeSchema,
   ErrorPayloadSchema,
@@ -40,6 +46,7 @@ import {
   ReplyOpenWaitCommandSchema,
   RepositorySchema,
   StartAgentRunCommandSchema,
+  StartAgentRunResultSchema,
   SubmitMessageCommandSchema,
   TerminalCheckpointSchema,
   TerminalEndpointStatusSchema,
@@ -48,6 +55,98 @@ import {
   UpdateGroupCommandSchema,
   WorktreeSchema,
 } from "../src/index.js";
+
+const customLaunchSubject = {
+  repositoryIdentity: "repo_1234567890abcdef",
+  integrationId: "claude-wrapper",
+  providerKind: "claude-code",
+  adapterId: "nanasa.claude-code-v2",
+  adapterSecurityVersion: "2.0.0",
+  configuredCommand: ["sh", "bin/claude-wrapper"],
+  launcher: "append",
+  launcherFiles: [{ path: "bin/claude-wrapper", digest: "a".repeat(64) }],
+  workingDirectory: "/repository",
+  environmentNames: ["ANTHROPIC_BASE_URL", "NANASA_MCP_URL"],
+  credentialReference: { kind: "provider-managed" },
+  permissionFloor: "inherit",
+} as const;
+
+describe("custom launch consent contracts", () => {
+  it("accepts redacted stable subjects and rejects duplicate set members or runtime data", () => {
+    expect(CustomLaunchConsentSubjectSchema.parse(customLaunchSubject)).toEqual(
+      customLaunchSubject,
+    );
+    expect(
+      CustomLaunchConsentSubjectSchema.safeParse({
+        ...customLaunchSubject,
+        environmentNames: ["NANASA_MCP_URL", "NANASA_MCP_URL"],
+      }).success,
+    ).toBe(false);
+    expect(
+      CustomLaunchConsentSubjectSchema.safeParse({
+        ...customLaunchSubject,
+        runId: "run-specific",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("defines exact pending-request, decision, and approval-required start results", () => {
+    const request = CustomLaunchConsentRequestSchema.parse({
+      id: "consent-one",
+      repositoryIdentity: customLaunchSubject.repositoryIdentity,
+      groupId: "group-one",
+      agentId: "agent-one",
+      memberId: "claude.reviewer",
+      integrationId: customLaunchSubject.integrationId,
+      subjectDigest: "b".repeat(64),
+      configRevision: "c".repeat(64),
+      subject: customLaunchSubject,
+      state: "pending",
+      requestedAt: "2026-09-02T12:00:00.000Z",
+    });
+
+    expect(StartAgentRunResultSchema.parse({ status: "approval-required", request })).toMatchObject(
+      { status: "approval-required", request: { id: "consent-one" } },
+    );
+    expect(
+      CustomLaunchConsentDecisionResultSchema.parse({
+        request: {
+          ...request,
+          state: "approved",
+          decidedAt: "2026-09-02T12:01:00.000Z",
+          decidedBy: "operator-one",
+        },
+        decision: CustomLaunchConsentDecisionSchema.parse({
+          id: "receipt-one",
+          repositoryIdentity: customLaunchSubject.repositoryIdentity,
+          subjectDigest: request.subjectDigest,
+          principalId: "operator-one",
+          decision: "trusted",
+          decidedAt: "2026-09-02T12:01:00.000Z",
+        }),
+      }),
+    ).toMatchObject({
+      request: { state: "approved" },
+      decision: { id: "receipt-one", decision: "trusted" },
+    });
+    expect(CustomLaunchConsentErrorCodeSchema.parse("launch_consent_stale")).toBe(
+      "launch_consent_stale",
+    );
+    expect(
+      CustomLaunchConsentLifecycleEventPayloadSchema.parse({
+        state: "pending",
+        repositoryIdentity: request.repositoryIdentity,
+        subjectDigest: request.subjectDigest,
+        requestId: request.id,
+        groupId: request.groupId,
+        agentId: request.agentId,
+        memberId: request.memberId,
+        integrationId: request.integrationId,
+        configRevision: request.configRevision,
+      }),
+    ).not.toHaveProperty("subject");
+  });
+});
 
 describe("versioned control-plane contracts", () => {
   it("normalizes public errors to message, details, and code", () => {
@@ -825,12 +924,14 @@ describe("configuration contracts", () => {
         name: "GitHub Copilot",
         kind: "copilot",
         command: ["copilot"],
+        commandSource: "builtin",
       },
       opencode: {
         id: "opencode",
         name: "OpenCode",
         kind: "opencode",
         command: ["opencode"],
+        commandSource: "builtin",
       },
     },
   } as const;
@@ -873,6 +974,7 @@ describe("configuration contracts", () => {
             name: "Pi",
             kind: "pi",
             command: ["pi"],
+            commandSource: "builtin",
           },
         },
       }),
@@ -1037,6 +1139,7 @@ describe("configuration contracts", () => {
           name: "Pi",
           kind: "pi",
           command: ["pi"],
+          commandSource: "builtin",
           providerState: { scope: "membership" },
         },
       },
@@ -1051,6 +1154,7 @@ describe("configuration contracts", () => {
           name: "Copilot",
           kind: "copilot",
           command: ["copilot"],
+          commandSource: "builtin",
           providerState: { scope: "custom", path: "homes/{integrationId}/{agentId}" },
         },
       },

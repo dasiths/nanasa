@@ -1,4 +1,7 @@
-# Run the multi-coding-agents example
+---
+title: Run the multi-coding-agents example
+description: Operate the four-provider Nanasa dogfooding team
+---
 
 This example runs four coding-agent processes as one Nanasa-managed team. It is
 the repository's dogfooding configuration, but its configuration, commands,
@@ -113,6 +116,12 @@ a group-bound MCP credential and can use `nanasa.list_members` to discover its
 peers. Messages, progress, direct requests, and status remain scoped to the
 group represented by that credential.
 
+Engineer 2 uses repository launcher code, so its first start pauses for custom
+launch consent. Review `sh bin/claude-copilot`, the `append` strategy, and the
+displayed script digest, then select **Trust and start**. Nanasa reuses that
+approval on later launches while the consent subject and script contents remain
+unchanged.
+
 ## Run source development mode
 
 Use this target while changing the daemon or portal:
@@ -135,10 +144,16 @@ make -C examples/multi-coding-agents proxy-logs
 make -C examples/multi-coding-agents proxy-stop
 ```
 
-The Claude Code adapter recognizes the `make claude-copilot` wrapper and passes
-its generated arguments through the `CLAUDE_ARGS` Make variable. The target
-prepares the isolated Claude home and starts Claude Code against the LiteLLM
-endpoint.
+The configured `bin/claude-copilot` script checks gateway health, prepares the
+isolated Claude home, exports the Anthropic gateway variables, and executes
+Claude Code. Its `append` launcher strategy preserves generated prompt, MCP,
+model, settings, and reporter arguments as separate command arguments.
+
+The script resolves the example and product roots from its own location, so it
+does not depend on the provider's current directory. Nanasa hashes this checked-in
+script as part of the consent subject. Editing it requires another approval.
+Consent approves repository code; it does not sandbox the script or every file,
+interpreter, or executable that the script can load.
 
 ## Keep local state private
 

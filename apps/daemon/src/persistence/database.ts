@@ -1,7 +1,12 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { DATABASE_BASELINE_SQL, DATABASE_SCHEMA_VERSION } from "./schema.js";
+import {
+  DATABASE_BASELINE_SQL,
+  DATABASE_MIGRATION_10_TO_11_SQL,
+  DATABASE_MIGRATION_11_TO_12_SQL,
+  DATABASE_SCHEMA_VERSION,
+} from "./schema.js";
 
 export class DatabaseSchemaError extends Error {
   public constructor(
@@ -47,6 +52,32 @@ function initializeFreshDatabase(database: DatabaseSync): void {
   }
 }
 
+function applyMigration(database: DatabaseSync, fromVersion: number, sql: string): void {
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database.exec(sql);
+    database
+      .prepare("UPDATE schema_metadata SET schema_version = ? WHERE singleton = 1")
+      .run(fromVersion + 1);
+    database.exec(`PRAGMA user_version = ${fromVersion + 1}`);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function migrateDatabase(database: DatabaseSync, version: number): void {
+  let currentVersion = version;
+  if (currentVersion === 10) {
+    applyMigration(database, currentVersion, DATABASE_MIGRATION_10_TO_11_SQL);
+    currentVersion = 11;
+  }
+  if (currentVersion === 11) {
+    applyMigration(database, currentVersion, DATABASE_MIGRATION_11_TO_12_SQL);
+  }
+}
+
 function assertCurrentSchema(database: DatabaseSync): void {
   const version = schemaVersion(database);
   if (version !== DATABASE_SCHEMA_VERSION) {
@@ -78,6 +109,7 @@ export function openNanasaDatabase(path: string): DatabaseSync {
     const version = schemaVersion(database);
     const tables = userTableNames(database);
     if (version === 0 && tables.length === 0) initializeFreshDatabase(database);
+    else migrateDatabase(database, version);
     assertCurrentSchema(database);
     return database;
   } catch (error) {

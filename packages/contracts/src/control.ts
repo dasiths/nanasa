@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ProviderUpdateTransitionSchema } from "./provider-update-state.js";
 
 export const IdentifierSchema = z.string().trim().min(1).max(128);
 export const TimestampSchema = z.string().datetime({ offset: true });
@@ -201,6 +202,7 @@ export const AgentRunSchema = z
     effectiveModel: z.string().trim().min(1).max(256).optional(),
     nativeSessionId: IdentifierSchema.optional(),
     recoveryOutcome: z.enum(["retained", "resumed", "restarted", "failed"]).optional(),
+    providerUpdate: ProviderUpdateTransitionSchema.optional(),
     terminal: TerminalBindingSchema.optional(),
     startedAt: TimestampSchema,
     stoppedAt: TimestampSchema.optional(),

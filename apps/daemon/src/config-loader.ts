@@ -15,6 +15,7 @@ import {
   InstructionPathSchema,
   IntegrationConfigSchema,
   IntegrationIdSchema,
+  IntegrationLauncherSchema,
   MessageConfigSchema,
   type NanasaConfig,
   NanasaConfigSchema,
@@ -35,12 +36,19 @@ const MAX_CONFIG_BYTES = 256 * 1024;
 const MAX_CONFIG_DEPTH = 20;
 const MAX_CONFIG_NODES = 10_000;
 const CORE_TAG_PREFIX = "tag:yaml.org,2002:";
+const DEFAULT_INTEGRATION_COMMANDS = {
+  copilot: ["copilot"],
+  "claude-code": ["claude"],
+  pi: ["pi"],
+  opencode: ["opencode"],
+} as const;
 
 const RawIntegrationConfigSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
     kind: AgentKindSchema,
-    command: z.array(z.string().min(1).max(4_096)).min(1).max(64),
+    command: z.array(z.string().min(1).max(4_096)).min(1).max(64).optional(),
+    launcher: IntegrationLauncherSchema.optional(),
     cwd: z.string().min(1).max(4_096).optional(),
     providerState: ProviderStatePolicySchema.default({ scope: "membership" }),
     credentials: CredentialProfileReferenceSchema.default({ kind: "provider-managed" }),
@@ -54,7 +62,16 @@ const RawIntegrationConfigSchema = z
       .record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string().max(16_384))
       .default({}),
   })
-  .strict();
+  .strict()
+  .superRefine((integration, context) => {
+    if (integration.command === undefined && integration.launcher !== undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "Launcher configuration requires an explicit command",
+        path: ["launcher"],
+      });
+    }
+  });
 type RawIntegrationConfig = z.infer<typeof RawIntegrationConfigSchema>;
 
 export const AuthoredNanasaConfigSchema = z
@@ -167,7 +184,9 @@ function assertInsideRepository(repoRoot: string, configuredPath: string, label:
   }
   return realCandidate;
 }
-function validateIntegration(integration: RawIntegrationConfig): string | undefined {
+function validateIntegration(
+  integration: RawIntegrationConfig & { command: string[] },
+): string | undefined {
   if (integration.command.some((argument) => argument.includes("\0")))
     return "Command arguments may not contain NUL characters";
   for (const [name, value] of Object.entries(integration.environment)) {
@@ -287,6 +306,10 @@ export function parseNanasaConfigSource(
   }
   const integrations = Object.fromEntries(
     Object.entries(parsed.data.integrations).map(([id, raw]) => {
+      const command = raw.command ?? [...DEFAULT_INTEGRATION_COMMANDS[raw.kind]];
+      const commandSource = raw.command === undefined ? "builtin" : "custom";
+      const launcher =
+        commandSource === "custom" ? (raw.launcher ?? { providerArguments: "append" }) : undefined;
       let cwd: string;
       try {
         cwd = assertInsideRepository(repositoryPath, raw.cwd ?? ".", "Working directory");
@@ -301,12 +324,13 @@ export function parseNanasaConfigSource(
           ]),
         );
       }
-      const invalid = validateIntegration(raw);
+      const normalized = { ...raw, command, commandSource, launcher };
+      const invalid = validateIntegration(normalized);
       if (invalid !== undefined)
         throw new ConfigLoadError(
           errorStatus(paths, [diagnostic("invalid_integration", invalid, ["integrations", id])]),
         );
-      return [id, IntegrationConfigSchema.parse({ ...raw, id, cwd })];
+      return [id, IntegrationConfigSchema.parse({ ...normalized, id, cwd })];
     }),
   );
   const resolvedHomes = new Map<string, string>();

@@ -36,7 +36,6 @@ integrations:
   copilot:
     name: GitHub Copilot
     kind: copilot
-    command: [copilot]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
@@ -77,7 +76,6 @@ integrations:
   copilot:
     name: Shared GitHub Copilot
     kind: copilot
-    command: [copilot]
     cwd: .
     providerState: { scope: integration }
     credentials: { kind: provider-managed }
@@ -106,7 +104,6 @@ integrations:
   copilot:
     name: Custom GitHub Copilot
     kind: copilot
-    command: [copilot]
     cwd: .
     providerState:
       scope: custom

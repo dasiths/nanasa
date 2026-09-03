@@ -1,6 +1,7 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { ErrorPayloadSchema, type ErrorPayload } from "@nanasa/contracts";
 import { assertLoopbackControlHost } from "./authority-policy.js";
 import { discoverAndLoadNanasaConfig, loadNanasaConfig } from "./config-loader.js";
 import { isLoopbackHost, validateMcpEndpointConfiguration } from "./mcp-config.js";
@@ -15,6 +16,13 @@ export {
 } from "./config-loader.js";
 export { createDaemon } from "./server.js";
 export { DomainError, NanasaStore } from "./store.js";
+
+export function daemonStartupErrorPayload(error: unknown): ErrorPayload {
+  return ErrorPayloadSchema.parse({
+    message: error instanceof Error ? error.message : "The daemon could not be started",
+    code: "daemon_start_failed",
+  });
+}
 
 function configuredPort(value: string | undefined): number {
   const port = value === undefined ? 3210 : Number(value);
@@ -162,7 +170,7 @@ async function start(): Promise<void> {
 const entryPoint = process.argv[1];
 if (entryPoint !== undefined && import.meta.url === pathToFileURL(entryPoint).href) {
   start().catch((error: unknown) => {
-    console.error(error);
+    process.stderr.write(`${JSON.stringify(daemonStartupErrorPayload(error))}\n`);
     process.exitCode = 1;
   });
 }

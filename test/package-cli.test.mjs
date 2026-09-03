@@ -80,8 +80,9 @@ test("init creates one repository-local config without runtime state", () => {
   assert.match(original, /^integrations:$/m);
   assert.match(original, /^version: 2$/m);
   assert.doesNotMatch(original, /^agentProfiles:|^agentTypes:/m);
-  assert.match(original, /command: \[copilot\]/);
-  assert.match(original, /command: \[pi\]/);
+  assert.match(original, /^ {4}kind: copilot$/m);
+  assert.match(original, /^ {4}kind: pi$/m);
+  assert.doesNotMatch(original, /^ {4}command:/m);
   assert.doesNotMatch(original, /^\s+(adapter|capabilities|recovery|agentConfigHome):/m);
   assert.match(original, /^\s+providerState: \{ scope: membership \}$/m);
   assert.doesNotMatch(original, /packagefeedproxy|pkgs\.visualstudio|\/workspaces\/nanasa/);
@@ -123,6 +124,7 @@ test("help documents authenticated MCP enablement", () => {
   assert.match(result.stdout, /nanasa auth portal/);
   assert.match(result.stdout, /setup\s+Prepare repository-local integration configuration homes/);
   assert.match(result.stdout, /auth\s+Authenticate locally or inspect daemon auth state/);
+  assert.match(result.stdout, /trust consent extension/);
   assert.match(result.stdout, /doctor\s+Validate configuration, commands, and integration homes/);
   assert.match(result.stdout, /docs\s+Print the absolute path to the packaged documentation index/);
 });
@@ -273,6 +275,14 @@ test("completion is daemon-free and grammar failures use exit 2", () => {
   const usage = runCli(repository, ["group", "unknown"]);
   assert.equal(usage.status, 2);
   assert.match(usage.stderr, /Unknown command/);
+
+  const missingGroup = runCli(repository, ["run", "recover"]);
+  assert.equal(missingGroup.status, 2);
+  assert.match(missingGroup.stderr, /nanasa run recover <group-id> \[<agent-id>\]/);
+
+  const extraTarget = runCli(repository, ["run", "recover", "group", "agent", "extra"]);
+  assert.equal(extraTarget.status, 2);
+  assert.match(extraTarget.stderr, /nanasa run recover <group-id> \[<agent-id>\]/);
 });
 
 test("packed package installs cleanly and initializes config version 2", () => {
@@ -351,7 +361,8 @@ test("packed package installs cleanly and initializes config version 2", () => {
   const configPath = join(repository, ".nanasa", "config.yaml");
   const config = readFileSync(configPath, "utf8");
   assert.match(config, /^integrations:$/m);
-  assert.match(config, /command: \[copilot\]/);
+  assert.match(config, /^ {4}kind: copilot$/m);
+  assert.doesNotMatch(config, /^ {4}command:/m);
   assert.match(config, /^version: 2$/m);
   assert.doesNotMatch(config, /^agentProfiles:|^agentTypes:/m);
   assert.doesNotMatch(config, /^\s+(adapter|capabilities|recovery|agentConfigHome):/m);

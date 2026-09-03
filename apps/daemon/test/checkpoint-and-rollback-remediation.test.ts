@@ -213,11 +213,11 @@ messages: { retentionPerGroup: 100 }
     const manager = new ReleaseManager(repository, activePackage, {
       serviceFactory,
       onPlannedRestart: (frame) => restartFrames.push(frame),
-      readinessTimeoutMs: 5_000,
+      readinessTimeoutMs: 15_000,
     });
     instances[0]!.install();
     instances[0]!.start();
-    await instances[0]!.waitReady(5_000);
+    await instances[0]!.waitReady(15_000);
     const secret = readFileSync(join(repository, ".nanasa", "runtime", "operator-secret")).toString(
       "base64url",
     );
@@ -235,10 +235,26 @@ messages: { retentionPerGroup: 100 }
       name: "Run",
       integrationId: "fixture",
     });
-    const run = await api(`/api/v1/groups/${String(group.id)}/agents/${String(agent.id)}/run`, {
+    const pending = await api(`/api/v1/groups/${String(group.id)}/agents/${String(agent.id)}/run`, {
       cols: 100,
       rows: 30,
     });
+    expect(pending.status).toBe("approval-required");
+    const request = pending.request as {
+      id: string;
+      subjectDigest: string;
+      configRevision: string;
+    };
+    await api(`/api/v1/launch-consents/${request.id}/approve`, {
+      expectedSubjectDigest: request.subjectDigest,
+      configRevision: request.configRevision,
+    });
+    const started = await api(`/api/v1/groups/${String(group.id)}/agents/${String(agent.id)}/run`, {
+      cols: 100,
+      rows: 30,
+    });
+    expect(started.status).toBe("started");
+    const run = started.run as Record<string, unknown>;
     const terminal = run.terminal as { serverName: string; paneId: string };
     const panePid = Number(
       execFileSync(

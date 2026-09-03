@@ -51,7 +51,6 @@ integrations:
   copilot:
     name: GitHub Copilot
     kind: copilot
-    command: [copilot]
     cwd: .
     providerState: { scope: membership }
 groups:
@@ -110,7 +109,6 @@ integrations:
   copilot:
     name: GitHub Copilot
     kind: copilot
-    command: [copilot]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
@@ -162,10 +160,50 @@ that relative working directory into the assigned checkout.
 
 ## Configure integrations
 
-Each integration names a provider adapter and the direct command Nanasa starts.
-`kind` is one of `copilot`, `claude-code`, `pi`, or `opencode`. `cwd` must remain
-inside the repository. `environment` adds non-secret variables, but rejects
-unsafe loader variables. Do not store tokens there.
+Each integration names a provider adapter. `kind` is one of `copilot`,
+`claude-code`, `pi`, or `opencode`. Nanasa derives the default command from
+`kind`: `copilot`, `claude`, `pi`, or `opencode`. Omitted commands use that
+built-in launch without custom-command consent. An explicit `command` opts into
+a custom launcher and requires a provider argument strategy:
+
+```yaml
+integrations:
+  claude-copilot:
+    name: Claude Code via GitHub Copilot
+    kind: claude-code
+    command: [sh, bin/claude-copilot]
+    launcher:
+      providerArguments: append
+```
+
+Use `append` for scripts that accept normal positional arguments. Nanasa adds
+provider-generated prompt, MCP, model, settings, permission, and reporter
+arguments after the authored command without combining them into one string.
+Wrappers that cannot accept positional arguments can request one shell-escaped
+environment variable instead:
+
+```yaml
+launcher:
+  providerArguments:
+    kind: environment
+    name: PROVIDER_ARGS
+```
+
+The first custom launch pauses for operator consent before Nanasa creates a run,
+binds credentials, or writes private launch overlays. Consent records the exact
+command order, strategy, working directory, credential mode, permission floor,
+environment names, and active adapter identity. A regular command argument
+beneath the configuration root is also hashed. Nanasa rejects symlinked launcher
+files, and file changes require new consent.
+
+Custom-launch consent approves repository code; it is not a sandbox. An
+interpreter, shell `-c` command, PATH lookup, or script dependency can execute
+code not represented by one launcher file digest. A custom wrapper can also
+discard appended arguments. Nanasa therefore rejects a `read-only` custom
+launcher unless the adapter can enforce that floor independently.
+
+`cwd` must remain inside the repository. `environment` adds non-secret
+variables, but rejects unsafe loader variables. Do not store tokens there.
 
 `providerState` controls whether provider-owned authentication and sessions are
 per agent, shared by an integration, or placed at a custom relative path.
@@ -278,6 +316,7 @@ configuration. Important defaults include:
 | `repository.path` | `.` |
 | `repository.checkout` | `{ kind: current }` |
 | Instruction lists | `[]` |
+| Integration `command` | Built-in executable derived from `kind` |
 | `providerState` | `{ scope: membership }` |
 | `credentials` | `{ kind: provider-managed }` |
 | `model.resumePolicy` | `preserve-session` |

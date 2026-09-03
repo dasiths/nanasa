@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -8,13 +9,15 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadNanasaConfig } from "../src/config-loader.js";
+import { repositoryLauncherFiles } from "../src/custom-launch-consent-subject.js";
 import { resolveEffectiveAgentPrompt } from "../src/instruction-resolver.js";
 import { resolveProviderStateHome } from "../src/provider-state-home.js";
 import { ProviderStateRepository } from "../src/provider-state-repository.js";
@@ -166,9 +169,24 @@ describe("tested documentation examples", () => {
     } as const;
 
     expect(loaded.repoRoot).toBe(multiCodingAgentsRoot);
-    expect(loaded.config.integrations["claude-copilot"]?.command).toEqual([
-      "make",
-      "claude-copilot",
+    const claudeCopilot = loaded.config.integrations["claude-copilot"]!;
+    expect(claudeCopilot).toMatchObject({
+      command: ["sh", "bin/claude-copilot"],
+      commandSource: "custom",
+      launcher: { providerArguments: "append" },
+    });
+    const launcherBytes = readFileSync(join(multiCodingAgentsRoot, "bin", "claude-copilot"));
+    expect(
+      repositoryLauncherFiles({
+        repositoryRoot: loaded.repoRoot,
+        workingDirectory: claudeCopilot.cwd,
+        configuredCommand: claudeCopilot.command,
+      }),
+    ).toEqual([
+      {
+        path: "bin/claude-copilot",
+        digest: createHash("sha256").update(launcherBytes).digest("hex"),
+      },
     ]);
     for (const [agentId, rolePath] of Object.entries(expectedRolePaths)) {
       const prompt = resolveEffectiveAgentPrompt({
@@ -288,5 +306,80 @@ describe("tested documentation examples", () => {
     expect(() => new UserCredentialBroker({ configPath: credentialsPath })).toThrow(
       "Credential broker file must be a private bounded regular file",
     );
+  });
+
+  it("forwards Claude gateway arguments without depending on the caller cwd", () => {
+    const callerDirectory = temporaryGitRepository();
+    const fakeBin = join(callerDirectory, "fake-bin");
+    mkdirSync(fakeBin);
+    const fakeCommands = {
+      curl: `#!/bin/sh
+set -eu
+header=$(cat)
+test "$header" = "Authorization: Bearer test-secret"
+case "$*" in
+  *test-secret*) exit 91 ;;
+esac
+test "$6" = "--url"
+test "$7" = "http://gateway.test:4000/health/liveliness"
+`,
+      node: `#!/bin/sh
+set -eu
+test "$PWD" = "$EXPECTED_PRODUCT_ROOT"
+test "$1" = "scripts/prepare-claude-gateway-state.mjs"
+`,
+      claude: `#!/bin/sh
+set -eu
+    test "$ANTHROPIC_AUTH_TOKEN" = "test-secret"
+printf 'claude-pwd=%s\n' "$PWD"
+printf 'base=%s\n' "$ANTHROPIC_BASE_URL"
+printf 'model=%s\n' "$ANTHROPIC_MODEL"
+printf 'sonnet=%s\n' "$ANTHROPIC_DEFAULT_SONNET_MODEL"
+printf 'haiku=%s\n' "$ANTHROPIC_DEFAULT_HAIKU_MODEL"
+printf 'betas=%s\n' "$CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"
+for argument in "$@"; do
+  printf 'arg=%s\n' "$argument"
+done
+`,
+    } as const;
+    for (const [name, source] of Object.entries(fakeCommands)) {
+      const path = join(fakeBin, name);
+      writeFileSync(path, source, { mode: 0o700 });
+    }
+
+    const output = execFileSync(
+      "sh",
+      [
+        join(multiCodingAgentsRoot, "bin", "claude-copilot"),
+        "--permission-mode",
+        "plan mode",
+        "literal-*",
+        "",
+      ],
+      {
+        cwd: callerDirectory,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          EXPECTED_PRODUCT_ROOT: resolve(productRoot),
+          LITELLM_URL: "http://gateway.test:4000",
+          LITELLM_KEY: "test-secret",
+          COPILOT_MODEL: "model-test",
+        },
+      },
+    );
+
+    expect(output).toBe(`claude-pwd=${callerDirectory}
+base=http://gateway.test:4000
+model=model-test
+sonnet=model-test
+haiku=model-test
+betas=1
+arg=--permission-mode
+arg=plan mode
+arg=literal-*
+arg=
+`);
   });
 });

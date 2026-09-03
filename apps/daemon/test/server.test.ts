@@ -2,7 +2,13 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MAX_MESSAGE_TEXT_BYTES } from "@nanasa/contracts";
+import {
+  type CustomLaunchConsentDecisionResult,
+  type CustomLaunchConsentRequest,
+  type GroupMembership,
+  MAX_MESSAGE_TEXT_BYTES,
+  type StartAgentRunResult,
+} from "@nanasa/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { loadNanasaConfig } from "../src/config-loader.js";
@@ -10,6 +16,7 @@ import { createDaemon as createDaemonBase, type DaemonOptions } from "../src/ser
 
 const temporaryDirectories: string[] = [];
 const repositoryByDataPath = new Map<string, string>();
+const providerDigest = (character: string): string => character.repeat(64);
 
 async function createDaemon(options: DaemonOptions = {}) {
   const key = options.dataPath ?? `memory-${temporaryDirectories.length}`;
@@ -447,6 +454,72 @@ describe("daemon REST API", () => {
     await daemon.app.close();
   });
 
+  it("recovers group and single-agent runs through the provider update reconciler", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const group = (
+      await daemon.app.inject({ method: "POST", url: "/api/groups", payload: { name: "Team" } })
+    ).json<{ id: string }>();
+    const agent = (
+      await daemon.app.inject({
+        method: "POST",
+        url: `/api/groups/${group.id}/agents`,
+        payload: { name: "Engineer", integrationId: "copilot" },
+      })
+    ).json<{ id: string; memberId: string }>();
+    const { run } = daemon.store.createRunForMembership(group.id, agent.memberId);
+    const retained = {
+      runId: run.id,
+      generation: run.generation,
+      memberId: run.memberId,
+      providerId: "copilot",
+      previousSnapshotDigest: providerDigest("a"),
+      currentSnapshotDigest: providerDigest("a"),
+      status: "retained" as const,
+    };
+    const recover = vi
+      .spyOn(daemon.coordinator, "recoverProviderUpdates")
+      .mockResolvedValue({ outcomes: [retained] });
+
+    const groupResponse = await daemon.app.inject({
+      method: "POST",
+      url: `/api/groups/${group.id}/runs/recover`,
+      payload: { dryRun: true },
+    });
+    expect(groupResponse.statusCode).toBe(200);
+    expect(groupResponse.json()).toMatchObject({
+      groupId: group.id,
+      dryRun: true,
+      outcomes: [{ memberId: agent.memberId, status: "retained" }],
+    });
+    expect(recover).toHaveBeenNthCalledWith(
+      1,
+      [expect.objectContaining({ id: run.id, generation: run.generation })],
+      { dryRun: true, forceIndeterminate: false },
+    );
+
+    const agentResponse = await daemon.app.inject({
+      method: "POST",
+      url: `/api/groups/${group.id}/agents/${agent.id}/run/recover`,
+      payload: { forceIndeterminate: false },
+    });
+    expect(agentResponse.statusCode).toBe(200);
+    expect(agentResponse.json()).toMatchObject({ runId: run.id, status: "retained" });
+    expect(recover).toHaveBeenNthCalledWith(
+      2,
+      [expect.objectContaining({ id: run.id, generation: run.generation })],
+      { dryRun: false, forceIndeterminate: false },
+    );
+
+    const invalid = await daemon.app.inject({
+      method: "POST",
+      url: `/api/groups/${group.id}/runs/recover`,
+      payload: { dryRun: true, restartEverything: true },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json()).toMatchObject({ code: "validation_error" });
+    await daemon.app.close();
+  });
+
   it("removes semantic routes and keeps interrupt as a terminal lifecycle command", async () => {
     const daemon = await createDaemon({ dataPath: ":memory:" });
     const interrupt = vi.spyOn(daemon.coordinator, "interrupt").mockResolvedValue(undefined);
@@ -815,6 +888,181 @@ describe("daemon REST API", () => {
     });
     expect(unauthorizedControl.statusCode).toBe(400);
     expect(daemon.store.getSnapshot().messages).toHaveLength(0);
+    await daemon.app.close();
+  });
+});
+
+describe("custom launch consent operator API", () => {
+  async function createPendingConsent(daemon: Awaited<ReturnType<typeof createDaemon>>) {
+    const group = (
+      await daemon.app.inject({
+        method: "POST",
+        url: "/api/v1/groups",
+        payload: { name: "Consent Team" },
+      })
+    ).json<{ id: string }>();
+    const membership = (
+      await daemon.app.inject({
+        method: "POST",
+        url: `/api/v1/groups/${group.id}/agents`,
+        payload: { name: "Consent Agent", integrationId: "copilot" },
+      })
+    ).json<GroupMembership>();
+    const start = await daemon.app.inject({
+      method: "POST",
+      url: `/api/v1/groups/${group.id}/agents/${membership.id}/run`,
+      payload: { cols: 120, rows: 40 },
+    });
+    expect(start.statusCode).toBe(201);
+    const result = start.json<StartAgentRunResult>();
+    expect(result.status).toBe("approval-required");
+    if (result.status !== "approval-required") throw new Error("Expected pending consent");
+    return { group, membership, request: result.request };
+  }
+
+  function exact(request: CustomLaunchConsentRequest) {
+    return {
+      expectedSubjectDigest: request.subjectDigest,
+      configRevision: request.configRevision,
+    };
+  }
+
+  it("lists, inspects, approves, revokes, cancels, and denies without auto-starting", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const pending = await createPendingConsent(daemon);
+
+    const listed = await daemon.app.inject({
+      method: "GET",
+      url: "/api/v1/launch-consents?state=pending",
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json<CustomLaunchConsentRequest[]>()).toEqual([
+      expect.objectContaining({ id: pending.request.id, state: "pending" }),
+    ]);
+    expect(
+      (
+        await daemon.app.inject({
+          method: "GET",
+          url: `/api/v1/launch-consents/${pending.request.id}`,
+        })
+      ).json<CustomLaunchConsentRequest>(),
+    ).toMatchObject({ id: pending.request.id, subjectDigest: pending.request.subjectDigest });
+
+    const approval = await daemon.app.inject({
+      method: "POST",
+      url: `/api/v1/launch-consents/${pending.request.id}/approve`,
+      payload: exact(pending.request),
+    });
+    expect(approval.statusCode).toBe(200);
+    const approved = approval.json<CustomLaunchConsentDecisionResult>();
+    expect(approved).toMatchObject({
+      request: { id: pending.request.id, state: "approved" },
+      decision: { decision: "trusted", subjectDigest: pending.request.subjectDigest },
+    });
+    expect(daemon.store.getSnapshot().runs).toHaveLength(0);
+
+    const revoked = await daemon.app.inject({
+      method: "POST",
+      url: `/api/v1/trust/${approved.decision.id}/revoke`,
+      payload: { expectedSubjectDigest: pending.request.subjectDigest },
+    });
+    expect(revoked.statusCode).toBe(200);
+    expect(revoked.json()).toMatchObject({ decision: "revoked" });
+
+    const retry = await daemon.app.inject({
+      method: "POST",
+      url: `/api/v1/groups/${pending.group.id}/agents/${pending.membership.id}/run`,
+      payload: { cols: 120, rows: 40 },
+    });
+    const cancellable = retry.json<StartAgentRunResult>();
+    expect(cancellable.status).toBe("approval-required");
+    if (cancellable.status !== "approval-required") throw new Error("Expected replacement consent");
+    const cancelled = await daemon.app.inject({
+      method: "POST",
+      url: `/api/v1/launch-consents/${cancellable.request.id}/cancel`,
+      payload: exact(cancellable.request),
+    });
+    expect(cancelled.json()).toMatchObject({ state: "cancelled" });
+
+    const denyRetry = await daemon.app.inject({
+      method: "POST",
+      url: `/api/v1/groups/${pending.group.id}/agents/${pending.membership.id}/run`,
+      payload: { cols: 120, rows: 40 },
+    });
+    const deniable = denyRetry.json<StartAgentRunResult>();
+    if (deniable.status !== "approval-required") throw new Error("Expected deniable consent");
+    const denied = await daemon.app.inject({
+      method: "POST",
+      url: `/api/v1/launch-consents/${deniable.request.id}/deny`,
+      payload: exact(deniable.request),
+    });
+    expect(denied.json()).toMatchObject({
+      request: { state: "denied" },
+      decision: { decision: "denied" },
+    });
+    const deniedStart = (
+      await daemon.app.inject({
+        method: "POST",
+        url: `/api/v1/groups/${pending.group.id}/agents/${pending.membership.id}/run`,
+        payload: { cols: 120, rows: 40 },
+      })
+    ).json<StartAgentRunResult>();
+    expect(deniedStart).toMatchObject({ status: "denied", request: { id: deniable.request.id } });
+
+    const bounds = daemon.store.eventBounds();
+    const consentEvents = daemon.store
+      .listEventPage(0, bounds.highWater, 100)
+      .filter((event) => event.type.startsWith("launch-consent."));
+    expect(consentEvents.map((event) => event.type)).toEqual([
+      "launch-consent.pending",
+      "launch-consent.approved",
+      "launch-consent.revoked",
+      "launch-consent.pending",
+      "launch-consent.cancelled",
+      "launch-consent.pending",
+      "launch-consent.denied",
+    ]);
+    expect(JSON.stringify(consentEvents.map((event) => event.payload))).not.toContain("command");
+    expect(JSON.stringify(consentEvents.map((event) => event.payload))).not.toContain(
+      "environment",
+    );
+
+    expect(
+      (await daemon.app.inject({ method: "POST", url: "/api/v1/auth/revoke", payload: {} }))
+        .statusCode,
+    ).toBe(204);
+    expect(
+      (await daemon.app.inject({ method: "GET", url: "/api/v1/launch-consents" })).statusCode,
+    ).toBe(401);
+    await daemon.app.close();
+  });
+
+  it("marks approval stale when the current integration changes", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    const pending = await createPendingConsent(daemon);
+    const changed = await daemon.app.inject({
+      method: "PATCH",
+      url: `/api/v1/groups/${pending.group.id}/agents/${pending.membership.id}`,
+      payload: { integrationId: "claude-copilot" },
+    });
+    expect(changed.statusCode).toBe(200);
+
+    const stale = await daemon.app.inject({
+      method: "POST",
+      url: `/api/v1/launch-consents/${pending.request.id}/approve`,
+      payload: exact(pending.request),
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ code: "launch_consent_stale" });
+    expect(daemon.store.findLaunchConsentRequest(pending.request.id)?.state).toBe("stale");
+    expect(daemon.store.getSnapshot().runs).toHaveLength(0);
+    const bounds = daemon.store.eventBounds();
+    expect(
+      daemon.store
+        .listEventPage(0, bounds.highWater, 100)
+        .filter((event) => event.aggregateId === pending.request.id)
+        .map((event) => event.type),
+    ).toEqual(["launch-consent.pending", "launch-consent.stale"]);
     await daemon.app.close();
   });
 });

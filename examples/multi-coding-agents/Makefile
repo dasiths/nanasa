@@ -64,8 +64,7 @@ help:
 		'  make proxy-start     Start the local LiteLLM proxy' \
 		'  make proxy-stop      Stop the local LiteLLM proxy' \
 		'  make proxy-logs      Follow proxy logs' \
-		'  make proxy-status    Check proxy health and models' \
-		'  make claude-copilot  Start Claude Code through the proxy'
+		'  make proxy-status    Check proxy health and models'
 
 .PHONY: install package init reset-alpha setup doctor start run first-run dev
 
@@ -85,6 +84,7 @@ setup: package
 	$(NANASA) setup
 
 doctor: package
+	sh -n $(EXAMPLE_ROOT)/bin/claude-copilot
 	$(NANASA) doctor
 
 start: package
@@ -141,7 +141,7 @@ auth-opencode: setup
 auth-litellm: proxy-build
 	$(COMPOSE) run --rm --entrypoint python litellm -c 'from litellm.llms.github_copilot.authenticator import Authenticator; Authenticator().get_access_token(); print("LiteLLM GitHub Copilot authentication saved.")'
 
-.PHONY: proxy-build proxy-start proxy-stop proxy-logs proxy-status claude-copilot
+.PHONY: proxy-build proxy-start proxy-stop proxy-logs proxy-status
 
 proxy-build:
 	$(COMPOSE) build litellm
@@ -160,15 +160,3 @@ proxy-status:
 	@printf '\n'
 	@curl --fail --silent --show-error -H 'Authorization: Bearer $(LITELLM_KEY)' $(LITELLM_URL)/v1/models
 	@printf '\n'
-
-claude-copilot:
-	@curl --fail --silent --show-error -H 'Authorization: Bearer $(LITELLM_KEY)' $(LITELLM_URL)/health/liveliness >/dev/null || \
-		{ printf '%s\n' 'LiteLLM is not ready. Run make proxy-start first.' >&2; exit 1; }
-	@node $(PRODUCT_ROOT)/scripts/prepare-claude-gateway-state.mjs
-	ANTHROPIC_BASE_URL=$(LITELLM_URL) \
-	ANTHROPIC_AUTH_TOKEN=$(LITELLM_KEY) \
-	ANTHROPIC_MODEL=$(COPILOT_MODEL) \
-	ANTHROPIC_DEFAULT_SONNET_MODEL=$(COPILOT_MODEL) \
-	ANTHROPIC_DEFAULT_HAIKU_MODEL=$(COPILOT_MODEL) \
-	CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
-	claude $(CLAUDE_ARGS)

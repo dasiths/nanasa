@@ -1,3 +1,49 @@
+export const PROVIDER_UPDATE_TRANSITION_SCHEMA_SQL = `
+  CREATE TABLE provider_update_transitions (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    member_id TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    previous_snapshot_digest TEXT NOT NULL REFERENCES provider_snapshots(digest)
+      CHECK (length(previous_snapshot_digest) = 64),
+    current_snapshot_digest TEXT NOT NULL REFERENCES provider_snapshots(digest)
+      CHECK (length(current_snapshot_digest) = 64),
+    state TEXT NOT NULL CHECK (state IN ('pending', 'in-progress', 'completed')),
+    outcome TEXT CHECK (outcome IN (
+      'restarted', 'approval-required', 'ownership-uncertain', 'failed'
+    )),
+    replacement_run_id TEXT REFERENCES runs(id),
+    safe_error_code TEXT CHECK (safe_error_code IS NULL OR length(safe_error_code) BETWEEN 1 AND 100),
+    safe_error_message TEXT CHECK (safe_error_message IS NULL OR length(safe_error_message) BETWEEN 1 AND 1000),
+    safe_error_retryable INTEGER CHECK (safe_error_retryable IN (0, 1)),
+    detected_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    FOREIGN KEY (run_id, generation) REFERENCES runs(id, generation),
+    UNIQUE (run_id, generation, previous_snapshot_digest, current_snapshot_digest),
+    CHECK (previous_snapshot_digest != current_snapshot_digest),
+    CHECK (
+      (state = 'completed' AND outcome IS NOT NULL AND completed_at IS NOT NULL) OR
+      (state != 'completed' AND outcome IS NULL AND completed_at IS NULL)
+    ),
+    CHECK (
+      (outcome = 'restarted' AND replacement_run_id IS NOT NULL) OR
+      (outcome IS NULL OR outcome != 'restarted')
+    ),
+    CHECK (
+      (safe_error_code IS NULL AND safe_error_message IS NULL AND safe_error_retryable IS NULL) OR
+      (safe_error_code IS NOT NULL AND safe_error_message IS NOT NULL AND safe_error_retryable IS NOT NULL)
+    )
+  ) STRICT;
+
+  CREATE INDEX provider_update_transitions_member_state
+    ON provider_update_transitions (member_id, state, detected_at);
+  CREATE INDEX provider_update_transitions_replacement
+    ON provider_update_transitions (replacement_run_id)
+    WHERE replacement_run_id IS NOT NULL;
+`;
+
 export const PROVIDER_PLATFORM_SCHEMA_SQL = `
   CREATE UNIQUE INDEX runs_target_identity ON runs (id, generation);
 
@@ -357,4 +403,5 @@ export const PROVIDER_PLATFORM_SCHEMA_SQL = `
       (binding_id, reporter_session_id, reporter_epoch, source_sequence);
   CREATE INDEX provider_reporter_sessions_binding
     ON provider_reporter_sessions (binding_id, state, reporter_epoch);
+  ${PROVIDER_UPDATE_TRANSITION_SCHEMA_SQL}
 `;

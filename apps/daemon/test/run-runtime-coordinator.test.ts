@@ -22,7 +22,169 @@ const runningRun: AgentRun = {
   startedAt: "2026-08-09T12:00:00.000Z",
 };
 
+function consentRequest(memberId = "alpha", state: "pending" | "denied" = "pending") {
+  return {
+    id: `launch-consent-${memberId}`,
+    repositoryIdentity: "repository-one",
+    groupId: "group-one",
+    agentId: `agent-${memberId}`,
+    memberId,
+    integrationId: "custom-provider",
+    subjectDigest: "a".repeat(64),
+    configRevision: "b".repeat(64),
+    subject: {
+      repositoryIdentity: "repository-one",
+      integrationId: "custom-provider",
+      providerKind: "pi" as const,
+      adapterId: "pi-adapter",
+      adapterSecurityVersion: "1.0.0",
+      configuredCommand: ["sh", "bin/custom-pi"],
+      launcher: "append" as const,
+      launcherFiles: [],
+      workingDirectory: "/workspace",
+      environmentNames: [],
+      credentialReference: { kind: "provider-managed" as const },
+      permissionFloor: "inherit" as const,
+    },
+    state,
+    requestedAt: "2026-09-02T00:00:00.000Z",
+    ...(state === "denied"
+      ? { decidedAt: "2026-09-02T00:01:00.000Z", decidedBy: "operator-one" }
+      : {}),
+  };
+}
+
 describe("RunRuntimeCoordinator", () => {
+  it("requires custom launch approval before starting the runtime", async () => {
+    const request = consentRequest();
+    const startRun = vi.fn();
+    const coordinator = new RunRuntimeCoordinator(
+      {} as never,
+      { startRun, close: vi.fn(async () => undefined) } as never,
+      { close: vi.fn(async () => undefined) } as never,
+      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
+      {
+        reconcileIntervalMs: 60_000,
+        launchConsent: {
+          resolve: vi.fn(async () => ({ status: "approval-required" as const, request })),
+        },
+      },
+    );
+
+    try {
+      await expect(
+        coordinator.startRun("group-one", "alpha", { cols: 120, rows: 40 }),
+      ).resolves.toMatchObject({ status: "approval-required", request: { id: request.id } });
+      expect(startRun).not.toHaveBeenCalled();
+    } finally {
+      await coordinator.close();
+    }
+  });
+
+  it("starts a trusted custom launch and returns a typed started result", async () => {
+    const startRun = vi.fn(async () => runningRun);
+    const coordinator = new RunRuntimeCoordinator(
+      {} as never,
+      {
+        startRun,
+        ensureViewSession: vi.fn(async () => "view"),
+        close: vi.fn(async () => undefined),
+      } as never,
+      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
+      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
+      {
+        reconcileIntervalMs: 60_000,
+        launchConsent: { resolve: vi.fn(async () => ({ status: "trusted" as const })) },
+      },
+    );
+    try {
+      await expect(
+        coordinator.startRun("group-one", "alpha", { cols: 120, rows: 40 }),
+      ).resolves.toMatchObject({ status: "started", run: { id: runningRun.id } });
+      expect(startRun).toHaveBeenCalledOnce();
+    } finally {
+      await coordinator.close();
+    }
+  });
+
+  it("gates restart and restart-all before stopping current runs", async () => {
+    const request = consentRequest();
+    const stopRun = vi.fn();
+    const runtimeStop = vi.fn();
+    const store = {
+      getRun: vi.fn(() => runningRun),
+      getActiveRun: vi.fn(() => runningRun),
+      getGroup: vi.fn(() => ({ id: "group-one" })),
+      listGroupRunsRequiringStop: vi.fn(() => [runningRun]),
+    };
+    const coordinator = new RunRuntimeCoordinator(
+      store as never,
+      { stopRun: runtimeStop, close: vi.fn(async () => undefined) } as never,
+      { stop: stopRun, close: vi.fn(async () => undefined) } as never,
+      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
+      {
+        reconcileIntervalMs: 60_000,
+        launchConsent: {
+          resolve: vi.fn(async () => ({ status: "approval-required" as const, request })),
+        },
+      },
+    );
+    try {
+      await expect(
+        coordinator.restartRun(runningRun.id, { cols: 120, rows: 40 }),
+      ).resolves.toMatchObject({ status: "approval-required", request: { id: request.id } });
+      await expect(
+        coordinator.restartAll("group-one", { cols: 120, rows: 40 }),
+      ).resolves.toMatchObject({
+        outcomes: [{ memberId: "alpha", status: "approval-required" }],
+      });
+      expect(stopRun).not.toHaveBeenCalled();
+      expect(runtimeStop).not.toHaveBeenCalled();
+    } finally {
+      await coordinator.close();
+    }
+  });
+
+  it("returns approval-required and denied outcomes from start-all without launching", async () => {
+    const startRun = vi.fn();
+    const store = {
+      getGroupStartAllResult: vi.fn(() => undefined),
+      listActiveMemberships: vi.fn(() => [{ memberId: "alpha" }, { memberId: "beta" }]),
+      getActiveRun: vi.fn(() => undefined),
+      getLatestRunForMembership: vi.fn(() => undefined),
+      recordGroupStartAllResult: vi.fn((result: unknown) => result),
+    };
+    const coordinator = new RunRuntimeCoordinator(
+      store as never,
+      { startRun, close: vi.fn(async () => undefined) } as never,
+      { close: vi.fn(async () => undefined) } as never,
+      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
+      {
+        reconcileIntervalMs: 60_000,
+        launchConsent: {
+          resolve: vi.fn(async (_groupId: string, memberId: string) =>
+            memberId === "alpha"
+              ? { status: "approval-required" as const, request: consentRequest(memberId) }
+              : { status: "denied" as const, request: consentRequest(memberId, "denied") },
+          ),
+        },
+      },
+    );
+    try {
+      await expect(
+        coordinator.startAll("group-one", { cols: 120, rows: 40 }),
+      ).resolves.toMatchObject({
+        outcomes: [
+          { memberId: "alpha", status: "approval-required" },
+          { memberId: "beta", status: "denied" },
+        ],
+      });
+      expect(startRun).not.toHaveBeenCalled();
+    } finally {
+      await coordinator.close();
+    }
+  });
+
   it("stops the gateway and removes the view session before killing the owner pane", async () => {
     const operations: string[] = [];
     const stoppedRun: AgentRun = {
@@ -171,6 +333,70 @@ describe("RunRuntimeCoordinator", () => {
     }
   });
 
+  it("leaves unapproved automatic recovery failed without replacing the run", async () => {
+    const store = new NanasaStore(":memory:");
+    const group = store.createGroup({ name: "Consent recovery" });
+    const profile = store.createInternalAgentProfile({
+      name: "Custom Pi",
+      agentType: "custom-pi",
+      kind: "pi",
+      command: "sh",
+      args: ["bin/custom-pi"],
+      environment: {},
+    });
+    store.addMembership(group.id, {
+      memberId: "alpha",
+      agentProfileId: profile.id,
+      alias: "Alpha",
+    });
+    const starting = store.createRunForMembership(group.id, "alpha").run;
+    const run = store.updateRunStatus(starting.id, "running", {
+      terminal: runningRun.terminal,
+    });
+    const recoverRun = vi.fn();
+    const runtime = {
+      reconcile: vi.fn(async () => undefined),
+      observeRun: vi.fn(async () => ({ state: "missing" })),
+      recoverRun,
+      removeStaleViewSessions: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    };
+    const coordinator = new RunRuntimeCoordinator(
+      store,
+      runtime as never,
+      {
+        reconcile: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+      } as never,
+      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
+      {
+        reconcileIntervalMs: 60_000,
+        launchConsent: {
+          resolve: vi.fn(),
+          resolveForAutomaticRecovery: vi.fn(async () => ({
+            status: "approval-required" as const,
+          })),
+        },
+      },
+    );
+    try {
+      await coordinator.reconcile();
+      await coordinator.reconcile();
+      expect(store.getRun(run.id)).toMatchObject({
+        generation: 1,
+        status: "failed",
+        desiredState: "running",
+        recoveryPhase: "failed",
+        recoveryReason: "launch_consent_required",
+      });
+      expect(recoverRun).not.toHaveBeenCalled();
+      expect(store.getLatestRunForMembership(group.id, "alpha")?.id).toBe(run.id);
+    } finally {
+      await coordinator.close();
+      store.close();
+    }
+  });
+
   it("never launches or replaces a run after an indeterminate observation", async () => {
     const recoverRun = vi.fn();
     const runtime = {
@@ -197,6 +423,91 @@ describe("RunRuntimeCoordinator", () => {
       await coordinator.reconcile(true);
       await coordinator.reconcile(true);
       expect(recoverRun).not.toHaveBeenCalled();
+    } finally {
+      await coordinator.close();
+    }
+  });
+
+  it("reconciles provider updates before historical process observation", async () => {
+    const operations: string[] = [];
+    const observeRun = vi.fn(async () => {
+      operations.push("process:observe");
+      throw new Error("unsupported historical snapshot must not be parsed");
+    });
+    const providerUpdates = {
+      reconcile: vi.fn(async (runs: readonly AgentRun[]) => {
+        operations.push("provider-update:reconcile");
+        expect(runs).toEqual([runningRun]);
+        return { handledRunIds: new Set([runningRun.id]) };
+      }),
+    };
+    const coordinator = new RunRuntimeCoordinator(
+      {
+        listActiveRuns: vi.fn(() => []),
+        listDesiredRunningRuns: vi.fn(() => [runningRun]),
+      } as never,
+      {
+        reconcile: vi.fn(async () => operations.push("tmux:reconcile")),
+        observeRun,
+        removeStaleViewSessions: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+      } as never,
+      {
+        reconcile: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+      } as never,
+      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
+      { reconcileIntervalMs: 60_000, providerUpdates },
+    );
+    try {
+      await coordinator.reconcile(true);
+      expect(operations).toEqual(["tmux:reconcile", "provider-update:reconcile"]);
+      expect(observeRun).not.toHaveBeenCalled();
+    } finally {
+      await coordinator.close();
+    }
+  });
+
+  it("uses normal process observation after a current snapshot is retained", async () => {
+    const currentRun: AgentRun = { ...runningRun, recoveryPhase: "recovered" };
+    const operations: string[] = [];
+    const observeRun = vi.fn(async () => {
+      operations.push("process:observe");
+      return { state: "present" as const };
+    });
+    const providerUpdates = {
+      reconcile: vi.fn(async () => {
+        operations.push("provider-update:reconcile");
+        return { handledRunIds: new Set<string>() };
+      }),
+    };
+    const coordinator = new RunRuntimeCoordinator(
+      {
+        listActiveRuns: vi.fn(() => []),
+        listDesiredRunningRuns: vi.fn(() => [currentRun]),
+      } as never,
+      {
+        reconcile: vi.fn(async () => operations.push("tmux:reconcile")),
+        observeRun,
+        removeStaleViewSessions: vi.fn(async () => undefined),
+        ensureViewSession: vi.fn(async () => "view"),
+        close: vi.fn(async () => undefined),
+      } as never,
+      {
+        reconcile: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+      } as never,
+      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
+      { reconcileIntervalMs: 60_000, providerUpdates },
+    );
+    try {
+      await coordinator.reconcile();
+      expect(operations).toEqual([
+        "tmux:reconcile",
+        "provider-update:reconcile",
+        "process:observe",
+      ]);
+      expect(observeRun).toHaveBeenCalledWith(currentRun);
     } finally {
       await coordinator.close();
     }

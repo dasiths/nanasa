@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CLI_COMMAND_REGISTRY } from "../src/cli/command-registry.js";
-import { portalBootstrapUrl, runControlCli } from "../src/cli/control.js";
+import {
+  portalBootstrapUrl,
+  providerRecoveryExitCode,
+  providerRecoveryOutput,
+  runControlCli,
+} from "../src/cli/control.js";
 import {
   CONTROL_ROUTE_REGISTRY,
   generateControlOpenApi,
@@ -98,6 +103,7 @@ describe("typed control facade registries", () => {
         "checkout",
         "completion",
         "config",
+        "consent",
         "console",
         "daemon",
         "doctor",
@@ -134,6 +140,16 @@ describe("typed control facade registries", () => {
       "rollback",
       "remove",
     ]);
+    expect(
+      CLI_COMMAND_REGISTRY.filter((command) => command.family === "consent").map(
+        (command) => command.command,
+      ),
+    ).toEqual(["list", "get", "approve", "deny", "cancel", "revoke"]);
+    expect(
+      CONTROL_ROUTE_REGISTRY.filter((route) => route.family === "launch-consent").every(
+        (route) => route.principal === "operator",
+      ),
+    ).toBe(true);
     expect(
       CLI_COMMAND_REGISTRY.filter((command) => command.family === "service").map(
         (command) => command.command,
@@ -244,6 +260,42 @@ describe("typed control facade registries", () => {
     });
   });
 
+  it("routes and summarizes provider recovery with distinct outcome exits", () => {
+    const recovery = CLI_COMMAND_REGISTRY.find((command) => command.id === "run.recover");
+    expect(recovery?.path?.(["group-one"])).toBe("/api/v1/groups/group-one/runs/recover");
+    expect(recovery?.path?.(["group-one", "agent-one"])).toBe(
+      "/api/v1/groups/group-one/agents/agent-one/run/recover",
+    );
+
+    const outcomes = {
+      groupId: "group-one",
+      dryRun: false,
+      outcomes: [
+        { memberId: "project-manager", status: "retained" },
+        { memberId: "engineer", status: "restarted" },
+        { memberId: "reviewer", status: "approval-required" },
+      ],
+    };
+    expect(providerRecoveryOutput(outcomes, false)).toContain("project-manager  kept running");
+    expect(providerRecoveryOutput(outcomes, false)).toContain(
+      "engineer         restarted (agent tools changed)",
+    );
+    expect(providerRecoveryOutput(outcomes, true)).toContain("would restart");
+    expect(providerRecoveryExitCode(outcomes)).toBe(3);
+    expect(providerRecoveryExitCode({ memberId: "reviewer", status: "ownership-uncertain" })).toBe(
+      1,
+    );
+    expect(
+      providerRecoveryExitCode({
+        outcomes: [
+          { memberId: "reviewer", status: "approval-required" },
+          { memberId: "engineer", status: "failed" },
+        ],
+      }),
+    ).toBe(1);
+    expect(providerRecoveryExitCode({ memberId: "engineer", status: "restarted" })).toBe(0);
+  });
+
   it("keeps MCP authority semantic and excludes topology, raw terminal, extension, and permission tools", () => {
     const names = MCP_TOOL_REGISTRY.map((tool) => tool.name);
     expect(names).toContain("nanasa.get_delivery");
@@ -256,6 +308,8 @@ describe("typed control facade registries", () => {
         "nanasa.send_keys",
         "nanasa.install_extension",
         "nanasa.approve_permission",
+        "nanasa.approve_launch_consent",
+        "nanasa.deny_launch_consent",
       ]),
     );
     const ownWaits = MCP_TOOL_REGISTRY.find((tool) => tool.name === "nanasa.list_own_waits");

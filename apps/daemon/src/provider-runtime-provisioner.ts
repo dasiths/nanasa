@@ -7,6 +7,7 @@ import type {
   GroupMembership,
   NativeRecoveryPolicy,
   NativeSessionReference,
+  ProviderArgumentStrategy,
   ProviderStateBinding,
   ProviderStatePolicy,
   RunProviderBinding,
@@ -30,7 +31,6 @@ import {
   type RepositoryLaunchManifest,
   RepositoryTrustService,
 } from "./repository-trust-service.js";
-import { DomainError } from "./store.js";
 import { UserCredentialBroker } from "./user-credential-broker.js";
 
 export interface ProviderIntegrationPolicy {
@@ -38,6 +38,7 @@ export interface ProviderIntegrationPolicy {
   readonly credentials: CredentialProfileReference;
   readonly model: DesiredModelPolicy;
   readonly nativeRecovery: NativeRecoveryPolicy;
+  readonly providerArgumentStrategy?: ProviderArgumentStrategy;
 }
 
 export interface AgentRuntimeConfiguration {
@@ -99,14 +100,6 @@ export class AgentRuntimeProvisioner {
     const snapshot = await this.#bindings.resolveActiveSnapshot(profile.kind);
     const evaluator = this.#evaluator(snapshot);
     const configuredCommand = Object.freeze([profile.command, ...profile.args]);
-    if (!evaluator.matchesConfiguredCommand(configuredCommand)) {
-      throw new DomainError(
-        "provider_command_unrecognized",
-        "The configured command is not supported by the active provider",
-        409,
-        { configuredCommand, snapshotDigest: snapshot.digest },
-      );
-    }
     const stateBinding = this.#states.resolve({
       membershipId: membership.id,
       integrationId: profile.agentType,
@@ -155,6 +148,9 @@ export class AgentRuntimeProvisioner {
       ...(effectivePrompt === undefined ? {} : { prompt: effectivePrompt }),
       readOnly: permissionFloor === "read-only",
       configuredCommand,
+      ...(policy.providerArgumentStrategy === undefined
+        ? {}
+        : { providerArgumentStrategy: policy.providerArgumentStrategy }),
       ...(desiredModel === undefined ? {} : { model: desiredModel }),
       ...(normalizedSession === undefined ? {} : { nativeSession: normalizedSession }),
       enforceConfiguredModelOnResume: policy.model.resumePolicy === "enforce-configured",
@@ -222,6 +218,9 @@ export class AgentRuntimeProvisioner {
       ...(effectivePrompt === undefined ? {} : { prompt: effectivePrompt }),
       readOnly: permissionFloor === "read-only",
       configuredCommand,
+      ...(policy.providerArgumentStrategy === undefined
+        ? {}
+        : { providerArgumentStrategy: policy.providerArgumentStrategy }),
       ...(desiredModel === undefined ? {} : { model: desiredModel }),
       ...(normalizedSession === undefined ? {} : { nativeSession: normalizedSession }),
       modelResumePolicy: policy.model.resumePolicy,

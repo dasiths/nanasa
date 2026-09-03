@@ -50,6 +50,7 @@ function completionNotificationsEnabled(
 
 export function attentionNotificationTier(item: AttentionItem): AttentionNotificationTier {
   switch (item.kind) {
+    case "launch-consent":
     case "wait":
     case "response":
       return "urgent";
@@ -60,6 +61,7 @@ export function attentionNotificationTier(item: AttentionItem): AttentionNotific
     case "completion":
       return "quiet";
     case "action":
+    case "provider-update":
     case "unread":
       return "none";
   }
@@ -88,8 +90,11 @@ export function routeOwnsAttentionItem(
   if (route.kind === "global") return route.destination === "attention";
   if (route.kind !== "group" || route.groupId !== item.groupId) return false;
   switch (item.kind) {
+    case "launch-consent":
+      return route.section === "terminals";
     case "wait":
     case "action":
+    case "provider-update":
       return route.section === "activity";
     case "response":
     case "health":

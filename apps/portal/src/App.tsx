@@ -1,4 +1,7 @@
 import type {
+  CustomLaunchConsentRequest,
+  ProviderUpdateOutcome,
+  ProviderUpdateRecoveryResult,
   ReorderGroupAgentsCommand,
   StartGroupRunsResult,
   SubmitMessageCommand,
@@ -16,7 +19,6 @@ import {
   Play,
   RefreshCw,
   Users,
-  X,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
@@ -33,8 +35,10 @@ import {
 import { AdHocConsoleDialog } from "./components/ad-hoc-console-dialog.js";
 import { type AddAgentInput, GroupTree } from "./components/group-tree.js";
 import { MessageWorkspace } from "./components/message-workspace.js";
-import { ErrorNotice, type PortalError, portalErrorFromCode, toPortalError } from "./errors.js";
+import { TeamRecoveryResults } from "./components/team-recovery-results.js";
+import { ErrorNotice, type PortalError, toPortalError } from "./errors.js";
 import { useAttentionWorkspaces } from "./hooks/use-attention-workspaces.js";
+import { useLaunchConsents } from "./hooks/use-launch-consents.js";
 import { useMessageReadCursors } from "./hooks/use-message-read-cursors.js";
 import {
   type TerminalColumnsPreference,
@@ -71,6 +75,61 @@ const PortalRoutePanel = lazy(() =>
 
 export interface AppProps {
   client?: PortalClient;
+}
+
+type TeamRecoveryCategory = "kept" | "restarted" | "approval" | "failed";
+
+function providerUpdateCategory(outcome: ProviderUpdateOutcome): TeamRecoveryCategory {
+  if (outcome.status === "retained") return "kept";
+  if (outcome.status === "restarted") return "restarted";
+  if (outcome.status === "approval-required") return "approval";
+  return "failed";
+}
+
+function teamRecoveryCounts(
+  recovery: ProviderUpdateRecoveryResult | undefined,
+  started: StartGroupRunsResult | undefined,
+): Record<TeamRecoveryCategory, number> {
+  const categories = new Map<string, TeamRecoveryCategory>();
+  for (const outcome of recovery?.outcomes ?? []) {
+    categories.set(outcome.memberId, providerUpdateCategory(outcome));
+  }
+  for (const outcome of started?.outcomes ?? []) {
+    if (categories.has(outcome.memberId)) continue;
+    categories.set(
+      outcome.memberId,
+      outcome.status === "already-running"
+        ? "kept"
+        : outcome.status === "started"
+          ? "restarted"
+          : outcome.status === "approval-required"
+            ? "approval"
+            : "failed",
+    );
+  }
+  const counts = { kept: 0, restarted: 0, approval: 0, failed: 0 };
+  for (const category of categories.values()) counts[category] += 1;
+  return counts;
+}
+
+function shouldShowRecoveryResults(
+  recovery: ProviderUpdateRecoveryResult | undefined,
+  started: StartGroupRunsResult | undefined,
+): boolean {
+  if (
+    started?.outcomes.some((outcome) =>
+      ["approval-required", "denied", "failed"].includes(outcome.status),
+    ) === true
+  ) {
+    return true;
+  }
+  if (recovery === undefined) return false;
+  if (recovery.dryRun) {
+    return recovery.outcomes.some((outcome) => outcome.status !== "retained");
+  }
+  return recovery.outcomes.some((outcome) =>
+    ["approval-required", "ownership-uncertain", "failed"].includes(outcome.status),
+  );
 }
 
 function TerminalNavigationActions({
@@ -144,7 +203,10 @@ export function App({ client = api }: AppProps) {
   const [busyAction, setBusyAction] = useState<string>();
   const [actionError, setActionError] = useState<PortalError>();
   const [startAllResult, setStartAllResult] = useState<StartGroupRunsResult>();
+  const [recoveryResult, setRecoveryResult] = useState<ProviderUpdateRecoveryResult>();
   const [startingAllGroupId, setStartingAllGroupId] = useState<string>();
+  const [recoveringGroupId, setRecoveringGroupId] = useState<string>();
+  const [approvingStartAllGroupId, setApprovingStartAllGroupId] = useState<string>();
   const [focusSelectedGroupAfterDelete, setFocusSelectedGroupAfterDelete] = useState(false);
   const [focusedTerminalGroupId, setFocusedTerminalGroupId] = useState<string>();
   const [terminalConnectionRevision, setTerminalConnectionRevision] = useState(0);
@@ -166,7 +228,6 @@ export function App({ client = api }: AppProps) {
     snapshot?.memberships.filter((member) => member.groupId === selectedGroupId) ?? [];
   const members = groupMemberships.filter((member) => member.state === "active");
   const runs = snapshot?.runs.filter((run) => run.groupId === selectedGroupId) ?? [];
-  const runningCount = runs.filter((run) => run.status === "running").length;
   const globalMemberStatusViews = useMemo(
     () =>
       (snapshot?.memberships ?? [])
@@ -181,6 +242,12 @@ export function App({ client = api }: AppProps) {
     () => globalMemberStatusViews.filter(({ member }) => member.groupId === selectedGroupId),
     [globalMemberStatusViews, selectedGroupId],
   );
+  const runningCount = memberStatusViews.filter(
+    ({ key, run }) => run?.status === "running" && key !== "updating",
+  ).length;
+  const startingCount = memberStatusViews.filter(
+    ({ key }) => key === "starting" || key === "updating",
+  ).length;
   const workingCount = memberStatusViews.filter(({ key }) => key === "working").length;
   const selectedMessageState = snapshot?.messageGroups?.find(
     (state) => state.groupId === selectedGroupId,
@@ -201,6 +268,11 @@ export function App({ client = api }: AppProps) {
     snapshot?.daemonEpoch,
     snapshot?.sequence,
   );
+  const launchConsents = useLaunchConsents(
+    client,
+    snapshot === undefined ? undefined : `${snapshot.instanceId}:${snapshot.daemonEpoch}`,
+    snapshot?.sequence,
+  );
   const attentionItems = useMemo(
     () =>
       snapshot === undefined
@@ -208,8 +280,9 @@ export function App({ client = api }: AppProps) {
         : deriveAttentionItems(snapshot, {
             workspaces: attentionWorkspaces.workspaces,
             unreadCounts,
+            launchConsents: launchConsents.latestRequests,
           }),
-    [attentionWorkspaces.workspaces, snapshot, unreadCounts],
+    [attentionWorkspaces.workspaces, launchConsents.latestRequests, snapshot, unreadCounts],
   );
   const attentionCountsByGroup = useMemo(
     () => attentionReviewCountsByGroup(attentionItems),
@@ -241,7 +314,11 @@ export function App({ client = api }: AppProps) {
   const attentionNotifications = useAttentionNotifications({
     items: attentionItems,
     ready:
-      snapshot !== undefined && attentionWorkspaces.ready && attentionWorkspaces.errors.size === 0,
+      snapshot !== undefined &&
+      attentionWorkspaces.ready &&
+      attentionWorkspaces.errors.size === 0 &&
+      !launchConsents.loading &&
+      launchConsents.error === undefined,
     hydrationKey:
       snapshot === undefined ? undefined : `${snapshot.instanceId}:${snapshot.daemonEpoch}`,
     route,
@@ -381,6 +458,7 @@ export function App({ client = api }: AppProps) {
         : (snapshot?.groups[groupIndex + 1]?.id ?? snapshot?.groups[groupIndex - 1]?.id);
     await runAction(`${groupId}:delete`, () => client.deleteGroup(groupId));
     setStartAllResult((current) => (current?.groupId === groupId ? undefined : current));
+    setRecoveryResult((current) => (current?.groupId === groupId ? undefined : current));
     if (fallbackGroupId !== undefined) {
       setSelectedGroup(fallbackGroupId, "terminals");
       navigate(groupRoute(fallbackGroupId), { replace: true });
@@ -423,16 +501,56 @@ export function App({ client = api }: AppProps) {
   const removeAgent = (groupId: string, agentId: string) =>
     runAction(`${groupId}:${agentId}:remove`, () => client.removeAgent(groupId, agentId));
 
-  const startRun = (groupId: string, agentId: string) =>
-    runAction(`${groupId}:${agentId}`, () => client.startRun(groupId, agentId));
+  const launchConsentPath = (request: CustomLaunchConsentRequest) =>
+    `${groupRoute(request.groupId, "terminals")}#launch-consent-${encodeURIComponent(request.id)}`;
+  const startRun = async (groupId: string, agentId: string) => {
+    let request: CustomLaunchConsentRequest | undefined;
+    await runAction(`${groupId}:${agentId}`, async () => {
+      const result = await client.startRun(groupId, agentId);
+      if (result.status === "approval-required" || result.status === "denied") {
+        request = result.request;
+      }
+    });
+    await launchConsents.reload();
+    if (request !== undefined) {
+      setSelectedGroup(groupId, "terminals");
+      navigate(launchConsentPath(request));
+    }
+  };
   const stopRun = (groupId: string, agentId: string) =>
     runAction(`${groupId}:${agentId}`, () => client.stopRun(groupId, agentId));
+  const recoverAgent = (groupId: string, agentId: string, forceIndeterminate: boolean) =>
+    runAction(`${groupId}:${agentId}:recover`, () =>
+      client.recoverAgentRun(groupId, agentId, { dryRun: false, forceIndeterminate }),
+    );
+  const recoverGroup = async (groupId: string, dryRun: boolean) => {
+    setRecoveringGroupId(groupId);
+    setStartAllResult(undefined);
+    try {
+      await runAction(`${groupId}:recover`, async () => {
+        setRecoveryResult(
+          await client.recoverGroupRuns(groupId, { dryRun, forceIndeterminate: false }),
+        );
+      });
+      await launchConsents.reload();
+    } finally {
+      setRecoveringGroupId((current) => (current === groupId ? undefined : current));
+    }
+  };
   const startAll = (groupId: string): Promise<void> => {
     const existing = startAllInFlight.current.get(groupId);
     if (existing !== undefined) return existing;
     const idempotencyKey = crypto.randomUUID();
     setStartingAllGroupId(groupId);
+    setRecoveryResult(undefined);
+    setStartAllResult(undefined);
     const operation = runAction(`${groupId}:start-all`, async () => {
+      setRecoveryResult(
+        await client.recoverGroupRuns(groupId, {
+          dryRun: false,
+          forceIndeterminate: false,
+        }),
+      );
       setStartAllResult(await client.startAllRuns(groupId, idempotencyKey));
     }).finally(() => {
       startAllInFlight.current.delete(groupId);
@@ -440,6 +558,62 @@ export function App({ client = api }: AppProps) {
     });
     startAllInFlight.current.set(groupId, operation);
     return operation;
+  };
+  const approveLaunchConsent = async (request: CustomLaunchConsentRequest) => {
+    try {
+      await client.approveLaunchConsent(request.id, {
+        expectedSubjectDigest: request.subjectDigest,
+        configRevision: request.configRevision,
+      });
+      const member = snapshot?.memberships.find(
+        (candidate) =>
+          candidate.groupId === request.groupId && candidate.memberId === request.memberId,
+      );
+      const update =
+        member === undefined
+          ? undefined
+          : memberStatusView(snapshot?.agentStatuses, snapshot?.runs ?? [], member).run
+              ?.providerUpdate;
+      if (update?.state === "completed" && update.outcome === "approval-required") {
+        await client.recoverAgentRun(request.groupId, request.agentId, {
+          dryRun: false,
+          forceIndeterminate: false,
+        });
+      } else {
+        await client.startRun(request.groupId, request.agentId);
+      }
+    } finally {
+      await Promise.all([refresh(), launchConsents.reload()]);
+    }
+  };
+  const cancelLaunchConsent = async (request: CustomLaunchConsentRequest) => {
+    try {
+      await client.cancelLaunchConsent(request.id, {
+        expectedSubjectDigest: request.subjectDigest,
+        configRevision: request.configRevision,
+      });
+    } finally {
+      await Promise.all([refresh(), launchConsents.reload()]);
+    }
+  };
+  const approveStartAll = async (groupId: string, requests: CustomLaunchConsentRequest[]) => {
+    setApprovingStartAllGroupId(groupId);
+    setActionError(undefined);
+    try {
+      for (const request of requests) {
+        await client.approveLaunchConsent(request.id, {
+          expectedSubjectDigest: request.subjectDigest,
+          configRevision: request.configRevision,
+        });
+      }
+      await launchConsents.reload();
+      await startAll(groupId);
+    } catch (cause) {
+      setActionError(toPortalError(cause, "Unable to approve all custom launchers"));
+      await launchConsents.reload();
+    } finally {
+      setApprovingStartAllGroupId(undefined);
+    }
   };
   const submitMessage = async (command: SubmitMessageCommand) => {
     if (selectedGroup === undefined) throw new Error("Select a group before sending a message");
@@ -482,6 +656,30 @@ export function App({ client = api }: AppProps) {
   if (snapshot === undefined || config === undefined) {
     return null;
   }
+
+  const startAllPendingRequests = [
+    ...new Map([
+      ...(startAllResult?.outcomes ?? []).flatMap((outcome) =>
+        outcome.status === "approval-required" && outcome.request !== undefined
+          ? [[outcome.request.id, outcome.request] as const]
+          : [],
+      ),
+      ...(recoveryResult?.outcomes ?? []).flatMap((outcome) =>
+        outcome.status === "approval-required" && outcome.consentRequest !== undefined
+          ? [[outcome.consentRequest.id, outcome.consentRequest] as const]
+          : [],
+      ),
+    ]).values(),
+  ];
+  const displayedRecoveryResult =
+    recoveryResult?.groupId === selectedGroupId ? recoveryResult : undefined;
+  const displayedStartAllResult =
+    startAllResult?.groupId === selectedGroupId ? startAllResult : undefined;
+  const recoveryCounts = teamRecoveryCounts(displayedRecoveryResult, displayedStartAllResult);
+  const showRecoveryResults = shouldShowRecoveryResults(
+    displayedRecoveryResult,
+    displayedStartAllResult,
+  );
 
   return (
     <PortalShell
@@ -567,13 +765,18 @@ export function App({ client = api }: AppProps) {
                 </h1>
                 <p
                   className="group-status-summary"
-                  aria-label={`${members.length} agents, ${runningCount} live terminals, ${workingCount} working`}
+                  aria-label={`${members.length} agents, ${runningCount} live terminals, ${startingCount} starting, ${workingCount} working`}
                 >
                   <span className="group-status-agents">{members.length} agents</span>
                   <span
                     className={`group-status-live${runningCount === 0 ? " group-status-empty" : ""}`}
                   >
                     {runningCount} live
+                  </span>
+                  <span
+                    className={`group-status-starting${startingCount === 0 ? " group-status-empty" : ""}`}
+                  >
+                    {startingCount} starting
                   </span>
                   <span
                     className={`group-status-working${workingCount === 0 ? " group-status-empty" : ""}`}
@@ -653,6 +856,23 @@ export function App({ client = api }: AppProps) {
           {selectedGroup !== undefined && (
             <button
               type="button"
+              className="compact-button recovery-check-button"
+              aria-label={`Check agent tools in ${selectedGroup.name}`}
+              title={`Preview agent tool recovery in ${selectedGroup.name}`}
+              disabled={recoveringGroupId === selectedGroup.id || members.length === 0}
+              onClick={() => void recoverGroup(selectedGroup.id, true).catch(() => undefined)}
+            >
+              <RefreshCw
+                className={recoveringGroupId === selectedGroup.id ? "spin" : undefined}
+                aria-hidden="true"
+                size={15}
+              />
+              <span>Check tools</span>
+            </button>
+          )}
+          {selectedGroup !== undefined && (
+            <button
+              type="button"
               className="compact-button start-all-button"
               aria-label={`Start all non-running agents in ${selectedGroup.name}`}
               title={`Start all non-running agents in ${selectedGroup.name}`}
@@ -680,56 +900,33 @@ export function App({ client = api }: AppProps) {
           onDismiss={() => setActionError(undefined)}
         />
       )}
-      {startAllResult !== undefined && startAllResult.groupId === selectedGroupId && (
-        <section className="start-all-results" role="status" aria-live="polite">
-          <div>
-            <strong>Start all complete</strong>
-            <span>
-              {startAllResult.outcomes.filter((outcome) => outcome.status === "started").length}{" "}
-              started,{" "}
-              {
-                startAllResult.outcomes.filter((outcome) => outcome.status === "already-running")
-                  .length
-              }{" "}
-              already running,{" "}
-              {startAllResult.outcomes.filter((outcome) => outcome.status === "failed").length}{" "}
-              failed
-            </span>
-          </div>
-          <ul>
-            {startAllResult.outcomes.map((outcome) => (
-              <li key={outcome.memberId} className={`start-all-${outcome.status}`}>
-                <span>
-                  {members.find((member) => member.memberId === outcome.memberId)?.alias ??
-                    outcome.memberId}
-                </span>
-                <strong>{outcome.status.replace("-", " ")}</strong>
-                {outcome.status === "failed" && (
-                  <ErrorNotice
-                    announce={false}
-                    className="start-all-error"
-                    error={
-                      outcome.error ??
-                      portalErrorFromCode(
-                        outcome.reason ?? "run_start_failed",
-                        "The agent could not be started.",
-                      )
-                    }
-                  />
-                )}
-              </li>
-            ))}
-          </ul>
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="Dismiss Start all results"
-            title="Dismiss results"
-            onClick={() => setStartAllResult(undefined)}
-          >
-            <X aria-hidden="true" size={15} />
-          </button>
-        </section>
+      {showRecoveryResults && (
+        <TeamRecoveryResults
+          recoveryResult={displayedRecoveryResult}
+          startAllResult={displayedStartAllResult}
+          counts={recoveryCounts}
+          agentNames={new Map(members.map((member) => [member.memberId, member.alias]))}
+          pendingApprovalCount={startAllPendingRequests.length}
+          recovering={recoveringGroupId === displayedRecoveryResult?.groupId}
+          approving={approvingStartAllGroupId === selectedGroupId}
+          onRecover={() => {
+            if (displayedRecoveryResult !== undefined) {
+              void recoverGroup(displayedRecoveryResult.groupId, false).catch(() => undefined);
+            }
+          }}
+          onApproveAndRetry={() => {
+            if (selectedGroupId !== undefined) {
+              void approveStartAll(selectedGroupId, startAllPendingRequests);
+            }
+          }}
+          onReview={(outcome) => {
+            if (outcome.request !== undefined) navigate(launchConsentPath(outcome.request));
+          }}
+          onDismiss={() => {
+            setStartAllResult(undefined);
+            setRecoveryResult(undefined);
+          }}
+        />
       )}
       <div className="workspace-body">
         {route.kind === "global" ? (
@@ -755,6 +952,7 @@ export function App({ client = api }: AppProps) {
                 onNavigate={navigate}
                 onRefresh={refresh}
                 onReloadAttentionWorkspace={attentionWorkspaces.reloadGroup}
+                onApproveLaunchConsent={approveLaunchConsent}
                 onPatchPreferences={patchPreferences}
               />
             </Suspense>
@@ -785,6 +983,24 @@ export function App({ client = api }: AppProps) {
                   roles={config.roles}
                   runs={runs}
                   agentStatuses={snapshot.agentStatuses ?? []}
+                  launchConsents={launchConsents.latestRequests.filter(
+                    (request) => request.groupId === selectedGroup.id,
+                  )}
+                  launchConsentsLoading={launchConsents.loading}
+                  launchConsentsError={
+                    launchConsents.error === undefined ? undefined : (
+                      <div className="launch-consent-load-error">
+                        <ErrorNotice error={launchConsents.error} />
+                        <button type="button" onClick={() => void launchConsents.reload()}>
+                          <RefreshCw aria-hidden="true" size={15} />
+                          Retry
+                        </button>
+                      </div>
+                    )
+                  }
+                  onApproveLaunchConsent={approveLaunchConsent}
+                  onCancelLaunchConsent={cancelLaunchConsent}
+                  onRecoverAgent={recoverAgent}
                   connectionRevision={terminalConnectionRevision}
                   theme={appliedTheme}
                   columns={preferences.terminalColumnsByGroup[selectedGroup.id] ?? "auto"}
@@ -860,6 +1076,7 @@ export function App({ client = api }: AppProps) {
                   onNavigate={navigate}
                   onRefresh={refresh}
                   onReloadAttentionWorkspace={attentionWorkspaces.reloadGroup}
+                  onApproveLaunchConsent={approveLaunchConsent}
                   onPatchPreferences={patchPreferences}
                 />
               </Suspense>

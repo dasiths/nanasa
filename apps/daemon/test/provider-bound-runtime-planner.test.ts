@@ -95,7 +95,8 @@ describe("snapshot-bound provider runtime planning", () => {
         sources: [{ scope: "builtin", reference: "builtin:test" }],
       },
       readOnly: true,
-      configuredCommand: ["copilot"],
+      configuredCommand: ["sh", "custom-copilot"],
+      providerArgumentStrategy: { kind: "environment", name: "CUSTOM_PROVIDER_ARGS" },
       model: "provider/model-one",
       modelResumePolicy: "enforce-configured",
       workingDirectory: "/repo",
@@ -104,6 +105,12 @@ describe("snapshot-bound provider runtime planning", () => {
 
     expect(observedBindingBeforeOverlay).toBe(true);
     expect(bound.binding.snapshotDigest).toBe(builtIn.snapshot.digest);
+    expect(bound.command).toEqual(["sh", "custom-copilot"]);
+    expect(bound.environment.CUSTOM_PROVIDER_ARGS).toContain("'--model' 'provider/model-one'");
+    expect(bound.binding.launchPlan.providerArgumentStrategy).toEqual({
+      kind: "environment",
+      name: "CUSTOM_PROVIDER_ARGS",
+    });
     expect(bound.binding.launchPlan.command).toEqual(bound.command);
     expect(bound.binding.launchPlan.environmentNames).toEqual(
       [...Object.keys(bound.environment), "NANASA_MCP_TOKEN", "NANASA_REPORTER_EPOCH"].sort(),
@@ -136,12 +143,6 @@ describe("snapshot-bound provider runtime planning", () => {
       referenceKind: "id",
       referenceValue: "session-one",
     });
-    expect(planner.resumeCommand(recovered, nativeSession)).toEqual([
-      "copilot",
-      ...bound.binding.launchPlan.overlayArguments,
-      "--resume=session-one",
-      "--model",
-      "provider/model-one",
-    ]);
+    expect(planner.resumeCommand(recovered, nativeSession)).toEqual(["sh", "custom-copilot"]);
   });
 });

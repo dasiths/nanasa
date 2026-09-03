@@ -1,0 +1,38 @@
+#!/bin/sh
+
+set -eu
+
+script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+example_root=$(CDPATH= cd -- "$script_directory/.." && pwd -P)
+product_root=$(CDPATH= cd -- "$example_root/../.." && pwd -P)
+
+: "${LITELLM_URL:=http://litellm:4000}"
+: "${LITELLM_KEY:=sk-local-litellm}"
+: "${COPILOT_MODEL:=claude-sonnet-5}"
+
+carriage_return=$(printf '\r')
+case "$LITELLM_KEY" in
+  *"$carriage_return"* | *'
+'*)
+    printf '%s\n' 'LITELLM_KEY must not contain line breaks.' >&2
+    exit 1
+    ;;
+esac
+
+if ! printf 'Authorization: Bearer %s\n' "$LITELLM_KEY" |
+  curl --fail --silent --show-error --header @- \
+    --url "${LITELLM_URL%/}/health/liveliness" >/dev/null; then
+  printf '%s\n' 'LiteLLM is not ready. Run make proxy-start first.' >&2
+  exit 1
+fi
+
+(cd "$product_root" && node scripts/prepare-claude-gateway-state.mjs)
+
+export ANTHROPIC_BASE_URL="$LITELLM_URL"
+export ANTHROPIC_AUTH_TOKEN="$LITELLM_KEY"
+export ANTHROPIC_MODEL="$COPILOT_MODEL"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="$COPILOT_MODEL"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="$COPILOT_MODEL"
+export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1
+
+exec claude "$@"

@@ -9,8 +9,11 @@ import {
   AgentStatusDetailSchema,
   AgentStatusSummarySchema,
   AssignAgentCheckoutCommandSchema,
+  ApproveCustomLaunchConsentCommandSchema,
   BrowserRestartFrameSchema,
   CheckoutSchema,
+  CustomLaunchConsentListQuerySchema,
+  DenyCustomLaunchConsentCommandSchema,
   type ControlMetadata,
   CreateAgentActionCommandSchema,
   CreateGroupAgentCommandSchema,
@@ -24,14 +27,19 @@ import {
   OpenCheckoutCommandSchema,
   OpenWaitSchema,
   ProviderStateBindingSchema,
+  ProviderUpdateOutcomeSchema,
+  ProviderUpdateRecoveryCommandSchema,
+  ProviderUpdateRecoveryResultSchema,
   type RemoteDescriptor,
   RemoteDescriptorSchema,
   RemoveGroupAgentResultSchema,
   RemoveWorktreeCommandSchema,
+  RevokeCustomLaunchConsentCommandSchema,
   ReorderGroupAgentsCommandSchema,
   ReorderGroupAgentsResultSchema,
   ReorderGroupsCommandSchema,
   ReorderGroupsResultSchema,
+  CancelCustomLaunchConsentCommandSchema,
   RepairProviderExtensionCommandSchema,
   ReparentGroupAgentCommandSchema,
   ReparentGroupAgentResultSchema,
@@ -74,6 +82,7 @@ import type { ProviderExtensionService } from "../extensions/provider-extension-
 import type { ProviderHealthService } from "../extensions/provider-health-service.js";
 import type { CheckoutService } from "../git/checkout-service.js";
 import type { WorktreeService } from "../git/worktree-service.js";
+import type { LaunchConsentService } from "../launch-consent-service.js";
 import type { MessageCommandService } from "../message-command-service.js";
 import type { MessageRepository } from "../message-repository.js";
 import type { OperatorAuth } from "../operator-auth.js";
@@ -86,12 +95,12 @@ import type { TerminalGateway } from "../terminal/terminal-gateway.js";
 import type { TerminalReadService } from "../terminal/terminal-read-service.js";
 import type { TopologyOrderService } from "../topology-order-service.js";
 import type { TopologyService } from "../topology-service.js";
+import { isValidationError, toPublicErrorResponse } from "./error-response.js";
 import {
   type ControlRouteDeclaration,
   controlRoute,
   generateControlOpenApi,
 } from "./route-registry.js";
-import { isValidationError, toPublicErrorResponse } from "./error-response.js";
 
 export interface ControlRouterServices {
   metadata(): ControlMetadata;
@@ -100,6 +109,8 @@ export interface ControlRouterServices {
   config: ConfigRepository;
   snapshot: SnapshotReadModel;
   store: NanasaStore;
+  repositoryIdentity: string;
+  launchConsent: LaunchConsentService;
   auth: OperatorAuth;
   providerStates: ProviderStateRepository;
   extensions: ProviderExtensionService;
@@ -349,6 +360,53 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     ),
   );
   register("trust.list", () => services.store.listRepositoryTrust());
+  register("launchConsents.list", (request) => {
+    const query = CustomLaunchConsentListQuerySchema.parse(request.query);
+    return services.launchConsent.listRequests(services.repositoryIdentity, query.state);
+  });
+  register("launchConsents.get", (request) =>
+    services.launchConsent.getRequest(
+      services.repositoryIdentity,
+      record(request.params).requestId ?? "",
+    ),
+  );
+  register("launchConsents.approve", async (request) =>
+    services.launchConsent.approve(
+      record(request.params).requestId ?? "",
+      ApproveCustomLaunchConsentCommandSchema.parse(
+        routeBody(controlRoute("launchConsents.approve"), request),
+      ),
+      operatorPrincipal(services, request).operatorId,
+    ),
+  );
+  register("launchConsents.deny", (request) =>
+    services.launchConsent.deny(
+      record(request.params).requestId ?? "",
+      DenyCustomLaunchConsentCommandSchema.parse(
+        routeBody(controlRoute("launchConsents.deny"), request),
+      ),
+      operatorPrincipal(services, request).operatorId,
+    ),
+  );
+  register("launchConsents.cancel", (request) =>
+    services.launchConsent.cancel(
+      record(request.params).requestId ?? "",
+      CancelCustomLaunchConsentCommandSchema.parse(
+        routeBody(controlRoute("launchConsents.cancel"), request),
+      ),
+      operatorPrincipal(services, request).operatorId,
+    ),
+  );
+  register("launchConsents.revoke", (request) =>
+    services.launchConsent.revoke(
+      services.repositoryIdentity,
+      record(request.params).receiptId ?? "",
+      RevokeCustomLaunchConsentCommandSchema.parse(
+        routeBody(controlRoute("launchConsents.revoke"), request),
+      ),
+      operatorPrincipal(services, request).operatorId,
+    ),
+  );
   register("extensions.catalog", () => services.extensions.list());
   register("extensions.list", () => services.extensions.list());
   register("extensions.inspect", (request) =>
@@ -539,12 +597,12 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
       params.groupId ?? "",
       params.agentId ?? "",
     );
-    const run = await services.coordinator.startRun(
+    const result = await services.coordinator.startRun(
       params.groupId ?? "",
       membership.memberId,
       command,
     );
-    return reply.status(201).send(run);
+    return reply.status(201).send(result);
   });
   register("runs.stop", async (request) => {
     StopAgentRunCommandSchema.parse(routeBody(controlRoute("runs.stop"), request));
@@ -562,6 +620,42 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     return reply
       .status(201)
       .send(await services.coordinator.restartRun(record(request.params).runId ?? "", command));
+  });
+  register("runs.recoverGroup", async (request) => {
+    const groupId = record(request.params).groupId ?? "";
+    services.store.getGroup(groupId);
+    const command = ProviderUpdateRecoveryCommandSchema.parse(
+      routeBody(controlRoute("runs.recoverGroup"), request),
+    );
+    const runs = services.store.listDesiredRunningRuns().filter((run) => run.groupId === groupId);
+    const result = await services.coordinator.recoverProviderUpdates(runs, command);
+    return ProviderUpdateRecoveryResultSchema.parse({
+      groupId,
+      dryRun: command.dryRun,
+      outcomes: result.outcomes,
+    });
+  });
+  register("runs.recoverAgent", async (request) => {
+    const params = record(request.params);
+    const groupId = params.groupId ?? "";
+    const membership = services.topology.getAgentMembership(groupId, params.agentId ?? "");
+    const run = services.store.getLatestRunForMembership(groupId, membership.memberId);
+    if (run?.desiredState !== "running") {
+      throw new DomainError("run_not_found", "No active agent run is available for recovery", 404);
+    }
+    const command = ProviderUpdateRecoveryCommandSchema.parse(
+      routeBody(controlRoute("runs.recoverAgent"), request),
+    );
+    const result = await services.coordinator.recoverProviderUpdates([run], command);
+    const outcome = result.outcomes[0];
+    if (outcome === undefined) {
+      throw new DomainError(
+        "provider_update_binding_unavailable",
+        "The agent run does not have current provider metadata",
+        409,
+      );
+    }
+    return ProviderUpdateOutcomeSchema.parse(outcome);
   });
   register("runs.startAll", async (request) => {
     const declaration = controlRoute("runs.startAll");
@@ -582,7 +676,7 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     const command = StartGroupRunsCommandSchema.parse(
       routeBody(controlRoute("runs.restartAll"), request),
     );
-    return AgentRunSchema.array().parse(
+    return StartGroupRunsResultSchema.parse(
       await services.coordinator.restartAll(record(request.params).groupId ?? "", command),
     );
   });

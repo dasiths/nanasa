@@ -6,7 +6,6 @@ integrations:
   claude-code:
     name: Claude Code
     kind: claude-code
-    command: [claude]
     providerState:
       scope: custom
       path: team-homes/{integrationId}/{agentId}

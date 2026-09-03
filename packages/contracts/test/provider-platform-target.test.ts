@@ -219,6 +219,50 @@ describe("canonical snapshot bytes", () => {
       }),
     ).rejects.toThrow(/canonical bytes/);
   });
+
+  it("rejects legacy launch metadata from the active snapshot parser", () => {
+    const legacyBody = {
+      ...snapshotBody,
+      capabilities: [
+        ...snapshotBody.capabilities,
+        {
+          id: "recognition",
+          version: { major: 1, minor: 0 },
+          payload: {
+            configuredCommandMatchers: [
+              {
+                executableNames: ["make"],
+                requiredArgvLiterals: ["provider"],
+                wrapperExecutableNames: ["make"],
+              },
+            ],
+            observedProcessMatchers: [
+              {
+                executableNames: ["provider"],
+                requiredArgvLiterals: [],
+                wrapperExecutableNames: [],
+              },
+            ],
+            maximumWrapperDepth: 1,
+          },
+        },
+        {
+          id: "launch",
+          version: { major: 1, minor: 0 },
+          payload: {
+            executableSlot: "configured-command",
+            argumentTemplate: [],
+            environmentNames: [],
+            files: [],
+            directExec: true,
+            wrapperArgumentSlot: 2,
+            wrapperArgumentPrefix: "PROVIDER_ARGS=",
+          },
+        },
+      ],
+    };
+    expect(() => canonicalProviderSnapshotBytes(legacyBody)).toThrow();
+  });
 });
 
 describe("clean target surface contracts", () => {

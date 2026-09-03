@@ -71,7 +71,14 @@ const references = {
       family: command.family,
       command: command.command,
       mode: command.mode,
-      positionals: command.positionals,
+      positionals: command.positionals.map((name) => name.replace(/\?$/, "")),
+      ...(command.positionals.some((name) => name.endsWith("?"))
+        ? {
+            optionalPositionals: command.positionals
+              .filter((name) => name.endsWith("?"))
+              .map((name) => name.slice(0, -1)),
+          }
+        : {}),
       summary: command.summary,
     })),
   },
@@ -81,6 +88,22 @@ const references = {
     cursor: schema(contracts.EventCursorSchema),
     filter: schema(contracts.EventFilterSchema),
     frame: schema(contracts.EventServerFrameSchema),
+    launchConsentLifecyclePayload: schema(contracts.CustomLaunchConsentLifecycleEventPayloadSchema),
+  },
+  "launch-consent.json": {
+    ...header,
+    errors: schema(contracts.CustomLaunchConsentErrorCodeSchema),
+    subject: schema(contracts.CustomLaunchConsentSubjectSchema),
+    request: schema(contracts.CustomLaunchConsentRequestSchema),
+    decision: schema(contracts.CustomLaunchConsentDecisionSchema),
+    commands: {
+      approve: schema(contracts.ApproveCustomLaunchConsentCommandSchema, "input"),
+      deny: schema(contracts.DenyCustomLaunchConsentCommandSchema, "input"),
+      cancel: schema(contracts.CancelCustomLaunchConsentCommandSchema, "input"),
+      revoke: schema(contracts.RevokeCustomLaunchConsentCommandSchema, "input"),
+    },
+    startAgentResult: schema(contracts.StartAgentRunResultSchema),
+    startGroupOutcome: schema(contracts.StartGroupRunOutcomeSchema),
   },
   "terminal.json": {
     ...header,

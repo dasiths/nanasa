@@ -155,6 +155,64 @@
       "summary": "List trust receipts"
     },
     {
+      "id": "consent.list",
+      "family": "consent",
+      "command": "list",
+      "mode": "control",
+      "positionals": [],
+      "summary": "List custom-launch consent requests"
+    },
+    {
+      "id": "consent.get",
+      "family": "consent",
+      "command": "get",
+      "mode": "control",
+      "positionals": [
+        "request-id"
+      ],
+      "summary": "Inspect one custom-launch consent request"
+    },
+    {
+      "id": "consent.approve",
+      "family": "consent",
+      "command": "approve",
+      "mode": "control",
+      "positionals": [
+        "request-id"
+      ],
+      "summary": "Approve one exact custom-launch consent request"
+    },
+    {
+      "id": "consent.deny",
+      "family": "consent",
+      "command": "deny",
+      "mode": "control",
+      "positionals": [
+        "request-id"
+      ],
+      "summary": "Deny one exact custom-launch consent request"
+    },
+    {
+      "id": "consent.cancel",
+      "family": "consent",
+      "command": "cancel",
+      "mode": "control",
+      "positionals": [
+        "request-id"
+      ],
+      "summary": "Cancel one custom-launch consent request"
+    },
+    {
+      "id": "consent.revoke",
+      "family": "consent",
+      "command": "revoke",
+      "mode": "control",
+      "positionals": [
+        "receipt-id"
+      ],
+      "summary": "Revoke one custom-launch trust receipt"
+    },
+    {
       "id": "extension.list",
       "family": "extension",
       "command": "list",
@@ -497,6 +555,20 @@
         "run-id"
       ],
       "summary": "Restart run"
+    },
+    {
+      "id": "run.recover",
+      "family": "run",
+      "command": "recover",
+      "mode": "control",
+      "positionals": [
+        "group-id",
+        "agent-id"
+      ],
+      "optionalPositionals": [
+        "agent-id"
+      ],
+      "summary": "Recover active runs after agent tools change"
     },
     {
       "id": "run.startAll",

@@ -17,6 +17,14 @@ type PackageRecord = ReturnType<typeof ProviderPackageRecordSchema.parse>;
 type Snapshot = Awaited<ReturnType<typeof parseResolvedProviderAdapterSnapshot>>;
 type PackageState = PackageRecord["state"];
 
+export interface ProviderSnapshotArchiveRecord {
+  readonly digest: string;
+  readonly extensionGeneration: string;
+  readonly providerId: string;
+  readonly adapterId: string;
+  readonly canonicalBytes: string;
+}
+
 function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((byte, index) => byte === right[index]);
 }
@@ -231,13 +239,13 @@ export class ProviderSnapshotRepository {
         throw new Error(`Provider snapshot asset is unavailable: ${declaration.digest}`);
       }
     }
-    const existing = await this.getSnapshot(snapshot.digest);
+    const existing = this.getSnapshotArchiveRecord(snapshot.digest);
     const canonicalBytes = Buffer.from(snapshot.canonicalBytes, "base64url");
     if (existing !== undefined) {
       if (!equalBytes(Buffer.from(existing.canonicalBytes, "base64url"), canonicalBytes)) {
         throw new Error(`Provider snapshot ${snapshot.digest} is immutable`);
       }
-      return existing;
+      return snapshot;
     }
     this.#database
       .prepare(
@@ -265,12 +273,36 @@ export class ProviderSnapshotRepository {
     return snapshot;
   }
 
-  public async getSnapshot(snapshotDigest: string): Promise<Snapshot | undefined> {
+  public getSnapshotArchiveRecord(
+    snapshotDigest: string,
+  ): ProviderSnapshotArchiveRecord | undefined {
     const row = this.#database
-      .prepare("SELECT canonical_bytes FROM provider_snapshots WHERE digest = ?")
-      .get(snapshotDigest) as { canonical_bytes: Uint8Array } | undefined;
+      .prepare(
+        `SELECT extension_generation,provider_id,adapter_id,canonical_bytes
+         FROM provider_snapshots WHERE digest = ?`,
+      )
+      .get(snapshotDigest) as
+      | {
+          extension_generation: string;
+          provider_id: string;
+          adapter_id: string;
+          canonical_bytes: Uint8Array;
+        }
+      | undefined;
     if (row === undefined) return undefined;
-    const canonicalBytes = Buffer.from(row.canonical_bytes);
+    return Object.freeze({
+      digest: snapshotDigest,
+      extensionGeneration: row.extension_generation,
+      providerId: row.provider_id,
+      adapterId: row.adapter_id,
+      canonicalBytes: Buffer.from(row.canonical_bytes).toString("base64url"),
+    });
+  }
+
+  public async getSnapshot(snapshotDigest: string): Promise<Snapshot | undefined> {
+    const archived = this.getSnapshotArchiveRecord(snapshotDigest);
+    if (archived === undefined) return undefined;
+    const canonicalBytes = Buffer.from(archived.canonicalBytes, "base64url");
     const body = JSON.parse(canonicalBytes.toString("utf8"));
     return parseResolvedProviderAdapterSnapshot({
       digest: snapshotDigest,

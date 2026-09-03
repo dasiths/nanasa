@@ -6,6 +6,7 @@ import {
   OVERSIZED_MESSAGE_GUIDANCE,
 } from "@nanasa/contracts";
 import { ExtensionPackageError } from "../extensions/extension-package-loader.js";
+import { LaunchConsentServiceError } from "../launch-consent-service.js";
 import { DomainError } from "../store.js";
 
 interface ErrorWithIssues {
@@ -60,6 +61,12 @@ export function toPublicErrorResponse(error: unknown): PublicErrorResponse | und
     return {
       statusCode: extensionStatusCode(error.code),
       payload: errorPayload(error.code, error.message, error.details),
+    };
+  }
+  if (error instanceof LaunchConsentServiceError) {
+    return {
+      statusCode: error.code === "launch_consent_not_found" ? 404 : 409,
+      payload: errorPayload(error.code, error.message),
     };
   }
   if (isValidationError(error)) {

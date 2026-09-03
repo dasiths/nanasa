@@ -111,6 +111,12 @@ describe("built-in provider snapshot conformance", () => {
     ]);
     for (const subject of subjects) {
       const repeated = await rebuild(subject.id);
+      const generation = subject.package.packageRecord.generation;
+      expect(generation.version).toBe("1.0.0");
+      expect(subject.package.packageRecord.manifest.antiRollbackSequence).toBe(1);
+      expect(generation.id).toBe(
+        `${generation.extensionId}@1.0.0+builtin.${generation.packageDigest.slice(0, 16)}`,
+      );
       expect(repeated.snapshot.digest).toBe(subject.package.snapshot.digest);
       expect(repeated.snapshot.canonicalBytes).toBe(subject.package.snapshot.canonicalBytes);
       expect(() => assertFunctionFreeProviderSnapshot(subject.package.snapshot.body)).not.toThrow();
@@ -171,7 +177,7 @@ describe("built-in provider snapshot conformance", () => {
     }
   });
 
-  it("supports exact fresh and resumed direct launches plus the declarative Claude Make slot", () => {
+  it("supports exact fresh and resumed launches plus the declarative environment strategy", () => {
     for (const subject of subjects) {
       const context = overlayContext(subject.id);
       const overlay = subject.evaluator.planOverlay(context);
@@ -215,39 +221,36 @@ describe("built-in provider snapshot conformance", () => {
     expect(claude).toBeDefined();
     const context = overlayContext("claude-code");
     const overlay = claude!.evaluator.planOverlay(context);
-    expect(
-      claude!.evaluator.launch({
-        ...context,
-        configuredCommand: ["make", "claude-copilot"],
-        model: "provider/model-one",
-      }).command,
-    ).toEqual([
-      "make",
-      "claude-copilot",
-      "CLAUDE_ARGS='--settings' '/overlay/claude-code/settings.json' '--mcp-config' '/overlay/claude-code/mcp.json' '--append-system-prompt-file' '/overlay/claude-code/prompts/system.md' '--model' 'provider/model-one'",
-    ]);
+    const wrapped = claude!.evaluator.launch({
+      ...context,
+      configuredCommand: ["sh", "custom-launcher"],
+      providerArgumentStrategy: { kind: "environment", name: "CUSTOM_PROVIDER_ARGS" },
+      model: "provider/model-one",
+    });
+    expect(wrapped.command).toEqual(["sh", "custom-launcher"]);
+    expect(wrapped.environment.CUSTOM_PROVIDER_ARGS).toBe(
+      "'--settings' '/overlay/claude-code/settings.json' '--mcp-config' '/overlay/claude-code/mcp.json' '--append-system-prompt-file' '/overlay/claude-code/prompts/system.md' '--model' 'provider/model-one'",
+    );
     expect(overlay.commandArguments).toContain("--settings");
   });
 
-  it("keeps configured augmentation separate from observed-process recognition", () => {
+  it("keeps arbitrary command augmentation separate from observed-process recognition", () => {
     for (const subject of subjects) {
       const executable = subject.command[0]!;
-      expect(subject.evaluator.matchesConfiguredCommand([`/opt/bin/${executable}`])).toBe(true);
+      const recognition = subject.package.snapshot.body.capabilities.find(
+        (capability) => capability.id === "recognition",
+      );
+      expect(recognition?.payload).not.toHaveProperty("configuredCommandMatchers");
       expect(subject.evaluator.matchesObservedProcess([executable], `/opt/bin/${executable}`)).toBe(
         true,
       );
       expect(
         subject.evaluator.matchesObservedProcess(["node", "worker.mjs"], "/usr/bin/node"),
       ).toBe(false);
-      expect(() =>
+      expect(
         subject.evaluator.augmentConfiguredCommand(["node", "worker.mjs"], ["--model", "x"]),
-      ).toThrow(/not eligible/);
+      ).toEqual(["node", "worker.mjs", "--model", "x"]);
     }
-    const claude = subjects.find((subject) => subject.id === "claude-code")!;
-    expect(claude.evaluator.matchesConfiguredCommand(["make", "claude-copilot"])).toBe(true);
-    expect(
-      claude.evaluator.matchesObservedProcess(["make", "claude-copilot"], "/usr/bin/make"),
-    ).toBe(false);
   });
 
   it("enforces Pi path containment and pins its MCP adapter as an immutable runtime asset", () => {

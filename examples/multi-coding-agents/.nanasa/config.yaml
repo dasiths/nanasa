@@ -16,7 +16,6 @@ integrations:
   copilot:
     name: GitHub Copilot
     kind: copilot
-    command: [ copilot ]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
@@ -25,7 +24,6 @@ integrations:
   pi:
     name: Pi
     kind: pi
-    command: [ pi ]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
@@ -34,7 +32,6 @@ integrations:
   opencode:
     name: OpenCode
     kind: opencode
-    command: [ opencode ]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
@@ -43,7 +40,6 @@ integrations:
   claude-code:
     name: Claude Code
     kind: claude-code
-    command: [ claude ]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
@@ -52,7 +48,9 @@ integrations:
   claude-copilot:
     name: Claude Code via GitHub Copilot
     kind: claude-code
-    command: [ make, claude-copilot ]
+    command: [ sh, bin/claude-copilot ]
+    launcher:
+      providerArguments: append
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }

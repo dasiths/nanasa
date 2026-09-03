@@ -170,6 +170,41 @@
                 "maxLength": 4096
               }
             },
+            "launcher": {
+              "type": "object",
+              "properties": {
+                "providerArguments": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "const": "append"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "environment"
+                        },
+                        "name": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "providerArguments"
+              ],
+              "additionalProperties": false
+            },
             "cwd": {
               "type": "string",
               "minLength": 1,
@@ -341,8 +376,7 @@
           },
           "required": [
             "name",
-            "kind",
-            "command"
+            "kind"
           ],
           "additionalProperties": false
         }

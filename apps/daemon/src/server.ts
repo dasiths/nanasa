@@ -43,6 +43,7 @@ import {
 } from "./http/error-response.js";
 import { matchControlRoute } from "./http/route-registry.js";
 import { resolveEffectiveAgentPrompt } from "./instruction-resolver.js";
+import { LaunchConsentService } from "./launch-consent-service.js";
 import { McpCredentialIssuer } from "./mcp-auth.js";
 import { validateMcpEndpointConfiguration } from "./mcp-config.js";
 import { registerMcpRoutes } from "./mcp-server.js";
@@ -64,11 +65,18 @@ import { ProviderRunBindingRepository } from "./providers/provider-run-binding-r
 import { resolveBuiltInProviderEvaluatorOptions } from "./providers/provider-runtime-assets.js";
 import { ProviderRuntimeIndex } from "./providers/provider-runtime-index.js";
 import { ProviderSnapshotRepository } from "./providers/provider-snapshot-repository.js";
+import { ProviderUpdateDetector } from "./providers/provider-update-detector.js";
+import { ProviderUpdateReconciler } from "./providers/provider-update-reconciler.js";
+import { ProviderUpdateTransitionRepository } from "./providers/provider-update-transition-repository.js";
 import { ActivationService } from "./release/activation-service.js";
 import { createRemoteDescriptorFromMetadata } from "./remote/remote-descriptor.js";
 import { ReporterRegistry } from "./reporter-registry.js";
 import { RepositoryTrustService } from "./repository-trust-service.js";
-import { RunRuntimeCoordinator } from "./run-runtime-coordinator.js";
+import {
+  RunRuntimeCoordinator,
+  type RunRuntimeCoordinatorOptions,
+} from "./run-runtime-coordinator.js";
+import { RuntimeLaunchConsentGate } from "./runtime-launch-consent-gate.js";
 import { SystemdUserService } from "./service/systemd-user-service.js";
 import { SnapshotReadModel } from "./snapshot-read-model.js";
 import { DomainError, NanasaStore } from "./store.js";
@@ -310,6 +318,22 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     );
     const credentialBroker = new UserCredentialBroker();
     const repositoryTrust = new RepositoryTrustService(store);
+    const launchConsentReference: { current?: RuntimeLaunchConsentGate } = {};
+    const launchConsentService = new LaunchConsentService(store, (request) => {
+      if (launchConsentReference.current === undefined) {
+        throw new Error("Runtime launch consent gate is unavailable");
+      }
+      return launchConsentReference.current.resolveCurrentSubject(request);
+    });
+    const launchConsent = new RuntimeLaunchConsentGate({
+      repositoryIdentity,
+      configRepository,
+      store,
+      providerBindings,
+      consentService: launchConsentService,
+      runtimeEnvironmentNames: options.mcp?.enabled === true ? ["NANASA_MCP_URL"] : [],
+    });
+    launchConsentReference.current = launchConsent;
     const nativeSessions = new NativeSessionService(store);
     const statusQueries = new AgentStatusQueryService(store);
     const coordinatorReference: { current?: RunRuntimeCoordinator } = {};
@@ -327,6 +351,9 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
             credentials: integration.credentials,
             model: integration.model,
             nativeRecovery: integration.nativeRecovery,
+            ...(integration.launcher?.providerArguments === undefined
+              ? {}
+              : { providerArgumentStrategy: integration.launcher.providerArguments }),
           },
         ]),
       ),
@@ -406,18 +433,32 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     const actionAcks = new AgentActionAckService(store);
     const actionWaits = new AgentWaitService(store);
     const openWaits = new AgentOpenWaitService(store, runtime, terminalInput, runtimeProvisioner);
+    const nativeRecoveryPolicy = (
+      run: Parameters<NonNullable<RunRuntimeCoordinatorOptions["nativeRecoveryPolicy"]>>[0],
+    ) => {
+      const profile = store.getAgentProfile(run.agentProfileId);
+      const integration = loadedConfig.config.integrations[profile.agentType];
+      if (integration === undefined) throw new Error(`Missing integration ${profile.agentType}`);
+      return { integrationId: profile.agentType, policy: integration.nativeRecovery };
+    };
+    const providerUpdates = new ProviderUpdateReconciler(
+      store,
+      runtime,
+      terminalGateway,
+      new ProviderUpdateDetector(providerBindings, providerRuntimeIndex),
+      new ProviderUpdateTransitionRepository(store.database),
+      launchConsent,
+      { nativeSessions, nativeRecoveryPolicy },
+    );
     const coordinator = new RunRuntimeCoordinator(store, runtime, terminalGateway, dispatcher, {
       ...(options.reconcileIntervalMs === undefined
         ? {}
         : { reconcileIntervalMs: options.reconcileIntervalMs }),
       nativeSessions,
+      launchConsent,
+      providerUpdates,
       onRuntimeObservation: (observation) => statusService.observeRuntime(observation),
-      nativeRecoveryPolicy: (run) => {
-        const profile = store.getAgentProfile(run.agentProfileId);
-        const integration = loadedConfig.config.integrations[profile.agentType];
-        if (integration === undefined) throw new Error(`Missing integration ${profile.agentType}`);
-        return { integrationId: profile.agentType, policy: integration.nativeRecovery };
-      },
+      nativeRecoveryPolicy,
     });
     coordinatorReference.current = coordinator;
     const topology = new TopologyService(configRepository, store, coordinator);
@@ -560,6 +601,8 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       config: configRepository,
       snapshot: snapshotReadModel,
       store,
+      repositoryIdentity,
+      launchConsent: launchConsentService,
       auth: operatorAuth,
       providerStates,
       extensions,

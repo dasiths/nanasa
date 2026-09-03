@@ -2,6 +2,7 @@ import type {
   BrowserRestartFrame,
   ConfigStatus,
   ControlMetadata,
+  CustomLaunchConsentRequest,
   Group,
   GroupMembership,
   NanasaConfig,
@@ -24,6 +25,9 @@ import {
   attentionReviewCount,
   type CompletionAttentionItem,
   deriveAttentionItems,
+  type HealthAttentionItem,
+  type LaunchConsentAttentionItem,
+  type ProviderUpdateAttentionItem,
   type WaitAttentionItem,
 } from "../attention-items.js";
 import { CheckoutWorkspace } from "../components/checkout-workspace.js";
@@ -50,6 +54,7 @@ interface PortalRoutePanelProps {
   onNavigate(path: string): void;
   onRefresh(): Promise<void>;
   onReloadAttentionWorkspace?(groupId: string): Promise<void>;
+  onApproveLaunchConsent?(request: CustomLaunchConsentRequest): Promise<void>;
   onPatchPreferences(next: Partial<PortalPreferences>): void;
 }
 
@@ -194,6 +199,100 @@ function CompletionControls({
   );
 }
 
+function LaunchConsentControls({
+  item,
+  onApprove,
+  onNavigate,
+}: {
+  item: LaunchConsentAttentionItem;
+  onApprove?(request: CustomLaunchConsentRequest): Promise<void>;
+  onNavigate(path: string): void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [approved, setApproved] = useState(false);
+  const [error, setError] = useState<PortalError>();
+  const approve = async () => {
+    if (onApprove === undefined) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await onApprove(item.request);
+      setApproved(true);
+    } catch (cause) {
+      setError(toPortalError(cause, "Unable to trust and start this launcher"));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="attention-control-stack">
+      <div className="workflow-actions">
+        <button type="button" onClick={() => onNavigate(item.targetPath)}>
+          {item.providerUpdate ? "View details" : "Review launcher"}
+        </button>
+        {item.consentState === "pending" && (
+          <button type="button" disabled={busy || approved} onClick={() => void approve()}>
+            {approved
+              ? "Starting"
+              : busy
+                ? "Approving..."
+                : item.providerUpdate
+                  ? "Approve and restart"
+                  : "Trust and start"}
+          </button>
+        )}
+      </div>
+      {error !== undefined && <ErrorNotice error={error} className="attention-control-error" />}
+    </div>
+  );
+}
+
+function ProviderUpdateHealthControls({
+  item,
+  agentId,
+  client,
+  onNavigate,
+  onRefresh,
+}: {
+  item: HealthAttentionItem;
+  agentId: string;
+  client: PortalClient;
+  onNavigate(path: string): void;
+  onRefresh(): Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<PortalError>();
+  const checkAgain = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await client.recoverAgentRun(item.groupId, agentId, {
+        dryRun: false,
+        forceIndeterminate: false,
+      });
+      await onRefresh();
+    } catch (cause) {
+      setError(toPortalError(cause, "Unable to check the agent setup"));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="attention-control-stack">
+      <div className="workflow-actions">
+        <button type="button" onClick={() => onNavigate(item.targetPath)}>
+          View details
+        </button>
+        <button type="button" disabled={busy} onClick={() => void checkAgain()}>
+          <RefreshCw className={busy ? "spin" : undefined} aria-hidden="true" size={14} />
+          Check again
+        </button>
+      </div>
+      {error !== undefined && <ErrorNotice error={error} className="attention-control-error" />}
+    </div>
+  );
+}
+
 function ActionControls({
   item,
   client,
@@ -323,6 +422,7 @@ function GroupSettingsPanel({
 function AttentionPanel({
   route,
   snapshot,
+  config,
   group,
   client,
   attentionItems,
@@ -331,10 +431,12 @@ function AttentionPanel({
   onNavigate,
   onRefresh,
   onReloadAttentionWorkspace,
+  onApproveLaunchConsent,
 }: Pick<
   PortalRoutePanelProps,
   | "route"
   | "snapshot"
+  | "config"
   | "group"
   | "client"
   | "attentionItems"
@@ -343,6 +445,7 @@ function AttentionPanel({
   | "onNavigate"
   | "onRefresh"
   | "onReloadAttentionWorkspace"
+  | "onApproveLaunchConsent"
 >) {
   const [filter, setFilter] = useState<"all" | AttentionReviewCategory>("all");
   const [suppressedCompletionIds, setSuppressedCompletionIds] = useState<ReadonlySet<string>>(
@@ -365,6 +468,9 @@ function AttentionPanel({
   );
   const progressItems = scopedItems.filter(
     (item): item is ActionAttentionItem => item.kind === "action",
+  );
+  const providerUpdates = scopedItems.filter(
+    (item): item is ProviderUpdateAttentionItem => item.kind === "provider-update",
   );
   const activeProgressCount = progressItems.filter((item) => item.active).length;
   const relevantGroupIds =
@@ -473,7 +579,15 @@ function AttentionPanel({
                     </small>
                     <p>{item.summary}</p>
                   </div>
-                  {item.kind === "wait" ? (
+                  {item.kind === "launch-consent" ? (
+                    <LaunchConsentControls
+                      item={item}
+                      {...(onApproveLaunchConsent === undefined
+                        ? {}
+                        : { onApprove: onApproveLaunchConsent })}
+                      onNavigate={onNavigate}
+                    />
+                  ) : item.kind === "wait" ? (
                     <WaitReply item={item} client={client} onChanged={() => reload(item.groupId)} />
                   ) : item.kind === "completion" ? (
                     <CompletionControls
@@ -491,6 +605,20 @@ function AttentionPanel({
                         });
                       }}
                     />
+                  ) : item.kind === "health" &&
+                    (item.healthType === "provider-update-failed" ||
+                      item.healthType === "ownership-uncertain") ? (
+                    <ProviderUpdateHealthControls
+                      item={item}
+                      agentId={
+                        Object.entries(config.groups[item.groupId]?.agents ?? {}).find(
+                          ([, agent]) => agent.memberId === item.memberId,
+                        )?.[0] ?? item.member.id
+                      }
+                      client={client}
+                      onNavigate={onNavigate}
+                      onRefresh={onRefresh}
+                    />
                   ) : (
                     <button type="button" onClick={() => onNavigate(item.targetPath)}>
                       {item.kind === "delivery" ? "Open Messages" : "Open terminal"}
@@ -502,6 +630,30 @@ function AttentionPanel({
           </ul>
         )}
       </section>
+      {providerUpdates.length > 0 && (
+        <section
+          className="workflow-card attention-updates"
+          aria-labelledby="attention-updates-heading"
+        >
+          <div className="attention-section-heading">
+            <h3 id="attention-updates-heading">Recent updates</h3>
+            <span>{providerUpdates.length}</span>
+          </div>
+          <ul className="workflow-list">
+            {providerUpdates.map((item) => (
+              <li className="workflow-row" key={item.id}>
+                <div>
+                  <strong>{item.title}</strong>
+                  <small>{item.summary}</small>
+                </div>
+                <button type="button" onClick={() => onNavigate(item.targetPath)}>
+                  Open agent
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <section
         className="workflow-card attention-progress"
         aria-labelledby="attention-progress-heading"

@@ -25,29 +25,43 @@ integrations:
   copilot:
     name: GitHub Copilot
     kind: copilot
-    command: [copilot]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
   pi:
     name: Pi
     kind: pi
-    command: [pi]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
   opencode:
     name: OpenCode
     kind: opencode
-    command: [opencode]
+    cwd: .
+    providerState: { scope: membership }
+    credentials: { kind: provider-managed }
+  claude-copilot:
+    name: Claude Code via GitHub Copilot
+    kind: claude-code
+    command: [sh, bin/claude-copilot]
+    launcher:
+      providerArguments: append
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
 ```
 
-Claude Code can use its direct command or Nanasa's recognized
-`make claude-copilot` wrapper. The adapter passes generated Claude arguments
-through the wrapper's `CLAUDE_ARGS` Make variable.
+When `command` is omitted, Nanasa derives the built-in executable from `kind`.
+The explicit Claude command is a custom launcher. Nanasa appends generated
+prompt, MCP, model, settings, and reporter arguments to the script command as
+individual arguments.
+
+The first start pauses before credentials or private launch state are created.
+Review the command, append strategy, and repository script digest, then approve
+it in the terminal consent pane or Attention workspace. Later starts reuse the
+approval while the stable launch properties and script contents remain
+unchanged. This consent trusts repository code; it does not sandbox an
+interpreter, a PATH lookup, or other files loaded by the script.
 
 ## Define reusable roles
 

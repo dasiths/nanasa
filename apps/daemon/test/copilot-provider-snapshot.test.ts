@@ -155,14 +155,15 @@ describe("Copilot provider snapshot conformance", () => {
     }
   });
 
-  it("keeps configured-command augmentation separate from process recognition", () => {
-    expect(evaluator.matchesConfiguredCommand(["/opt/bin/copilot"])).toBe(true);
-    expect(evaluator.matchesConfiguredCommand(["node", "worker.mjs"])).toBe(false);
+  it("augments arbitrary commands while keeping process recognition strict", () => {
     expect(evaluator.matchesObservedProcess(["copilot"], "/opt/bin/copilot")).toBe(true);
     expect(evaluator.matchesObservedProcess(["node", "worker.mjs"], "/usr/bin/node")).toBe(false);
-    expect(() =>
-      evaluator.augmentConfiguredCommand(["node", "worker.mjs"], ["--model", "x"]),
-    ).toThrow(/not eligible/);
+    expect(evaluator.augmentConfiguredCommand(["node", "worker.mjs"], ["--model", "x"])).toEqual([
+      "node",
+      "worker.mjs",
+      "--model",
+      "x",
+    ]);
   });
 
   it("exposes Copilot reporter, semantic status, and Herdr-adapted screen policy as data", () => {
@@ -241,7 +242,7 @@ describe("Copilot provider snapshot conformance", () => {
     database.close();
   });
 
-  it("rejects namespace takeover and parameterized grant broadening", () => {
+  it("rejects namespace takeover without treating launch grants as command allowlists", () => {
     const namespaces = new ProviderNamespaceOwnership();
     expect(() =>
       namespaces.assertManifest({
@@ -255,13 +256,18 @@ describe("Copilot provider snapshot conformance", () => {
     ).toThrow(/not owned|already owned/);
 
     const policy = new ProviderPermissionPolicy();
-    expect(() =>
+    expect(
       policy.resolve(builtIn.snapshot.body.capabilities, [
         {
           permission: "runtime.launch",
           parameters: { executableNames: ["bash"] },
         },
       ]),
-    ).toThrow(/exceeds configured-command recognition/);
+    ).toEqual([
+      {
+        permission: "runtime.launch",
+        parameters: { executableNames: ["bash"] },
+      },
+    ]);
   });
 });

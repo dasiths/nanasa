@@ -72,6 +72,90 @@ describe("Nanasa configuration", () => {
     expect(first.runtimeDirectory).toBe(join(repository, ".nanasa", "runtime"));
   });
 
+  it.each([
+    ["copilot", "copilot"],
+    ["claude-code", "claude"],
+    ["pi", "pi"],
+    ["opencode", "opencode"],
+  ] as const)("defaults the %s command when omitted", (kind, executable) => {
+    const repository = temporaryRepository(`version: 2
+integrations:
+  provider:
+    name: Provider
+    kind: ${kind}
+`);
+
+    expect(loadNanasaConfig(repository).config.integrations.provider).toMatchObject({
+      command: [executable],
+      commandSource: "builtin",
+    });
+    expect(loadNanasaConfig(repository).config.integrations.provider?.launcher).toBeUndefined();
+  });
+
+  it("preserves an explicit integration command override as a custom append launcher", () => {
+    const repository = temporaryRepository(`version: 2
+integrations:
+  claude-copilot:
+    name: Claude Code via GitHub Copilot
+    kind: claude-code
+    command: [make, claude-copilot]
+`);
+
+    expect(loadNanasaConfig(repository).config.integrations["claude-copilot"]).toMatchObject({
+      command: ["make", "claude-copilot"],
+      commandSource: "custom",
+      launcher: { providerArguments: "append" },
+    });
+  });
+
+  it("treats an explicit built-in executable as a custom command", () => {
+    const repository = temporaryRepository(`version: 2
+integrations:
+  claude:
+    name: Explicit Claude Code
+    kind: claude-code
+    command: [claude]
+`);
+
+    expect(loadNanasaConfig(repository).config.integrations.claude).toMatchObject({
+      command: ["claude"],
+      commandSource: "custom",
+      launcher: { providerArguments: "append" },
+    });
+  });
+
+  it("loads an environment provider-argument strategy for a custom command", () => {
+    const repository = temporaryRepository(`version: 2
+integrations:
+  claude-wrapper:
+    name: Claude wrapper
+    kind: claude-code
+    command: [sh, bin/claude-wrapper]
+    launcher:
+      providerArguments:
+        kind: environment
+        name: CLAUDE_ARGS
+`);
+
+    expect(loadNanasaConfig(repository).config.integrations["claude-wrapper"]?.launcher).toEqual({
+      providerArguments: { kind: "environment", name: "CLAUDE_ARGS" },
+    });
+  });
+
+  it.each([
+    ["launcher without a command", "    launcher: { providerArguments: append }\n"],
+    ["author-supplied command origin", "    commandSource: builtin\n"],
+  ])("rejects %s", (_name, integrationFields) => {
+    const repository = temporaryRepository(`version: 2
+integrations:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+${integrationFields}`);
+
+    expect(() => loadNanasaConfig(repository)).toThrow(ConfigLoadError);
+  });
+
   it("loads minimal terminal-only YAML with canonical defaults", () => {
     const repository = temporaryRepository(minimalConfig());
 
@@ -96,6 +180,8 @@ describe("Nanasa configuration", () => {
           name: "OpenCode",
           kind: "opencode",
           command: ["opencode"],
+          commandSource: "custom",
+          launcher: { providerArguments: "append" },
           cwd: repository,
           providerState: { scope: "membership" },
           credentials: { kind: "provider-managed" },
