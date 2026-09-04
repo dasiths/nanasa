@@ -37,6 +37,68 @@ export type InstructionPath = z.infer<typeof InstructionPathSchema>;
 
 export const RolePermissionPolicySchema = z.enum(["inherit", "read-only"]);
 export type RolePermissionPolicy = z.infer<typeof RolePermissionPolicySchema>;
+export const ExecutionProfileIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+export type ExecutionProfileId = z.infer<typeof ExecutionProfileIdSchema>;
+export const ExecutionProfileSchema = z
+  .object({
+    continuation: z.enum(["interactive", "autonomous"]),
+    questions: z.enum(["enabled", "disabled"]),
+    approvals: z.enum(["provider-default", "allow-known", "unrestricted"]),
+  })
+  .strict();
+export type ExecutionProfile = z.infer<typeof ExecutionProfileSchema>;
+export const ProviderFilePathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(4_096)
+  .refine(
+    (path) =>
+      !path.includes("\0") &&
+      !path.startsWith("/") &&
+      !/^[A-Za-z]:\//.test(path) &&
+      !path.includes("\\") &&
+      path
+        .split("/")
+        .every((segment) => segment.length > 0 && segment !== "." && segment !== "..") &&
+      path.toLowerCase().endsWith(".json"),
+    "Provider file path must be a repository-relative JSON path without traversal",
+  );
+export type ProviderFilePath = z.infer<typeof ProviderFilePathSchema>;
+export const ProviderMcpFileSelectionSchema = z
+  .object({
+    mode: z.enum(["append", "replace", "disabled"]).default("append"),
+    paths: z.array(ProviderFilePathSchema).max(16).default([]),
+  })
+  .strict()
+  .superRefine((selection, context) => {
+    if (new Set(selection.paths).size !== selection.paths.length) {
+      context.addIssue({ code: "custom", message: "Provider file paths must be unique" });
+    }
+    if (selection.mode === "disabled" && selection.paths.length > 0) {
+      context.addIssue({
+        code: "custom",
+        message: "Disabled provider files may not define paths",
+        path: ["paths"],
+      });
+    }
+    if (selection.mode === "replace" && selection.paths.length === 0) {
+      context.addIssue({
+        code: "custom",
+        message: "Replacing provider files requires at least one path",
+        path: ["paths"],
+      });
+    }
+  });
+export const ProviderFileSelectionSchema = z
+  .object({ mcp: ProviderMcpFileSelectionSchema.optional() })
+  .strict();
+export type ProviderFileSelection = z.infer<typeof ProviderFileSelectionSchema>;
 export const RolePresentationIconSchema = z.enum([
   "briefcase-business",
   "clipboard-list",
@@ -118,6 +180,8 @@ export const IntegrationConfigSchema = z
       mode: "resume-or-restart",
       confirmationTimeoutSeconds: 30,
     }),
+    executionProfile: ExecutionProfileIdSchema.optional(),
+    providerFiles: ProviderFileSelectionSchema.optional(),
     extensions: z.array(ExtensionIdSchema).max(32).default([]),
     environment: EnvironmentSchema.default({}),
   })
@@ -153,6 +217,7 @@ export const ConfiguredAgentSchema = z
     checkoutId: IdentifierSchema.optional(),
     desiredModel: z.string().trim().min(1).max(256).optional(),
     instructions: z.array(InstructionPathSchema).max(32).default([]),
+    providerFiles: ProviderFileSelectionSchema.optional(),
     attention: AgentAttentionSubscriptionConfigSchema.default({}),
     order: z.number().int().nonnegative().max(255).optional(),
   })
@@ -225,6 +290,7 @@ export const NanasaConfigSchema = z
       },
     }),
     instructions: z.array(InstructionPathSchema).max(32).default([]),
+    executionProfiles: z.record(ExecutionProfileIdSchema, ExecutionProfileSchema).optional(),
     integrations: z.record(IntegrationIdSchema, IntegrationConfigSchema),
     extensions: z.record(ExtensionIdSchema, ConfiguredProviderExtensionSchema).default({}),
     roles: z.record(RoleIdSchema, RoleDefinitionSchema).default({}),
@@ -244,6 +310,16 @@ export const NanasaConfigSchema = z
           code: "custom",
           message: "Integration ID must match its configuration key",
           path: ["integrations", integrationId, "id"],
+        });
+      }
+      if (
+        integration.executionProfile !== undefined &&
+        (config.executionProfiles ?? {})[integration.executionProfile] === undefined
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: `Integration references unknown execution profile ${integration.executionProfile}`,
+          path: ["integrations", integrationId, "executionProfile"],
         });
       }
       for (const extensionId of integration.extensions) {

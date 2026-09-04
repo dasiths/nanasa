@@ -89,6 +89,11 @@ export function usePortalSnapshot(client: PortalClient) {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    const interval = window.setInterval(() => void refresh(), 10_000);
+    return () => window.clearInterval(interval);
+  }, [refresh]);
+
   return { snapshot, config, status, error, errorSource, refresh };
 }
 

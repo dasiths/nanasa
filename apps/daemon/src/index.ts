@@ -112,6 +112,16 @@ async function start(): Promise<void> {
     loadedConfig.runtimeDirectory;
   const tmuxServerName = process.env.NANASA_TMUX_SERVER ?? "nanasa";
   const mcpEnabled = configuredBoolean("NANASA_MCP_ENABLED", process.env.NANASA_MCP_ENABLED, false);
+  const allowAutonomous = configuredBoolean(
+    "NANASA_ALLOW_AUTONOMOUS",
+    process.env.NANASA_ALLOW_AUTONOMOUS,
+    false,
+  );
+  const allowProviderFiles = configuredBoolean(
+    "NANASA_ALLOW_PROVIDER_FILES",
+    process.env.NANASA_ALLOW_PROVIDER_FILES,
+    false,
+  );
   const mcpPath = process.env.NANASA_MCP_PATH ?? "/mcp";
   const mcpOperatorToken = process.env.NANASA_MCP_OPERATOR_TOKEN;
   const mcpEndpointUrl =
@@ -150,6 +160,7 @@ async function start(): Promise<void> {
       ...(mcpOperatorToken === undefined ? {} : { operatorToken: mcpOperatorToken }),
       allowedHostnames: [new URL(mcpEndpointUrl).hostname],
     },
+    providerPolicy: { allowAutonomous, allowProviderFiles },
   });
 
   const close = async () => {

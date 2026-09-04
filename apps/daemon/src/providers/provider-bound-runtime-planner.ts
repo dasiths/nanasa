@@ -121,6 +121,8 @@ export class ProviderBoundRuntimePlanner {
       ...(input.mcpEndpointUrl === undefined ? {} : { mcpEndpointUrl: input.mcpEndpointUrl }),
       ...(input.prompt === undefined ? {} : { prompt: input.prompt }),
       readOnly: input.readOnly,
+      ...(input.executionProfile === undefined ? {} : { executionProfile: input.executionProfile }),
+      ...(input.providerFiles === undefined ? {} : { providerFiles: input.providerFiles }),
       configuredCommand: input.configuredCommand,
       ...(input.providerArgumentStrategy === undefined
         ? {}
@@ -145,6 +147,24 @@ export class ProviderBoundRuntimePlanner {
       ...(input.workingDirectory === undefined ? {} : { workingDirectory: input.workingDirectory }),
       ...(input.model === undefined ? {} : { desiredModel: input.model }),
       modelResumePolicy: input.modelResumePolicy,
+      ...(input.configRevision === undefined ? {} : { configRevision: input.configRevision }),
+      ...(input.executionProfileId === undefined || input.executionProfile === undefined
+        ? {}
+        : {
+            executionProfile: {
+              id: input.executionProfileId,
+              digest: digest(input.executionProfile),
+            },
+          }),
+      ...(input.providerFiles === undefined || input.providerFiles.length === 0
+        ? {}
+        : {
+            providerFiles: input.providerFiles.map((file) => ({
+              path: file.sourcePath,
+              scope: file.scope,
+              digest: file.digest,
+            })),
+          }),
     });
     const overlayDigests = {
       recipeDigest: digest(

@@ -14,6 +14,7 @@ import type {
 } from "@nanasa/contracts";
 import { AgentKindSchema } from "@nanasa/contracts";
 import type { EffectiveAgentPrompt } from "./instruction-resolver.js";
+import type { EffectiveProviderPolicy } from "./provider-policy-resolver.js";
 import { ProviderStateRepository, providerOverlayBindingId } from "./provider-state-repository.js";
 import {
   ProviderBoundRuntimePlanner,
@@ -67,6 +68,10 @@ export interface AgentRuntimeProvisionerOptions {
   assertProviderExtension?: (kind: AgentProfile["kind"]) => void;
   promptResolver?: (membership: GroupMembership, profile: AgentProfile) => EffectiveAgentPrompt;
   desiredModelResolver?: (membership: GroupMembership, profile: AgentProfile) => string | undefined;
+  providerPolicyResolver?: (
+    membership: GroupMembership,
+    profile: AgentProfile,
+  ) => EffectiveProviderPolicy;
 }
 
 export class AgentRuntimeProvisioner {
@@ -100,6 +105,7 @@ export class AgentRuntimeProvisioner {
     const snapshot = await this.#bindings.resolveActiveSnapshot(profile.kind);
     const evaluator = this.#evaluator(snapshot);
     const configuredCommand = Object.freeze([profile.command, ...profile.args]);
+    const providerPolicy = this.#options.providerPolicyResolver?.(membership, profile);
     const stateBinding = this.#states.resolve({
       membershipId: membership.id,
       integrationId: profile.agentType,
@@ -147,6 +153,18 @@ export class AgentRuntimeProvisioner {
         : { mcpEndpointUrl: this.#options.mcpEndpointUrl }),
       ...(effectivePrompt === undefined ? {} : { prompt: effectivePrompt }),
       readOnly: permissionFloor === "read-only",
+      ...(providerPolicy?.configRevision === undefined
+        ? {}
+        : { configRevision: providerPolicy.configRevision }),
+      ...(providerPolicy?.executionProfile === undefined
+        ? {}
+        : { executionProfile: providerPolicy.executionProfile }),
+      ...(providerPolicy?.executionProfileId === undefined
+        ? {}
+        : { executionProfileId: providerPolicy.executionProfileId }),
+      ...(providerPolicy?.providerFiles === undefined
+        ? {}
+        : { providerFiles: providerPolicy.providerFiles }),
       configuredCommand,
       ...(policy.providerArgumentStrategy === undefined
         ? {}
@@ -217,6 +235,18 @@ export class AgentRuntimeProvisioner {
         : { mcpEndpointUrl: this.#options.mcpEndpointUrl }),
       ...(effectivePrompt === undefined ? {} : { prompt: effectivePrompt }),
       readOnly: permissionFloor === "read-only",
+      ...(providerPolicy?.configRevision === undefined
+        ? {}
+        : { configRevision: providerPolicy.configRevision }),
+      ...(providerPolicy?.executionProfile === undefined
+        ? {}
+        : { executionProfile: providerPolicy.executionProfile }),
+      ...(providerPolicy?.executionProfileId === undefined
+        ? {}
+        : { executionProfileId: providerPolicy.executionProfileId }),
+      ...(providerPolicy?.providerFiles === undefined
+        ? {}
+        : { providerFiles: providerPolicy.providerFiles }),
       configuredCommand,
       ...(policy.providerArgumentStrategy === undefined
         ? {}

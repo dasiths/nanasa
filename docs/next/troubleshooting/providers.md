@@ -3,6 +3,17 @@
 Package users can fix provider state selection, missing credentials, and failed
 agent starts without copying secrets into repository files.
 
+## The portal says an agent may need a restart
+
+The running process may use an older configuration revision, provider MCP file,
+or provider snapshot. A daemon restart can reconnect to that process, but it
+cannot change the process arguments or environment.
+
+Finish or pause important work, then choose **Stop all** in the group header and
+confirm the action. Start the agents again to generate new launch overlays and
+apply the current settings. You can dismiss the warning when a restart should
+wait.
+
 ## Agent tools changed after an update
 
 Preview recovery before changing a running agent:

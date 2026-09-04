@@ -1596,6 +1596,33 @@ textarea {
   font-size: 1.1rem;
 }
 
+.restart-advisory-banner {
+  display: flex;
+  min-height: 38px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--amber);
+  background: var(--warning-surface);
+  padding: 5px 14px;
+  color: var(--warning-text);
+}
+
+.restart-advisory-banner > svg {
+  flex: 0 0 auto;
+}
+
+.restart-advisory-banner > span {
+  min-width: 0;
+  flex: 1 1 320px;
+}
+
+.restart-advisory-actions {
+  display: flex;
+  margin-left: auto;
+  gap: 6px;
+}
+
 .error-notice {
   display: flex;
   min-width: 0;

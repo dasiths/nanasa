@@ -166,6 +166,56 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 128
+      },
+      "executionProfile": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "id",
+          "digest"
+        ],
+        "additionalProperties": false
+      },
+      "providerFiles": {
+        "maxItems": 32,
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "integration",
+                "agent"
+              ]
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "path",
+            "scope",
+            "digest"
+          ],
+          "additionalProperties": false
+        }
       }
     },
     "required": [
@@ -379,6 +429,56 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128
+          },
+          "executionProfile": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "required": [
+              "id",
+              "digest"
+            ],
+            "additionalProperties": false
+          },
+          "providerFiles": {
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "integration",
+                    "agent"
+                  ]
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "path",
+                "scope",
+                "digest"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -1385,6 +1485,56 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 128
+                  },
+                  "executionProfile": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      },
+                      "digest": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "digest"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "providerFiles": {
+                    "maxItems": 32,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "scope": {
+                          "type": "string",
+                          "enum": [
+                            "integration",
+                            "agent"
+                          ]
+                        },
+                        "digest": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "scope",
+                        "digest"
+                      ],
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "required": [
@@ -1652,6 +1802,56 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 128
+                  },
+                  "executionProfile": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      },
+                      "digest": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "digest"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "providerFiles": {
+                    "maxItems": 32,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "scope": {
+                          "type": "string",
+                          "enum": [
+                            "integration",
+                            "agent"
+                          ]
+                        },
+                        "digest": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "scope",
+                        "digest"
+                      ],
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "required": [
@@ -1943,6 +2143,56 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 128
+              },
+              "executionProfile": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "digest": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "id",
+                  "digest"
+                ],
+                "additionalProperties": false
+              },
+              "providerFiles": {
+                "maxItems": 32,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4096
+                    },
+                    "scope": {
+                      "type": "string",
+                      "enum": [
+                        "integration",
+                        "agent"
+                      ]
+                    },
+                    "digest": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "scope",
+                    "digest"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [

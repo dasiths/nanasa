@@ -376,6 +376,7 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     }),
     recoverAgentRun: vi.fn(),
     stopRun: vi.fn().mockResolvedValue(run),
+    stopAllRuns: vi.fn().mockResolvedValue([run]),
     listLaunchConsents: vi.fn().mockResolvedValue([]),
     getLaunchConsent: vi.fn(),
     approveLaunchConsent: vi.fn(),
@@ -1808,6 +1809,59 @@ describe("portal application", () => {
     ).toHaveTextContent("");
   });
 
+  it("confirms before stopping all active agents and closing their terminals", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const activeRuns = [activeRun(memberships[0]!), activeRun(memberships[1]!)];
+    vi.mocked(client.loadSnapshot).mockResolvedValue({ ...snapshot, runs: activeRuns });
+    vi.mocked(client.stopAllRuns).mockResolvedValue(activeRuns);
+    render(<App client={client} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Stop all active agents in Backend" }),
+    );
+    expect(client.stopAllRuns).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog", { name: "Stop all agents?" });
+    expect(dialog).toHaveTextContent("stops 2 active agents in Backend");
+
+    await user.click(within(dialog).getByRole("button", { name: "Stop all" }));
+    await waitFor(() => expect(client.stopAllRuns).toHaveBeenCalledWith("group-backend"));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Stop all agents?" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("notifies when active agents may need restart and allows dismissal", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const running = activeRun(memberships[0]!);
+    vi.mocked(client.loadSnapshot).mockResolvedValue({
+      ...snapshot,
+      runs: [running],
+      restartAdvisories: [
+        {
+          runId: running.id,
+          groupId: "group-backend",
+          memberId: running.memberId,
+          reasons: ["configuration-changed", "provider-files-changed"],
+        },
+      ],
+    });
+    render(<App client={client} />);
+
+    expect(
+      await screen.findByText(
+        "Configuration or provider setup changed. 1 active agent may need a restart.",
+      ),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(
+      screen.queryByText(
+        "Configuration or provider setup changed. 1 active agent may need a restart.",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
   it("hides team-scoped header actions on global routes", async () => {
     const user = userEvent.setup();
     render(<App client={createClient()} />);
@@ -1827,6 +1881,9 @@ describe("portal application", () => {
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Start all non-running agents in Backend" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Stop all active agents in Backend" }),
     ).not.toBeInTheDocument();
   });
 

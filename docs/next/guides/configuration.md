@@ -29,6 +29,7 @@ Paths have two different bases:
 * `repository.path` is relative to the configuration root
 * Integration `cwd` is relative to `repository.path`
 * Instruction paths are relative to the configuration root
+* Provider-file paths are relative to the configuration root
 * Custom provider-state paths are relative to `.nanasa/integrations`
 
 All configured paths must remain beneath their applicable root. For example, a
@@ -187,6 +188,97 @@ launcher:
   providerArguments:
     kind: environment
     name: PROVIDER_ARGS
+```
+
+## Configure autonomous execution
+
+Execution profiles describe provider-independent continuation, question, and
+approval behavior. Integrations select a profile while retaining their built-in
+command:
+
+```yaml
+executionProfiles:
+  autonomous:
+    continuation: autonomous
+    questions: disabled
+    approvals: unrestricted
+integrations:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+    executionProfile: autonomous
+```
+
+Supported values are:
+
+| Field          | Values                                              |
+|----------------|-----------------------------------------------------|
+| `continuation` | `interactive`, `autonomous`                         |
+| `questions`    | `enabled`, `disabled`                               |
+| `approvals`    | `provider-default`, `allow-known`, `unrestricted`   |
+
+The active provider adapter translates these values into native arguments and
+settings. A role's `read-only` policy remains a denial floor and wins over
+profile grants.
+
+Autonomous behavior expands provider authority. Enable it outside repository
+configuration before starting Nanasa:
+
+```bash
+NANASA_ALLOW_AUTONOMOUS=true npx nanasa start --mcp
+```
+
+Without that daemon-owned authorization, an integration requesting expanded
+execution fails closed.
+
+## Add provider-native MCP files
+
+Nanasa selects and snapshots provider-native JSON files without defining their
+server schema:
+
+```yaml
+integrations:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+    providerFiles:
+      mcp:
+        mode: append
+        paths:
+          - .nanasa/providers/copilot/mcp.json
+```
+
+Configured agents can append files, replace inherited consumer files, or
+disable them:
+
+```yaml
+groups:
+  group_product:
+    name: Product
+    agents:
+      agent_builder:
+        memberId: copilot.builder
+        name: Builder
+        integrationId: copilot
+        providerFiles:
+          mcp:
+            mode: replace
+            paths:
+              - .nanasa/providers/copilot/builder.json
+```
+
+Integration files apply first, followed by configured-agent files. `replace`
+removes inherited consumer files, while `disabled` requires an empty path list.
+Neither mode removes Nanasa's generated coordination MCP entry.
+
+Provider files must be regular, daemon-owned JSON files beneath the
+configuration root. Nanasa copies verified bytes into the immutable run overlay
+and rejects files that define the reserved `nanasa` server.
+
+Authorize repository provider files outside repository configuration:
+
+```bash
+NANASA_ALLOW_PROVIDER_FILES=true npx nanasa start --mcp
 ```
 
 The first custom launch pauses for operator consent before Nanasa creates a run,

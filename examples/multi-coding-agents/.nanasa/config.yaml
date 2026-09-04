@@ -22,6 +22,11 @@ attention:
     provider-update-failed: false
     provider-update-succeeded: false
     unread-message: false
+executionProfiles:
+  autonomous:
+    continuation: autonomous
+    questions: disabled
+    approvals: unrestricted
 integrations:
   copilot:
     name: GitHub Copilot
@@ -31,6 +36,10 @@ integrations:
     credentials: { kind: provider-managed }
     model: { resumePolicy: preserve-session }
     nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+    executionProfile: autonomous
+    providerFiles:
+      mcp:
+        paths: [ .nanasa/providers/copilot/mcp.json ]
   pi:
     name: Pi
     kind: pi
@@ -39,6 +48,10 @@ integrations:
     credentials: { kind: provider-managed }
     model: { resumePolicy: preserve-session }
     nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+    executionProfile: autonomous
+    providerFiles:
+      mcp:
+        paths: [ .nanasa/providers/pi/mcp.json ]
   opencode:
     name: OpenCode
     kind: opencode
@@ -47,6 +60,10 @@ integrations:
     credentials: { kind: provider-managed }
     model: { resumePolicy: preserve-session }
     nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+    executionProfile: autonomous
+    providerFiles:
+      mcp:
+        paths: [ .nanasa/providers/opencode/mcp.json ]
   claude-code:
     name: Claude Code
     kind: claude-code
@@ -55,6 +72,10 @@ integrations:
     credentials: { kind: provider-managed }
     model: { resumePolicy: preserve-session }
     nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+    executionProfile: autonomous
+    providerFiles:
+      mcp:
+        paths: [ .nanasa/providers/claude-code/mcp.json ]
   claude-copilot:
     name: Claude Code via GitHub Copilot
     kind: claude-code
@@ -66,6 +87,10 @@ integrations:
     credentials: { kind: provider-managed }
     model: { resumePolicy: preserve-session }
     nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+    executionProfile: autonomous
+    providerFiles:
+      mcp:
+        paths: [ .nanasa/providers/claude-code/mcp.json ]
 extensions: {}
 roles:
   project-manager:

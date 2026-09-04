@@ -234,6 +234,136 @@ describe("built-in provider snapshot conformance", () => {
     expect(overlay.commandArguments).toContain("--settings");
   });
 
+  it("translates autonomous profiles and composes provider-native MCP files", () => {
+    const executionProfile = {
+      continuation: "autonomous",
+      questions: "disabled",
+      approvals: "unrestricted",
+    } as const;
+    for (const subject of subjects) {
+      const serverKey = subject.id === "opencode" ? "mcp" : "mcpServers";
+      const providerFile = {
+        sourcePath: `.nanasa/providers/${subject.id}/mcp.json`,
+        scope: "integration" as const,
+        content: `${JSON.stringify({ [serverKey]: { documentation: { url: "https://docs.example/mcp" } } })}\n`,
+        digest: "a".repeat(64),
+        bytes: 80,
+      };
+      const launch = subject.evaluator.launch({
+        ...overlayContext(subject.id, { readOnly: false }),
+        executionProfile,
+        providerFiles: [providerFile],
+        configuredCommand: subject.command,
+      });
+
+      expect(launch.overlay.files).toContainEqual(
+        expect.objectContaining({
+          relativePath: "provider-files/mcp/00.json",
+          content: providerFile.content,
+          ownerKind: "mcp",
+        }),
+      );
+      if (subject.id === "copilot") {
+        expect(launch.command).toEqual(
+          expect.arrayContaining(["--autopilot", "--no-ask-user", "--allow-all"]),
+        );
+        expect(launch.command).toContain("@/overlay/copilot/provider-files/mcp/00.json");
+      } else if (subject.id === "claude-code") {
+        expect(launch.command).toContain("--dangerously-skip-permissions");
+        expect(launch.command).toEqual(
+          expect.arrayContaining(["--disallowedTools", "AskUserQuestion"]),
+        );
+        expect(launch.command).toContain("/overlay/claude-code/provider-files/mcp/00.json");
+        expect(launch.command.filter((argument) => argument === "--mcp-config")).toHaveLength(1);
+        const mcpIndex = launch.command.indexOf("--mcp-config");
+        expect(launch.command.slice(mcpIndex + 1, mcpIndex + 3)).toEqual([
+          "/overlay/claude-code/provider-files/mcp/00.json",
+          "/overlay/claude-code/mcp.json",
+        ]);
+      } else if (subject.id === "pi") {
+        expect(launch.command).toEqual(
+          expect.arrayContaining(["--exclude-tools", "ask_question", "--approve"]),
+        );
+        const generated = launch.overlay.files.find((file) => file.relativePath === "mcp.json");
+        expect(JSON.parse(generated!.content)).toMatchObject({
+          mcpServers: {
+            documentation: { url: "https://docs.example/mcp" },
+            nanasa: { lifecycle: "lazy" },
+          },
+        });
+      } else {
+        expect(launch.command).toContain("--auto");
+        expect(JSON.parse(launch.environment.OPENCODE_CONFIG_CONTENT!)).toMatchObject({
+          mcp: {
+            documentation: { url: "https://docs.example/mcp" },
+            nanasa: { enabled: true },
+          },
+        });
+      }
+    }
+
+    const claude = subjects.find((subject) => subject.id === "claude-code")!;
+    const readOnly = claude.evaluator.launch({
+      ...overlayContext("claude-code"),
+      executionProfile,
+      configuredCommand: claude.command,
+    });
+    expect(readOnly.command).toEqual(expect.arrayContaining(["--permission-mode", "dontAsk"]));
+    expect(readOnly.command).not.toContain("--dangerously-skip-permissions");
+
+    const pi = subjects.find((subject) => subject.id === "pi")!;
+    const providerFilesOnly = pi.evaluator.launch({
+      ...overlayContext("pi", { mcp: false }),
+      providerFiles: [
+        {
+          sourcePath: ".nanasa/providers/pi/mcp.json",
+          scope: "integration",
+          content: '{"mcpServers":{"documentation":{"url":"https://docs.example/mcp"}}}\n',
+          digest: "a".repeat(64),
+          bytes: 80,
+        },
+      ],
+      configuredCommand: pi.command,
+    });
+    expect(providerFilesOnly.command).toEqual(
+      expect.arrayContaining(["--extension", PI_MCP_ADAPTER_PATH, "--mcp-config"]),
+    );
+  });
+
+  it("rejects consumer MCP files that claim the Nanasa server identity", () => {
+    const copilot = subjects.find((subject) => subject.id === "copilot")!;
+    expect(() =>
+      copilot.evaluator.planOverlay({
+        ...overlayContext("copilot"),
+        providerFiles: [
+          {
+            sourcePath: ".nanasa/providers/copilot/mcp.json",
+            scope: "integration",
+            content: '{"mcpServers":{"nanasa":{"url":"https://other.example/mcp"}}}\n',
+            digest: "a".repeat(64),
+            bytes: 70,
+          },
+        ],
+      }),
+    ).toThrow(/reserved nanasa server/);
+
+    const opencode = subjects.find((subject) => subject.id === "opencode")!;
+    expect(() =>
+      opencode.evaluator.planOverlay({
+        ...overlayContext("opencode"),
+        providerFiles: [
+          {
+            sourcePath: ".nanasa/providers/opencode/mcp.json",
+            scope: "integration",
+            content: '{"agent":{"nanasa-3836009a6c34f950":{"mode":"primary"}}}\n',
+            digest: "a".repeat(64),
+            bytes: 70,
+          },
+        ],
+      }),
+    ).toThrow(/Nanasa-generated OpenCode agent/);
+  });
+
   it("keeps arbitrary command augmentation separate from observed-process recognition", () => {
     for (const subject of subjects) {
       const executable = subject.command[0]!;

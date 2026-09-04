@@ -108,6 +108,77 @@ integrations:
     });
   });
 
+  it("loads execution profiles and scoped provider MCP files without changing built-in origin", () => {
+    const repository = temporaryRepository(`version: 2
+executionProfiles:
+  autonomous:
+    continuation: autonomous
+    questions: disabled
+    approvals: unrestricted
+integrations:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+    executionProfile: autonomous
+    providerFiles:
+      mcp:
+        paths: [.nanasa/providers/copilot/mcp.json]
+groups:
+  team:
+    name: Team
+    agents:
+      worker:
+        memberId: worker
+        name: Worker
+        integrationId: copilot
+        providerFiles:
+          mcp:
+            mode: replace
+            paths: [.nanasa/providers/copilot/worker.json]
+`);
+
+    const config = loadNanasaConfig(repository).config;
+    expect(config.executionProfiles!.autonomous).toEqual({
+      continuation: "autonomous",
+      questions: "disabled",
+      approvals: "unrestricted",
+    });
+    expect(config.integrations.copilot).toMatchObject({
+      command: ["copilot"],
+      commandSource: "builtin",
+      executionProfile: "autonomous",
+      providerFiles: {
+        mcp: { mode: "append", paths: [".nanasa/providers/copilot/mcp.json"] },
+      },
+    });
+    expect(config.groups.team?.agents.worker?.providerFiles).toEqual({
+      mcp: { mode: "replace", paths: [".nanasa/providers/copilot/worker.json"] },
+    });
+  });
+
+  it("rejects unknown execution profiles and invalid provider file selections", () => {
+    const unknownProfile = temporaryRepository(`version: 2
+integrations:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+    executionProfile: missing
+`);
+    const invalidFiles = temporaryRepository(`version: 2
+integrations:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+    providerFiles:
+      mcp:
+        mode: disabled
+        paths: [../outside.json]
+`);
+
+    expect(() => loadNanasaConfig(unknownProfile)).toThrow(ConfigLoadError);
+    expect(() => loadNanasaConfig(invalidFiles)).toThrow(ConfigLoadError);
+  });
+
   it("treats an explicit built-in executable as a custom command", () => {
     const repository = temporaryRepository(`version: 2
 integrations:
@@ -172,6 +243,7 @@ ${integrationFields}`);
         },
       },
       instructions: [],
+      executionProfiles: {},
       attention: {
         defaults: {
           "response-required": true,

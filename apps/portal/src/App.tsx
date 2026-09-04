@@ -23,6 +23,7 @@ import {
   RadioTower,
   RefreshCw,
   ScanSearch,
+  Square,
   UserPlus,
   Users,
 } from "lucide-react";
@@ -73,6 +74,7 @@ import {
   RepositoryNavigation,
 } from "./shell/portal-navigation.js";
 import { PortalShell } from "./shell/portal-shell.js";
+import { Dialog } from "./a11y/primitives.js";
 
 const TerminalWorkspace = lazy(() =>
   import("./components/terminal-workspace.js").then((module) => ({
@@ -197,6 +199,56 @@ function TerminalNavigationActions({
   );
 }
 
+function StopAllDialog({
+  open,
+  groupName,
+  activeCount,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  groupName: string;
+  activeCount: number;
+  busy: boolean;
+  onClose(): void;
+  onConfirm(): Promise<void>;
+}) {
+  return (
+    <Dialog
+      open={open}
+      labelledBy="stop-all-title"
+      onClose={() => {
+        if (!busy) onClose();
+      }}
+      closeOnBackdrop
+    >
+      <form
+        className="confirmation-dialog-body"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void onConfirm().catch(() => undefined);
+        }}
+      >
+        <h2 id="stop-all-title">Stop all agents?</h2>
+        <p>
+          This stops {activeCount} active {activeCount === 1 ? "agent" : "agents"} in {groupName}
+          and closes their terminal panes.
+        </p>
+        <div className="confirmation-actions">
+          <button type="button" className="compact-button" disabled={busy} onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="compact-button danger-button" disabled={busy}>
+            {busy ? <LoaderCircle className="spin" aria-hidden="true" size={15} /> : null}
+            Stop all
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
 export function App({ client = api }: AppProps) {
   const { snapshot, config, status, error, errorSource, refresh } = usePortalSnapshot(client);
   const eventStatus = useDomainEvents(client, snapshot, () => void refresh());
@@ -219,6 +271,9 @@ export function App({ client = api }: AppProps) {
   const [startAllResult, setStartAllResult] = useState<StartGroupRunsResult>();
   const [recoveryResult, setRecoveryResult] = useState<ProviderUpdateRecoveryResult>();
   const [startingAllGroupId, setStartingAllGroupId] = useState<string>();
+  const [stoppingAllGroupId, setStoppingAllGroupId] = useState<string>();
+  const [confirmStopAllGroupId, setConfirmStopAllGroupId] = useState<string>();
+  const [dismissedRestartAdvisory, setDismissedRestartAdvisory] = useState<string>();
   const [recoveringGroupId, setRecoveringGroupId] = useState<string>();
   const [approvingStartAllGroupId, setApprovingStartAllGroupId] = useState<string>();
   const [focusSelectedGroupAfterDelete, setFocusSelectedGroupAfterDelete] = useState(false);
@@ -273,6 +328,7 @@ export function App({ client = api }: AppProps) {
   const hasStartableMembers = memberStatusViews.some(
     ({ run }) => run === undefined || run.status === "stopped" || run.status === "failed",
   );
+  const activeRunCount = runs.filter((run) => ["starting", "running"].includes(run.status)).length;
   const selectedMessageState = snapshot?.messageGroups?.find(
     (state) => state.groupId === selectedGroupId,
   );
@@ -626,6 +682,15 @@ export function App({ client = api }: AppProps) {
   };
   const stopRun = (groupId: string, agentId: string) =>
     runAction(`${groupId}:${agentId}`, () => client.stopRun(groupId, agentId));
+  const stopAll = async (groupId: string) => {
+    setStoppingAllGroupId(groupId);
+    try {
+      await runAction(`${groupId}:stop-all`, () => client.stopAllRuns(groupId));
+      setConfirmStopAllGroupId(undefined);
+    } finally {
+      setStoppingAllGroupId((current) => (current === groupId ? undefined : current));
+    }
+  };
   const recoverAgent = (groupId: string, agentId: string, forceIndeterminate: boolean) =>
     runAction(`${groupId}:${agentId}:recover`, () =>
       client.recoverAgentRun(groupId, agentId, { dryRun: false, forceIndeterminate }),
@@ -787,6 +852,15 @@ export function App({ client = api }: AppProps) {
     displayedRecoveryResult,
     displayedStartAllResult,
   );
+  const selectedRestartAdvisories = (snapshot.restartAdvisories ?? []).filter(
+    (advisory) => advisory.groupId === selectedGroupId,
+  );
+  const restartAdvisorySignature = selectedRestartAdvisories
+    .map((advisory) => `${advisory.runId}:${advisory.reasons.join(",")}`)
+    .sort()
+    .join("|");
+  const showRestartAdvisory =
+    restartAdvisorySignature.length > 0 && restartAdvisorySignature !== dismissedRestartAdvisory;
 
   return (
     <PortalShell
@@ -1008,6 +1082,22 @@ export function App({ client = api }: AppProps) {
               )}
             </button>
           )}
+          {route.kind === "group" && selectedGroup !== undefined && (
+            <button
+              type="button"
+              className="compact-button header-icon-button stop-all-button"
+              aria-label={`Stop all active agents in ${selectedGroup.name}`}
+              title={`Stop all active agents in ${selectedGroup.name} and close their terminals`}
+              disabled={stoppingAllGroupId === selectedGroup.id || activeRunCount === 0}
+              onClick={() => setConfirmStopAllGroupId(selectedGroup.id)}
+            >
+              {stoppingAllGroupId === selectedGroup.id ? (
+                <LoaderCircle className="spin" aria-hidden="true" size={15} />
+              ) : (
+                <Square aria-hidden="true" size={14} />
+              )}
+            </button>
+          )}
           <span className={`event-status event-${eventStatus}`} title="Domain event connection">
             <Cable aria-hidden="true" size={14} />
             {eventStatus}
@@ -1020,6 +1110,31 @@ export function App({ client = api }: AppProps) {
           error={actionError}
           onDismiss={() => setActionError(undefined)}
         />
+      )}
+      {showRestartAdvisory && selectedGroup !== undefined && (
+        <div className="restart-advisory-banner" role="status">
+          <RefreshCw aria-hidden="true" size={15} />
+          <span>
+            Configuration or provider setup changed. {selectedRestartAdvisories.length} active
+            {selectedRestartAdvisories.length === 1 ? " agent may" : " agents may"} need a restart.
+          </span>
+          <div className="restart-advisory-actions">
+            <button
+              type="button"
+              className="compact-button"
+              onClick={() => setConfirmStopAllGroupId(selectedGroup.id)}
+            >
+              Stop all
+            </button>
+            <button
+              type="button"
+              className="compact-button"
+              onClick={() => setDismissedRestartAdvisory(restartAdvisorySignature)}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
       )}
       {showRecoveryResults && (
         <TeamRecoveryResults
@@ -1243,6 +1358,16 @@ export function App({ client = api }: AppProps) {
           config={config}
           onAdd={addAgent}
           onClose={() => setAddAgentGroupId(undefined)}
+        />
+      )}
+      {selectedGroup !== undefined && (
+        <StopAllDialog
+          open={confirmStopAllGroupId === selectedGroup.id}
+          groupName={selectedGroup.name}
+          activeCount={activeRunCount}
+          busy={stoppingAllGroupId === selectedGroup.id}
+          onClose={() => setConfirmStopAllGroupId(undefined)}
+          onConfirm={() => stopAll(selectedGroup.id)}
         />
       )}
       <CommandPalette

@@ -228,6 +228,7 @@ export interface PortalClient {
     command: ProviderUpdateRecoveryCommand,
   ): Promise<ProviderUpdateOutcome>;
   stopRun(groupId: string, agentId: string): Promise<AgentRun>;
+  stopAllRuns(groupId: string): Promise<AgentRun[]>;
   listLaunchConsents(
     state?: CustomLaunchConsentRequestState,
   ): Promise<CustomLaunchConsentRequest[]>;
@@ -484,6 +485,7 @@ export const api: PortalClient = {
       AgentRunSchema,
       commandInit("DELETE", {}),
     ),
+  stopAllRuns: (groupId) => resources.operations.stopAll(groupId, false),
   listLaunchConsents: (state) => {
     const query = state === undefined ? "" : `?${new URLSearchParams({ state }).toString()}`;
     return request(

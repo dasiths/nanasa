@@ -8,6 +8,28 @@ prompt, status reporting, optional Model Context Protocol (MCP) messaging, and a
 provider-state home. It does not replace the provider's login or model service.
 Choose state sharing in the [authentication guide](authentication.md).
 
+## Apply execution profiles and MCP files
+
+Nanasa resolves execution profiles and provider-file scopes before launch. The
+trusted provider implementation translates the effective profile and composes
+native MCP JSON with Nanasa's generated coordination entry:
+
+| Provider           | Autonomous behavior                                    | Consumer MCP composition                    |
+|--------------------|--------------------------------------------------------|---------------------------------------------|
+| GitHub Copilot CLI | Autopilot, question suppression, and native grants     | Repeated `--additional-mcp-config` arguments |
+| Claude Code        | Native automatic or bypass permission mode             | One ordered `--mcp-config` file list        |
+| Pi                 | Native tool selection and the pinned MCP adapter        | Adapter-owned merged MCP configuration      |
+| OpenCode           | Native automatic approval and generated denies         | Merged `OPENCODE_CONFIG_CONTENT`            |
+
+Provider files remain in each provider's native format. Nanasa validates file
+ownership and immutable bytes, protects its reserved identities, and delegates
+all other fields to the provider.
+
+Set `NANASA_ALLOW_AUTONOMOUS=true` and
+`NANASA_ALLOW_PROVIDER_FILES=true` in the daemon environment to authorize these
+repository requests. These settings are intentionally outside
+`.nanasa/config.yaml` so repository content cannot grant itself more authority.
+
 ## GitHub Copilot CLI
 
 Use `kind: copilot` and the default command `[copilot]`. Authenticate with

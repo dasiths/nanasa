@@ -79,6 +79,22 @@ export const EventServerFrameSchema = z.discriminatedUnion("type", [
 ]);
 export type EventServerFrame = z.infer<typeof EventServerFrameSchema>;
 
+export const RestartAdvisoryReasonSchema = z.enum([
+  "configuration-changed",
+  "provider-files-changed",
+  "provider-changed",
+]);
+export type RestartAdvisoryReason = z.infer<typeof RestartAdvisoryReasonSchema>;
+export const RestartAdvisorySchema = z
+  .object({
+    runId: IdentifierSchema,
+    groupId: IdentifierSchema,
+    memberId: IdentifierSchema,
+    reasons: z.array(RestartAdvisoryReasonSchema).min(1).max(3),
+  })
+  .strict();
+export type RestartAdvisory = z.infer<typeof RestartAdvisorySchema>;
+
 export const PortalSnapshotSchema = z
   .object({
     instanceId: IdentifierSchema,
@@ -99,6 +115,7 @@ export const PortalSnapshotSchema = z
     messageGroups: z.array(GroupMessageStateSchema).optional(),
     config: NanasaConfigSchema.optional(),
     configStatus: ConfigStatusSchema.optional(),
+    restartAdvisories: z.array(RestartAdvisorySchema).optional(),
   })
   .strict();
 export type PortalSnapshot = z.infer<typeof PortalSnapshotSchema>;

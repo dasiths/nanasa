@@ -32,6 +32,11 @@ place. On startup, Nanasa verifies pane identity, run ID, and generation before
 adoption. A failed tmux inspection is not treated as proof that a process is
 gone.
 
+Adopted processes keep the command, environment, and generated files from their
+original launch. Nanasa compares that launch record with the current
+configuration, provider files, and provider snapshot. The portal warns when an
+active agent may need to be stopped and started to receive updated settings.
+
 The browser resnapshots after reconnect. Existing WebSockets and attachment
 pseudo-terminals are not handed from one daemon process to another.
 

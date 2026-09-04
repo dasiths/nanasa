@@ -38,6 +38,25 @@ export const CustomLaunchConsentSubjectSchema = z
     credentialReference: CredentialProfileReferenceSchema,
     permissionFloor: RolePermissionPolicySchema,
     permissionFloorCapability: z.string().trim().min(1).max(128).optional(),
+    executionProfile: z
+      .object({
+        id: z.string().trim().min(1).max(64),
+        digest: Sha256DigestSchema,
+      })
+      .strict()
+      .optional(),
+    providerFiles: z
+      .array(
+        z
+          .object({
+            path: z.string().trim().min(1).max(4_096),
+            scope: z.enum(["integration", "agent"]),
+            digest: Sha256DigestSchema,
+          })
+          .strict(),
+      )
+      .max(32)
+      .optional(),
   })
   .strict()
   .superRefine((subject, context) => {

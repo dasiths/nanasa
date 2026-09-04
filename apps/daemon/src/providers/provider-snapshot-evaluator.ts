@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
-import type { OpenWaitReply, ProviderArgumentStrategy } from "@nanasa/contracts";
+import type { ExecutionProfile, OpenWaitReply, ProviderArgumentStrategy } from "@nanasa/contracts";
 import type { EffectiveAgentPrompt } from "../instruction-resolver.js";
 import type { ProviderReporterDriverRegistry } from "./provider-reporter-driver-registry.js";
 import type {
@@ -25,6 +25,8 @@ interface FileRecipe {
 export interface SnapshotLaunchInput extends ProviderOverlayContext {
   readonly configuredCommand: readonly string[];
   readonly providerArgumentStrategy?: ProviderArgumentStrategy;
+  readonly configRevision?: string;
+  readonly executionProfileId?: string;
   readonly model?: string;
   readonly nativeSession?: SnapshotNativeSession;
   readonly enforceConfiguredModelOnResume?: boolean;
@@ -83,6 +85,103 @@ function matches(
 
 function json(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+function object(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${label} must contain a JSON object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function mergeObjects(
+  base: Record<string, unknown>,
+  next: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(next)) {
+    const current = merged[key];
+    merged[key] =
+      typeof current === "object" &&
+      current !== null &&
+      !Array.isArray(current) &&
+      typeof value === "object" &&
+      value !== null &&
+      !Array.isArray(value)
+        ? mergeObjects(current as Record<string, unknown>, value as Record<string, unknown>)
+        : value;
+  }
+  return merged;
+}
+
+function providerFilePath(index: number): string {
+  return join("provider-files", "mcp", `${String(index).padStart(2, "0")}.json`);
+}
+
+function consumerProviderConfig(
+  providerId: string,
+  contents: readonly string[],
+): Record<string, unknown> {
+  let merged: Record<string, unknown> = {};
+  for (const [index, content] of contents.entries()) {
+    const parsed = object(JSON.parse(content), `Provider MCP file ${index + 1}`);
+    const serverKey = providerId === "opencode" ? "mcp" : "mcpServers";
+    const servers = parsed[serverKey];
+    if (
+      typeof servers === "object" &&
+      servers !== null &&
+      !Array.isArray(servers) &&
+      Object.hasOwn(servers, "nanasa")
+    ) {
+      throw new Error("Provider MCP files may not define the reserved nanasa server");
+    }
+    merged = mergeObjects(merged, parsed);
+  }
+  return merged;
+}
+
+function executionArguments(
+  providerId: string,
+  profile: ExecutionProfile | undefined,
+  readOnly: boolean,
+): string[] {
+  if (profile === undefined) return [];
+  switch (providerId) {
+    case "copilot":
+      return [
+        ...(profile.continuation === "autonomous" ? ["--autopilot"] : []),
+        ...(profile.questions === "disabled" ? ["--no-ask-user"] : []),
+        ...(profile.approvals === "allow-known"
+          ? ["--allow-all-tools"]
+          : profile.approvals === "unrestricted"
+            ? ["--allow-all"]
+            : []),
+      ];
+    case "claude-code": {
+      const questionArguments =
+        profile.questions === "disabled" ? ["--disallowedTools", "AskUserQuestion"] : [];
+      if (profile.approvals === "unrestricted" && !readOnly) {
+        return [...questionArguments, "--dangerously-skip-permissions"];
+      }
+      return [
+        ...questionArguments,
+        ...(profile.continuation === "autonomous" || profile.approvals !== "provider-default"
+          ? ["--permission-mode", readOnly ? "dontAsk" : "auto"]
+          : []),
+      ];
+    }
+    case "pi":
+      return [
+        ...(profile.questions === "disabled" ? ["--exclude-tools", "ask_question"] : []),
+        ...(profile.approvals === "provider-default" ? [] : ["--approve"]),
+      ];
+    case "opencode":
+      return profile.continuation === "autonomous" || profile.approvals !== "provider-default"
+        ? ["--auto"]
+        : [];
+    default:
+      throw new Error(`Execution profiles are unsupported for provider ${providerId}`);
+  }
 }
 
 function generatedAgentName(membershipId: string): string {
@@ -206,13 +305,39 @@ export class ProviderSnapshotEvaluator {
     const generatedIdentities: string[] = [];
     const generatedName = generatedAgentName(context.membershipId);
     const providerId = this.#adapter.body.providerId;
+    const providerFiles = context.providerFiles ?? [];
+    const consumerConfig = consumerProviderConfig(
+      providerId,
+      providerFiles.map((file) => file.content),
+    );
+    if (
+      providerId === "opencode" &&
+      typeof consumerConfig.agent === "object" &&
+      consumerConfig.agent !== null &&
+      !Array.isArray(consumerConfig.agent) &&
+      Object.hasOwn(consumerConfig.agent, generatedName)
+    ) {
+      throw new Error("Provider MCP files may not define the Nanasa-generated OpenCode agent");
+    }
+    for (const [index, file] of providerFiles.entries()) {
+      const relativePath = providerFilePath(index);
+      files.push({ relativePath, content: file.content, ownerKind: "mcp" });
+      generatedIdentities.push(relativePath);
+    }
     const copilotReporterPath = join(
       context.overlayRoot,
       "copilot-status-plugin",
       "status-hook.mjs",
     );
-    const openCodeManaged = {
-      plugin: [join(context.overlayRoot, "plugins", "nanasa-status.js")],
+    const openCodePermission = {
+      ...(context.executionProfile?.questions === "disabled" ? { question: "deny" } : {}),
+      ...(context.readOnly ? { edit: "deny", bash: "deny" } : {}),
+    };
+    const openCodeManaged = mergeObjects(consumerConfig, {
+      plugin: [
+        ...(Array.isArray(consumerConfig.plugin) ? consumerConfig.plugin : []),
+        join(context.overlayRoot, "plugins", "nanasa-status.js"),
+      ],
       ...(context.mcpEndpointUrl === undefined
         ? {}
         : {
@@ -234,11 +359,13 @@ export class ProviderSnapshotEvaluator {
                 description: `Nanasa-managed ${context.prompt.role?.name ?? "agent"}`,
                 mode: "primary",
                 prompt: `{file:${join(context.overlayRoot, "prompts", "system.md")}}`,
-                ...(context.readOnly ? { permission: { edit: "deny", bash: "deny" } } : {}),
+                ...(Object.keys(openCodePermission).length === 0
+                  ? {}
+                  : { permission: openCodePermission }),
               },
             },
           }),
-    };
+    });
 
     for (const recipe of launch.files) {
       if (recipe.assetDigest === undefined)
@@ -374,20 +501,26 @@ export class ProviderSnapshotEvaluator {
           ownerKind = "prompt";
           break;
         case "pi.mcp.config":
-          if (context.mcpEndpointUrl === undefined) continue;
+          if (context.mcpEndpointUrl === undefined && providerFiles.length === 0) continue;
           if (asset.kind !== "pi-mcp-config") throw new Error("Pi MCP asset kind mismatch");
-          assertLoopbackEndpoint(context.mcpEndpointUrl);
-          content = json({
-            settings: { directTools: true, hostConfigDiscovery: "off" },
-            mcpServers: {
-              nanasa: {
-                url: context.mcpEndpointUrl,
-                headers: { Authorization: "Bearer ${NANASA_MCP_TOKEN}" },
-                protocolVersion: "auto",
-                lifecycle: "lazy",
-              },
-            },
-          });
+          if (context.mcpEndpointUrl !== undefined) assertLoopbackEndpoint(context.mcpEndpointUrl);
+          content = json(
+            mergeObjects(consumerConfig, {
+              settings: { directTools: true, hostConfigDiscovery: "off" },
+              ...(context.mcpEndpointUrl === undefined
+                ? {}
+                : {
+                    mcpServers: {
+                      nanasa: {
+                        url: context.mcpEndpointUrl,
+                        headers: { Authorization: "Bearer ${NANASA_MCP_TOKEN}" },
+                        protocolVersion: "auto",
+                        lifecycle: "lazy",
+                      },
+                    },
+                  }),
+            }),
+          );
           ownerKind = "mcp";
           break;
         case "opencode.tui.config":
@@ -409,8 +542,17 @@ export class ProviderSnapshotEvaluator {
       generatedIdentities.push(relativePath);
     }
 
+    commandArguments.push(
+      ...executionArguments(providerId, context.executionProfile, context.readOnly),
+    );
     switch (providerId) {
       case "copilot":
+        for (let index = 0; index < providerFiles.length; index += 1) {
+          commandArguments.push(
+            "--additional-mcp-config",
+            `@${join(context.overlayRoot, providerFilePath(index))}`,
+          );
+        }
         commandArguments.push("--plugin-dir", join(context.overlayRoot, "copilot-status-plugin"));
         if (context.mcpEndpointUrl !== undefined) {
           commandArguments.push(
@@ -425,10 +567,16 @@ export class ProviderSnapshotEvaluator {
           commandArguments.push(...promptPolicy.readOnlyFloor.map((tool) => `--deny-tool=${tool}`));
         }
         break;
-      case "claude-code":
+      case "claude-code": {
         commandArguments.push("--settings", join(context.overlayRoot, "settings.json"));
+        const mcpConfigs = providerFiles.map((_file, index) =>
+          join(context.overlayRoot, providerFilePath(index)),
+        );
         if (context.mcpEndpointUrl !== undefined) {
-          commandArguments.push("--mcp-config", join(context.overlayRoot, "mcp.json"));
+          mcpConfigs.push(join(context.overlayRoot, "mcp.json"));
+        }
+        if (mcpConfigs.length > 0) {
+          commandArguments.push("--mcp-config", ...mcpConfigs);
         }
         if (context.prompt !== undefined) {
           commandArguments.push(
@@ -437,9 +585,10 @@ export class ProviderSnapshotEvaluator {
           );
         }
         break;
+      }
       case "pi": {
         commandArguments.push("--extension", join(context.overlayRoot, "extensions", "status.mjs"));
-        if (context.mcpEndpointUrl !== undefined) {
+        if (context.mcpEndpointUrl !== undefined || providerFiles.length > 0) {
           const mcp = capability<{ adapterAssetDigest?: string }>(this.#adapter, "mcp");
           if (mcp.adapterAssetDigest === undefined) {
             throw new Error("Pi MCP capability has no pinned adapter asset");

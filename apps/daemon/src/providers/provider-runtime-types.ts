@@ -1,4 +1,6 @@
+import type { ExecutionProfile } from "@nanasa/contracts";
 import type { EffectiveAgentPrompt } from "../instruction-resolver.js";
+import type { ResolvedProviderFile } from "../provider-policy-resolver.js";
 
 export interface GeneratedOverlayFile {
   readonly relativePath: string;
@@ -16,6 +18,8 @@ export interface ProviderOverlayContext {
   readonly statusEndpointUrl: string;
   readonly prompt?: EffectiveAgentPrompt;
   readonly readOnly: boolean;
+  readonly executionProfile?: ExecutionProfile;
+  readonly providerFiles?: readonly ResolvedProviderFile[];
 }
 
 export interface ProviderOverlayPlan {

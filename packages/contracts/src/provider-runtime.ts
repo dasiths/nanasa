@@ -985,6 +985,26 @@ export const RunProviderLaunchSelectionSchema = z
     workingDirectory: z.string().min(1).max(4_096).optional(),
     desiredModel: z.string().min(1).max(256).optional(),
     modelResumePolicy: z.enum(["preserve-session", "enforce-configured"]),
+    configRevision: SnapshotDigestSchema.optional(),
+    executionProfile: z
+      .object({
+        id: z.string().trim().min(1).max(64),
+        digest: SnapshotDigestSchema,
+      })
+      .strict()
+      .optional(),
+    providerFiles: z
+      .array(
+        z
+          .object({
+            path: z.string().trim().min(1).max(4_096),
+            scope: z.enum(["integration", "agent"]),
+            digest: SnapshotDigestSchema,
+          })
+          .strict(),
+      )
+      .max(32)
+      .optional(),
   })
   .strict()
   .superRefine((selection, context) => {

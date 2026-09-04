@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import type {
   CustomLaunchConsentRequest,
   CustomLaunchConsentSubject,
   IntegrationConfig,
   StartAgentRunResult,
 } from "@nanasa/contracts";
+import { canonicalJson } from "@nanasa/contracts";
 
 import type { ConfigRepository } from "./config-repository.js";
 import { repositoryLauncherFiles } from "./custom-launch-consent-subject.js";
@@ -12,6 +14,7 @@ import {
   LaunchConsentService,
   type ResolveLaunchConsentInput,
 } from "./launch-consent-service.js";
+import { ProviderPolicyError, resolveEffectiveProviderPolicy } from "./provider-policy-resolver.js";
 import type { ProviderRunBindingRepository } from "./providers/provider-run-binding-repository.js";
 import type { ResolvedProviderAdapter } from "./providers/resolved-provider-adapter.js";
 import type { RuntimeLaunchConsentGate as CoordinatorLaunchConsentGate } from "./run-runtime-coordinator.js";
@@ -95,6 +98,8 @@ export interface RuntimeLaunchConsentGateOptions {
   readonly providerBindings: ProviderRunBindingRepository;
   readonly consentService: LaunchConsentService;
   readonly runtimeEnvironmentNames?: readonly string[];
+  readonly allowAutonomous?: boolean;
+  readonly allowProviderFiles?: boolean;
 }
 
 export class RuntimeLaunchConsentGate implements CoordinatorLaunchConsentGate {
@@ -104,6 +109,8 @@ export class RuntimeLaunchConsentGate implements CoordinatorLaunchConsentGate {
   readonly #providerBindings: ProviderRunBindingRepository;
   readonly #consentService: LaunchConsentService;
   readonly #runtimeEnvironmentNames: readonly string[];
+  readonly #allowAutonomous: boolean;
+  readonly #allowProviderFiles: boolean;
 
   public constructor(options: RuntimeLaunchConsentGateOptions) {
     this.#repositoryIdentity = options.repositoryIdentity;
@@ -112,6 +119,8 @@ export class RuntimeLaunchConsentGate implements CoordinatorLaunchConsentGate {
     this.#providerBindings = options.providerBindings;
     this.#consentService = options.consentService;
     this.#runtimeEnvironmentNames = options.runtimeEnvironmentNames ?? [];
+    this.#allowAutonomous = options.allowAutonomous === true;
+    this.#allowProviderFiles = options.allowProviderFiles === true;
   }
 
   public async resolve(
@@ -190,6 +199,23 @@ export class RuntimeLaunchConsentGate implements CoordinatorLaunchConsentGate {
     if (integration === undefined) {
       throw new DomainError("integration_not_found", "The integration was not found", 404);
     }
+    let providerPolicy;
+    try {
+      providerPolicy = resolveEffectiveProviderPolicy({
+        repoRoot: loaded.repoRoot,
+        config: loaded.config,
+        membership,
+        profile: { agentType: configuredAgent.integrationId },
+        allowAutonomous: this.#allowAutonomous,
+        allowProviderFiles: this.#allowProviderFiles,
+        ...(loaded.status.revision === undefined ? {} : { configRevision: loaded.status.revision }),
+      });
+    } catch (error) {
+      if (error instanceof ProviderPolicyError) {
+        throw new DomainError(error.code, error.message, 409);
+      }
+      throw error;
+    }
     if (integration.commandSource === "builtin") return { commandSource: "builtin" };
     if (loaded.status.revision === undefined) {
       throw new DomainError(
@@ -233,6 +259,26 @@ export class RuntimeLaunchConsentGate implements CoordinatorLaunchConsentGate {
       credentialReference: integration.credentials,
       permissionFloor,
       ...(permissionFloorCapability === undefined ? {} : { permissionFloorCapability }),
+      ...(providerPolicy.executionProfileId === undefined ||
+      providerPolicy.executionProfile === undefined
+        ? {}
+        : {
+            executionProfile: {
+              id: providerPolicy.executionProfileId,
+              digest: createHash("sha256")
+                .update(canonicalJson(providerPolicy.executionProfile))
+                .digest("hex"),
+            },
+          }),
+      ...(providerPolicy.providerFiles.length === 0
+        ? {}
+        : {
+            providerFiles: providerPolicy.providerFiles.map((file) => ({
+              path: file.sourcePath,
+              scope: file.scope,
+              digest: file.digest,
+            })),
+          }),
     };
     return {
       commandSource: "custom",

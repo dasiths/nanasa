@@ -52,6 +52,7 @@ import { MessageRepository } from "./message-repository.js";
 import { NativeSessionService } from "./native-session-service.js";
 import { OperatorAuth } from "./operator-auth.js";
 import { controlMetadata, PRODUCT_VERSION, repositoryTmuxNamespace } from "./protocol-metadata.js";
+import { resolveEffectiveProviderPolicy } from "./provider-policy-resolver.js";
 import { ProviderStateRepository } from "./provider-state-repository.js";
 import {
   buildTrustedBuiltinClaudeCodePackage,
@@ -119,6 +120,10 @@ export interface DaemonOptions {
     operatorToken?: string;
     allowedHostnames?: string[];
     secretPath?: string;
+  };
+  providerPolicy?: {
+    allowAutonomous?: boolean;
+    allowProviderFiles?: boolean;
   };
 }
 
@@ -216,10 +221,6 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       repositoryRoot: loadedConfig.repoRoot,
       packageRoot: options.packageRoot ?? process.env.NANASA_PACKAGE_ROOT ?? loadedConfig.repoRoot,
     });
-    const snapshotReadModel = new SnapshotReadModel(store, {
-      instanceId: guard.instanceId,
-      daemonEpoch,
-    });
     const eventLog = new EventLog(store);
     const eventSessions = new Set<EventStreamSession>();
     const configRepository = new ConfigRepository(loadedConfig.repoRoot);
@@ -305,6 +306,11 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       providerRuntimeIndex,
       providerSnapshots,
     );
+    const snapshotReadModel = new SnapshotReadModel(
+      store,
+      { instanceId: guard.instanceId, daemonEpoch },
+      { configRepository, providerBindings, providerRuntimeIndex },
+    );
     const providerStates = new ProviderStateRepository(
       options.providerStateRoot ?? loadedConfig.integrationsDirectory,
       store,
@@ -332,6 +338,8 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       providerBindings,
       consentService: launchConsentService,
       runtimeEnvironmentNames: options.mcp?.enabled === true ? ["NANASA_MCP_URL"] : [],
+      allowAutonomous: options.providerPolicy?.allowAutonomous === true,
+      allowProviderFiles: options.providerPolicy?.allowProviderFiles === true,
     });
     launchConsentReference.current = launchConsent;
     const nativeSessions = new NativeSessionService(store);
@@ -379,6 +387,20 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       desiredModelResolver: (membership) => {
         const current = configRepository.load();
         return current.config.groups[membership.groupId]?.agents[membership.id]?.desiredModel;
+      },
+      providerPolicyResolver: (membership, profile) => {
+        const current = configRepository.load();
+        return resolveEffectiveProviderPolicy({
+          repoRoot: current.repoRoot,
+          config: current.config,
+          membership,
+          profile,
+          allowAutonomous: options.providerPolicy?.allowAutonomous === true,
+          allowProviderFiles: options.providerPolicy?.allowProviderFiles === true,
+          ...(current.status.revision === undefined
+            ? {}
+            : { configRevision: current.status.revision }),
+        });
       },
     });
     const reporterRegistry = new ReporterRegistry(store, {

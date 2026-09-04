@@ -174,7 +174,20 @@ describe("tested documentation examples", () => {
       command: ["sh", "bin/claude-copilot"],
       commandSource: "custom",
       launcher: { providerArguments: "append" },
+      executionProfile: "autonomous",
     });
+    expect(loaded.config.executionProfiles!.autonomous).toEqual({
+      continuation: "autonomous",
+      questions: "disabled",
+      approvals: "unrestricted",
+    });
+    for (const integration of Object.values(loaded.config.integrations)) {
+      expect(integration.executionProfile).toBe("autonomous");
+      expect(integration.providerFiles?.mcp?.paths).toHaveLength(1);
+      expect(statExists(join(loaded.repoRoot, integration.providerFiles!.mcp!.paths[0]!))).toBe(
+        true,
+      );
+    }
     const launcherBytes = readFileSync(join(multiCodingAgentsRoot, "bin", "claude-copilot"));
     expect(
       repositoryLauncherFiles({

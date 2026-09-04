@@ -13,6 +13,8 @@ import {
   CredentialProfileReferenceSchema,
   DEFAULT_ATTENTION_SUBSCRIPTIONS,
   DesiredModelPolicySchema,
+  ExecutionProfileIdSchema,
+  ExecutionProfileSchema,
   ExtensionIdSchema,
   InstructionPathSchema,
   IntegrationConfigSchema,
@@ -22,6 +24,7 @@ import {
   type NanasaConfig,
   NanasaConfigSchema,
   NativeRecoveryPolicySchema,
+  ProviderFileSelectionSchema,
   ProviderStatePolicySchema,
   RepositoryIntentSchema,
   RoleDefinitionSchema,
@@ -59,6 +62,8 @@ const RawIntegrationConfigSchema = z
       mode: "resume-or-restart",
       confirmationTimeoutSeconds: 30,
     }),
+    executionProfile: ExecutionProfileIdSchema.optional(),
+    providerFiles: ProviderFileSelectionSchema.optional(),
     extensions: z.array(ExtensionIdSchema).max(32).default([]),
     environment: z
       .record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string().max(16_384))
@@ -90,6 +95,7 @@ export const AuthoredNanasaConfigSchema = z
       },
     }),
     instructions: z.array(InstructionPathSchema).max(32).default([]),
+    executionProfiles: z.record(ExecutionProfileIdSchema, ExecutionProfileSchema).default({}),
     integrations: z.record(IntegrationIdSchema, RawIntegrationConfigSchema),
     extensions: z.record(ExtensionIdSchema, ConfiguredProviderExtensionSchema).default({}),
     roles: z.record(RoleIdSchema, RoleDefinitionSchema).default({}),
@@ -99,7 +105,21 @@ export const AuthoredNanasaConfigSchema = z
       defaults: DEFAULT_ATTENTION_SUBSCRIPTIONS,
     }),
   })
-  .strict();
+  .strict()
+  .superRefine((config, context) => {
+    for (const [integrationId, integration] of Object.entries(config.integrations)) {
+      if (
+        integration.executionProfile !== undefined &&
+        config.executionProfiles[integration.executionProfile] === undefined
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: `Integration references unknown execution profile ${integration.executionProfile}`,
+          path: ["integrations", integrationId, "executionProfile"],
+        });
+      }
+    }
+  });
 
 export interface NanasaPaths {
   repoRoot: string;

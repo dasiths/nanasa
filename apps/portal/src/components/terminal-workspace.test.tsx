@@ -106,6 +106,7 @@ function client(): PortalClient {
     recoverGroupRuns: vi.fn(),
     recoverAgentRun: vi.fn(),
     stopRun: vi.fn(),
+    stopAllRuns: vi.fn(),
     listLaunchConsents: vi.fn().mockResolvedValue([]),
     getLaunchConsent: vi.fn(),
     approveLaunchConsent: vi.fn(),
