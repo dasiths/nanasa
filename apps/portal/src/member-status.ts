@@ -1,10 +1,12 @@
 import type { AgentRun, AgentStatusSummary, GroupMembership } from "@nanasa/contracts";
 
 export type MemberStatusKey =
+  | "needs-help"
   | "failed"
   | "needs-approval"
   | "needs-input"
   | "stuck"
+  | "updating"
   | "starting"
   | "working"
   | "done"
@@ -23,17 +25,19 @@ export interface MemberStatusView {
 }
 
 const statusPresentation = {
-  failed: { label: "Failed", rank: 1, attentionWorthy: true },
-  "needs-approval": { label: "Needs approval", rank: 2, attentionWorthy: true },
-  "needs-input": { label: "Needs input", rank: 3, attentionWorthy: true },
-  stuck: { label: "Stuck", rank: 4, attentionWorthy: true },
-  starting: { label: "Starting", rank: 5, attentionWorthy: false },
-  working: { label: "Working", rank: 6, attentionWorthy: false },
-  done: { label: "Done", rank: 7, attentionWorthy: true },
-  idle: { label: "Idle", rank: 8, attentionWorthy: false },
-  stopped: { label: "Stopped", rank: 9, attentionWorthy: false },
-  "not-started": { label: "Not started", rank: 10, attentionWorthy: false },
-  unknown: { label: "Unknown", rank: 11, attentionWorthy: false },
+  "needs-help": { label: "Needs help", rank: 1, attentionWorthy: true },
+  failed: { label: "Failed", rank: 2, attentionWorthy: true },
+  "needs-approval": { label: "Needs approval", rank: 3, attentionWorthy: true },
+  "needs-input": { label: "Needs input", rank: 4, attentionWorthy: true },
+  stuck: { label: "Stuck", rank: 5, attentionWorthy: true },
+  updating: { label: "Updating", rank: 6, attentionWorthy: false },
+  starting: { label: "Starting", rank: 7, attentionWorthy: false },
+  working: { label: "Working", rank: 8, attentionWorthy: false },
+  done: { label: "Done", rank: 9, attentionWorthy: true },
+  idle: { label: "Idle", rank: 10, attentionWorthy: false },
+  stopped: { label: "Stopped", rank: 11, attentionWorthy: false },
+  "not-started": { label: "Not started", rank: 12, attentionWorthy: false },
+  unknown: { label: "Unknown", rank: 13, attentionWorthy: false },
 } as const satisfies Record<
   MemberStatusKey,
   { label: string; rank: number; attentionWorthy: boolean }
@@ -111,6 +115,22 @@ export function memberStatusView(
   const status = currentMemberStatus(statuses, member, run);
 
   if (run === undefined) return view("not-started", undefined, status);
+  if (run.providerUpdate?.state === "pending" || run.providerUpdate?.state === "in-progress") {
+    return view("updating", run, status);
+  }
+  if (
+    run.providerUpdate?.state === "completed" &&
+    (run.providerUpdate.outcome === "failed" ||
+      run.providerUpdate.outcome === "ownership-uncertain")
+  ) {
+    return view("needs-help", run, status);
+  }
+  if (
+    run.providerUpdate?.state === "completed" &&
+    run.providerUpdate.outcome === "approval-required"
+  ) {
+    return view("needs-approval", run, status);
+  }
   if (
     status?.state === "failed" ||
     status?.outcome === "failed" ||

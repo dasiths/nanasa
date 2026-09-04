@@ -9,10 +9,19 @@ import {
   AgentRunSchema,
   type AgentStatusDetail,
   AgentStatusDetailSchema,
+  type ApproveCustomLaunchConsentCommand,
+  ApproveCustomLaunchConsentCommandSchema,
   type AssignAgentCheckoutCommand,
   AssignAgentCheckoutCommandSchema,
+  type AttentionDismissalList,
+  AttentionDismissalListSchema,
+  type AttentionEventType,
+  type AttentionSubscriptionsSnapshot,
+  AttentionSubscriptionsSnapshotSchema,
   type BrowserRestartFrame,
   BrowserRestartFrameSchema,
+  type CancelCustomLaunchConsentCommand,
+  CancelCustomLaunchConsentCommandSchema,
   type ClearMessageHistoryResult,
   ClearMessageHistoryResultSchema,
   type ConfigStatus,
@@ -26,8 +35,19 @@ import {
   CreateGroupCommandSchema,
   type CreateWorktreeCommand,
   CreateWorktreeCommandSchema,
+  type CustomLaunchConsentDecision,
+  type CustomLaunchConsentDecisionResult,
+  CustomLaunchConsentDecisionResultSchema,
+  CustomLaunchConsentDecisionSchema,
+  type CustomLaunchConsentRequest,
+  CustomLaunchConsentRequestListSchema,
+  CustomLaunchConsentRequestSchema,
+  type CustomLaunchConsentRequestState,
   type DeleteGroupResult,
   DeleteGroupResultSchema,
+  type DenyCustomLaunchConsentCommand,
+  DenyCustomLaunchConsentCommandSchema,
+  type DismissAttentionItemsCommand,
   type ExtensionLifecycleCommand,
   type ExtensionTrustReceipt,
   ExtensionTrustReceiptSchema,
@@ -36,6 +56,8 @@ import {
   GroupMembershipSchema,
   GroupSchema,
   type InstallProviderExtensionCommand,
+  type MemberAttentionSubscriptions,
+  MemberAttentionSubscriptionsSchema,
   type MessagePage,
   MessagePageSchema,
   type MessageSubmissionResult,
@@ -58,6 +80,9 @@ import {
   ProviderExtensionPlanSchema,
   type ProviderStateBinding,
   ProviderStateBindingSchema,
+  type ProviderUpdateOutcome,
+  type ProviderUpdateRecoveryCommand,
+  type ProviderUpdateRecoveryResult,
   type RemoteDescriptor,
   RemoteDescriptorSchema,
   type RemoveGroupAgentResult,
@@ -75,10 +100,15 @@ import {
   type ReparentGroupAgentResult,
   type ReplyOpenWaitCommand,
   ReplyOpenWaitCommandSchema,
+  type RevokeCustomLaunchConsentCommand,
+  RevokeCustomLaunchConsentCommandSchema,
   type RoleDefinition,
   RoleDefinitionSchema,
   type ServiceDescriptor,
   ServiceDescriptorSchema,
+  type SetAttentionSubscriptionCommand,
+  type StartAgentRunResult,
+  StartAgentRunResultSchema,
   type StartGroupRunsResult,
   StartGroupRunsResultSchema,
   type SubmitMessageCommand,
@@ -186,15 +216,58 @@ export interface PortalClient {
     roleId: string,
     command: UpdateRolePresentationCommand,
   ): Promise<RoleDefinition>;
-  startRun(groupId: string, agentId: string): Promise<AgentRun>;
+  startRun(groupId: string, agentId: string): Promise<StartAgentRunResult>;
   startAllRuns(groupId: string, idempotencyKey: string): Promise<StartGroupRunsResult>;
+  recoverGroupRuns(
+    groupId: string,
+    command: ProviderUpdateRecoveryCommand,
+  ): Promise<ProviderUpdateRecoveryResult>;
+  recoverAgentRun(
+    groupId: string,
+    agentId: string,
+    command: ProviderUpdateRecoveryCommand,
+  ): Promise<ProviderUpdateOutcome>;
   stopRun(groupId: string, agentId: string): Promise<AgentRun>;
+  stopAllRuns(groupId: string): Promise<AgentRun[]>;
+  listLaunchConsents(
+    state?: CustomLaunchConsentRequestState,
+  ): Promise<CustomLaunchConsentRequest[]>;
+  getLaunchConsent(requestId: string): Promise<CustomLaunchConsentRequest>;
+  approveLaunchConsent(
+    requestId: string,
+    command: ApproveCustomLaunchConsentCommand,
+  ): Promise<CustomLaunchConsentDecisionResult>;
+  denyLaunchConsent(
+    requestId: string,
+    command: DenyCustomLaunchConsentCommand,
+  ): Promise<CustomLaunchConsentDecisionResult>;
+  cancelLaunchConsent(
+    requestId: string,
+    command: CancelCustomLaunchConsentCommand,
+  ): Promise<CustomLaunchConsentRequest>;
+  revokeLaunchConsent(
+    receiptId: string,
+    command: RevokeCustomLaunchConsentCommand,
+  ): Promise<CustomLaunchConsentDecision>;
   submitMessage(groupId: string, command: SubmitMessageCommand): Promise<MessageSubmissionResult>;
   createAgentAction(command: CreateAgentActionCommand): Promise<AgentAction>;
   loadActionWorkspace(groupId: string): Promise<AgentActionWorkspace>;
   cancelAgentAction(actionId: string): Promise<AgentAction>;
   replyOpenWait(waitId: string, command: ReplyOpenWaitCommand): Promise<OpenWait>;
   acknowledgeCompletion(groupId: string, memberId: string): Promise<AgentStatusDetail>;
+  listAttentionDismissals(): Promise<AttentionDismissalList>;
+  dismissAttentionItems(command: DismissAttentionItemsCommand): Promise<AttentionDismissalList>;
+  listAttentionSubscriptions(): Promise<AttentionSubscriptionsSnapshot>;
+  setAttentionSubscription(
+    groupId: string,
+    memberId: string,
+    eventType: AttentionEventType,
+    command: SetAttentionSubscriptionCommand,
+  ): Promise<MemberAttentionSubscriptions>;
+  resetAttentionSubscriptions(
+    groupId: string,
+    memberId: string,
+  ): Promise<MemberAttentionSubscriptions>;
   loadMessages(
     groupId: string,
     options?: { limit?: number; before?: number; after?: number },
@@ -394,7 +467,7 @@ export const api: PortalClient = {
   startRun: (groupId, agentId) =>
     request(
       `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}/run`,
-      AgentRunSchema,
+      StartAgentRunResultSchema,
       commandInit("POST", {}),
     ),
   startAllRuns: (groupId) =>
@@ -403,11 +476,51 @@ export const api: PortalClient = {
       StartGroupRunsResultSchema,
       commandInit("POST", {}),
     ),
+  recoverGroupRuns: (groupId, command) => resources.operations.recoverGroupRuns(groupId, command),
+  recoverAgentRun: (groupId, agentId, command) =>
+    resources.operations.recoverAgentRun(groupId, agentId, command),
   stopRun: (groupId, agentId) =>
     request(
       `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/agents/${encodeURIComponent(agentId)}/run`,
       AgentRunSchema,
       commandInit("DELETE", {}),
+    ),
+  stopAllRuns: (groupId) => resources.operations.stopAll(groupId, false),
+  listLaunchConsents: (state) => {
+    const query = state === undefined ? "" : `?${new URLSearchParams({ state }).toString()}`;
+    return request(
+      `${CONTROL_API_PREFIX}/launch-consents${query}`,
+      CustomLaunchConsentRequestListSchema,
+    );
+  },
+  getLaunchConsent: (requestId) =>
+    request(
+      `${CONTROL_API_PREFIX}/launch-consents/${encodeURIComponent(requestId)}`,
+      CustomLaunchConsentRequestSchema,
+    ),
+  approveLaunchConsent: (requestId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/launch-consents/${encodeURIComponent(requestId)}/approve`,
+      CustomLaunchConsentDecisionResultSchema,
+      commandInit("POST", ApproveCustomLaunchConsentCommandSchema.parse(command)),
+    ),
+  denyLaunchConsent: (requestId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/launch-consents/${encodeURIComponent(requestId)}/deny`,
+      CustomLaunchConsentDecisionResultSchema,
+      commandInit("POST", DenyCustomLaunchConsentCommandSchema.parse(command)),
+    ),
+  cancelLaunchConsent: (requestId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/launch-consents/${encodeURIComponent(requestId)}/cancel`,
+      CustomLaunchConsentRequestSchema,
+      commandInit("POST", CancelCustomLaunchConsentCommandSchema.parse(command)),
+    ),
+  revokeLaunchConsent: (receiptId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/trust/${encodeURIComponent(receiptId)}/revoke`,
+      CustomLaunchConsentDecisionSchema,
+      commandInit("POST", RevokeCustomLaunchConsentCommandSchema.parse(command)),
     ),
   submitMessage: (groupId, command) =>
     request(
@@ -443,6 +556,28 @@ export const api: PortalClient = {
       `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/status/acknowledge`,
       AgentStatusDetailSchema,
       commandInit("POST", {}, crypto.randomUUID()),
+    ),
+  listAttentionDismissals: () =>
+    request(`${CONTROL_API_PREFIX}/attention-dismissals`, AttentionDismissalListSchema),
+  dismissAttentionItems: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/attention-dismissals`,
+      AttentionDismissalListSchema,
+      commandInit("POST", command, crypto.randomUUID()),
+    ),
+  listAttentionSubscriptions: () =>
+    request(`${CONTROL_API_PREFIX}/attention-subscriptions`, AttentionSubscriptionsSnapshotSchema),
+  setAttentionSubscription: (groupId, memberId, eventType, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/attention-subscriptions/${encodeURIComponent(eventType)}`,
+      MemberAttentionSubscriptionsSchema,
+      commandInit("PUT", command, crypto.randomUUID()),
+    ),
+  resetAttentionSubscriptions: (groupId, memberId) =>
+    request(
+      `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/attention-subscriptions`,
+      MemberAttentionSubscriptionsSchema,
+      commandInit("DELETE", {}, crypto.randomUUID()),
     ),
   loadMessages: (groupId, options = {}) => {
     const query = new URLSearchParams();

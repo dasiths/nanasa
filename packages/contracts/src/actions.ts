@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { IdentifierSchema, TimestampSchema } from "./control.js";
+import { ErrorPayloadSchema, IdentifierSchema, TimestampSchema } from "./control.js";
+import { CustomLaunchConsentRequestSchema } from "./launch-consent.js";
 import { AgentWaitKindSchema } from "./status.js";
 
 export const MAX_MESSAGE_TEXT_BYTES = 1_048_576;
@@ -22,11 +23,22 @@ export const StartGroupRunOutcomeSchema = z
   .object({
     groupId: IdentifierSchema,
     memberId: IdentifierSchema,
-    status: z.enum(["started", "already-running", "failed"]),
+    status: z.enum(["started", "already-running", "approval-required", "denied", "failed"]),
     runId: IdentifierSchema.optional(),
+    request: CustomLaunchConsentRequestSchema.optional(),
     reason: z.string().min(1).optional(),
+    error: ErrorPayloadSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((outcome, context) => {
+    if (["approval-required", "denied"].includes(outcome.status) && outcome.request === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: `${outcome.status} outcomes require a launch consent request`,
+        path: ["request"],
+      });
+    }
+  });
 export const StartGroupRunsResultSchema = z
   .object({ groupId: IdentifierSchema, outcomes: z.array(StartGroupRunOutcomeSchema) })
   .strict();

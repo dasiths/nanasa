@@ -179,6 +179,23 @@ describe("NanasaStore agent status", () => {
     store.close();
   });
 
+  it("keeps an unacknowledged completion pending during later work", () => {
+    const { store, identity } = createFixture();
+    store.ingestAgentStatusEvent(identity, event("turn_1", "turn.started", { sourceSequence: 1 }));
+    expect(
+      store.ingestAgentStatusEvent(
+        identity,
+        event("settled_1", "turn.settled", { sourceSequence: 2 }),
+      ).status,
+    ).toMatchObject({ state: "idle", completionRevision: 1, completionPending: true });
+
+    expect(
+      store.ingestAgentStatusEvent(identity, event("turn_2", "turn.started", { sourceSequence: 3 }))
+        .status,
+    ).toMatchObject({ state: "working", completionRevision: 1, completionPending: true });
+    store.close();
+  });
+
   it("classifies an unexpected process exit as failed", () => {
     const { store, group, run } = createFixture();
     const status = store.recordProcessStatus(run.id, {

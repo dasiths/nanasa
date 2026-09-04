@@ -2,11 +2,6 @@ import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
-import {
-  MAX_MESSAGE_REQUEST_BYTES,
-  MAX_MESSAGE_TEXT_BYTES,
-  OVERSIZED_MESSAGE_GUIDANCE,
-} from "@nanasa/contracts";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 import { AgentActionAckService } from "./actions/agent-action-ack-service.js";
 import { AgentActionScheduler } from "./actions/agent-action-scheduler.js";
@@ -40,8 +35,15 @@ import { GitStatusService } from "./git/git-status-service.js";
 import { RepositoryDiscoveryService } from "./git/repository-discovery-service.js";
 import { WorktreeService } from "./git/worktree-service.js";
 import { registerControlRouter } from "./http/control-router.js";
+import {
+  errorPayload,
+  hasErrorCode,
+  internalErrorPayload,
+  toPublicErrorResponse,
+} from "./http/error-response.js";
 import { matchControlRoute } from "./http/route-registry.js";
 import { resolveEffectiveAgentPrompt } from "./instruction-resolver.js";
+import { LaunchConsentService } from "./launch-consent-service.js";
 import { McpCredentialIssuer } from "./mcp-auth.js";
 import { validateMcpEndpointConfiguration } from "./mcp-config.js";
 import { registerMcpRoutes } from "./mcp-server.js";
@@ -50,6 +52,7 @@ import { MessageRepository } from "./message-repository.js";
 import { NativeSessionService } from "./native-session-service.js";
 import { OperatorAuth } from "./operator-auth.js";
 import { controlMetadata, PRODUCT_VERSION, repositoryTmuxNamespace } from "./protocol-metadata.js";
+import { resolveEffectiveProviderPolicy } from "./provider-policy-resolver.js";
 import { ProviderStateRepository } from "./provider-state-repository.js";
 import {
   buildTrustedBuiltinClaudeCodePackage,
@@ -63,11 +66,18 @@ import { ProviderRunBindingRepository } from "./providers/provider-run-binding-r
 import { resolveBuiltInProviderEvaluatorOptions } from "./providers/provider-runtime-assets.js";
 import { ProviderRuntimeIndex } from "./providers/provider-runtime-index.js";
 import { ProviderSnapshotRepository } from "./providers/provider-snapshot-repository.js";
+import { ProviderUpdateDetector } from "./providers/provider-update-detector.js";
+import { ProviderUpdateReconciler } from "./providers/provider-update-reconciler.js";
+import { ProviderUpdateTransitionRepository } from "./providers/provider-update-transition-repository.js";
 import { ActivationService } from "./release/activation-service.js";
 import { createRemoteDescriptorFromMetadata } from "./remote/remote-descriptor.js";
 import { ReporterRegistry } from "./reporter-registry.js";
 import { RepositoryTrustService } from "./repository-trust-service.js";
-import { RunRuntimeCoordinator } from "./run-runtime-coordinator.js";
+import {
+  RunRuntimeCoordinator,
+  type RunRuntimeCoordinatorOptions,
+} from "./run-runtime-coordinator.js";
+import { RuntimeLaunchConsentGate } from "./runtime-launch-consent-gate.js";
 import { SystemdUserService } from "./service/systemd-user-service.js";
 import { SnapshotReadModel } from "./snapshot-read-model.js";
 import { DomainError, NanasaStore } from "./store.js";
@@ -111,6 +121,10 @@ export interface DaemonOptions {
     allowedHostnames?: string[];
     secretPath?: string;
   };
+  providerPolicy?: {
+    allowAutonomous?: boolean;
+    allowProviderFiles?: boolean;
+  };
 }
 
 export interface DaemonContext {
@@ -141,20 +155,6 @@ export interface DaemonContext {
   providerStates: ProviderStateRepository;
   nativeSessions: NativeSessionService;
   extensions: ProviderExtensionService;
-}
-
-interface ErrorWithIssues {
-  issues: unknown[];
-}
-
-function isValidationError(error: unknown): error is ErrorWithIssues {
-  return (
-    typeof error === "object" && error !== null && "issues" in error && Array.isArray(error.issues)
-  );
-}
-
-function hasErrorCode(error: unknown, code: string): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === code;
 }
 
 function requestPath(url: string): string {
@@ -220,10 +220,6 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     const systemdService = new SystemdUserService({
       repositoryRoot: loadedConfig.repoRoot,
       packageRoot: options.packageRoot ?? process.env.NANASA_PACKAGE_ROOT ?? loadedConfig.repoRoot,
-    });
-    const snapshotReadModel = new SnapshotReadModel(store, {
-      instanceId: guard.instanceId,
-      daemonEpoch,
     });
     const eventLog = new EventLog(store);
     const eventSessions = new Set<EventStreamSession>();
@@ -310,6 +306,11 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       providerRuntimeIndex,
       providerSnapshots,
     );
+    const snapshotReadModel = new SnapshotReadModel(
+      store,
+      { instanceId: guard.instanceId, daemonEpoch },
+      { configRepository, providerBindings, providerRuntimeIndex },
+    );
     const providerStates = new ProviderStateRepository(
       options.providerStateRoot ?? loadedConfig.integrationsDirectory,
       store,
@@ -323,6 +324,24 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     );
     const credentialBroker = new UserCredentialBroker();
     const repositoryTrust = new RepositoryTrustService(store);
+    const launchConsentReference: { current?: RuntimeLaunchConsentGate } = {};
+    const launchConsentService = new LaunchConsentService(store, (request) => {
+      if (launchConsentReference.current === undefined) {
+        throw new Error("Runtime launch consent gate is unavailable");
+      }
+      return launchConsentReference.current.resolveCurrentSubject(request);
+    });
+    const launchConsent = new RuntimeLaunchConsentGate({
+      repositoryIdentity,
+      configRepository,
+      store,
+      providerBindings,
+      consentService: launchConsentService,
+      runtimeEnvironmentNames: options.mcp?.enabled === true ? ["NANASA_MCP_URL"] : [],
+      allowAutonomous: options.providerPolicy?.allowAutonomous === true,
+      allowProviderFiles: options.providerPolicy?.allowProviderFiles === true,
+    });
+    launchConsentReference.current = launchConsent;
     const nativeSessions = new NativeSessionService(store);
     const statusQueries = new AgentStatusQueryService(store);
     const coordinatorReference: { current?: RunRuntimeCoordinator } = {};
@@ -340,6 +359,9 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
             credentials: integration.credentials,
             model: integration.model,
             nativeRecovery: integration.nativeRecovery,
+            ...(integration.launcher?.providerArguments === undefined
+              ? {}
+              : { providerArgumentStrategy: integration.launcher.providerArguments }),
           },
         ]),
       ),
@@ -365,6 +387,20 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       desiredModelResolver: (membership) => {
         const current = configRepository.load();
         return current.config.groups[membership.groupId]?.agents[membership.id]?.desiredModel;
+      },
+      providerPolicyResolver: (membership, profile) => {
+        const current = configRepository.load();
+        return resolveEffectiveProviderPolicy({
+          repoRoot: current.repoRoot,
+          config: current.config,
+          membership,
+          profile,
+          allowAutonomous: options.providerPolicy?.allowAutonomous === true,
+          allowProviderFiles: options.providerPolicy?.allowProviderFiles === true,
+          ...(current.status.revision === undefined
+            ? {}
+            : { configRevision: current.status.revision }),
+        });
       },
     });
     const reporterRegistry = new ReporterRegistry(store, {
@@ -419,18 +455,32 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     const actionAcks = new AgentActionAckService(store);
     const actionWaits = new AgentWaitService(store);
     const openWaits = new AgentOpenWaitService(store, runtime, terminalInput, runtimeProvisioner);
+    const nativeRecoveryPolicy = (
+      run: Parameters<NonNullable<RunRuntimeCoordinatorOptions["nativeRecoveryPolicy"]>>[0],
+    ) => {
+      const profile = store.getAgentProfile(run.agentProfileId);
+      const integration = loadedConfig.config.integrations[profile.agentType];
+      if (integration === undefined) throw new Error(`Missing integration ${profile.agentType}`);
+      return { integrationId: profile.agentType, policy: integration.nativeRecovery };
+    };
+    const providerUpdates = new ProviderUpdateReconciler(
+      store,
+      runtime,
+      terminalGateway,
+      new ProviderUpdateDetector(providerBindings, providerRuntimeIndex),
+      new ProviderUpdateTransitionRepository(store.database),
+      launchConsent,
+      { nativeSessions, nativeRecoveryPolicy },
+    );
     const coordinator = new RunRuntimeCoordinator(store, runtime, terminalGateway, dispatcher, {
       ...(options.reconcileIntervalMs === undefined
         ? {}
         : { reconcileIntervalMs: options.reconcileIntervalMs }),
       nativeSessions,
+      launchConsent,
+      providerUpdates,
       onRuntimeObservation: (observation) => statusService.observeRuntime(observation),
-      nativeRecoveryPolicy: (run) => {
-        const profile = store.getAgentProfile(run.agentProfileId);
-        const integration = loadedConfig.config.integrations[profile.agentType];
-        if (integration === undefined) throw new Error(`Missing integration ${profile.agentType}`);
-        return { integrationId: profile.agentType, policy: integration.nativeRecovery };
-      },
+      nativeRecoveryPolicy,
     });
     coordinatorReference.current = coordinator;
     const topology = new TopologyService(configRepository, store, coordinator);
@@ -463,58 +513,20 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     });
 
     app.setErrorHandler((error, request, reply) => {
-      if (error instanceof DomainError) {
-        return reply.status(error.statusCode).send({ code: error.code, message: error.message });
-      }
-      if (error instanceof ExtensionPackageError) {
-        const statusCode = error.code.includes("not_found")
-          ? 404
-          : error.code.includes("trust_required") || error.code.includes("signature_untrusted")
-            ? 403
-            : error.code.includes("stale") ||
-                error.code.includes("busy") ||
-                error.code.includes("active_runs") ||
-                error.code.includes("referenced")
-              ? 409
-              : 400;
-        return reply.status(statusCode).send({ code: error.code, message: error.message });
-      }
-      if (isValidationError(error)) {
-        const oversized = error.issues.some(
-          (issue) =>
-            typeof issue === "object" &&
-            issue !== null &&
-            "message" in issue &&
-            String(issue.message).includes(`${MAX_MESSAGE_TEXT_BYTES}-byte UTF-8 limit`),
-        );
-        if (oversized) {
-          return reply.status(413).send({
-            code: "message_body_too_large",
-            message: `Message text exceeds the ${MAX_MESSAGE_TEXT_BYTES}-byte UTF-8 limit. ${OVERSIZED_MESSAGE_GUIDANCE}`,
-          });
-        }
-        return reply.status(400).send({
-          code: "validation_error",
-          message: "Request validation failed",
-          issues: error.issues,
-        });
-      }
-      if (hasErrorCode(error, "FST_ERR_CTP_BODY_TOO_LARGE")) {
-        const payload = {
-          code: "request_too_large",
-          message: `Request exceeds the ${MAX_MESSAGE_REQUEST_BYTES}-byte message request limit. Message text is limited to ${MAX_MESSAGE_TEXT_BYTES} UTF-8 bytes. ${OVERSIZED_MESSAGE_GUIDANCE}`,
-        };
-        if (request.url === mcpPath) {
-          return reply.status(413).send({
+      const publicError = toPublicErrorResponse(error);
+      if (publicError !== undefined) {
+        const { statusCode, payload } = publicError;
+        if (request.url === mcpPath && hasErrorCode(error, "FST_ERR_CTP_BODY_TOO_LARGE")) {
+          return reply.status(statusCode).send({
             jsonrpc: "2.0",
             error: { code: -32_000, message: payload.message },
             id: null,
           });
         }
-        return reply.status(413).send(payload);
+        return reply.status(statusCode).send(payload);
       }
       request.log.error(error);
-      return reply.status(500).send({ code: "internal_error", message: "Internal server error" });
+      return reply.status(500).send(internalErrorPayload());
     });
 
     app.addHook("preClose", async () => {
@@ -611,6 +623,8 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       config: configRepository,
       snapshot: snapshotReadModel,
       store,
+      repositoryIdentity,
+      launchConsent: launchConsentService,
       auth: operatorAuth,
       providerStates,
       extensions,
@@ -659,7 +673,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         ) {
           return reply.sendFile("index.html", { cacheControl: false });
         }
-        return reply.status(404).send({ code: "not_found", message: "Route not found" });
+        return reply.status(404).send(errorPayload("not_found", "Route not found"));
       });
     }
 

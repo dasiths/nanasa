@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ProviderUpdateTransitionSchema } from "./provider-update-state.js";
 
 export const IdentifierSchema = z.string().trim().min(1).max(128);
 export const TimestampSchema = z.string().datetime({ offset: true });
@@ -9,6 +10,21 @@ export const EnvironmentSchema = z.record(
 
 export const RequestIdSchema = IdentifierSchema;
 export const IdempotencyKeySchema = z.string().trim().min(1).max(256);
+export const ErrorCodeSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(100)
+  .regex(/^[a-z0-9]+(?:_[a-z0-9]+)*$/);
+export const ErrorDetailsSchema = z.record(z.string(), z.unknown());
+export const ErrorPayloadSchema = z
+  .object({
+    message: z.string().trim().min(1).max(2_000),
+    details: ErrorDetailsSchema.default({}),
+    code: ErrorCodeSchema,
+  })
+  .strict();
+export const ErrorEnvelopeSchema = ErrorPayloadSchema;
 export const PrincipalSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("operator"), operatorId: IdentifierSchema }).strict(),
   z
@@ -20,20 +36,6 @@ export const PrincipalSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
-export const ErrorEnvelopeSchema = z
-  .object({
-    version: z.literal(1),
-    requestId: RequestIdSchema,
-    error: z
-      .object({
-        code: z.string().trim().min(1).max(100),
-        message: z.string().trim().min(1).max(2_000),
-        retryable: z.boolean(),
-        details: z.record(z.string(), z.unknown()).optional(),
-      })
-      .strict(),
-  })
-  .strict();
 export const ControlMetadataSchema = z
   .object({
     apiVersion: z.literal(1),
@@ -70,6 +72,7 @@ export const OperatorSessionSchema = z
   .strict();
 
 export type Principal = z.infer<typeof PrincipalSchema>;
+export type ErrorPayload = z.infer<typeof ErrorPayloadSchema>;
 export type ErrorEnvelope = z.infer<typeof ErrorEnvelopeSchema>;
 export type ControlMetadata = z.infer<typeof ControlMetadataSchema>;
 export type OperatorBootstrapCommand = z.infer<typeof OperatorBootstrapCommandSchema>;
@@ -199,6 +202,7 @@ export const AgentRunSchema = z
     effectiveModel: z.string().trim().min(1).max(256).optional(),
     nativeSessionId: IdentifierSchema.optional(),
     recoveryOutcome: z.enum(["retained", "resumed", "restarted", "failed"]).optional(),
+    providerUpdate: ProviderUpdateTransitionSchema.optional(),
     terminal: TerminalBindingSchema.optional(),
     startedAt: TimestampSchema,
     stoppedAt: TimestampSchema.optional(),

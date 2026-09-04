@@ -21,6 +21,14 @@ import {
   AgentStatusEventInputSchema,
   type AgentStatusSummary,
   AgentStatusSummarySchema,
+  type AttentionDismissal,
+  AttentionDismissalListSchema,
+  AttentionDismissalSchema,
+  type AttentionEventType,
+  AttentionEventTypeSchema,
+  type AttentionSubscriptionOverride,
+  AttentionSubscriptionOverrideSchema,
+  type AttentionSubscriptionsSnapshot,
   type Checkout,
   CheckoutSchema,
   type ClearMessageHistoryResult,
@@ -30,6 +38,8 @@ import {
   type ConfigStatus,
   type CreateGroupCommand,
   CreateGroupCommandSchema,
+  type CustomLaunchConsentRequest,
+  CustomLaunchConsentRequestSchema,
   DEFAULT_MESSAGE_PAGE_SIZE,
   type DeleteGroupResult,
   DeleteGroupResultSchema,
@@ -61,6 +71,7 @@ import {
   type MessageSubmissionResult,
   MessageSubmissionResultSchema,
   type NanasaConfig,
+  NanasaConfigSchema,
   type OpenWait,
   OpenWaitSchema,
   type PortalSnapshot,
@@ -68,6 +79,8 @@ import {
   type ProcessIdentityObservation,
   type ProviderStateBinding,
   ProviderStateBindingSchema,
+  type ProviderUpdateTransition,
+  ProviderUpdateTransitionSchema,
   REPORTER_LEASE_MS,
   type RecoveryPhase,
   type ReporterSession,
@@ -95,10 +108,14 @@ import {
   type ProcessStatusObservation,
   reduceAgentStatus,
 } from "./agent-status-reducer.js";
+import {
+  resolveAttentionSubscriptionsSnapshot,
+  resolveMemberAttentionSubscriptions,
+} from "./attention-subscription-policy.js";
 import { dockerMemberName, formatMemberId, type MemberNameGenerator } from "./member-id.js";
 import { orderedAgentEntries } from "./membership-order.js";
 import { openNanasaDatabase } from "./persistence/database.js";
-import type { RepositoryTrustReceipt } from "./repository-trust-service.js";
+import type { RepositoryTrustReceipt, TrustSubjectKind } from "./repository-trust-service.js";
 
 interface AddMembershipInput {
   memberId?: string;
@@ -198,6 +215,25 @@ interface RunRow {
   terminal_json: string | null;
   started_at: string;
   stopped_at: string | null;
+}
+
+interface ProviderUpdateTransitionRow {
+  id: string;
+  run_id: string;
+  generation: number;
+  member_id: string;
+  provider_id: string;
+  previous_snapshot_digest: string;
+  current_snapshot_digest: string;
+  state: string;
+  outcome: string | null;
+  replacement_run_id: string | null;
+  safe_error_code: string | null;
+  safe_error_message: string | null;
+  safe_error_retryable: number | null;
+  detected_at: string;
+  updated_at: string;
+  completed_at: string | null;
 }
 
 interface RepositoryRow {
@@ -443,6 +479,7 @@ export class DomainError extends Error {
     public readonly code: string,
     message: string,
     public readonly statusCode: number,
+    public readonly details: Readonly<Record<string, unknown>> = {},
   ) {
     super(message);
     this.name = "DomainError";
@@ -462,6 +499,7 @@ function agentStatusSummary(detail: AgentStatusDetail): AgentStatusSummary {
     runId: detail.runId,
     generation: detail.generation,
     runStatus: detail.runStatus,
+    providerUpdate: detail.providerUpdate,
     state: detail.state,
     phase: detail.phase,
     outcome: detail.outcome,
@@ -1181,6 +1219,9 @@ export class NanasaStore {
       DeleteGroupResultSchema,
       () => {
         this.#requireGroup(groupId);
+        this.#database
+          .prepare("DELETE FROM attention_subscription_overrides WHERE group_id = ?")
+          .run(groupId);
         for (const column of ["reply_to", "root_id", "causation_id"] as const) {
           this.#database
             .prepare(
@@ -1478,6 +1519,11 @@ export class NanasaStore {
       }
 
       const timestamp = new Date().toISOString();
+      this.#database
+        .prepare(
+          "DELETE FROM attention_subscription_overrides WHERE group_id = ? AND member_id = ?",
+        )
+        .run(groupId, memberId);
       this.#database
         .prepare("UPDATE memberships SET state = 'removed', removed_at = ? WHERE id = ?")
         .run(timestamp, existing.id);
@@ -2116,7 +2162,6 @@ export class NanasaStore {
         input.generation !== run.generation ||
         session === undefined ||
         input.providerId !== profile.agentType ||
-        input.adapterId !== profile.kind ||
         input.providerId !== session.providerId ||
         input.adapterId !== session.adapterId ||
         input.reporterId !== session.reporterId ||
@@ -2307,6 +2352,115 @@ export class NanasaStore {
     return completed.acknowledgement;
   }
 
+  public listAttentionDismissals(operatorId: string): AttentionDismissal[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT item_id AS itemId, dismissed_at AS dismissedAt
+         FROM attention_dismissals
+         WHERE operator_id = ?
+         ORDER BY dismissed_at ASC, item_id ASC`,
+      )
+      .all(operatorId);
+    return AttentionDismissalListSchema.parse({ dismissals: rows }).dismissals;
+  }
+
+  public dismissAttentionItems(
+    operatorId: string,
+    itemIds: readonly string[],
+  ): AttentionDismissal[] {
+    const dismissedAt = new Date().toISOString();
+    const dismissals = [...new Set(itemIds)].map((itemId) =>
+      AttentionDismissalSchema.parse({ itemId, dismissedAt }),
+    );
+    this.#transaction(() => {
+      const statement = this.#database.prepare(
+        `INSERT INTO attention_dismissals (operator_id, item_id, dismissed_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(operator_id, item_id) DO UPDATE SET dismissed_at = excluded.dismissed_at`,
+      );
+      for (const dismissal of dismissals) {
+        statement.run(operatorId, dismissal.itemId, dismissal.dismissedAt);
+      }
+      this.#database
+        .prepare(
+          `DELETE FROM attention_dismissals
+           WHERE operator_id = ? AND item_id NOT IN (
+             SELECT item_id FROM attention_dismissals
+             WHERE operator_id = ?
+             ORDER BY dismissed_at DESC, item_id DESC
+             LIMIT 500
+           )`,
+        )
+        .run(operatorId, operatorId);
+    });
+    return this.listAttentionDismissals(operatorId);
+  }
+
+  public listAttentionSubscriptions(operatorId: string): AttentionSubscriptionsSnapshot {
+    const members = this.#database
+      .prepare(
+        `SELECT group_id AS groupId, member_id AS memberId
+         FROM memberships WHERE state = 'active'
+         ORDER BY group_id, order_index, member_id`,
+      )
+      .all() as Array<{ groupId: string; memberId: string }>;
+    return resolveAttentionSubscriptionsSnapshot(
+      this.#attentionConfig(),
+      members,
+      this.#listAttentionSubscriptionOverrides(operatorId),
+    );
+  }
+
+  public setAttentionSubscription(
+    operatorId: string,
+    groupId: string,
+    memberId: string,
+    eventType: AttentionEventType,
+    enabled: boolean,
+  ) {
+    const parsedEventType = AttentionEventTypeSchema.parse(eventType);
+    this.#requireActiveMembership(groupId, memberId);
+    const updatedAt = new Date().toISOString();
+    const event = this.#transaction(() => {
+      this.#database
+        .prepare(
+          `INSERT INTO attention_subscription_overrides
+             (operator_id, group_id, member_id, event_type, enabled, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(operator_id, group_id, member_id, event_type) DO UPDATE SET
+             enabled = excluded.enabled,
+             updated_at = excluded.updated_at`,
+        )
+        .run(operatorId, groupId, memberId, parsedEventType, enabled ? 1 : 0, updatedAt);
+      return this.#appendEvent("attention.subscription-updated", "membership", memberId, {
+        groupId,
+        memberId,
+        eventType: parsedEventType,
+        enabled,
+      });
+    });
+    this.#publish(event);
+    return this.#memberAttentionSubscriptions(operatorId, groupId, memberId);
+  }
+
+  public resetAttentionSubscriptions(operatorId: string, groupId: string, memberId: string) {
+    this.#requireActiveMembership(groupId, memberId);
+    const event = this.#transaction(() => {
+      this.#database
+        .prepare(
+          `DELETE FROM attention_subscription_overrides
+           WHERE operator_id = ? AND group_id = ? AND member_id = ?`,
+        )
+        .run(operatorId, groupId, memberId);
+      return this.#appendEvent("attention.subscriptions-reset", "membership", memberId, {
+        groupId,
+        memberId,
+      });
+    });
+    this.#publish(event);
+    return this.#memberAttentionSubscriptions(operatorId, groupId, memberId);
+  }
+
   public reportAgentProgress(
     identity: AgentStatusIdentity,
     report: AgentProgressReportCommand,
@@ -2417,7 +2571,8 @@ export class NanasaStore {
       );
     }
     const recoveryAttempts = current.recoveryAttempts + (options.incrementAttempt === true ? 1 : 0);
-    const recoveryNotBefore = options.recoveryNotBefore ?? current.recoveryNotBefore;
+    const recoveryNotBefore =
+      phase === "recovered" ? undefined : (options.recoveryNotBefore ?? current.recoveryNotBefore);
     const recoveryReason = options.reason ?? current.recoveryReason;
     const { result, event } = this.#transaction(() => {
       const updated = this.#database
@@ -4178,19 +4333,21 @@ export class NanasaStore {
   public findRepositoryTrust(
     repositoryIdentity: string,
     subjectDigest: string,
+    subjectKind: TrustSubjectKind = "repository-launch",
   ): RepositoryTrustReceipt | undefined {
     const row = this.#database
       .prepare(
         `SELECT * FROM trust
-         WHERE repository_identity = ? AND subject_digest = ?
+         WHERE subject_kind = ? AND repository_identity = ? AND subject_digest = ?
          ORDER BY decided_at DESC, rowid DESC LIMIT 1`,
       )
-      .get(repositoryIdentity, subjectDigest) as Record<string, unknown> | undefined;
+      .get(subjectKind, repositoryIdentity, subjectDigest) as Record<string, unknown> | undefined;
     return row === undefined
       ? undefined
       : {
           id: String(row.id),
           repositoryIdentity,
+          subjectKind,
           subjectDigest,
           principalId: String(row.principal_id),
           decision: row.decision as RepositoryTrustReceipt["decision"],
@@ -4204,12 +4361,14 @@ export class NanasaStore {
       this.#database
         .prepare(
           `SELECT * FROM trust
+           WHERE subject_kind = 'repository-launch'
            ORDER BY decided_at DESC, rowid DESC`,
         )
         .all() as Record<string, unknown>[]
     ).map((row) => ({
       id: String(row.id),
       repositoryIdentity: String(row.repository_identity),
+      subjectKind: row.subject_kind as TrustSubjectKind,
       subjectDigest: String(row.subject_digest),
       principalId: String(row.principal_id),
       decision: row.decision as RepositoryTrustReceipt["decision"],
@@ -4222,19 +4381,220 @@ export class NanasaStore {
     this.#database
       .prepare(
         `INSERT INTO trust
-           (id, repository_id, repository_identity, principal_id, subject_digest, decision, decided_at, revoked_at)
-         VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`,
+           (id, repository_id, repository_identity, principal_id, subject_kind, subject_digest,
+            decision, decided_at, revoked_at)
+         VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         receipt.id,
         receipt.repositoryIdentity,
         receipt.principalId,
+        receipt.subjectKind,
         receipt.subjectDigest,
         receipt.decision,
         receipt.decidedAt,
         receipt.revokedAt ?? null,
       );
     return receipt;
+  }
+
+  public findLaunchConsentRequest(requestId: string): CustomLaunchConsentRequest | undefined {
+    const row = this.#database
+      .prepare("SELECT * FROM launch_consent_requests WHERE id = ?")
+      .get(requestId) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : this.#hydrateLaunchConsentRequest(row);
+  }
+
+  public listLaunchConsentRequests(
+    repositoryIdentity: string,
+    state?: CustomLaunchConsentRequest["state"],
+  ): CustomLaunchConsentRequest[] {
+    const rows =
+      state === undefined
+        ? this.#database
+            .prepare(
+              `SELECT * FROM launch_consent_requests
+               WHERE repository_identity = ?
+               ORDER BY requested_at DESC, rowid DESC LIMIT 500`,
+            )
+            .all(repositoryIdentity)
+        : this.#database
+            .prepare(
+              `SELECT * FROM launch_consent_requests
+               WHERE repository_identity = ? AND state = ?
+               ORDER BY requested_at DESC, rowid DESC LIMIT 500`,
+            )
+            .all(repositoryIdentity, state);
+    return (rows as Record<string, unknown>[]).map((row) => this.#hydrateLaunchConsentRequest(row));
+  }
+
+  public findPendingLaunchConsentRequest(
+    repositoryIdentity: string,
+    groupId: string,
+    agentId: string,
+    subjectDigest: string,
+  ): CustomLaunchConsentRequest | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM launch_consent_requests
+         WHERE repository_identity = ? AND group_id = ? AND agent_id = ?
+           AND subject_digest = ? AND state = 'pending'
+         ORDER BY requested_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(repositoryIdentity, groupId, agentId, subjectDigest) as
+      | Record<string, unknown>
+      | undefined;
+    return row === undefined ? undefined : this.#hydrateLaunchConsentRequest(row);
+  }
+
+  public findLatestLaunchConsentRequest(
+    repositoryIdentity: string,
+    groupId: string,
+    agentId: string,
+    subjectDigest: string,
+  ): CustomLaunchConsentRequest | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM launch_consent_requests
+         WHERE repository_identity = ? AND group_id = ? AND agent_id = ? AND subject_digest = ?
+         ORDER BY requested_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(repositoryIdentity, groupId, agentId, subjectDigest) as
+      | Record<string, unknown>
+      | undefined;
+    return row === undefined ? undefined : this.#hydrateLaunchConsentRequest(row);
+  }
+
+  public createOrReuseLaunchConsentRequest(
+    request: CustomLaunchConsentRequest,
+  ): CustomLaunchConsentRequest {
+    const parsed = CustomLaunchConsentRequestSchema.parse(request);
+    return this.#transaction(() => {
+      this.#database
+        .prepare(
+          `INSERT INTO launch_consent_requests
+             (id, repository_identity, group_id, agent_id, member_id, integration_id,
+              subject_digest, config_revision, redacted_subject_json, state, requested_at,
+              decided_at, decided_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL, NULL)
+           ON CONFLICT DO NOTHING`,
+        )
+        .run(
+          parsed.id,
+          parsed.repositoryIdentity,
+          parsed.groupId,
+          parsed.agentId,
+          parsed.memberId,
+          parsed.integrationId,
+          parsed.subjectDigest,
+          parsed.configRevision,
+          JSON.stringify(parsed.subject),
+          parsed.requestedAt,
+        );
+      const stored = this.findPendingLaunchConsentRequest(
+        parsed.repositoryIdentity,
+        parsed.groupId,
+        parsed.agentId,
+        parsed.subjectDigest,
+      );
+      if (stored === undefined) throw new Error("Failed to persist launch consent request");
+      return stored;
+    });
+  }
+
+  public reconcileLaunchConsentRequests(input: {
+    repositoryIdentity: string;
+    groupId: string;
+    agentId: string;
+    subjectDigest: string;
+    configRevision: string;
+    reconciledAt: string;
+  }): CustomLaunchConsentRequest[] {
+    return this.#transaction(() => {
+      const stale = this.#database
+        .prepare(
+          `SELECT * FROM launch_consent_requests
+           WHERE repository_identity = ? AND group_id = ? AND agent_id = ? AND state = 'pending'
+             AND (subject_digest != ? OR config_revision != ?)`,
+        )
+        .all(
+          input.repositoryIdentity,
+          input.groupId,
+          input.agentId,
+          input.subjectDigest,
+          input.configRevision,
+        ) as Record<string, unknown>[];
+      if (stale.length === 0) return [];
+      this.#database
+        .prepare(
+          `UPDATE launch_consent_requests
+           SET state = 'stale', decided_at = ?, decided_by = NULL
+           WHERE repository_identity = ? AND group_id = ? AND agent_id = ? AND state = 'pending'
+             AND (subject_digest != ? OR config_revision != ?)`,
+        )
+        .run(
+          input.reconciledAt,
+          input.repositoryIdentity,
+          input.groupId,
+          input.agentId,
+          input.subjectDigest,
+          input.configRevision,
+        );
+      return stale.map((row) =>
+        this.#hydrateLaunchConsentRequest({
+          ...row,
+          state: "stale",
+          decided_at: input.reconciledAt,
+          decided_by: null,
+        }),
+      );
+    });
+  }
+
+  public staleLaunchConsentRequest(
+    requestId: string,
+    decidedAt: string,
+  ): CustomLaunchConsentRequest {
+    this.#database
+      .prepare(
+        `UPDATE launch_consent_requests
+         SET state = 'stale', decided_at = ?, decided_by = NULL
+         WHERE id = ? AND state = 'pending'`,
+      )
+      .run(decidedAt, requestId);
+    const request = this.findLaunchConsentRequest(requestId);
+    if (request === undefined) throw new Error(`Launch consent request ${requestId} not found`);
+    return request;
+  }
+
+  public decideLaunchConsentRequest(input: {
+    requestId: string;
+    subjectDigest: string;
+    configRevision: string;
+    state: "approved" | "denied" | "cancelled";
+    decidedAt: string;
+    decidedBy: string;
+    receipt?: RepositoryTrustReceipt;
+  }): CustomLaunchConsentRequest | undefined {
+    return this.#transaction(() => {
+      const changed = this.#database
+        .prepare(
+          `UPDATE launch_consent_requests
+           SET state = ?, decided_at = ?, decided_by = ?
+           WHERE id = ? AND subject_digest = ? AND config_revision = ? AND state = 'pending'`,
+        )
+        .run(
+          input.state,
+          input.decidedAt,
+          input.decidedBy,
+          input.requestId,
+          input.subjectDigest,
+          input.configRevision,
+        ).changes;
+      if (changed !== 1) return undefined;
+      if (input.receipt !== undefined) this.saveRepositoryTrust(input.receipt);
+      return this.findLaunchConsentRequest(input.requestId);
+    });
   }
 
   public getGroupStartAllResult(
@@ -5025,6 +5385,7 @@ export class NanasaStore {
       runId: run.id,
       generation: run.generation,
       runStatus: run.status,
+      providerUpdate: run.providerUpdate,
       state: statusState,
       phase: statusState === "stopped" || statusState === "failed" ? "exited" : state.phase,
       outcome: statusState === "failed" && state.outcome === "unknown" ? "failed" : state.outcome,
@@ -5041,7 +5402,7 @@ export class NanasaStore {
       statusRevision: state.statusRevision,
       completionRevision: state.completionRevision,
       operatorAcknowledgedCompletionRevision: acknowledgedRevision,
-      completionPending: statusState === "idle" && state.completionRevision > acknowledgedRevision,
+      completionPending: state.completionRevision > acknowledgedRevision,
       interactiveReady: state.interactiveReady,
       staleAuthority: state.staleAuthority,
       authorityKind: state.authorityKind,
@@ -5136,6 +5497,45 @@ export class NanasaStore {
       .get(groupId, memberId) as unknown as MembershipRow | undefined;
   }
 
+  #requireActiveMembership(groupId: string, memberId: string): MembershipRow {
+    const row = this.#getMembershipRow(groupId, memberId);
+    if (row === undefined || row.state !== "active") {
+      throw new DomainError("membership_not_found", "Membership not found", 404);
+    }
+    return row;
+  }
+
+  #attentionConfig(): NanasaConfig {
+    return this.#config ?? NanasaConfigSchema.parse({ version: 2, integrations: {} });
+  }
+
+  #listAttentionSubscriptionOverrides(operatorId: string): AttentionSubscriptionOverride[] {
+    return this.#database
+      .prepare(
+        `SELECT operator_id AS operatorId, group_id AS groupId, member_id AS memberId,
+                event_type AS eventType, enabled, updated_at AS updatedAt
+         FROM attention_subscription_overrides
+         WHERE operator_id = ?
+         ORDER BY group_id, member_id, event_type`,
+      )
+      .all(operatorId)
+      .map((row) => {
+        const value = row as Record<string, unknown>;
+        return AttentionSubscriptionOverrideSchema.parse({
+          ...value,
+          enabled: value.enabled === 1,
+        });
+      });
+  }
+
+  #memberAttentionSubscriptions(operatorId: string, groupId: string, memberId: string) {
+    return resolveMemberAttentionSubscriptions(
+      this.#attentionConfig(),
+      { groupId, memberId },
+      this.#listAttentionSubscriptionOverrides(operatorId),
+    );
+  }
+
   #hydrateGroup(row: GroupRow): Group {
     return GroupSchema.parse({
       id: row.id,
@@ -5199,9 +5599,44 @@ export class NanasaStore {
       effectiveModel: row.effective_model ?? undefined,
       nativeSessionId: row.native_session_id ?? undefined,
       recoveryOutcome: row.recovery_outcome ?? undefined,
+      providerUpdate: this.#providerUpdateForRun(row.id, row.generation),
       terminal: row.terminal_json === null ? undefined : JSON.parse(row.terminal_json),
       startedAt: row.started_at,
       stoppedAt: row.stopped_at ?? undefined,
+    });
+  }
+
+  #providerUpdateForRun(runId: string, generation: number): ProviderUpdateTransition | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM provider_update_transitions
+         WHERE (run_id = ? AND generation = ?) OR replacement_run_id = ?
+         ORDER BY detected_at DESC, id DESC LIMIT 1`,
+      )
+      .get(runId, generation, runId) as ProviderUpdateTransitionRow | undefined;
+    if (row === undefined) return undefined;
+    return ProviderUpdateTransitionSchema.parse({
+      id: row.id,
+      runId: row.run_id,
+      generation: row.generation,
+      memberId: row.member_id,
+      providerId: row.provider_id,
+      previousSnapshotDigest: row.previous_snapshot_digest,
+      currentSnapshotDigest: row.current_snapshot_digest,
+      state: row.state,
+      outcome: row.outcome ?? undefined,
+      replacementRunId: row.replacement_run_id ?? undefined,
+      safeError:
+        row.safe_error_code === null
+          ? undefined
+          : {
+              code: row.safe_error_code,
+              message: row.safe_error_message,
+              retryable: row.safe_error_retryable === 1,
+            },
+      detectedAt: row.detected_at,
+      updatedAt: row.updated_at,
+      completedAt: row.completed_at ?? undefined,
     });
   }
 
@@ -5517,6 +5952,24 @@ export class NanasaStore {
       aggregateId: row.aggregate_id,
       occurredAt: row.occurred_at,
       payload: JSON.parse(row.payload_json),
+    });
+  }
+
+  #hydrateLaunchConsentRequest(row: Record<string, unknown>): CustomLaunchConsentRequest {
+    return CustomLaunchConsentRequestSchema.parse({
+      id: String(row.id),
+      repositoryIdentity: String(row.repository_identity),
+      groupId: String(row.group_id),
+      agentId: String(row.agent_id),
+      memberId: String(row.member_id),
+      integrationId: String(row.integration_id),
+      subjectDigest: String(row.subject_digest),
+      configRevision: String(row.config_revision),
+      subject: JSON.parse(String(row.redacted_subject_json)),
+      state: row.state,
+      requestedAt: String(row.requested_at),
+      ...(row.decided_at === null ? {} : { decidedAt: String(row.decided_at) }),
+      ...(row.decided_by === null ? {} : { decidedBy: String(row.decided_by) }),
     });
   }
 

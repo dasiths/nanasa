@@ -11,14 +11,23 @@ import {
   AgentStatusDetailSchema,
   AgentStatusEventInputSchema,
   AgentStatusStateSchema,
+  ATTENTION_EVENT_TYPES,
+  AttentionEventTypeSchema,
   CheckoutSchema,
   ConfigStatusSchema,
   ControlMetadataSchema,
   CreateGroupAgentCommandSchema,
   CreateWorktreeCommandSchema,
   CredentialProfileReferenceSchema,
+  CustomLaunchConsentDecisionResultSchema,
+  CustomLaunchConsentDecisionSchema,
+  CustomLaunchConsentErrorCodeSchema,
+  CustomLaunchConsentLifecycleEventPayloadSchema,
+  CustomLaunchConsentRequestSchema,
+  CustomLaunchConsentSubjectSchema,
   DeleteGroupResultSchema,
   DeliveryOutcomeSchema,
+  ErrorPayloadSchema,
   EventServerFrameSchema,
   ExtensionLockSchema,
   InstructionPathSchema,
@@ -39,6 +48,7 @@ import {
   ReplyOpenWaitCommandSchema,
   RepositorySchema,
   StartAgentRunCommandSchema,
+  StartAgentRunResultSchema,
   SubmitMessageCommandSchema,
   TerminalCheckpointSchema,
   TerminalEndpointStatusSchema,
@@ -48,7 +58,119 @@ import {
   WorktreeSchema,
 } from "../src/index.js";
 
+const customLaunchSubject = {
+  repositoryIdentity: "repo_1234567890abcdef",
+  integrationId: "claude-wrapper",
+  providerKind: "claude-code",
+  adapterId: "nanasa.claude-code-v2",
+  adapterSecurityVersion: "2.0.0",
+  configuredCommand: ["sh", "bin/claude-wrapper"],
+  launcher: "append",
+  launcherFiles: [{ path: "bin/claude-wrapper", digest: "a".repeat(64) }],
+  workingDirectory: "/repository",
+  environmentNames: ["ANTHROPIC_BASE_URL", "NANASA_MCP_URL"],
+  credentialReference: { kind: "provider-managed" },
+  permissionFloor: "inherit",
+} as const;
+
+describe("custom launch consent contracts", () => {
+  it("accepts redacted stable subjects and rejects duplicate set members or runtime data", () => {
+    expect(CustomLaunchConsentSubjectSchema.parse(customLaunchSubject)).toEqual(
+      customLaunchSubject,
+    );
+    expect(
+      CustomLaunchConsentSubjectSchema.safeParse({
+        ...customLaunchSubject,
+        environmentNames: ["NANASA_MCP_URL", "NANASA_MCP_URL"],
+      }).success,
+    ).toBe(false);
+    expect(
+      CustomLaunchConsentSubjectSchema.safeParse({
+        ...customLaunchSubject,
+        runId: "run-specific",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("defines exact pending-request, decision, and approval-required start results", () => {
+    const request = CustomLaunchConsentRequestSchema.parse({
+      id: "consent-one",
+      repositoryIdentity: customLaunchSubject.repositoryIdentity,
+      groupId: "group-one",
+      agentId: "agent-one",
+      memberId: "claude.reviewer",
+      integrationId: customLaunchSubject.integrationId,
+      subjectDigest: "b".repeat(64),
+      configRevision: "c".repeat(64),
+      subject: customLaunchSubject,
+      state: "pending",
+      requestedAt: "2026-09-02T12:00:00.000Z",
+    });
+
+    expect(StartAgentRunResultSchema.parse({ status: "approval-required", request })).toMatchObject(
+      { status: "approval-required", request: { id: "consent-one" } },
+    );
+    expect(
+      CustomLaunchConsentDecisionResultSchema.parse({
+        request: {
+          ...request,
+          state: "approved",
+          decidedAt: "2026-09-02T12:01:00.000Z",
+          decidedBy: "operator-one",
+        },
+        decision: CustomLaunchConsentDecisionSchema.parse({
+          id: "receipt-one",
+          repositoryIdentity: customLaunchSubject.repositoryIdentity,
+          subjectDigest: request.subjectDigest,
+          principalId: "operator-one",
+          decision: "trusted",
+          decidedAt: "2026-09-02T12:01:00.000Z",
+        }),
+      }),
+    ).toMatchObject({
+      request: { state: "approved" },
+      decision: { id: "receipt-one", decision: "trusted" },
+    });
+    expect(CustomLaunchConsentErrorCodeSchema.parse("launch_consent_stale")).toBe(
+      "launch_consent_stale",
+    );
+    expect(
+      CustomLaunchConsentLifecycleEventPayloadSchema.parse({
+        state: "pending",
+        repositoryIdentity: request.repositoryIdentity,
+        subjectDigest: request.subjectDigest,
+        requestId: request.id,
+        groupId: request.groupId,
+        agentId: request.agentId,
+        memberId: request.memberId,
+        integrationId: request.integrationId,
+        configRevision: request.configRevision,
+      }),
+    ).not.toHaveProperty("subject");
+  });
+});
+
 describe("versioned control-plane contracts", () => {
+  it("normalizes public errors to message, details, and code", () => {
+    expect(
+      ErrorPayloadSchema.parse({
+        message: "The configured command is unsupported",
+        code: "provider_command_unrecognized",
+      }),
+    ).toEqual({
+      message: "The configured command is unsupported",
+      details: {},
+      code: "provider_command_unrecognized",
+    });
+    expect(
+      ErrorPayloadSchema.safeParse({
+        message: "Invalid error code",
+        details: {},
+        code: "Invalid Code",
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires daemon identity, epoch, versions, and explicit loopback-only metadata", () => {
     expect(
       ControlMetadataSchema.parse({
@@ -804,12 +926,14 @@ describe("configuration contracts", () => {
         name: "GitHub Copilot",
         kind: "copilot",
         command: ["copilot"],
+        commandSource: "builtin",
       },
       opencode: {
         id: "opencode",
         name: "OpenCode",
         kind: "opencode",
         command: ["opencode"],
+        commandSource: "builtin",
       },
     },
   } as const;
@@ -821,6 +945,16 @@ describe("configuration contracts", () => {
     expect(parsed.terminal.checkpoints).toMatchObject({
       enabled: false,
       sensitivity: "repository-private",
+    });
+    expect(parsed.attention.defaults).toEqual({
+      "response-required": true,
+      "agent-health": true,
+      completion: true,
+      "delivery-failure": true,
+      "action-state": false,
+      "provider-update-failed": true,
+      "provider-update-succeeded": false,
+      "unread-message": false,
     });
     expect(parsed.integrations.copilot).toMatchObject({
       providerState: { scope: "membership" },
@@ -852,6 +986,7 @@ describe("configuration contracts", () => {
             name: "Pi",
             kind: "pi",
             command: ["pi"],
+            commandSource: "builtin",
           },
         },
       }),
@@ -909,7 +1044,39 @@ describe("configuration contracts", () => {
       integrationId: "copilot",
       roleId: "reviewer",
       instructions: [],
+      attention: {},
       order: 0,
+    });
+    expect(ATTENTION_EVENT_TYPES).toHaveLength(8);
+    expect(AttentionEventTypeSchema.safeParse("provider-hook-stop").success).toBe(false);
+
+    const subscribed = NanasaConfigSchema.parse({
+      version: 2,
+      integrations: config.integrations,
+      attention: {
+        defaults: {
+          ...parsed.attention.defaults,
+          completion: false,
+        },
+      },
+      groups: {
+        group_one: {
+          name: "Team",
+          agents: {
+            agent_one: {
+              memberId: "copilot.reviewer",
+              name: "Reviewer",
+              integrationId: "copilot",
+              attention: { completion: true, "action-state": true },
+            },
+          },
+        },
+      },
+    });
+    expect(subscribed.attention.defaults.completion).toBe(false);
+    expect(subscribed.groups.group_one?.agents.agent_one.attention).toEqual({
+      completion: true,
+      "action-state": true,
     });
     expect(
       NanasaConfigSchema.safeParse({
@@ -1016,6 +1183,7 @@ describe("configuration contracts", () => {
           name: "Pi",
           kind: "pi",
           command: ["pi"],
+          commandSource: "builtin",
           providerState: { scope: "membership" },
         },
       },
@@ -1030,6 +1198,7 @@ describe("configuration contracts", () => {
           name: "Copilot",
           kind: "copilot",
           command: ["copilot"],
+          commandSource: "builtin",
           providerState: { scope: "custom", path: "homes/{integrationId}/{agentId}" },
         },
       },

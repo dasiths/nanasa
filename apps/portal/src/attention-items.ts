@@ -6,6 +6,9 @@ import type {
   AgentActionWorkspace,
   AgentRun,
   AgentStatusSummary,
+  AttentionEventType,
+  AttentionSubscriptionsSnapshot,
+  CustomLaunchConsentRequest,
   Group,
   GroupMembership,
   OpenWait,
@@ -13,8 +16,14 @@ import type {
 } from "@nanasa/contracts";
 import { type MemberStatusView, memberStatusView } from "./member-status.js";
 
-export type AttentionReviewKind = "wait" | "response" | "health" | "completion" | "delivery";
-export type AttentionNeutralKind = "action" | "unread";
+export type AttentionReviewKind =
+  | "launch-consent"
+  | "wait"
+  | "response"
+  | "health"
+  | "completion"
+  | "delivery";
+export type AttentionNeutralKind = "action" | "provider-update" | "unread";
 export type AttentionItemKind = AttentionReviewKind | AttentionNeutralKind;
 export type AttentionReviewCategory = "response" | "health" | "completion" | "delivery";
 export type AttentionNeutralCategory = "progress" | "updates";
@@ -66,6 +75,14 @@ export interface WaitAttentionItem extends AttentionItemBase<"wait", "response",
   acknowledgements: AgentActionAcknowledgement[];
 }
 
+export interface LaunchConsentAttentionItem
+  extends AttentionItemBase<"launch-consent", "response", "high", true> {
+  memberId: string;
+  request: CustomLaunchConsentRequest;
+  consentState: "pending" | "denied";
+  providerUpdate: boolean;
+}
+
 export interface ResponseAttentionItem
   extends AttentionItemBase<"response", "response", "high", true> {
   memberId: string;
@@ -85,7 +102,7 @@ export interface HealthAttentionItem
   run?: AgentRun;
   status?: AgentStatusSummary;
   statusView: MemberStatusView;
-  healthType: "failed" | "stuck";
+  healthType: "failed" | "stuck" | "provider-update-failed" | "ownership-uncertain";
 }
 
 export interface CompletionAttentionItem
@@ -123,13 +140,26 @@ export interface UnreadAttentionItem extends AttentionItemBase<"unread", "update
   latestGroupSequence: number;
 }
 
+export interface ProviderUpdateAttentionItem
+  extends AttentionItemBase<"provider-update", "updates", "none", false> {
+  memberId: string;
+  runId: string;
+  generation: number;
+  member: GroupMembership;
+  run: AgentRun;
+}
+
 export type AttentionReviewItem =
+  | LaunchConsentAttentionItem
   | WaitAttentionItem
   | ResponseAttentionItem
   | HealthAttentionItem
   | CompletionAttentionItem
   | DeliveryAttentionItem;
-export type AttentionNeutralItem = ActionAttentionItem | UnreadAttentionItem;
+export type AttentionNeutralItem =
+  | ActionAttentionItem
+  | ProviderUpdateAttentionItem
+  | UnreadAttentionItem;
 export type AttentionItem = AttentionReviewItem | AttentionNeutralItem;
 
 export type AttentionWorkspaceCollection =
@@ -143,6 +173,7 @@ export type AttentionUnreadCounts =
 export interface AttentionProjectionOptions {
   workspaces?: AttentionWorkspaceCollection;
   unreadCounts?: AttentionUnreadCounts;
+  launchConsents?: readonly CustomLaunchConsentRequest[];
 }
 
 export type AttentionScope = { kind: "repository" } | { kind: "group"; groupId: string };
@@ -169,13 +200,15 @@ const activeActionStates = new Set<AgentActionState>([
 ]);
 
 const kindSortRank = {
-  wait: 0,
-  response: 1,
-  health: 2,
-  delivery: 3,
-  completion: 4,
-  action: 5,
-  unread: 6,
+  "launch-consent": 0,
+  wait: 1,
+  response: 2,
+  health: 3,
+  delivery: 4,
+  completion: 5,
+  action: 6,
+  "provider-update": 7,
+  unread: 8,
 } as const satisfies Record<AttentionItemKind, number>;
 
 function sourceIdentity(kind: AttentionItemKind, ...parts: readonly (string | number)[]): string {
@@ -256,8 +289,70 @@ function isProjectionOptions(
     input !== undefined &&
     !Array.isArray(input) &&
     !(input instanceof Map) &&
-    (Object.hasOwn(input, "workspaces") || Object.hasOwn(input, "unreadCounts"))
+    (Object.hasOwn(input, "workspaces") ||
+      Object.hasOwn(input, "unreadCounts") ||
+      Object.hasOwn(input, "launchConsents"))
   );
+}
+
+function launchConsentItems(
+  snapshot: PortalSnapshot,
+  groups: ReadonlyMap<string, Group>,
+  requests: readonly CustomLaunchConsentRequest[] | undefined,
+): LaunchConsentAttentionItem[] {
+  const latest = new Map<string, CustomLaunchConsentRequest>();
+  for (const request of requests ?? []) {
+    const key = `${request.groupId}\u0000${request.memberId}`;
+    const current = latest.get(key);
+    if (current === undefined || request.requestedAt > current.requestedAt)
+      latest.set(key, request);
+  }
+  return [...latest.values()].flatMap((request) => {
+    if (request.state !== "pending" && request.state !== "denied") return [];
+    const group = groups.get(request.groupId);
+    if (group === undefined) return [];
+    const member = snapshot.memberships.find(
+      (candidate) =>
+        candidate.state === "active" &&
+        candidate.groupId === request.groupId &&
+        candidate.memberId === request.memberId,
+    );
+    const label = memberLabel(member, request.memberId);
+    const update =
+      member === undefined
+        ? undefined
+        : memberStatusView(snapshot.agentStatuses, snapshot.runs, member).run?.providerUpdate;
+    const providerUpdate = update?.state === "completed" && update.outcome === "approval-required";
+    const source = sourceIdentity("launch-consent", request.groupId, request.memberId, request.id);
+    return [
+      {
+        ...commonFields(source, group, {
+          memberId: request.memberId,
+          label,
+          title:
+            providerUpdate && request.state === "pending"
+              ? `Review before restarting ${label}`
+              : `${label} · Launch ${request.state === "pending" ? "approval required" : "denied"}`,
+          summary:
+            providerUpdate && request.state === "pending"
+              ? "The agent tools or launch settings changed. Confirm the command Nanasa will run."
+              : request.state === "pending"
+                ? `Review the custom ${request.subject.providerKind} launcher before credentials are made available.`
+                : `The exact custom launcher is denied and remains stopped.`,
+          targetPath: `${terminalPath(request.groupId, undefined)}#launch-consent-${encodeURIComponent(request.id)}`,
+        }),
+        kind: "launch-consent" as const,
+        category: "response" as const,
+        urgency: "high" as const,
+        counted: true as const,
+        review: true as const,
+        memberId: request.memberId,
+        request,
+        consentState: request.state,
+        providerUpdate,
+      },
+    ];
+  });
 }
 
 function commonFields(
@@ -339,14 +434,21 @@ function statusItems(
       continue;
     }
 
-    if (view.key === "failed" || view.key === "stuck") {
+    if (view.key === "needs-help" || view.key === "failed" || view.key === "stuck") {
+      const updateOutcome = run?.providerUpdate?.outcome;
+      const healthType =
+        view.key === "needs-help"
+          ? updateOutcome === "ownership-uncertain"
+            ? "ownership-uncertain"
+            : "provider-update-failed"
+          : view.key;
       const source = sourceIdentity(
         "health",
         group.id,
         member.memberId,
         run?.id ?? "no-run",
         run?.generation ?? 0,
-        view.key,
+        healthType,
         incidentMarker(view, member),
       );
       items.push({
@@ -354,13 +456,22 @@ function statusItems(
           memberId: member.memberId,
           ...(run === undefined ? {} : { runId: run.id, generation: run.generation }),
           label: member.alias,
-          title: `${member.alias} · ${view.label}`,
-          summary: statusSummary(view, member),
+          title:
+            view.key === "needs-help"
+              ? `${member.alias} needs help`
+              : `${member.alias} · ${view.label}`,
+          summary:
+            healthType === "ownership-uncertain"
+              ? "Nanasa cannot safely confirm which process belongs to this agent. It will not stop anything automatically."
+              : healthType === "provider-update-failed"
+                ? (run?.providerUpdate?.safeError?.message ??
+                  "Nanasa could not restart this agent with the latest setup.")
+                : statusSummary(view, member),
           targetPath: terminalPath(group.id, run?.id),
         }),
         kind: "health",
         category: "health",
-        urgency: view.key === "failed" ? "critical" : "medium",
+        urgency: view.key === "stuck" ? "medium" : "critical",
         counted: true,
         review: true,
         memberId: member.memberId,
@@ -368,12 +479,12 @@ function statusItems(
         ...(run === undefined ? {} : { run }),
         ...(status === undefined ? {} : { status }),
         statusView: view,
-        healthType: view.key,
+        healthType,
       });
       continue;
     }
 
-    if (view.key === "done" && run !== undefined && status !== undefined) {
+    if (status?.completionPending === true && run !== undefined) {
       const source = sourceIdentity(
         "completion",
         group.id,
@@ -408,6 +519,51 @@ function statusItems(
     }
   }
   return items;
+}
+
+function providerUpdateItems(
+  snapshot: PortalSnapshot,
+  groups: ReadonlyMap<string, Group>,
+): ProviderUpdateAttentionItem[] {
+  return snapshot.memberships.flatMap((member) => {
+    if (member.state !== "active") return [];
+    const group = groups.get(member.groupId);
+    if (group === undefined) return [];
+    const run = memberStatusView(snapshot.agentStatuses, snapshot.runs, member).run;
+    const update = run?.providerUpdate;
+    if (
+      run === undefined ||
+      update?.state !== "completed" ||
+      update.outcome !== "restarted" ||
+      update.replacementRunId !== run.id
+    ) {
+      return [];
+    }
+    const source = sourceIdentity("provider-update", group.id, member.memberId, update.id);
+    return [
+      {
+        ...commonFields(source, group, {
+          memberId: member.memberId,
+          runId: run.id,
+          generation: run.generation,
+          label: member.alias,
+          title: `${member.alias} restarted`,
+          summary: "The agent is using the latest setup. Its previous terminal remains in history.",
+          targetPath: terminalPath(group.id, run.id),
+        }),
+        kind: "provider-update" as const,
+        category: "updates" as const,
+        urgency: "none" as const,
+        counted: false as const,
+        review: false as const,
+        memberId: member.memberId,
+        runId: run.id,
+        generation: run.generation,
+        member,
+        run,
+      },
+    ];
+  });
 }
 
 function workspaceItems(
@@ -628,22 +784,71 @@ export function deriveAttentionItems(
         ...(unreadCounts === undefined ? {} : { unreadCounts }),
       };
   const groups = new Map(snapshot.groups.map((group) => [group.id, group] as const));
+  const consents = launchConsentItems(snapshot, groups, options.launchConsents);
   const statuses = statusItems(snapshot, groups);
   const workspace = workspaceItems(snapshot, groups, options.workspaces);
+  const consentMembers = new Set(consents.map((item) => `${item.groupId}\u0000${item.memberId}`));
   const deduplicatedStatuses = statuses.filter(
     (item) =>
       item.kind !== "response" ||
-      !workspace.exactWaitKeys.has(
-        suppressionKey(item.groupId, item.memberId, item.run.id, item.run.generation),
-      ),
+      (!consentMembers.has(`${item.groupId}\u0000${item.memberId}`) &&
+        !workspace.exactWaitKeys.has(
+          suppressionKey(item.groupId, item.memberId, item.run.id, item.run.generation),
+        )),
   );
 
   return [
+    ...consents,
     ...deduplicatedStatuses,
     ...workspace.items,
+    ...providerUpdateItems(snapshot, groups),
     ...deliveryItems(snapshot, groups),
     ...unreadItems(snapshot, groups, options.unreadCounts),
   ].sort(compareAttentionItems);
+}
+
+export function attentionEventType(item: AttentionItem): AttentionEventType {
+  switch (item.kind) {
+    case "launch-consent":
+    case "wait":
+    case "response":
+      return "response-required";
+    case "health":
+      return item.healthType === "provider-update-failed" ||
+        item.healthType === "ownership-uncertain"
+        ? "provider-update-failed"
+        : "agent-health";
+    case "completion":
+      return "completion";
+    case "delivery":
+      return "delivery-failure";
+    case "action":
+      return "action-state";
+    case "provider-update":
+      return "provider-update-succeeded";
+    case "unread":
+      return "unread-message";
+  }
+}
+
+export function filterAttentionItemsBySubscriptions(
+  items: readonly AttentionItem[],
+  policies: AttentionSubscriptionsSnapshot,
+): AttentionItem[] {
+  const memberPolicies = new Map(
+    policies.members.map(
+      (member) => [`${member.groupId}\u0000${member.memberId}`, member.subscriptions] as const,
+    ),
+  );
+  return items.filter((item) => {
+    const eventType = attentionEventType(item);
+    if (item.memberId === undefined) return policies.defaults[eventType];
+    const subscriptions = memberPolicies.get(`${item.groupId}\u0000${item.memberId}`);
+    return (
+      subscriptions?.find((subscription) => subscription.eventType === eventType)?.enabled ??
+      policies.defaults[eventType]
+    );
+  });
 }
 
 export function isAttentionReviewItem(item: AttentionItem): item is AttentionReviewItem {

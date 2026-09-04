@@ -27,14 +27,16 @@ Repository paths must stay beneath the repository root.
 ## Integration fields
 
 An integration map key is its authored ID. Do not add a nested `id`; Nanasa adds
-that field after parsing. Required authored fields are `name`, `kind`, and a
-non-empty `command` array. `kind` is `copilot`, `claude-code`, `pi`, or
-`opencode`.
+that field after parsing. Required authored fields are `name` and `kind`. `kind`
+is `copilot`, `claude-code`, `pi`, or `opencode`.
 
-Optional fields include `cwd`, `providerState`, `credentials`, `model`,
-`nativeRecovery`, `extensions`, and `environment`. State scope is `membership`,
-`integration`, or `custom`. Credential kind is `provider-managed` or
-`broker-profile`. A broker profile also needs `profileId`.
+Optional fields include `command`, `cwd`, `providerState`, `credentials`,
+`model`, `nativeRecovery`, `extensions`, and `environment`. An omitted command
+defaults to `copilot`, `claude`, `pi`, or `opencode` according to `kind`. An
+explicit command must be a non-empty array accepted by the active provider
+adapter. State scope is `membership`, `integration`, or `custom`. Credential
+kind is `provider-managed` or `broker-profile`. A broker profile also needs
+`profileId`.
 
 Environment names use shell variable syntax. Values can contain at most 16 KiB.
 `NODE_OPTIONS`, `LD_PRELOAD`, and `DYLD_INSERT_LIBRARIES` are forbidden. Do not

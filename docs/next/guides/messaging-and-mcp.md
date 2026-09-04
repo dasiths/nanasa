@@ -50,6 +50,13 @@ short-lived `NANASA_MCP_URL` and `NANASA_MCP_TOKEN` values into each run. It als
 injects `NANASA_STATUS_URL` for lifecycle reporting. Generated provider files
 refer to the token by environment variable and do not contain the capability.
 
+This Nanasa-owned server is separate from consumer MCP files selected through
+`providerFiles.mcp`. Consumer files use the provider's native JSON format and
+are composed by its adapter. Integration files apply to every assigned agent;
+an agent selection can append, replace, or disable inherited consumer files.
+The generated `nanasa` server is reserved and cannot be replaced by a consumer
+file.
+
 The signing key lives in `.nanasa/state/mcp-secret` as an owner-only file. A
 capability is bound to one group, member, run, and generation. Stopping,
 replacing, or removing the run causes later requests to be rejected.

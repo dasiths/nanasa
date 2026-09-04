@@ -3,6 +3,58 @@
 Package users can fix provider state selection, missing credentials, and failed
 agent starts without copying secrets into repository files.
 
+## The portal says an agent may need a restart
+
+The running process may use an older configuration revision, provider MCP file,
+or provider snapshot. A daemon restart can reconnect to that process, but it
+cannot change the process arguments or environment.
+
+Finish or pause important work, then choose **Stop all** in the group header and
+confirm the action. Start the agents again to generate new launch overlays and
+apply the current settings. You can dismiss the warning when a restart should
+wait.
+
+## Agent tools changed after an update
+
+Preview recovery before changing a running agent:
+
+```bash
+npx nanasa run recover <group-id> --body '{"dryRun":true}'
+```
+
+Then recover the group or one configured agent:
+
+```bash
+npx nanasa run recover <group-id>
+npx nanasa run recover <group-id> <agent-id>
+```
+
+Nanasa keeps healthy current agents running and restarts affected agents with
+the latest setup. A restart can interrupt work in progress. The previous run and
+terminal history remain available.
+
+Recovery compares the run's persisted snapshot digest with the active provider
+digest before loading executable provider policy. Historical snapshots remain
+immutable raw audit records. Nanasa does not decode an unsupported historical
+capability payload to restart an outdated run.
+
+A custom launcher may require renewed approval when its launch settings change.
+Review and approve the pending launch request, then run recovery again. Approval
+is distinct from process recovery and is never implied by a force option.
+
+If Nanasa reports that it could not safely identify the old process, inspect the
+run and terminal before continuing. Retry the exact run only when stopping it is
+appropriate:
+
+```bash
+npx nanasa run recover <group-id> <agent-id> --body '{"forceIndeterminate":true}'
+```
+
+Forced recovery remains fenced to the persisted run, generation, terminal
+binding, and tmux ownership tags. If those identities changed or do not match,
+Nanasa leaves the process alone. Do not delete state or manipulate tmux panes to
+bypass this check.
+
 ## Login says `--agent` is required
 
 This means the integration uses `membership` state or a custom path containing
@@ -64,6 +116,36 @@ environment or repair the helper.
 
 Do not put the credential value in `.nanasa/config.yaml` or commit the broker
 file. See [Credential broker profiles](../guides/authentication.md#use-a-credential-broker-profile).
+
+## A custom provider waits for launch consent
+
+An explicit integration command runs repository-selected code. Nanasa pauses
+the first launch before creating a provider process, binding credentials, or
+writing private launch state.
+
+Open the selected member's terminal or the Attention workspace. Compare the
+exact command, launcher strategy, working directory, environment variable
+names, credential mode, permission floor, and repository launcher file digest.
+Select **Trust and start** only after reviewing that code. Nanasa reuses the
+approval until a security-relevant property or hashed launcher file changes.
+
+If the request was denied, later starts remain denied for that exact digest.
+Revisit or revoke the decision instead of editing unrelated configuration. If a
+request is stale, start again and review the replacement request.
+
+## The Claude example says LiteLLM is not ready
+
+The multi-coding-agents Claude launcher checks LiteLLM before it prepares state
+or starts Claude Code. From the repository root, run:
+
+```bash
+make -C examples/multi-coding-agents proxy-status
+make -C examples/multi-coding-agents proxy-start
+```
+
+Authenticate with `auth-litellm` if startup requires it. Keep `LITELLM_KEY` in
+the operator environment; do not add it to `.nanasa/config.yaml`, command
+arguments, logs, or committed files.
 
 ## An agent starts and then fails
 

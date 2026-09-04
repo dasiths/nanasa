@@ -33,6 +33,13 @@ shows agents that started, were already running, or failed. **Stop** requests a
 clean stop. **Interrupt** sends Ctrl+C to the owner pane. **Restart** creates a
 new run generation when appropriate.
 
+Choose **Stop all** in the group header to stop every active agent and close its
+terminal pane. Nanasa asks for confirmation before it stops anything.
+
+The portal checks for configuration, provider-file, and provider changes while
+it is open. A warning appears when active agents may still be using older launch
+settings. Stop and start those agents when it is safe to interrupt their work.
+
 Recovery states distinguish reconciling, resuming, restarting, recovered, and
 failed recovery. You can stop active recovery. Use retry only after recovery
 reports that it cannot continue.

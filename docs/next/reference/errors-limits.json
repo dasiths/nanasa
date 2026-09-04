@@ -35,6 +35,28 @@
       "provider_state_not_found"
     ],
     "trust.list": [],
+    "launchConsents.list": [],
+    "launchConsents.get": [
+      "launch_consent_not_found"
+    ],
+    "launchConsents.approve": [
+      "launch_consent_not_found",
+      "launch_consent_not_pending",
+      "launch_consent_stale"
+    ],
+    "launchConsents.deny": [
+      "launch_consent_not_found",
+      "launch_consent_not_pending",
+      "launch_consent_stale"
+    ],
+    "launchConsents.cancel": [
+      "launch_consent_not_found",
+      "launch_consent_not_pending",
+      "launch_consent_stale"
+    ],
+    "launchConsents.revoke": [
+      "launch_consent_not_found"
+    ],
     "extensions.catalog": [],
     "extensions.list": [],
     "extensions.inspect": [
@@ -128,23 +150,48 @@
     ],
     "runs.start": [
       "run_already_active",
-      "agent_not_found"
+      "agent_not_found",
+      "launch_consent_required",
+      "launch_consent_denied",
+      "custom_launcher_permission_floor_unsupported"
     ],
     "runs.stop": [
       "run_not_found"
     ],
     "runs.restart": [
       "run_not_found",
-      "run_replaced"
+      "run_replaced",
+      "launch_consent_required",
+      "launch_consent_denied",
+      "custom_launcher_permission_floor_unsupported"
+    ],
+    "runs.recoverGroup": [
+      "group_not_found",
+      "provider_update_binding_unavailable",
+      "provider_update_target_changed",
+      "provider_update_recovery_unavailable"
+    ],
+    "runs.recoverAgent": [
+      "agent_not_found",
+      "run_not_found",
+      "provider_update_binding_unavailable",
+      "provider_update_target_changed",
+      "provider_update_recovery_unavailable"
     ],
     "runs.startAll": [
-      "group_not_found"
+      "group_not_found",
+      "launch_consent_required",
+      "launch_consent_denied",
+      "custom_launcher_permission_floor_unsupported"
     ],
     "runs.stopAll": [
       "group_not_found"
     ],
     "runs.restartAll": [
-      "group_not_found"
+      "group_not_found",
+      "launch_consent_required",
+      "launch_consent_denied",
+      "custom_launcher_permission_floor_unsupported"
     ],
     "runs.interrupt": [
       "run_not_running",
@@ -155,6 +202,15 @@
       "membership_not_found"
     ],
     "statuses.acknowledge": [
+      "membership_not_found"
+    ],
+    "attentionDismissals.list": [],
+    "attentionDismissals.dismiss": [],
+    "attentionSubscriptions.list": [],
+    "attentionSubscriptions.set": [
+      "membership_not_found"
+    ],
+    "attentionSubscriptions.reset": [
       "membership_not_found"
     ],
     "messages.submit": [
@@ -262,6 +318,12 @@
     "state.retain": 65536,
     "state.delete": 65536,
     "trust.list": 65536,
+    "launchConsents.list": 65536,
+    "launchConsents.get": 65536,
+    "launchConsents.approve": 65536,
+    "launchConsents.deny": 65536,
+    "launchConsents.cancel": 65536,
+    "launchConsents.revoke": 65536,
     "extensions.catalog": 65536,
     "extensions.list": 65536,
     "extensions.inspect": 65536,
@@ -295,6 +357,8 @@
     "runs.start": 65536,
     "runs.stop": 65536,
     "runs.restart": 65536,
+    "runs.recoverGroup": 65536,
+    "runs.recoverAgent": 65536,
     "runs.startAll": 65536,
     "runs.stopAll": 65536,
     "runs.restartAll": 65536,
@@ -302,6 +366,11 @@
     "statuses.list": 65536,
     "statuses.get": 65536,
     "statuses.acknowledge": 65536,
+    "attentionDismissals.list": 65536,
+    "attentionDismissals.dismiss": 65536,
+    "attentionSubscriptions.list": 65536,
+    "attentionSubscriptions.set": 65536,
+    "attentionSubscriptions.reset": 65536,
     "messages.submit": 6356992,
     "messages.list": 65536,
     "messages.clear": 65536,

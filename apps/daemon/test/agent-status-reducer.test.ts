@@ -66,6 +66,22 @@ describe("agent status reducer", () => {
     expect(state).toMatchObject({ state: "idle", phase: "settled", openTools: [] });
   });
 
+  it("clears an orphaned tool when the provider confirms no active work remains", () => {
+    let state = createAgentStatusReducerState("run_1", 1, startedAt);
+    state = reporterEvent(state, "turn.started");
+    state = reporterEvent(state, "tool.started", { operationId: "rejected-tool" });
+
+    state = reporterEvent(state, "turn.settled", { data: { activeCount: 0 } });
+
+    expect(state).toMatchObject({
+      state: "idle",
+      phase: "settled",
+      attention: "none",
+      openTools: [],
+      completionRevision: 1,
+    });
+  });
+
   it("keeps explicit waits out of stuck inference until the matching request closes", () => {
     let state = createAgentStatusReducerState("run_1", 1, startedAt);
     state = reporterEvent(state, "turn.started");

@@ -10,11 +10,20 @@ terminal:
     retentionSeconds: 86400
     sensitivity: repository-private
 instructions: []
+attention:
+  defaults:
+    response-required: true
+    agent-health: true
+    completion: true
+    delivery-failure: true
+    action-state: false
+    provider-update-failed: true
+    provider-update-succeeded: false
+    unread-message: false
 integrations:
   copilot:
     name: GitHub Copilot
     kind: copilot
-    command: [copilot]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
@@ -23,7 +32,6 @@ integrations:
   pi:
     name: Pi
     kind: pi
-    command: [pi]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
@@ -32,7 +40,6 @@ integrations:
   opencode:
     name: OpenCode
     kind: opencode
-    command: [opencode]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
@@ -41,7 +48,6 @@ integrations:
   claude-code:
     name: Claude Code
     kind: claude-code
-    command: [claude]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }

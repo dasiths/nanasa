@@ -16,6 +16,9 @@ Existing users can go directly to [configuration](guides/configuration.md),
 [provider authentication](guides/authentication.md), or
 [everyday portal use](guides/portal.md).
 
+Explore the [examples catalog](examples/index.md) for minimal, multi-agent, and
+provider-state configurations.
+
 ## Configure and use a team
 
 * [Configuration](guides/configuration.md)

@@ -2,6 +2,7 @@ import type {
   BrowserRestartFrame,
   ConfigStatus,
   ControlMetadata,
+  CustomLaunchConsentRequest,
   Group,
   GroupMembership,
   NanasaConfig,
@@ -11,23 +12,19 @@ import type {
   ServiceDescriptor,
   TerminalCheckpoint,
 } from "@nanasa/contracts";
-import { Bell, RefreshCw } from "lucide-react";
+import { Bell, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { PortalClient } from "../api.js";
 import {
   type ActionAttentionItem,
   ATTENTION_CATEGORY_LABELS,
   type AttentionItem,
-  type AttentionReviewCategory,
-  attentionCategoryCount,
   attentionItemsForScope,
-  attentionReviewCount,
-  type CompletionAttentionItem,
   deriveAttentionItems,
-  type WaitAttentionItem,
 } from "../attention-items.js";
 import { CheckoutWorkspace } from "../components/checkout-workspace.js";
 import { ExtensionsWorkspace } from "../components/extensions-workspace.js";
+import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 import { generatedOfflineHelp } from "../help/generated-offline-help.js";
 import type { PortalPreferences } from "../hooks/use-portal-preferences.js";
 import { memberStatusView } from "../member-status.js";
@@ -45,188 +42,116 @@ interface PortalRoutePanelProps {
   commands: PortalCommand[];
   attentionItems?: readonly AttentionItem[];
   attentionWorkspaceLoading?: ReadonlySet<string>;
-  attentionWorkspaceErrors?: ReadonlyMap<string, string>;
+  attentionWorkspaceErrors?: ReadonlyMap<string, PortalError>;
   onNavigate(path: string): void;
   onRefresh(): Promise<void>;
   onReloadAttentionWorkspace?(groupId: string): Promise<void>;
+  onApproveLaunchConsent?(request: CustomLaunchConsentRequest): Promise<void>;
+  onDismissAttentionItems(itemIds: readonly string[]): Promise<boolean>;
+  onOpenRoleSettings(): void;
   onPatchPreferences(next: Partial<PortalPreferences>): void;
 }
 
-const cancellableStates = new Set(["created", "deferred"]);
-
-function WaitReply({
-  item,
-  client,
-  onChanged,
-}: {
-  item: WaitAttentionItem;
-  client: PortalClient;
-  onChanged(): Promise<void>;
-}) {
-  const { wait } = item;
-  const [answer, setAnswer] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const [error, setError] = useState<string>();
-  const submit = async (reply: Parameters<PortalClient["replyOpenWait"]>[1]["reply"]) => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await client.replyOpenWait(wait.id, {
-        expectedRunId: wait.runId,
-        expectedGeneration: wait.generation,
-        expectedReporterEpoch: wait.reporterEpoch,
-        expectedStatusRevision: wait.openedStatusRevision,
-        reply,
-      });
-      setSubmitted(true);
-      await onChanged();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to send the exact wait reply");
-    } finally {
-      setBusy(false);
-    }
-  };
-  const disabled = busy || submitted || wait.state === "replying";
-  return (
-    <div className="attention-control-stack">
-      {wait.kind === "permission" ? (
-        <div className="workflow-actions">
-          <button type="button" disabled={disabled} onClick={() => void submit({ kind: "deny" })}>
-            Deny
-          </button>
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => void submit({ kind: "allow-once" })}
-          >
-            Allow once
-          </button>
-        </div>
-      ) : wait.kind === "plan_approval" ? (
-        <div className="workflow-actions">
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => void submit({ kind: "reject-plan" })}
-          >
-            Reject
-          </button>
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => void submit({ kind: "approve-plan" })}
-          >
-            Approve
-          </button>
-        </div>
-      ) : (
-        <form
-          className="workflow-actions"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void submit({ kind: "answer", text: answer });
-          }}
-        >
-          <input
-            aria-label={`Answer ${wait.summary}`}
-            value={answer}
-            onChange={(event) => setAnswer(event.target.value)}
-            disabled={disabled}
-            required
-          />
-          <button type="submit" disabled={disabled || answer.trim().length === 0}>
-            Reply
-          </button>
-        </form>
-      )}
-      {(submitted || wait.state === "replying") && (
-        <small role="status">Reply submitted. Waiting for the reporter to close this wait.</small>
-      )}
-      {error !== undefined && <small role="alert">{error}</small>}
-    </div>
-  );
+function actionStateLabel(state: string): string {
+  const label = state.replaceAll("-", " ");
+  return `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
 }
 
-function CompletionControls({
-  item,
-  client,
-  onNavigate,
-  onRefresh,
-  onAcknowledged,
-}: {
-  item: CompletionAttentionItem;
-  client: PortalClient;
-  onNavigate(path: string): void;
-  onRefresh(): Promise<void>;
-  onAcknowledged(item: CompletionAttentionItem): void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const [error, setError] = useState<string>();
-  const acknowledge = async () => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await client.acknowledgeCompletion(item.groupId, item.memberId);
-      setSubmitted(true);
-      onAcknowledged(item);
-      await onRefresh();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to acknowledge completion");
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="attention-control-stack">
-      <div className="workflow-actions">
-        <button type="button" disabled={busy || submitted} onClick={() => void acknowledge()}>
-          {submitted ? "Acknowledged" : "Acknowledge"}
-        </button>
-        <button type="button" onClick={() => onNavigate(item.targetPath)}>
-          Open agent
-        </button>
-      </div>
-      {error !== undefined && <small role="alert">{error}</small>}
-    </div>
-  );
+function actionDisplayState(item: ActionAttentionItem): string {
+  if (item.action.error?.code === "agent_prompt_stalled") return "Delivery unconfirmed";
+  return actionStateLabel(item.action.state);
 }
 
-function ActionControls({
-  item,
-  client,
-  onChanged,
-}: {
-  item: ActionAttentionItem;
-  client: PortalClient;
-  onChanged(): Promise<void>;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const [error, setError] = useState<string>();
-  const cancel = async () => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await client.cancelAgentAction(item.action.id);
-      setSubmitted(true);
-      await onChanged();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to cancel this action");
-    } finally {
-      setBusy(false);
-    }
-  };
-  if (!cancellableStates.has(item.action.state)) return null;
-  return (
-    <div className="attention-control-stack">
-      <button type="button" disabled={busy || submitted} onClick={() => void cancel()}>
-        {submitted ? "Cancellation requested" : "Cancel"}
-      </button>
-      {error !== undefined && <small role="alert">{error}</small>}
-    </div>
-  );
+function actionErrorMessage(item: ActionAttentionItem): string | undefined {
+  const error = item.action.error;
+  if (error?.code === "agent_prompt_stalled") {
+    return `Nanasa sent this prompt to ${item.label}, but could not confirm that the agent received it. The prompt may still have run.`;
+  }
+  return error?.message;
+}
+
+function actionKindLabel(kind: string): string {
+  const label = kind.replaceAll("-", " ");
+  return `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
+}
+
+type AttentionInboxView = "needs" | "active" | "history" | "all";
+
+function attentionInboxView(item: AttentionItem): Exclude<AttentionInboxView, "all"> {
+  if (item.counted) return "needs";
+  if (item.kind === "action" && item.active) return "active";
+  return "history";
+}
+
+function attentionDestination(item: AttentionItem): { label: string; path: string } {
+  if (item.kind === "delivery" || item.kind === "unread") {
+    return { label: "Open messages", path: item.targetPath };
+  }
+  if (item.kind === "launch-consent") {
+    return { label: "Review consent", path: item.targetPath };
+  }
+  if (item.kind === "provider-update") {
+    return { label: "Open setup", path: item.targetPath };
+  }
+  if ((item.kind === "wait" || item.kind === "action") && item.runId !== undefined) {
+    return {
+      label: "Open terminal",
+      path: `/groups/${encodeURIComponent(item.groupId)}/terminals/${encodeURIComponent(item.runId)}`,
+    };
+  }
+  return { label: "Open terminal", path: item.targetPath };
+}
+
+function attentionStateLabel(item: AttentionItem): string {
+  switch (item.kind) {
+    case "launch-consent":
+      return item.consentState === "pending" ? "Approval required" : "Denied";
+    case "wait":
+      return "Response required";
+    case "response":
+      return item.responseType === "approval" ? "Approval required" : "Input required";
+    case "health":
+      return item.healthType === "stuck"
+        ? "Stuck"
+        : item.healthType === "failed"
+          ? "Failed"
+          : "Needs help";
+    case "completion":
+      return "Ready";
+    case "delivery":
+      return "Delivery failed";
+    case "action":
+      return actionDisplayState(item);
+    case "provider-update":
+      return "Restarted";
+    case "unread":
+      return "Unread";
+  }
+}
+
+function attentionItemTimestamp(item: AttentionItem): string | undefined {
+  switch (item.kind) {
+    case "launch-consent":
+      return item.request.requestedAt;
+    case "wait":
+      return item.wait.updatedAt;
+    case "response":
+    case "health":
+    case "completion":
+      return item.status?.observedAt;
+    case "action":
+      return item.action.updatedAt;
+    case "provider-update":
+      return item.run.providerUpdate?.updatedAt;
+    case "delivery":
+    case "unread":
+      return undefined;
+  }
+}
+
+function formatAttentionTime(timestamp: string | undefined): string | undefined {
+  if (timestamp === undefined) return undefined;
+  return new Date(timestamp).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
 function GroupSettingsPanel({
@@ -323,49 +248,40 @@ function AttentionPanel({
   route,
   snapshot,
   group,
-  client,
   attentionItems,
   attentionWorkspaceLoading,
   attentionWorkspaceErrors,
   onNavigate,
-  onRefresh,
   onReloadAttentionWorkspace,
+  onDismissAttentionItems,
+  preferences,
+  onPatchPreferences,
 }: Pick<
   PortalRoutePanelProps,
   | "route"
   | "snapshot"
   | "group"
-  | "client"
   | "attentionItems"
   | "attentionWorkspaceLoading"
   | "attentionWorkspaceErrors"
   | "onNavigate"
-  | "onRefresh"
   | "onReloadAttentionWorkspace"
+  | "onDismissAttentionItems"
+  | "preferences"
+  | "onPatchPreferences"
 >) {
-  const [filter, setFilter] = useState<"all" | AttentionReviewCategory>("all");
-  const [suppressedCompletionIds, setSuppressedCompletionIds] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
-  const [completionAnnouncement, setCompletionAnnouncement] = useState<{
-    itemId: string;
-    message: string;
-  }>();
+  const [view, setView] = useState<AttentionInboxView>("needs");
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState<"all" | AttentionItem["category"]>("all");
+  const routeTeamFilter = route.kind === "group" ? route.groupId : "all";
+  const [teamFilter, setTeamFilter] = useState(routeTeamFilter);
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
   const allItems = attentionItems ?? deriveAttentionItems(snapshot);
   const scope =
     route.kind === "group"
       ? ({ kind: "group", groupId: route.groupId } as const)
       : ({ kind: "repository" } as const);
-  const scopedItems = attentionItemsForScope(allItems, scope).filter(
-    (item) => item.kind !== "completion" || !suppressedCompletionIds.has(item.id),
-  );
-  const reviewItems = scopedItems.filter(
-    (item) => item.counted && (filter === "all" || item.category === filter),
-  );
-  const progressItems = scopedItems.filter(
-    (item): item is ActionAttentionItem => item.kind === "action",
-  );
-  const activeProgressCount = progressItems.filter((item) => item.active).length;
+  const scopedItems = attentionItemsForScope(allItems, scope);
   const relevantGroupIds =
     scope.kind === "group" ? [scope.groupId] : snapshot.groups.map((item) => item.id);
   const loading = relevantGroupIds.filter((groupId) => attentionWorkspaceLoading?.has(groupId));
@@ -373,14 +289,45 @@ function AttentionPanel({
     const error = attentionWorkspaceErrors?.get(groupId);
     return error === undefined ? [] : [{ groupId, error }];
   });
-  const filters: Array<{ id: "all" | AttentionReviewCategory; label: string; count: number }> = [
-    { id: "all", label: "All", count: attentionReviewCount(scopedItems) },
-    ...(["response", "health", "completion", "delivery"] as const).map((category) => ({
-      id: category,
-      label: ATTENTION_CATEGORY_LABELS[category],
-      count: attentionCategoryCount(scopedItems, category),
-    })),
+  const views: Array<{ id: AttentionInboxView; label: string; count: number }> = [
+    {
+      id: "needs",
+      label: "Needs action",
+      count: scopedItems.filter((item) => item.counted).length,
+    },
+    {
+      id: "active",
+      label: "Active",
+      count: scopedItems.filter((item) => item.kind === "action" && item.active).length,
+    },
+    {
+      id: "history",
+      label: "History",
+      count: scopedItems.filter((item) => attentionInboxView(item) === "history").length,
+    },
+    { id: "all", label: "All", count: scopedItems.length },
   ];
+  const categories = [...new Set(scopedItems.map((item) => item.category))];
+  const teams =
+    scope.kind === "group"
+      ? snapshot.groups.filter((item) => item.id === scope.groupId)
+      : [...new Map(scopedItems.map((item) => [item.groupId, item.group])).values()];
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const visibleItems = scopedItems.filter((item) => {
+    if (view !== "all" && attentionInboxView(item) !== view) return false;
+    if (typeFilter !== "all" && item.category !== typeFilter) return false;
+    if (teamFilter !== "all" && item.groupId !== teamFilter) return false;
+    if (normalizedSearch.length === 0) return true;
+    return [
+      item.title,
+      item.summary,
+      item.label,
+      item.group.name,
+      ATTENTION_CATEGORY_LABELS[item.category],
+      attentionStateLabel(item),
+    ].some((value) => value.toLocaleLowerCase().includes(normalizedSearch));
+  });
+  const selectedItems = scopedItems.filter((item) => selectedIds.has(item.id));
 
   useEffect(() => {
     const fragment = window.location.hash.slice(1);
@@ -388,8 +335,17 @@ function AttentionPanel({
     const target = scopedItems.find((item) => item.targetPath.split("#")[1] === fragment);
     if (target === undefined) return;
     if (target.kind !== "wait" && target.kind !== "action") return;
-    if (target.kind === "wait" && filter !== target.category) {
-      setFilter(target.category);
+    const targetView = attentionInboxView(target);
+    if (
+      view !== targetView ||
+      search !== "" ||
+      typeFilter !== "all" ||
+      teamFilter !== routeTeamFilter
+    ) {
+      setView(targetView);
+      setSearch("");
+      setTypeFilter("all");
+      setTeamFilter(routeTeamFilter);
       return;
     }
     const frame = requestAnimationFrame(() => {
@@ -398,36 +354,117 @@ function AttentionPanel({
       element?.scrollIntoView?.({ block: "center" });
     });
     return () => cancelAnimationFrame(frame);
-  }, [filter, scopedItems]);
+  }, [routeTeamFilter, scopedItems, search, teamFilter, typeFilter, view]);
+
+  useEffect(() => {
+    setTeamFilter(routeTeamFilter);
+  }, [routeTeamFilter]);
+
+  useEffect(() => {
+    const currentIds = new Set(scopedItems.map((item) => item.id));
+    setSelectedIds((current) => {
+      const retained = new Set([...current].filter((id) => currentIds.has(id)));
+      return retained.size === current.size ? current : retained;
+    });
+  }, [scopedItems]);
 
   const reload = (groupId: string) => onReloadAttentionWorkspace?.(groupId) ?? Promise.resolve();
+  const dismissAttentionItems = async (items: readonly AttentionItem[]) => {
+    const persisted = await onDismissAttentionItems(items.map(({ id }) => id));
+    if (!persisted) return false;
+    const providerUpdateIds = items.flatMap((item) => {
+      if (item.kind !== "provider-update") return [];
+      const updateId = item.run.providerUpdate?.id;
+      return updateId === undefined ? [] : [updateId];
+    });
+    if (providerUpdateIds.length > 0) {
+      onPatchPreferences({
+        dismissedProviderUpdateIds: [
+          ...new Set([...(preferences.dismissedProviderUpdateIds ?? []), ...providerUpdateIds]),
+        ].slice(-100),
+      });
+    }
+    return true;
+  };
+  const dismissSelected = async () => {
+    if (await dismissAttentionItems(selectedItems)) setSelectedIds(new Set());
+  };
   return (
     <RouteSurface
       title="Attention"
       eyebrow={group?.name ?? "Global operations"}
-      description="Review responses, agent health, completed work, and failed deliveries. Durable action progress remains visible without inflating the review count."
+      description="Your subscribed inbox for agent requests, progress, completions, delivery issues, and updates."
     >
-      <p
-        key={completionAnnouncement?.itemId}
-        className="visually-hidden"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-      >
-        {completionAnnouncement?.message ?? ""}
-      </p>
-      <div className="attention-filters" role="group" aria-label="Attention category filters">
-        {filters.map((item) => (
+      <div className="attention-filters" role="group" aria-label="Attention inbox views">
+        {views.map((item) => (
           <button
             type="button"
             key={item.id}
-            aria-pressed={filter === item.id}
-            onClick={() => setFilter(item.id)}
+            aria-pressed={view === item.id}
+            onClick={() => setView(item.id)}
           >
             {item.label} <span>{item.count}</span>
           </button>
         ))}
       </div>
+      <div className="attention-inbox-toolbar">
+        <label className="attention-search">
+          <span>Search</span>
+          <input
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search Attention"
+          />
+        </label>
+        <label>
+          <span>Type</span>
+          <select
+            aria-label="Filter by type"
+            value={typeFilter}
+            onChange={(event) =>
+              setTypeFilter(event.target.value as "all" | AttentionItem["category"])
+            }
+          >
+            <option value="all">All types</option>
+            {categories.map((category) => (
+              <option value={category} key={category}>
+                {ATTENTION_CATEGORY_LABELS[category]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Team</span>
+          <select
+            aria-label="Filter by team"
+            value={teamFilter}
+            disabled={scope.kind === "group"}
+            onChange={(event) => setTeamFilter(event.target.value)}
+          >
+            {scope.kind === "repository" && <option value="all">All teams</option>}
+            {teams.map((team) => (
+              <option value={team.id} key={team.id}>
+                {team.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {selectedItems.length > 0 && (
+        <div className="attention-selection" role="group" aria-label="Selected Attention items">
+          <strong>{selectedItems.length} selected</strong>
+          <div>
+            <button type="button" onClick={() => void dismissSelected()}>
+              <X aria-hidden="true" size={14} />
+              Dismiss selected
+            </button>
+            <button type="button" onClick={() => setSelectedIds(new Set())}>
+              Clear selection
+            </button>
+          </div>
+        </div>
+      )}
       {loading.length > 0 && (
         <p className="attention-loading" role="status">
           Loading exact waits and action progress for {loading.length}{" "}
@@ -440,9 +477,9 @@ function AttentionPanel({
           {failures.map(({ groupId, error }) => (
             <div key={groupId}>
               <span>
-                {snapshot.groups.find((candidate) => candidate.id === groupId)?.name ?? groupId}:{" "}
-                {error}
+                {snapshot.groups.find((candidate) => candidate.id === groupId)?.name ?? groupId}
               </span>
+              <ErrorNotice error={error} className="attention-workspace-error" />
               <button type="button" onClick={() => void reload(groupId)}>
                 Retry
               </button>
@@ -450,95 +487,84 @@ function AttentionPanel({
           ))}
         </section>
       )}
-      <section className="attention-review-section" aria-labelledby="attention-review-heading">
-        <h3 id="attention-review-heading">Review items</h3>
-        {reviewItems.length === 0 ? (
-          <Empty text="No review items match this category." />
-        ) : (
-          <ul className="workflow-list attention-list">
-            {reviewItems.map((item) => {
-              const fragment = item.targetPath.split("#")[1];
-              return (
-                <li
-                  className={`workflow-row attention-item attention-${item.category}`}
-                  id={fragment}
-                  key={item.id}
-                  tabIndex={fragment === undefined ? undefined : -1}
-                >
-                  <div className="attention-item-main">
-                    <strong>{item.title}</strong>
-                    <small>
-                      {item.group.name} · {ATTENTION_CATEGORY_LABELS[item.category]}
-                    </small>
-                    <p>{item.summary}</p>
-                  </div>
-                  {item.kind === "wait" ? (
-                    <WaitReply item={item} client={client} onChanged={() => reload(item.groupId)} />
-                  ) : item.kind === "completion" ? (
-                    <CompletionControls
-                      item={item}
-                      client={client}
-                      onNavigate={onNavigate}
-                      onRefresh={onRefresh}
-                      onAcknowledged={(completion) => {
-                        setSuppressedCompletionIds(
-                          (current) => new Set([...current, completion.id]),
-                        );
-                        setCompletionAnnouncement({
-                          itemId: completion.id,
-                          message: `Completion acknowledged for ${completion.label}.`,
-                        });
-                      }}
-                    />
-                  ) : (
-                    <button type="button" onClick={() => onNavigate(item.targetPath)}>
-                      {item.kind === "delivery" ? "Open Messages" : "Open terminal"}
-                    </button>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
-      <section
-        className="workflow-card attention-progress"
-        aria-labelledby="attention-progress-heading"
-      >
-        <div className="attention-section-heading">
-          <h3 id="attention-progress-heading">Progress</h3>
-          {activeProgressCount > 0 && (
-            <span className="progress-count">
-              {activeProgressCount} active {activeProgressCount === 1 ? "action" : "actions"}
-            </span>
-          )}
-        </div>
-        {progressItems.length === 0 ? (
-          <p>No durable actions have been created in this scope.</p>
-        ) : (
-          <ul className="workflow-list">
-            {progressItems.map((item) => {
-              const fragment = item.targetPath.split("#")[1];
-              return (
-                <li className="workflow-row progress-row" id={fragment} key={item.id} tabIndex={-1}>
-                  <div>
-                    <strong>{item.title}</strong>
-                    <small>
-                      {item.group.name} · {item.attempts.length} attempts ·{" "}
-                      {item.acknowledgements.length} acknowledgements · {item.action.id}
-                    </small>
-                  </div>
-                  <ActionControls
-                    item={item}
-                    client={client}
-                    onChanged={() => reload(item.groupId)}
+      {visibleItems.length === 0 ? (
+        <Empty text="No Attention items match this view." />
+      ) : (
+        <ul className="attention-inbox-list">
+          {visibleItems.map((item) => {
+            const fragment = item.targetPath.split("#")[1];
+            const destination = attentionDestination(item);
+            const timestamp = attentionItemTimestamp(item);
+            const diagnostic = item.kind === "action" ? actionErrorMessage(item) : undefined;
+            return (
+              <li
+                className={`attention-inbox-row attention-${attentionInboxView(item)}`}
+                id={fragment}
+                key={item.id}
+                tabIndex={fragment === undefined ? undefined : -1}
+              >
+                <label className="attention-row-select">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${item.title}`}
+                    checked={selectedIds.has(item.id)}
+                    onChange={(event) => {
+                      setSelectedIds((current) => {
+                        const next = new Set(current);
+                        if (event.target.checked) next.add(item.id);
+                        else next.delete(item.id);
+                        return next;
+                      });
+                    }}
                   />
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
+                </label>
+                <span className="attention-state-indicator" aria-hidden="true" />
+                <div className="attention-inbox-main">
+                  <div className="attention-inbox-title">
+                    <strong>{item.title}</strong>
+                    <span className="attention-state-badge">{attentionStateLabel(item)}</span>
+                  </div>
+                  <small className="attention-inbox-meta">
+                    <span>{item.group.name}</span>
+                    <span>{ATTENTION_CATEGORY_LABELS[item.category]}</span>
+                    {item.kind === "action" && <span>{actionKindLabel(item.action.kind)}</span>}
+                    {timestamp !== undefined && (
+                      <time dateTime={timestamp}>{formatAttentionTime(timestamp)}</time>
+                    )}
+                  </small>
+                  <p>{item.summary}</p>
+                  {item.kind === "action" && diagnostic !== undefined && (
+                    <p
+                      className="attention-diagnostic"
+                      title={
+                        item.action.error === undefined
+                          ? undefined
+                          : `Diagnostic code: ${item.action.error.code}`
+                      }
+                    >
+                      {diagnostic}
+                      {item.action.error !== undefined && <code>{item.action.error.code}</code>}
+                    </p>
+                  )}
+                </div>
+                <div className="attention-item-actions">
+                  <button type="button" onClick={() => onNavigate(destination.path)}>
+                    {destination.label}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Dismiss ${item.title}`}
+                    onClick={() => void dismissAttentionItems([item])}
+                  >
+                    <X aria-hidden="true" size={14} />
+                    Dismiss
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </RouteSurface>
   );
 }
@@ -594,7 +620,7 @@ function DiagnosticsPanel({
   const [status, setStatus] = useState<ConfigStatus>();
   const [states, setStates] = useState<ProviderStateBinding[]>([]);
   const [checkpoints, setCheckpoints] = useState<TerminalCheckpoint[]>([]);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   const load = () =>
     void Promise.all([
       client.loadMetadata(),
@@ -609,8 +635,7 @@ function DiagnosticsPanel({
         setCheckpoints(nextCheckpoints);
         setError(undefined);
       },
-      (cause: unknown) =>
-        setError(cause instanceof Error ? cause.message : "Unable to load diagnostics"),
+      (cause: unknown) => setError(toPortalError(cause, "Unable to load diagnostics")),
     );
   useEffect(load, [client, snapshot.sequence]);
   const lifecycle = async (bindingId: string, action: "retain" | "delete") => {
@@ -626,11 +651,7 @@ function DiagnosticsPanel({
       eyebrow="Control plane"
       description="Structured configuration, provider-state, terminal retention, and daemon metadata."
     >
-      {error !== undefined && (
-        <p className="route-error" role="alert">
-          {error}
-        </p>
-      )}
+      {error !== undefined && <ErrorNotice error={error} className="route-error" />}
       <div className="workflow-grid">
         <section className="workflow-card">
           <h3>Daemon</h3>
@@ -743,8 +764,12 @@ function DiagnosticsPanel({
 
 function SettingsPanel({
   preferences,
+  onOpenRoleSettings,
   onPatchPreferences,
-}: Pick<PortalRoutePanelProps, "preferences" | "onPatchPreferences">) {
+}: Pick<PortalRoutePanelProps, "preferences" | "onOpenRoleSettings" | "onPatchPreferences">) {
+  const [notificationPermission, setNotificationPermission] = useState<
+    NotificationPermission | "unsupported"
+  >(() => (!("Notification" in window) ? "unsupported" : Notification.permission));
   const setNotification = (key: keyof PortalPreferences["notifications"], value: boolean) =>
     onPatchPreferences({ notifications: { ...preferences.notifications, [key]: value } });
   const requestNotifications = async () => {
@@ -752,9 +777,27 @@ function SettingsPanel({
       setNotification("desktop", false);
       return;
     }
-    if (!("Notification" in window)) return;
+    if (!("Notification" in window) || Notification.permission === "denied") return;
     const permission = await Notification.requestPermission();
+    setNotificationPermission(permission);
     setNotification("desktop", permission === "granted");
+  };
+  const notificationStatus =
+    notificationPermission === "unsupported"
+      ? "Unsupported"
+      : notificationPermission === "denied"
+        ? "Blocked"
+        : preferences.notifications.desktop && notificationPermission === "granted"
+          ? "On"
+          : notificationPermission === "default"
+            ? "Permission required"
+            : "Off";
+  const testNotification = () => {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    new Notification("Nanasa browser notifications", {
+      body: "Subscribed Attention items can appear here while the portal is open.",
+      silent: true,
+    });
   };
   return (
     <RouteSurface
@@ -790,6 +833,9 @@ function SettingsPanel({
               <option value="compact">Compact</option>
             </select>
           </label>
+          <button type="button" onClick={onOpenRoleSettings}>
+            Edit role presentation
+          </button>
         </fieldset>
         <fieldset>
           <legend>Accessibility</legend>
@@ -824,14 +870,7 @@ function SettingsPanel({
         </fieldset>
         <fieldset>
           <legend>Notifications</legend>
-          <label>
-            <input
-              type="checkbox"
-              checked={preferences.notifications.inApp}
-              onChange={(event) => setNotification("inApp", event.target.checked)}
-            />{" "}
-            In-app attention notices
-          </label>
+          <p>Subscribed Attention items always show a temporary in-app toast.</p>
           <label>
             <input
               type="checkbox"
@@ -845,6 +884,15 @@ function SettingsPanel({
               ? "Disable desktop notifications"
               : "Request desktop notifications"}
           </button>
+          <p role="status">Browser notifications: {notificationStatus}</p>
+          <button
+            type="button"
+            disabled={!preferences.notifications.desktop || notificationPermission !== "granted"}
+            onClick={testNotification}
+          >
+            Send test notification
+          </button>
+          <small>Keep a Nanasa portal tab open to receive browser notifications.</small>
         </fieldset>
       </div>
     </RouteSurface>
@@ -878,12 +926,12 @@ function HelpPanel({ commands }: Pick<PortalRoutePanelProps, "commands">) {
 function ServicePanel({ client }: Pick<PortalRoutePanelProps, "client">) {
   const [service, setService] = useState<ServiceDescriptor>();
   const [restart, setRestart] = useState<BrowserRestartFrame>();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   useEffect(() => {
     void client
       .loadServiceStatus()
       .then(setService, (cause: unknown) =>
-        setError(cause instanceof Error ? cause.message : "Unable to load service status"),
+        setError(toPortalError(cause, "Unable to load service status")),
       );
   }, [client]);
   return (
@@ -892,11 +940,7 @@ function ServicePanel({ client }: Pick<PortalRoutePanelProps, "client">) {
       eyebrow="Project-local systemd user service"
       description="The daemon restarts independently while tmux-owned agent processes continue running."
     >
-      {error !== undefined && (
-        <p className="route-error" role="alert">
-          {error}
-        </p>
-      )}
+      {error !== undefined && <ErrorNotice error={error} className="route-error" />}
       <section className="workflow-card">
         <h3>{service?.state ?? "loading"}</h3>
         <p>{service?.detail ?? "Reading service health."}</p>
@@ -940,12 +984,12 @@ function ServicePanel({ client }: Pick<PortalRoutePanelProps, "client">) {
 
 function RemotePanel({ client }: Pick<PortalRoutePanelProps, "client">) {
   const [remote, setRemote] = useState<RemoteDescriptor>();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   useEffect(() => {
     void client
       .loadRemoteStatus()
       .then(setRemote, (cause: unknown) =>
-        setError(cause instanceof Error ? cause.message : "Unable to load remote status"),
+        setError(toPortalError(cause, "Unable to load remote status")),
       );
   }, [client]);
   return (
@@ -954,11 +998,7 @@ function RemotePanel({ client }: Pick<PortalRoutePanelProps, "client">) {
       eyebrow="OpenSSH loopback forwarding"
       description="Remote operation keeps every daemon and terminal listener on loopback."
     >
-      {error !== undefined && (
-        <p className="route-error" role="alert">
-          {error}
-        </p>
-      )}
+      {error !== undefined && <ErrorNotice error={error} className="route-error" />}
       <section className="workflow-card">
         <h3>{remote?.service.state ?? "loading"}</h3>
         <p>No browser-managed tunnel is active. Start a verified tunnel from the operator CLI.</p>
@@ -1081,6 +1121,7 @@ export function PortalRoutePanel(props: PortalRoutePanelProps) {
       return (
         <SettingsPanel
           preferences={props.preferences}
+          onOpenRoleSettings={props.onOpenRoleSettings}
           onPatchPreferences={props.onPatchPreferences}
         />
       );

@@ -15,9 +15,12 @@ export interface RepositoryLaunchManifest {
   readonly modelResumePolicy: ModelResumePolicy;
 }
 
+export type TrustSubjectKind = "repository-launch" | "custom-provider-launch";
+
 export interface RepositoryTrustReceipt {
   readonly id: string;
   readonly repositoryIdentity: string;
+  readonly subjectKind: TrustSubjectKind;
   readonly subjectDigest: string;
   readonly principalId: string;
   readonly decision: "trusted" | "denied" | "revoked";
@@ -29,6 +32,7 @@ export interface RepositoryTrustPersistence {
   findRepositoryTrust(
     repositoryIdentity: string,
     subjectDigest: string,
+    subjectKind?: TrustSubjectKind,
   ): RepositoryTrustReceipt | undefined;
   saveRepositoryTrust(receipt: RepositoryTrustReceipt): RepositoryTrustReceipt;
 }
@@ -72,6 +76,7 @@ export class RepositoryTrustService {
       Object.freeze({
         id: `trust_${randomUUID()}`,
         repositoryIdentity: manifest.repositoryIdentity,
+        subjectKind: "repository-launch",
         subjectDigest: this.digest(manifest),
         principalId,
         decision: "trusted",
@@ -100,6 +105,7 @@ export class RepositoryTrustService {
       Object.freeze({
         id: `trust_${randomUUID()}`,
         repositoryIdentity: manifest.repositoryIdentity,
+        subjectKind: "repository-launch",
         subjectDigest: this.digest(manifest),
         principalId,
         decision: "revoked",

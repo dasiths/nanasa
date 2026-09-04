@@ -2,6 +2,7 @@ import { EventServerFrameSchema, type NanasaConfig, type PortalSnapshot } from "
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { PortalClient } from "../api.js";
+import { type PortalError, toPortalError } from "../errors.js";
 
 export type LoadStatus = "loading" | "ready" | "error";
 export type EventConnectionStatus = "disconnected" | "connected" | "reconnecting";
@@ -10,7 +11,7 @@ export function usePortalSnapshot(client: PortalClient) {
   const [snapshot, setSnapshot] = useState<PortalSnapshot>();
   const [config, setConfig] = useState<NanasaConfig>();
   const [status, setStatus] = useState<LoadStatus>("loading");
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   const [errorSource, setErrorSource] = useState<"snapshot" | "config">();
   const acceptedRef = useRef<
     { instanceId: string; daemonEpoch: number; sequence: number } | undefined
@@ -39,7 +40,7 @@ export function usePortalSnapshot(client: PortalClient) {
                 : undefined;
           setStatus("error");
           setErrorSource("snapshot");
-          setError(reason instanceof Error ? reason.message : "Unable to load portal state");
+          setError(toPortalError(reason, "Unable to load portal state"));
           return;
         }
         const next = snapshotResult.value;
@@ -67,11 +68,7 @@ export function usePortalSnapshot(client: PortalClient) {
         if (configResult.status === "rejected") {
           setStatus("error");
           setErrorSource("config");
-          setError(
-            configResult.reason instanceof Error
-              ? configResult.reason.message
-              : "Unable to load repository configuration",
-          );
+          setError(toPortalError(configResult.reason, "Unable to load repository configuration"));
           return;
         }
         setConfig(configResult.value);
@@ -90,6 +87,11 @@ export function usePortalSnapshot(client: PortalClient) {
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => void refresh(), 10_000);
+    return () => window.clearInterval(interval);
   }, [refresh]);
 
   return { snapshot, config, status, error, errorSource, refresh };

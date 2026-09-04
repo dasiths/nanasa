@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App.js";
 import type { PortalClient } from "./api.js";
+import { deriveAttentionItems } from "./attention-items.js";
 import { GroupTree } from "./components/group-tree.js";
 import {
   buildMessageCommand,
@@ -28,16 +29,21 @@ import {
   defaultPortalPreferences,
   PORTAL_PREFERENCES_KEY,
 } from "./hooks/use-portal-preferences.js";
+import { launchConsentRequest } from "./test/launch-consent-fixture.js";
 
 vi.mock("./components/terminal-workspace.js", () => ({
   TerminalWorkspace: ({
     members,
     runs,
+    launchConsents = [],
     onSetFocusedRun,
+    onApproveLaunchConsent,
   }: {
     members: GroupMembership[];
     runs: AgentRun[];
+    launchConsents?: ReturnType<typeof launchConsentRequest>[];
     onSetFocusedRun(runId: string | undefined): void;
+    onApproveLaunchConsent(request: ReturnType<typeof launchConsentRequest>): Promise<void>;
   }) => (
     <div data-testid="terminal-surface">
       terminal-surface
@@ -50,6 +56,11 @@ vi.mock("./components/terminal-workspace.js", () => ({
           </button>
         );
       })}
+      {launchConsents.map((request) => (
+        <button type="button" key={request.id} onClick={() => void onApproveLaunchConsent(request)}>
+          Trust and start {request.memberId}
+        </button>
+      ))}
     </div>
   ),
 }));
@@ -76,6 +87,7 @@ const config: NanasaConfig = {
           name: "Builder",
           integrationId: "copilot",
           instructions: [],
+          attention: {},
           order: 0,
         },
         "reviewer-agent": {
@@ -84,6 +96,7 @@ const config: NanasaConfig = {
           integrationId: "copilot",
           roleId: "reviewer",
           instructions: [],
+          attention: {},
           order: 1,
         },
       },
@@ -97,18 +110,33 @@ const config: NanasaConfig = {
           name: "Auditor",
           integrationId: "copilot",
           instructions: [],
+          attention: {},
           order: 0,
         },
       },
     },
   },
   messages: { retentionPerGroup: 1_000 },
+  attention: {
+    defaults: {
+      "response-required": true,
+      "agent-health": true,
+      completion: true,
+      "delivery-failure": true,
+      "action-state": false,
+      "provider-update-failed": true,
+      "provider-update-succeeded": false,
+      "unread-message": false,
+    },
+  },
   integrations: {
     copilot: {
       id: "copilot",
       name: "GitHub Copilot",
       kind: "copilot",
       command: ["copilot", "--acp", "--stdio"],
+      commandSource: "custom",
+      launcher: { providerArguments: "append" },
       providerState: { scope: "integration" },
       credentials: { kind: "provider-managed" },
       model: { resumePolicy: "preserve-session" },
@@ -121,6 +149,8 @@ const config: NanasaConfig = {
       name: "Claude through Copilot",
       kind: "claude-code",
       command: ["make", "claude-copilot"],
+      commandSource: "custom",
+      launcher: { providerArguments: "append" },
       providerState: { scope: "integration" },
       credentials: { kind: "provider-managed" },
       model: { resumePolicy: "preserve-session" },
@@ -133,6 +163,8 @@ const config: NanasaConfig = {
       name: "Custom reviewer",
       kind: "opencode",
       command: ["custom-reviewer"],
+      commandSource: "custom",
+      launcher: { providerArguments: "append" },
       providerState: { scope: "integration" },
       credentials: { kind: "provider-managed" },
       model: { resumePolicy: "preserve-session" },
@@ -335,9 +367,22 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     openCheckout: vi.fn(),
     removeWorktree: vi.fn(),
     updateRolePresentation: vi.fn().mockResolvedValue(config.roles.reviewer),
-    startRun: vi.fn().mockResolvedValue(run),
+    startRun: vi.fn().mockResolvedValue({ status: "started", run }),
     startAllRuns: vi.fn().mockResolvedValue({ groupId: "group-backend", outcomes: [] }),
+    recoverGroupRuns: vi.fn().mockResolvedValue({
+      groupId: "group-backend",
+      dryRun: false,
+      outcomes: [],
+    }),
+    recoverAgentRun: vi.fn(),
     stopRun: vi.fn().mockResolvedValue(run),
+    stopAllRuns: vi.fn().mockResolvedValue([run]),
+    listLaunchConsents: vi.fn().mockResolvedValue([]),
+    getLaunchConsent: vi.fn(),
+    approveLaunchConsent: vi.fn(),
+    denyLaunchConsent: vi.fn(),
+    cancelLaunchConsent: vi.fn(),
+    revokeLaunchConsent: vi.fn(),
     submitMessage: vi.fn().mockImplementation(async () => {
       if (submission === undefined) throw new Error("No submission fixture configured");
       return submission;
@@ -353,6 +398,22 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     cancelAgentAction: vi.fn(),
     replyOpenWait: vi.fn(),
     acknowledgeCompletion: vi.fn(),
+    listAttentionDismissals: vi.fn().mockResolvedValue({ dismissals: [] }),
+    dismissAttentionItems: vi.fn().mockResolvedValue({ dismissals: [] }),
+    listAttentionSubscriptions: vi.fn().mockResolvedValue({
+      defaults: config.attention.defaults,
+      members: memberships.map((member) => ({
+        groupId: member.groupId,
+        memberId: member.memberId,
+        subscriptions: Object.entries(config.attention.defaults).map(([eventType, enabled]) => ({
+          eventType,
+          enabled,
+          source: "repository-default",
+        })),
+      })),
+    }),
+    setAttentionSubscription: vi.fn(),
+    resetAttentionSubscriptions: vi.fn(),
     loadMessages: vi.fn().mockResolvedValue({
       groupId: "group-backend",
       messages: [],
@@ -670,7 +731,9 @@ describe("portal application", () => {
 
     const emitAttention = async (client: PortalClient, sequence: number) => {
       const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
-      await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
+      await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)), {
+        timeout: 5_000,
+      });
       await act(async () =>
         socket!.onmessage!(
           new MessageEvent("message", {
@@ -796,7 +859,7 @@ describe("portal application", () => {
     expect(within(notices).getByText("Auditor · Needs approval")).toBeInTheDocument();
   });
 
-  it("uses canonical desktop routes and passes per-agent completion opt-ins", async () => {
+  it("uses canonical desktop routes for admitted items", async () => {
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     const notifications: Array<{
       title: string;
@@ -825,7 +888,6 @@ describe("portal application", () => {
       JSON.stringify({
         ...defaultPortalPreferences,
         notifications: { ...defaultPortalPreferences.notifications, desktop: true },
-        completionNotificationMemberIdsByGroup: { "group-review": ["auditor"] },
       }),
     );
 
@@ -947,14 +1009,14 @@ describe("portal application", () => {
       activeRunId: "run-builder",
       focusAlias: undefined,
       completionMember: memberships[1]!,
-      expectedToast: false,
+      expectedToast: true,
     },
     {
       name: "focused completion pane",
       activeRunId: "run-builder",
       focusAlias: "Reviewer",
       completionMember: memberships[1]!,
-      expectedToast: false,
+      expectedToast: true,
     },
     {
       name: "run hidden by Focus mode",
@@ -964,7 +1026,7 @@ describe("portal application", () => {
       expectedToast: true,
     },
   ])(
-    "uses actual terminal visibility for a completion on the $name",
+    "toasts an admitted completion on the $name",
     async ({ activeRunId, focusAlias, completionMember, expectedToast }) => {
       window.history.replaceState({}, "", "/groups/group-backend/terminals");
       window.localStorage.setItem(
@@ -972,9 +1034,6 @@ describe("portal application", () => {
         JSON.stringify({
           ...defaultPortalPreferences,
           activeRunByGroup: { "group-backend": activeRunId },
-          completionNotificationMemberIdsByGroup: {
-            "group-backend": [completionMember.memberId],
-          },
         }),
       );
       const client = createClient();
@@ -1094,6 +1153,7 @@ describe("portal application", () => {
     await waitFor(() =>
       expect(client.updateGroup).toHaveBeenCalledWith("group-backend", { name: "Platform" }),
     );
+
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Actions for group Backend" })).toHaveFocus(),
     );
@@ -1109,6 +1169,22 @@ describe("portal application", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Actions for agent Reviewer" })).toHaveFocus(),
     );
+  });
+
+  it("opens Add agent for the selected team from the header icon", async () => {
+    const user = userEvent.setup();
+    render(<App client={createClient()} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    const addAgent = screen.getByRole("button", { name: "Add agent to Backend" });
+    expect(addAgent).toHaveTextContent("");
+    expect(addAgent).toHaveAttribute("title", "Add agent to Backend");
+    await user.click(addAgent);
+
+    const dialog = screen.getByRole("dialog", { name: "Add agent" });
+    expect(within(dialog).getByText("Backend")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Close Add agent" }));
+    expect(screen.queryByRole("dialog", { name: "Add agent" })).not.toBeInTheDocument();
   });
 
   it("prevents concurrent inline rename submissions", async () => {
@@ -1222,7 +1298,13 @@ describe("portal application", () => {
     render(<App client={client} />);
 
     await screen.findByRole("heading", { name: "Backend" });
-    await user.click(screen.getByRole("button", { name: "Role settings" }));
+    await user.click(screen.getByLabelText("Portal utilities", { selector: "summary" }));
+    await user.click(
+      within(screen.getByRole("navigation", { name: "Portal utilities" })).getByRole("link", {
+        name: "Preferences",
+      }),
+    );
+    await user.click(await screen.findByRole("button", { name: "Edit role presentation" }));
     const dialog = screen.getByRole("dialog", { name: "Role presentation" });
     await user.selectOptions(within(dialog).getByLabelText("Icon"), "scan-search");
     await user.selectOptions(within(dialog).getByLabelText("Color"), "rose");
@@ -1424,6 +1506,7 @@ describe("portal application", () => {
               integrationId: "copilot",
               roleId: "reviewer",
               instructions: [".nanasa/instructions/agents/reviewer.md"],
+              attention: {},
               order: 1,
             },
           },
@@ -1506,6 +1589,7 @@ describe("portal application", () => {
               integrationId: "copilot",
               roleId: "reviewer",
               instructions: [],
+              attention: {},
               order: 1,
             },
           },
@@ -1533,10 +1617,14 @@ describe("portal application", () => {
     render(<App client={client} />);
 
     expect(await screen.findByText("Repository configuration unavailable")).toBeInTheDocument();
-    expect(screen.getByText("integrations is invalid")).toBeInTheDocument();
+    const alert = screen.getByRole("alert");
+    expect(within(alert).getByText("Unable to load repository configuration")).toBeInTheDocument();
+    expect(within(alert).getByText("portal_operation_failed")).toBeInTheDocument();
+    expect(within(alert).getByText(/integrations is invalid/)).toBeInTheDocument();
   });
 
   it("deduplicates Start all while pending and announces per-member outcomes", async () => {
+    const user = userEvent.setup();
     const client = createClient();
     let resolveStartAll: (result: StartGroupRunsResult) => void = () => undefined;
     vi.mocked(client.startAllRuns).mockImplementation(
@@ -1552,8 +1640,16 @@ describe("portal application", () => {
     fireEvent.click(button);
     fireEvent.click(button);
     expect(button).toBeDisabled();
-    expect(client.startAllRuns).toHaveBeenCalledTimes(1);
+    expect(client.recoverGroupRuns).toHaveBeenCalledTimes(1);
+    expect(client.recoverGroupRuns).toHaveBeenCalledWith("group-backend", {
+      dryRun: false,
+      forceIndeterminate: false,
+    });
+    await waitFor(() => expect(client.startAllRuns).toHaveBeenCalledTimes(1));
     expect(client.startAllRuns).toHaveBeenCalledWith("group-backend", expect.any(String));
+    expect(vi.mocked(client.recoverGroupRuns).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(client.startAllRuns).mock.invocationCallOrder[0]!,
+    );
 
     await act(async () =>
       resolveStartAll({
@@ -1569,8 +1665,399 @@ describe("portal application", () => {
         ],
       }),
     );
-    expect(await screen.findByText("1 started, 0 already running, 1 failed")).toBeInTheDocument();
-    expect(screen.getByText("launch_failed")).toBeInTheDocument();
+    expect(
+      await screen.findByText("2 agents processed. 1 agent restarted and 1 agent needs attention."),
+    ).toBeVisible();
+    expect(screen.queryByText("launch_failed")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "View results" }));
+    const dialog = screen.getByRole("dialog", { name: "Team recovery results" });
+    const counts = within(dialog).getByLabelText("Recovery summary");
+    expect(within(counts).getByText("Kept running").parentElement).toHaveTextContent(
+      "Kept running0",
+    );
+    expect(within(counts).getByText("Restarted").parentElement).toHaveTextContent("Restarted1");
+    expect(within(counts).getByText("Need approval").parentElement).toHaveTextContent(
+      "Need approval0",
+    );
+    expect(within(counts).getByText("Need help").parentElement).toHaveTextContent("Need help1");
+    const reviewerOutcome = within(dialog).getByText("Reviewer").closest("li");
+    expect(reviewerOutcome).not.toBeNull();
+    await user.click(within(reviewerOutcome as HTMLElement).getByText("Technical details"));
+    expect(within(reviewerOutcome as HTMLElement).getByText("launch_failed")).toBeVisible();
+  });
+
+  it("previews group recovery without changing runs and can apply the checked plan", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const outcome = {
+      runId: "run-builder",
+      generation: 1,
+      memberId: "builder",
+      providerId: "copilot",
+      previousSnapshotDigest: "a".repeat(64),
+      currentSnapshotDigest: "b".repeat(64),
+      status: "restarted" as const,
+      replacementRunId: "run-builder-next",
+    };
+    vi.mocked(client.recoverGroupRuns)
+      .mockResolvedValueOnce({ groupId: "group-backend", dryRun: true, outcomes: [outcome] })
+      .mockResolvedValueOnce({ groupId: "group-backend", dryRun: false, outcomes: [outcome] });
+    render(<App client={client} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Check setup and restart needs for Backend" }),
+    );
+
+    expect(client.recoverGroupRuns).toHaveBeenNthCalledWith(1, "group-backend", {
+      dryRun: true,
+      forceIndeterminate: false,
+    });
+    expect(
+      await screen.findByText("1 agent checked. 1 agent would restart and 0 agents need review."),
+    ).toBeVisible();
+    expect(screen.queryByText("a".repeat(64))).toBeNull();
+    expect(client.startAllRuns).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "View results" }));
+    const dialog = screen.getByRole("dialog", { name: "Team recovery preview" });
+    expect(within(dialog).getByText("Would restart")).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "Recover team" }));
+    await waitFor(() => expect(client.recoverGroupRuns).toHaveBeenCalledTimes(2));
+    expect(client.recoverGroupRuns).toHaveBeenNthCalledWith(2, "group-backend", {
+      dryRun: false,
+      forceIndeterminate: false,
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Team recovery results" })).toBeNull(),
+    );
+    expect(screen.queryByRole("button", { name: "View results" })).toBeNull();
+  });
+
+  it("stays quiet when a tools check finds every agent healthy", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    vi.mocked(client.recoverGroupRuns).mockResolvedValue({
+      groupId: "group-backend",
+      dryRun: true,
+      outcomes: [
+        {
+          runId: "run-builder",
+          generation: 1,
+          memberId: "builder",
+          providerId: "copilot",
+          previousSnapshotDigest: "a".repeat(64),
+          currentSnapshotDigest: "a".repeat(64),
+          status: "retained",
+        },
+      ],
+    });
+    render(<App client={client} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Check setup and restart needs for Backend" }),
+    );
+    await waitFor(() => expect(client.recoverGroupRuns).toHaveBeenCalledOnce());
+
+    expect(screen.queryByRole("button", { name: "View results" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: /Team recovery/ })).toBeNull();
+  });
+
+  it("stays quiet when Start all completes without approval or failures", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    vi.mocked(client.startAllRuns).mockResolvedValue({
+      groupId: "group-backend",
+      outcomes: [
+        {
+          groupId: "group-backend",
+          memberId: "builder",
+          status: "started",
+          runId: "run-builder-next",
+        },
+      ],
+    });
+    render(<App client={client} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Start all non-running agents in Backend" }),
+    );
+    await waitFor(() => expect(client.startAllRuns).toHaveBeenCalledOnce());
+
+    expect(screen.queryByRole("button", { name: "View results" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: /Team recovery/ })).toBeNull();
+  });
+
+  it("keeps Start all visible but disabled when every group member is active", async () => {
+    const client = createClient();
+    vi.mocked(client.loadSnapshot).mockResolvedValue({
+      ...snapshot,
+      runs: [activeRun(memberships[0]!), activeRun(memberships[1]!)],
+    });
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    const startAll = screen.getByRole("button", {
+      name: "Start all non-running agents in Backend",
+    });
+    expect(startAll).toBeDisabled();
+    expect(startAll).toHaveAttribute("title", "All agents are active in Backend");
+    expect(startAll).toHaveTextContent("");
+    expect(screen.getByRole("button", { name: "Open command palette" })).toHaveTextContent("");
+    expect(
+      screen.getByRole("button", { name: "Check setup and restart needs for Backend" }),
+    ).toHaveTextContent("");
+  });
+
+  it("confirms before stopping all active agents and closing their terminals", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const activeRuns = [activeRun(memberships[0]!), activeRun(memberships[1]!)];
+    vi.mocked(client.loadSnapshot).mockResolvedValue({ ...snapshot, runs: activeRuns });
+    vi.mocked(client.stopAllRuns).mockResolvedValue(activeRuns);
+    render(<App client={client} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Stop all active agents in Backend" }),
+    );
+    expect(client.stopAllRuns).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog", { name: "Stop all agents?" });
+    expect(dialog).toHaveTextContent("stops 2 active agents in Backend");
+
+    await user.click(within(dialog).getByRole("button", { name: "Stop all" }));
+    await waitFor(() => expect(client.stopAllRuns).toHaveBeenCalledWith("group-backend"));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Stop all agents?" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("notifies when active agents may need restart and allows dismissal", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const running = activeRun(memberships[0]!);
+    vi.mocked(client.loadSnapshot).mockResolvedValue({
+      ...snapshot,
+      runs: [running],
+      restartAdvisories: [
+        {
+          runId: running.id,
+          groupId: "group-backend",
+          memberId: running.memberId,
+          reasons: ["configuration-changed", "provider-files-changed"],
+        },
+      ],
+    });
+    render(<App client={client} />);
+
+    expect(
+      await screen.findByText(
+        "Configuration or provider setup changed. 1 active agent may need a restart.",
+      ),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(
+      screen.queryByText(
+        "Configuration or provider setup changed. 1 active agent may need a restart.",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides team-scoped header actions on global routes", async () => {
+    const user = userEvent.setup();
+    render(<App client={createClient()} />);
+
+    await screen.findByRole("heading", { name: "Backend" });
+    await user.click(screen.getByLabelText("Portal utilities", { selector: "summary" }));
+    await user.click(
+      within(screen.getByRole("navigation", { name: "Portal utilities" })).getByRole("link", {
+        name: "Preferences",
+      }),
+    );
+    await screen.findByRole("heading", { name: "Preferences", level: 2 });
+
+    expect(screen.queryByRole("button", { name: "Add agent to Backend" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Check setup and restart needs for Backend" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Start all non-running agents in Backend" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Stop all active agents in Backend" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("approves an exact terminal request and retries the same member start", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const request = launchConsentRequest();
+    vi.mocked(client.listLaunchConsents).mockResolvedValueOnce([request]).mockResolvedValue([]);
+    vi.mocked(client.approveLaunchConsent).mockResolvedValue({
+      request: { ...request, state: "approved" },
+      decision: {
+        id: "decision-one",
+        repositoryIdentity: request.repositoryIdentity,
+        subjectDigest: request.subjectDigest,
+        principalId: "operator-test",
+        decision: "trusted",
+        decidedAt: timestamp,
+      },
+    });
+    render(<App client={client} />);
+
+    await user.click(await screen.findByRole("button", { name: "Trust and start builder" }));
+
+    await waitFor(() =>
+      expect(client.approveLaunchConsent).toHaveBeenCalledWith(request.id, {
+        expectedSubjectDigest: request.subjectDigest,
+        configRevision: request.configRevision,
+      }),
+    );
+    expect(client.startRun).toHaveBeenCalledWith(request.groupId, request.agentId);
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Trust and start builder" })).toBeNull(),
+    );
+  });
+
+  it("routes exact launch approval from Attention to its consent surface", async () => {
+    window.history.replaceState({}, "", "/attention");
+    const user = userEvent.setup();
+    const client = createClient();
+    const request = launchConsentRequest();
+    vi.mocked(client.listLaunchConsents).mockResolvedValue([request]);
+    vi.mocked(client.approveLaunchConsent).mockResolvedValue({
+      request: { ...request, state: "approved" },
+      decision: {
+        id: "decision-attention",
+        repositoryIdentity: request.repositoryIdentity,
+        subjectDigest: request.subjectDigest,
+        principalId: "operator-test",
+        decision: "trusted",
+        decidedAt: timestamp,
+      },
+    });
+    render(<App client={client} />);
+
+    expect(await screen.findByText("Builder · Launch approval required")).toBeInTheDocument();
+    const reviewItem = screen.getByText("Builder · Launch approval required").closest("li");
+    await user.click(
+      within(reviewItem as HTMLElement).getByRole("button", { name: "Review consent" }),
+    );
+    await user.click(await screen.findByRole("button", { name: "Trust and start builder" }));
+
+    await waitFor(() => expect(client.approveLaunchConsent).toHaveBeenCalledTimes(1));
+    expect(client.startRun).toHaveBeenCalledWith(request.groupId, request.agentId);
+  });
+
+  it("routes update-specific consent to the exact terminal review", async () => {
+    window.history.replaceState({}, "", "/attention");
+    const user = userEvent.setup();
+    const client = createClient();
+    const request = launchConsentRequest();
+    const updateRun = activeRun(memberships[0], {
+      status: "failed",
+      recoveryPhase: "failed",
+      providerUpdate: {
+        id: "provider-update-one",
+        runId: "run-builder",
+        generation: 1,
+        memberId: request.memberId,
+        providerId: "custom",
+        previousSnapshotDigest: "a".repeat(64),
+        currentSnapshotDigest: "b".repeat(64),
+        state: "completed",
+        outcome: "approval-required",
+        detectedAt: timestamp,
+        updatedAt: timestamp,
+        completedAt: timestamp,
+      },
+    });
+    vi.mocked(client.loadSnapshot).mockResolvedValue({ ...snapshot, runs: [updateRun] });
+    vi.mocked(client.listLaunchConsents).mockResolvedValue([request]);
+    vi.mocked(client.approveLaunchConsent).mockResolvedValue({
+      request: { ...request, state: "approved" },
+      decision: {
+        id: "decision-update",
+        repositoryIdentity: request.repositoryIdentity,
+        subjectDigest: request.subjectDigest,
+        principalId: "operator-test",
+        decision: "trusted",
+        decidedAt: timestamp,
+      },
+    });
+    render(<App client={client} />);
+
+    expect(await screen.findByText("Review before restarting Builder")).toBeInTheDocument();
+    const reviewItem = screen.getByText("Review before restarting Builder").closest("li");
+    await user.click(
+      within(reviewItem as HTMLElement).getByRole("button", { name: "Review consent" }),
+    );
+    expect(window.location.pathname).toBe("/groups/group-backend/terminals");
+    expect(window.location.hash).toBe(`#launch-consent-${request.id}`);
+    expect(client.startRun).not.toHaveBeenCalled();
+  });
+
+  it("consolidates Start-all approvals and retries without reusing its idempotency key", async () => {
+    const user = userEvent.setup();
+    const client = createClient();
+    const request = launchConsentRequest();
+    vi.mocked(client.startAllRuns)
+      .mockResolvedValueOnce({
+        groupId: request.groupId,
+        outcomes: [
+          {
+            groupId: request.groupId,
+            memberId: request.memberId,
+            status: "approval-required",
+            request,
+          },
+          {
+            groupId: request.groupId,
+            memberId: "reviewer",
+            status: "already-running",
+            runId: "run-reviewer",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        groupId: request.groupId,
+        outcomes: [
+          {
+            groupId: request.groupId,
+            memberId: request.memberId,
+            status: "started",
+            runId: "run-builder",
+          },
+          {
+            groupId: request.groupId,
+            memberId: "reviewer",
+            status: "already-running",
+            runId: "run-reviewer",
+          },
+        ],
+      });
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+
+    await user.click(
+      screen.getByRole("button", { name: "Start all non-running agents in Backend" }),
+    );
+    await user.click(await screen.findByRole("button", { name: "View results" }));
+    const dialog = screen.getByRole("dialog", { name: "Team recovery results" });
+    await user.click(within(dialog).getByRole("button", { name: "Approve and retry 1 agent" }));
+
+    await waitFor(() => expect(client.startAllRuns).toHaveBeenCalledTimes(2));
+    expect(client.approveLaunchConsent).toHaveBeenCalledWith(request.id, {
+      expectedSubjectDigest: request.subjectDigest,
+      configRevision: request.configRevision,
+    });
+    const firstKey = vi.mocked(client.startAllRuns).mock.calls[0]?.[1];
+    const secondKey = vi.mocked(client.startAllRuns).mock.calls[1]?.[1];
+    expect(firstKey).not.toBe(secondKey);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Team recovery results" })).toBeNull(),
+    );
+    expect(screen.queryByRole("button", { name: "View results" })).toBeNull();
   });
 
   it.each([
@@ -1622,6 +2109,7 @@ describe("portal application", () => {
         "title",
         "daemon_restart",
       );
+      expect(screen.queryByText(/retry \d/)).not.toBeInTheDocument();
       expect(
         screen.getByRole("button", {
           name: `View details for Builder, status ${statusLabel}`,
@@ -1823,6 +2311,10 @@ describe("portal application", () => {
     await screen.findByRole("heading", { name: "Backend" });
 
     expect(screen.getByText("1 working")).toBeInTheDocument();
+    expect(screen.queryByText("0 starting")).not.toBeInTheDocument();
+    expect(screen.getByTitle("Configured agents")).toHaveTextContent("2 agents");
+    expect(screen.getByTitle("Live terminals")).toHaveTextContent("2 live");
+    expect(screen.getByTitle("Agents currently working")).toHaveTextContent("1 working");
     expect(screen.queryByText(/waiting$/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/needs attention/)).not.toBeInTheDocument();
     expect(
@@ -1833,6 +2325,36 @@ describe("portal application", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "View details for Reviewer, status Working" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Collapse Backend" }).closest(".tree-group-row"),
+    ).toHaveClass("team-working");
+    fireEvent.click(screen.getByRole("button", { name: "Collapse Backend" }));
+    await screen.findByRole("button", { name: "Expand Backend" });
+    expect(
+      screen.getByRole("button", { name: "Expand Backend" }).closest(".tree-group-row"),
+    ).toHaveClass("team-working");
+  });
+
+  it("shows transient starting status only while an agent is starting", async () => {
+    const client = createClient();
+    vi.mocked(client.loadSnapshot).mockResolvedValue({
+      ...snapshot,
+      runs: [
+        activeRun(memberships[0]!, {
+          status: "starting",
+          recoveryPhase: "resuming",
+        }),
+      ],
+      agentStatuses: [],
+    });
+
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "Backend" });
+
+    expect(screen.getByTitle("Agents starting or recovering")).toHaveTextContent("1 starting");
+    expect(
+      screen.getByLabelText("2 agents, 0 live terminals, 0 working, 1 starting or recovering"),
     ).toBeInTheDocument();
   });
 
@@ -1863,6 +2385,9 @@ describe("portal application", () => {
     await screen.findByRole("heading", { name: "Backend" });
 
     expect(screen.getByText("0 working")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Collapse Backend" }).closest(".tree-group-row"),
+    ).not.toHaveClass("team-working");
     expect(screen.queryByText(/needs attention/)).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "View details for Builder, status Done" }),
@@ -1876,6 +2401,86 @@ describe("portal application", () => {
       }),
     ).toBeInTheDocument();
     await waitFor(() => expect(document.title).toBe("(1) Backend Terminals · Nanasa"));
+  });
+
+  it("loads Attention dismissals from the daemon when browser storage is empty", async () => {
+    window.history.replaceState({}, "", "/attention");
+    const client = createClient();
+    const completion = completionAttentionSnapshot(3);
+    const dismissedItem = deriveAttentionItems(completion)[0]!;
+    vi.mocked(client.loadSnapshot).mockResolvedValue(completion);
+    vi.mocked(client.listAttentionDismissals).mockResolvedValue({
+      dismissals: [{ itemId: dismissedItem.id, dismissedAt: timestamp }],
+    });
+
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { level: 1, name: "Attention" });
+    await waitFor(() => expect(client.listAttentionDismissals).toHaveBeenCalledOnce());
+    expect(
+      screen.queryByText("Completion revision 3 is ready for review."),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open Attention" })).toBeInTheDocument();
+    expect(window.localStorage.getItem(PORTAL_PREFERENCES_KEY)).toBeNull();
+  });
+
+  it("persists an Attention dismissal before removing the item", async () => {
+    window.history.replaceState({}, "", "/attention");
+    const user = userEvent.setup();
+    const client = createClient();
+    const completion = completionAttentionSnapshot(3);
+    const dismissedItem = deriveAttentionItems(completion)[0]!;
+    vi.mocked(client.loadSnapshot).mockResolvedValue(completion);
+    vi.mocked(client.dismissAttentionItems).mockResolvedValue({
+      dismissals: [{ itemId: dismissedItem.id, dismissedAt: timestamp }],
+    });
+
+    render(<App client={client} />);
+    const dismiss = await screen.findByRole("button", {
+      name: "Dismiss Builder · Completion ready",
+    });
+    await user.click(dismiss);
+
+    await waitFor(() =>
+      expect(client.dismissAttentionItems).toHaveBeenCalledWith({ itemIds: [dismissedItem.id] }),
+    );
+    expect(
+      screen.queryByText("Completion revision 3 is ready for review."),
+    ).not.toBeInTheDocument();
+    expect(window.localStorage.getItem(PORTAL_PREFERENCES_KEY)).toBeNull();
+  });
+
+  it("keeps an unsubscribed completion out of Attention while preserving status", async () => {
+    window.history.replaceState({}, "", "/attention");
+    const client = createClient();
+    const completion = completionAttentionSnapshot(3);
+    vi.mocked(client.loadSnapshot).mockResolvedValue(completion);
+    vi.mocked(client.listAttentionSubscriptions).mockResolvedValue({
+      defaults: config.attention.defaults,
+      members: completion.memberships.map((member) => ({
+        groupId: member.groupId,
+        memberId: member.memberId,
+        subscriptions: Object.entries(config.attention.defaults).map(([eventType, enabled]) => ({
+          eventType: eventType as keyof typeof config.attention.defaults,
+          enabled: eventType === "completion" ? false : enabled,
+          source: eventType === "completion" ? "operator-override" : "repository-default",
+        })),
+      })),
+    });
+
+    render(<App client={client} />);
+
+    await screen.findByRole("heading", { level: 1, name: "Attention" });
+    await waitFor(() => expect(client.listAttentionSubscriptions).toHaveBeenCalledOnce());
+    expect(completion.agentStatuses?.[0]).toMatchObject({
+      completionRevision: 3,
+      completionPending: true,
+    });
+    expect(
+      screen.queryByText("Completion revision 3 is ready for review."),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open Attention" })).toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Attention notifications" })).toBeNull();
   });
 
   it("offers Start for a normally stopped desired-stopped run", async () => {
@@ -1985,6 +2590,12 @@ describe("portal application", () => {
         .getAllByRole("link")
         .map((link) => link.textContent),
     ).toEqual(["Terminals", "Messages", "Attention", "Overview"]);
+    const groupAttention = within(groupNavigation).getByRole("link", { name: "Attention" });
+    expect(groupAttention).toHaveAttribute("href", "/groups/group-backend/activity");
+    await user.click(groupAttention);
+    await screen.findByRole("heading", { name: "Attention" });
+    expect(screen.getByRole("combobox", { name: "Filter by team" })).toHaveValue("group-backend");
+    expect(screen.getByRole("combobox", { name: "Filter by team" })).toBeDisabled();
 
     const repositoryNavigation = screen.getByRole("navigation", {
       name: "Repository operations",
@@ -2012,6 +2623,14 @@ describe("portal application", () => {
     expect(within(palette).getByRole("button", { name: /Open About Nanasa/ })).toBeInTheDocument();
     await user.click(within(palette).getByRole("button", { name: "Close command palette" }));
 
+    await user.click(screen.getByLabelText("Portal utilities", { selector: "summary" }));
+    expect(
+      within(screen.getByRole("navigation", { name: "Portal utilities" })).queryByRole("button", {
+        name: "Commands",
+      }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByLabelText("Portal utilities", { selector: "summary" }));
+
     const mobileTrigger = screen.getByRole("button", { name: "Open application menu" });
     await user.click(mobileTrigger);
     const drawer = screen.getByRole("dialog", { name: "Nanasa" });
@@ -2020,6 +2639,10 @@ describe("portal application", () => {
       "href",
       "/settings",
     );
+    expect(within(drawer).getByRole("button", { name: "Commands" })).toBeInTheDocument();
+    expect(
+      within(drawer).queryByRole("button", { name: "Role presentation" }),
+    ).not.toBeInTheDocument();
     await user.click(within(drawer).getByRole("button", { name: "Close menu" }));
     expect(screen.queryByRole("dialog", { name: "Nanasa" })).not.toBeInTheDocument();
     await waitFor(() => expect(mobileTrigger).toHaveFocus());
@@ -2350,11 +2973,15 @@ describe("portal application", () => {
     expect(await screen.findByText("Approve repository check?")).toBeInTheDocument();
     expect(client.loadActionWorkspace).toHaveBeenCalledWith("group-backend");
     expect(client.loadActionWorkspace).toHaveBeenCalledWith("group-review");
-    expect(screen.getByText("Review: unavailable")).toBeInTheDocument();
+    const partialError = screen.getByRole("region", { name: "Unavailable Attention details" });
+    expect(within(partialError).getByText("Review")).toBeInTheDocument();
+    expect(within(partialError).getByText("Unable to load Attention details")).toBeInTheDocument();
+    expect(within(partialError).getByText("portal_operation_failed")).toBeInTheDocument();
+    expect(within(partialError).getByText(/unavailable/)).toBeInTheDocument();
     expect(
       screen.getByLabelText("1 review item requires attention across all groups"),
     ).toBeInTheDocument();
-    expect(document.title).toBe("(1) Attention · Nanasa");
+    await waitFor(() => expect(document.title).toBe("(1) Attention · Nanasa"));
   });
 
   it("loads all active group workspaces before Attention navigation for canonical counts", async () => {
@@ -2403,7 +3030,7 @@ describe("portal application", () => {
     expect(document.title).toBe("(2) Backend Terminals · Nanasa");
   });
 
-  it("renders exact permission waits separately and sends only closed logical replies", async () => {
+  it("routes exact permission waits to their live terminal", async () => {
     const user = userEvent.setup();
     const client = createClient();
     vi.mocked(client.loadActionWorkspace).mockResolvedValue({
@@ -2443,15 +3070,12 @@ describe("portal application", () => {
     expect(
       within(groupNavigation).getByLabelText("1 review item requires attention in Backend"),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Allow once" }));
-
-    expect(client.replyOpenWait).toHaveBeenCalledWith("wait-1", {
-      expectedRunId: "run-builder",
-      expectedGeneration: 1,
-      expectedReporterEpoch: "epoch-1",
-      expectedStatusRevision: 7,
-      reply: { kind: "allow-once" },
-    });
+    const waitItem = screen.getByText("Allow one command?").closest("li");
+    await user.click(
+      within(waitItem as HTMLElement).getByRole("button", { name: "Open terminal" }),
+    );
+    expect(window.location.pathname).toBe("/groups/group-backend/terminals");
+    expect(client.replyOpenWait).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /send keys/i })).not.toBeInTheDocument();
   });
 

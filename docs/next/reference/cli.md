@@ -13,9 +13,15 @@ npx nanasa --version
 ```
 
 Control commands print compact JSON by default. Exit code 0 means success, 1
-means an operational failure, and 2 means invalid command usage. Commands that
-mutate through the control API may require `--body <json>` with fields from the
-[generated CLI registry](cli.json).
+means an operational failure, and 2 means invalid command usage. `run recover`
+prints a plain summary by default and uses exit code 3 when approval is required
+but no recovery failed. Commands that mutate through the control API may require
+`--body <json>` with fields from the [generated CLI registry](cli.json).
+
+Every failure writes one compact JSON object to standard error with `message`,
+`details`, and `code` fields. The message is suitable for people, the code is a
+stable machine-readable identifier, and details contain optional diagnostics.
+Usage failures use the same shape and retain exit code 2.
 
 ## Bootstrap and local lifecycle
 
@@ -65,6 +71,33 @@ npx nanasa events watch
 
 Use agent map keys for topology and run commands. Status and messaging responses
 also expose stable member IDs for communication.
+
+## Recover runs after agent tools change
+
+Recover all active runs in a group or one configured agent:
+
+```bash
+npx nanasa run recover <group-id>
+npx nanasa run recover <group-id> <agent-id>
+npx nanasa run recover <group-id> --body '{"dryRun":true}'
+npx nanasa run recover <group-id> --body '{"forceIndeterminate":true}'
+```
+
+A dry run checks current provider metadata, launch approval, and process
+ownership without changing run records, creating approval requests, stopping a
+pane, or starting an agent. Current healthy agents are reported as kept running.
+Affected agents are reported as agents that would restart.
+
+Normal recovery does not stop a process that Nanasa cannot safely identify.
+Use `forceIndeterminate` only after an ordinary recovery reports that condition.
+Nanasa still requires the same run, generation, terminal binding, and tmux
+ownership tags before stopping the process. This option does not approve a
+custom launcher.
+
+Use `--json` or `--output json` to receive the full typed response with technical
+identifiers. Recovery exits with 1 when any agent failed or could not be safely
+identified, 3 when approval is required without a hard failure, and 0 otherwise.
+Hard failures take precedence over approval when a group has mixed outcomes.
 
 ## Services and remote access
 

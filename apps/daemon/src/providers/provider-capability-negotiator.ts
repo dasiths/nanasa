@@ -4,9 +4,9 @@ import {
   type HostCapabilitySupport,
   negotiateProviderCapabilities,
   PROVIDER_CAPABILITY_IDS,
-  type ProviderPackageManifest,
   type ProviderGrant,
   ProviderGrantSchema,
+  type ProviderPackageManifest,
   type SelectedCapability,
 } from "@nanasa/contracts";
 
@@ -81,14 +81,6 @@ export class ProviderPermissionPolicy {
     }
 
     const selected = selectedById(capabilities);
-    const recognition = selected.get("recognition")?.payload as
-      | {
-          configuredCommandMatchers: Array<{
-            executableNames: string[];
-            wrapperExecutableNames: string[];
-          }>;
-        }
-      | undefined;
     const launch = selected.get("launch")?.payload as
       | { files: Array<{ recipeId: string }> }
       | undefined;
@@ -102,12 +94,6 @@ export class ProviderPermissionPolicy {
     const credentials = selected.get("credentials")?.payload as
       | { slots: Array<{ slotId: string; targetNames: string[] }> }
       | undefined;
-    const executableNames = new Set(
-      recognition?.configuredCommandMatchers.flatMap((matcher) => [
-        ...matcher.executableNames,
-        ...matcher.wrapperExecutableNames,
-      ]) ?? [],
-    );
     const recipeIds = new Set(launch?.files.map((file) => file.recipeId) ?? []);
     const stateScopes = new Set(state?.scopes ?? []);
     const reporterEvents = new Set(reporter?.events ?? []);
@@ -134,11 +120,6 @@ export class ProviderPermissionPolicy {
           subset(grant.parameters.recipeIds, recipeIds, "State write grant exceeds file recipes");
           break;
         case "runtime.launch":
-          subset(
-            grant.parameters.executableNames,
-            executableNames,
-            "Launch grant exceeds configured-command recognition",
-          );
           break;
         case "network.connect":
           if (!selected.has("mcp")) throw new Error("Network grant requires MCP capability");

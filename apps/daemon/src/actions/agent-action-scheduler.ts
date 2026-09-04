@@ -130,7 +130,8 @@ export class AgentActionScheduler {
         this.store.transitionAgentAction(action.id, ["submitted"], "stalled", {
           error: {
             code: "agent_prompt_stalled",
-            message: "The exact reporter did not acknowledge submission before the deadline",
+            message:
+              "Nanasa sent the prompt but could not confirm that the agent received it. The prompt may still have run.",
             retryable: false,
           },
         });

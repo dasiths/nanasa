@@ -7,12 +7,14 @@ import type {
   GroupMembership,
   NativeRecoveryPolicy,
   NativeSessionReference,
+  ProviderArgumentStrategy,
   ProviderStateBinding,
   ProviderStatePolicy,
   RunProviderBinding,
 } from "@nanasa/contracts";
 import { AgentKindSchema } from "@nanasa/contracts";
 import type { EffectiveAgentPrompt } from "./instruction-resolver.js";
+import type { EffectiveProviderPolicy } from "./provider-policy-resolver.js";
 import { ProviderStateRepository, providerOverlayBindingId } from "./provider-state-repository.js";
 import {
   ProviderBoundRuntimePlanner,
@@ -37,6 +39,7 @@ export interface ProviderIntegrationPolicy {
   readonly credentials: CredentialProfileReference;
   readonly model: DesiredModelPolicy;
   readonly nativeRecovery: NativeRecoveryPolicy;
+  readonly providerArgumentStrategy?: ProviderArgumentStrategy;
 }
 
 export interface AgentRuntimeConfiguration {
@@ -65,6 +68,10 @@ export interface AgentRuntimeProvisionerOptions {
   assertProviderExtension?: (kind: AgentProfile["kind"]) => void;
   promptResolver?: (membership: GroupMembership, profile: AgentProfile) => EffectiveAgentPrompt;
   desiredModelResolver?: (membership: GroupMembership, profile: AgentProfile) => string | undefined;
+  providerPolicyResolver?: (
+    membership: GroupMembership,
+    profile: AgentProfile,
+  ) => EffectiveProviderPolicy;
 }
 
 export class AgentRuntimeProvisioner {
@@ -98,9 +105,7 @@ export class AgentRuntimeProvisioner {
     const snapshot = await this.#bindings.resolveActiveSnapshot(profile.kind);
     const evaluator = this.#evaluator(snapshot);
     const configuredCommand = Object.freeze([profile.command, ...profile.args]);
-    if (!evaluator.matchesConfiguredCommand(configuredCommand)) {
-      throw new Error(`Configured command is not recognized by snapshot ${snapshot.digest}`);
-    }
+    const providerPolicy = this.#options.providerPolicyResolver?.(membership, profile);
     const stateBinding = this.#states.resolve({
       membershipId: membership.id,
       integrationId: profile.agentType,
@@ -148,7 +153,22 @@ export class AgentRuntimeProvisioner {
         : { mcpEndpointUrl: this.#options.mcpEndpointUrl }),
       ...(effectivePrompt === undefined ? {} : { prompt: effectivePrompt }),
       readOnly: permissionFloor === "read-only",
+      ...(providerPolicy?.configRevision === undefined
+        ? {}
+        : { configRevision: providerPolicy.configRevision }),
+      ...(providerPolicy?.executionProfile === undefined
+        ? {}
+        : { executionProfile: providerPolicy.executionProfile }),
+      ...(providerPolicy?.executionProfileId === undefined
+        ? {}
+        : { executionProfileId: providerPolicy.executionProfileId }),
+      ...(providerPolicy?.providerFiles === undefined
+        ? {}
+        : { providerFiles: providerPolicy.providerFiles }),
       configuredCommand,
+      ...(policy.providerArgumentStrategy === undefined
+        ? {}
+        : { providerArgumentStrategy: policy.providerArgumentStrategy }),
       ...(desiredModel === undefined ? {} : { model: desiredModel }),
       ...(normalizedSession === undefined ? {} : { nativeSession: normalizedSession }),
       enforceConfiguredModelOnResume: policy.model.resumePolicy === "enforce-configured",
@@ -215,7 +235,22 @@ export class AgentRuntimeProvisioner {
         : { mcpEndpointUrl: this.#options.mcpEndpointUrl }),
       ...(effectivePrompt === undefined ? {} : { prompt: effectivePrompt }),
       readOnly: permissionFloor === "read-only",
+      ...(providerPolicy?.configRevision === undefined
+        ? {}
+        : { configRevision: providerPolicy.configRevision }),
+      ...(providerPolicy?.executionProfile === undefined
+        ? {}
+        : { executionProfile: providerPolicy.executionProfile }),
+      ...(providerPolicy?.executionProfileId === undefined
+        ? {}
+        : { executionProfileId: providerPolicy.executionProfileId }),
+      ...(providerPolicy?.providerFiles === undefined
+        ? {}
+        : { providerFiles: providerPolicy.providerFiles }),
       configuredCommand,
+      ...(policy.providerArgumentStrategy === undefined
+        ? {}
+        : { providerArgumentStrategy: policy.providerArgumentStrategy }),
       ...(desiredModel === undefined ? {} : { model: desiredModel }),
       ...(normalizedSession === undefined ? {} : { nativeSession: normalizedSession }),
       modelResumePolicy: policy.model.resumePolicy,

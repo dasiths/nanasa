@@ -2,17 +2,39 @@ import type {
   AgentRun,
   DeleteGroupResult,
   GroupMembership,
+  NativeRecoveryPolicy,
+  ProviderUpdateOutcome,
+  ProviderUpdateRecoveryCommand,
+  StartAgentRunResult,
   StartGroupRunsCommand,
   StartGroupRunsResult,
-  NativeRecoveryPolicy,
 } from "@nanasa/contracts";
 
 import { DeliveryDispatcher } from "./delivery-dispatcher.js";
+import { errorPayloadFromUnknown } from "./http/error-response.js";
 import { NativeSessionService } from "./native-session-service.js";
 import type { RuntimeObservation } from "./runtime-observation.js";
 import { DomainError, NanasaStore } from "./store.js";
 import { TerminalGateway } from "./terminal/terminal-gateway.js";
 import { TmuxRuntime } from "./tmux-runtime.js";
+
+export interface RuntimeLaunchConsentGate {
+  resolve(
+    groupId: string,
+    memberId: string,
+  ): Promise<
+    | { readonly status: "built-in" | "trusted" }
+    | Extract<StartAgentRunResult, { status: "approval-required" | "denied" }>
+  >;
+  resolveForAutomaticRecovery(
+    groupId: string,
+    memberId: string,
+  ): Promise<{ readonly status: "built-in" | "trusted" | "approval-required" | "denied" }>;
+  inspectForRecovery(
+    groupId: string,
+    memberId: string,
+  ): Promise<{ readonly status: "built-in" | "trusted" | "approval-required" | "denied" }>;
+}
 
 export interface RunRuntimeCoordinatorOptions {
   reconcileIntervalMs?: number;
@@ -23,6 +45,17 @@ export interface RunRuntimeCoordinatorOptions {
   nativeRecoveryPolicy?: (run: AgentRun) => {
     integrationId: string;
     policy: NativeRecoveryPolicy;
+  };
+  launchConsent?: RuntimeLaunchConsentGate;
+  providerUpdates?: {
+    reconcile(runs: readonly AgentRun[]): Promise<{ readonly handledRunIds: ReadonlySet<string> }>;
+    recover(
+      runs: readonly AgentRun[],
+      command: ProviderUpdateRecoveryCommand,
+    ): Promise<{
+      readonly outcomes: readonly ProviderUpdateOutcome[];
+      readonly handledRunIds: ReadonlySet<string>;
+    }>;
   };
   onRuntimeObservation?: (observation: RuntimeObservation) => void | Promise<void>;
 }
@@ -41,6 +74,8 @@ export class RunRuntimeCoordinator {
   readonly #now: () => Date;
   readonly #nativeSessions: NativeSessionService | undefined;
   readonly #nativeRecoveryPolicy: RunRuntimeCoordinatorOptions["nativeRecoveryPolicy"];
+  readonly #launchConsent: RuntimeLaunchConsentGate | undefined;
+  readonly #providerUpdates: RunRuntimeCoordinatorOptions["providerUpdates"];
   readonly #onRuntimeObservation: RunRuntimeCoordinatorOptions["onRuntimeObservation"];
   #pending: Promise<void> = Promise.resolve();
   #closing = false;
@@ -63,6 +98,8 @@ export class RunRuntimeCoordinator {
     this.#now = options.now ?? (() => new Date());
     this.#nativeSessions = options.nativeSessions;
     this.#nativeRecoveryPolicy = options.nativeRecoveryPolicy;
+    this.#launchConsent = options.launchConsent;
+    this.#providerUpdates = options.providerUpdates;
     this.#onRuntimeObservation = options.onRuntimeObservation;
     this.#reconcileTimer = setInterval(
       () => void this.reconcile().catch(() => undefined),
@@ -75,11 +112,27 @@ export class RunRuntimeCoordinator {
     this.#dispatcher.start();
   }
 
+  public recoverProviderUpdates(
+    runs: readonly AgentRun[],
+    command: ProviderUpdateRecoveryCommand,
+  ): Promise<{ readonly outcomes: readonly ProviderUpdateOutcome[] }> {
+    return this.#serialize(async () => {
+      if (this.#providerUpdates === undefined) {
+        throw new DomainError(
+          "provider_update_recovery_unavailable",
+          "Provider update recovery is not available",
+          503,
+        );
+      }
+      return this.#providerUpdates.recover(runs, command);
+    });
+  }
+
   public startRun(
     groupId: string,
     memberId: string,
     size: { cols: number; rows: number },
-  ): Promise<AgentRun> {
+  ): Promise<StartAgentRunResult> {
     return this.#serialize(() => this.#startRun(groupId, memberId, size));
   }
 
@@ -114,26 +167,36 @@ export class RunRuntimeCoordinator {
           continue;
         }
         try {
-          const run = await this.#startRun(groupId, membership.memberId, command);
+          const result = await this.#startRun(groupId, membership.memberId, command);
+          if (result.status === "approval-required" || result.status === "denied") {
+            outcomes.push({
+              groupId,
+              memberId: membership.memberId,
+              status: result.status,
+              request: result.request,
+            });
+            continue;
+          }
           outcomes.push({
             groupId,
             memberId: membership.memberId,
             status: "started",
-            runId: run.id,
+            runId: result.run.id,
           });
         } catch (error) {
           const failedRun = this.#store.getLatestRunForMembership(groupId, membership.memberId);
+          const failure = errorPayloadFromUnknown(
+            error,
+            "run_start_failed",
+            "The agent could not be started",
+          );
           outcomes.push({
             groupId,
             memberId: membership.memberId,
             status: "failed",
             ...(failedRun === undefined ? {} : { runId: failedRun.id }),
-            reason:
-              error instanceof DomainError
-                ? error.code
-                : error instanceof Error
-                  ? error.message
-                  : "run_start_failed",
+            reason: failure.code,
+            error: failure,
           });
         }
       }
@@ -172,15 +235,20 @@ export class RunRuntimeCoordinator {
     return this.#serialize(() => this.#stopRun(groupId, memberId));
   }
 
-  public restartRun(runId: string, size: { cols: number; rows: number }): Promise<AgentRun> {
+  public restartRun(
+    runId: string,
+    size: { cols: number; rows: number },
+  ): Promise<StartAgentRunResult> {
     return this.#serialize(async () => {
       const current = this.#store.getRun(runId);
       const active = this.#store.getActiveRun(current.groupId, current.memberId);
       if (active?.id !== current.id) {
         throw new DomainError("run_replaced", "The run was replaced", 409);
       }
+      const consent = await this.#resolveConsent(current.groupId, current.memberId);
+      if (consent !== undefined) return consent;
       await this.#stopRun(current.groupId, current.memberId);
-      return this.#startRun(current.groupId, current.memberId, size);
+      return this.#launchRun(current.groupId, current.memberId, size);
     });
   }
 
@@ -195,15 +263,50 @@ export class RunRuntimeCoordinator {
     });
   }
 
-  public restartAll(groupId: string, size: { cols: number; rows: number }): Promise<AgentRun[]> {
+  public restartAll(
+    groupId: string,
+    size: { cols: number; rows: number },
+  ): Promise<StartGroupRunsResult> {
     return this.#serialize(async () => {
       this.#store.getGroup(groupId);
-      const restarted: AgentRun[] = [];
+      const outcomes: StartGroupRunsResult["outcomes"] = [];
       for (const run of this.#store.listGroupRunsRequiringStop(groupId)) {
-        await this.#stopRun(groupId, run.memberId);
-        restarted.push(await this.#startRun(groupId, run.memberId, size));
+        try {
+          const consent = await this.#resolveConsent(groupId, run.memberId);
+          if (consent !== undefined) {
+            outcomes.push({
+              groupId,
+              memberId: run.memberId,
+              status: consent.status,
+              request: consent.request,
+            });
+            continue;
+          }
+          await this.#stopRun(groupId, run.memberId);
+          const result = await this.#launchRun(groupId, run.memberId, size);
+          outcomes.push({
+            groupId,
+            memberId: run.memberId,
+            status: "started",
+            runId: result.run.id,
+          });
+        } catch (error) {
+          const failure = errorPayloadFromUnknown(
+            error,
+            "run_restart_failed",
+            "The agent could not be restarted",
+          );
+          outcomes.push({
+            groupId,
+            memberId: run.memberId,
+            status: "failed",
+            runId: run.id,
+            reason: failure.code,
+            error: failure,
+          });
+        }
       }
-      return restarted;
+      return { groupId, outcomes };
     });
   }
 
@@ -231,6 +334,9 @@ export class RunRuntimeCoordinator {
     }
     return this.#serialize(async () => {
       await this.#runtime.reconcile(markOrphanedStarting);
+      const providerUpdates = await this.#providerUpdates?.reconcile(
+        this.#store.listDesiredRunningRuns(),
+      );
       const afterTmux = this.#store.listActiveRuns();
       const probeNow = this.#now();
       if (probeNow.getTime() - this.#lastStatusProbeAt >= STATUS_PROBE_INTERVAL_MS) {
@@ -252,7 +358,9 @@ export class RunRuntimeCoordinator {
         await this.#runtime.stopRun(run.groupId, run.memberId);
       }
       const recoveredRuns: AgentRun[] = [];
-      for (const persisted of this.#store.listDesiredRunningRuns()) {
+      for (const persisted of this.#store
+        .listDesiredRunningRuns()
+        .filter((run) => providerUpdates?.handledRunIds.has(run.id) !== true)) {
         const observationKey = `${persisted.id}:${persisted.generation}`;
         const observation = await this.#runtime.observeRun(persisted);
         await this.#onRuntimeObservation?.(observation);
@@ -384,7 +492,27 @@ export class RunRuntimeCoordinator {
     groupId: string,
     memberId: string,
     size: { cols: number; rows: number },
-  ): Promise<AgentRun> {
+  ): Promise<StartAgentRunResult> {
+    const consent = await this.#resolveConsent(groupId, memberId);
+    if (consent !== undefined) return consent;
+    return this.#launchRun(groupId, memberId, size);
+  }
+
+  async #resolveConsent(
+    groupId: string,
+    memberId: string,
+  ): Promise<Extract<StartAgentRunResult, { status: "approval-required" | "denied" }> | undefined> {
+    const consent = await this.#launchConsent?.resolve(groupId, memberId);
+    return consent?.status === "approval-required" || consent?.status === "denied"
+      ? consent
+      : undefined;
+  }
+
+  async #launchRun(
+    groupId: string,
+    memberId: string,
+    size: { cols: number; rows: number },
+  ): Promise<Extract<StartAgentRunResult, { status: "started" }>> {
     const run = await this.#runtime.startRun(groupId, memberId, size);
     try {
       await this.#runtime.ensureViewSession(run);
@@ -392,7 +520,7 @@ export class RunRuntimeCoordinator {
     } catch {
       this.#supervisor.unavailable(run);
     }
-    return run;
+    return { status: "started", run };
   }
 
   async #stopRun(groupId: string, memberId: string): Promise<AgentRun> {
@@ -423,6 +551,22 @@ export class RunRuntimeCoordinator {
     }
     const now = this.#now();
     if (run.recoveryNotBefore !== undefined && Date.parse(run.recoveryNotBefore) > now.getTime()) {
+      return undefined;
+    }
+    const consent = await this.#launchConsent?.resolveForAutomaticRecovery(
+      run.groupId,
+      run.memberId,
+    );
+    if (consent?.status === "approval-required" || consent?.status === "denied") {
+      const reason =
+        consent.status === "denied" ? "launch_consent_denied" : "launch_consent_required";
+      let blocked = run;
+      if (blocked.status !== "failed") {
+        blocked = this.#store.updateRunStatus(blocked.id, "failed", { reason });
+      }
+      if (blocked.recoveryPhase !== "failed") {
+        this.#store.transitionRunRecovery(blocked.id, blocked.generation, "failed", { reason });
+      }
       return undefined;
     }
     let current = run;
@@ -484,10 +628,14 @@ export class RunRuntimeCoordinator {
       }
       return replacement;
     } catch (error) {
-      const reason = error instanceof Error ? error.message : "recovery_launch_failed";
+      const failure = errorPayloadFromUnknown(
+        error,
+        "recovery_launch_failed",
+        "The agent could not be restarted",
+      );
       this.#store.recordRuntimeEvent("run.recovery-failed", "run", current.id, {
         generation: current.generation,
-        reason,
+        error: failure,
       });
       const latest = this.#store
         .listDesiredRunningRuns()
@@ -501,7 +649,7 @@ export class RunRuntimeCoordinator {
           latest.generation,
           latest.recoveryAttempts >= this.#recoveryMaxAttempts ? "failed" : "reconciling",
           {
-            reason,
+            reason: failure.code,
           },
         );
       }

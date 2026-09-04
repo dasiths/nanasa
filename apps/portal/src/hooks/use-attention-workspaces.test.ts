@@ -34,7 +34,11 @@ describe("useAttentionWorkspaces", () => {
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.loadingGroupIds.size).toBe(0);
     expect([...result.current.workspaces.keys()]).toEqual(["group-a"]);
-    expect(result.current.errors.get("group-b")).toBe("group-b unavailable");
+    expect(result.current.errors.get("group-b")).toEqual({
+      message: "Unable to load Attention details",
+      details: { cause: "group-b unavailable" },
+      code: "portal_operation_failed",
+    });
   });
 
   it("ignores late workspace results from a previous daemon identity", async () => {
@@ -77,6 +81,10 @@ describe("useAttentionWorkspaces", () => {
     await act(async () => result.current.reloadGroup("group-a"));
 
     expect(result.current.workspaces.get("group-a")).toBe(original);
-    expect(result.current.errors.get("group-a")).toBe("refresh failed");
+    expect(result.current.errors.get("group-a")).toEqual({
+      message: "Unable to load Attention details",
+      details: { cause: "refresh failed" },
+      code: "portal_operation_failed",
+    });
   });
 });

@@ -8,24 +8,34 @@ import {
   AgentRunSchema,
   AgentStatusDetailSchema,
   AgentStatusSummarySchema,
+  ApproveCustomLaunchConsentCommandSchema,
   AssignAgentCheckoutCommandSchema,
+  AttentionDismissalListSchema,
+  AttentionEventTypeSchema,
+  AttentionSubscriptionsSnapshotSchema,
   BrowserRestartFrameSchema,
+  CancelCustomLaunchConsentCommandSchema,
   CheckoutSchema,
   type ControlMetadata,
   CreateAgentActionCommandSchema,
   CreateGroupAgentCommandSchema,
   CreateGroupCommandSchema,
   CreateWorktreeCommandSchema,
+  CustomLaunchConsentListQuerySchema,
   DeleteGroupResultSchema,
+  DenyCustomLaunchConsentCommandSchema,
+  DismissAttentionItemsCommandSchema,
   EventServerFrameSchema,
   ExtensionLifecycleCommandSchema,
   InstallProviderExtensionCommandSchema,
   InterruptAgentRunCommandSchema,
-  MAX_MESSAGE_TEXT_BYTES,
+  MemberAttentionSubscriptionsSchema,
   OpenCheckoutCommandSchema,
   OpenWaitSchema,
-  OVERSIZED_MESSAGE_GUIDANCE,
   ProviderStateBindingSchema,
+  ProviderUpdateOutcomeSchema,
+  ProviderUpdateRecoveryCommandSchema,
+  ProviderUpdateRecoveryResultSchema,
   type RemoteDescriptor,
   RemoteDescriptorSchema,
   RemoveGroupAgentResultSchema,
@@ -39,8 +49,10 @@ import {
   ReparentGroupAgentResultSchema,
   ReplyOpenWaitCommandSchema,
   RepositorySchema,
+  RevokeCustomLaunchConsentCommandSchema,
   RoleDefinitionSchema,
   type ServiceDescriptor,
+  SetAttentionSubscriptionCommandSchema,
   StartAgentRunCommandSchema,
   StartGroupRunsCommandSchema,
   StartGroupRunsResultSchema,
@@ -76,6 +88,7 @@ import type { ProviderExtensionService } from "../extensions/provider-extension-
 import type { ProviderHealthService } from "../extensions/provider-health-service.js";
 import type { CheckoutService } from "../git/checkout-service.js";
 import type { WorktreeService } from "../git/worktree-service.js";
+import type { LaunchConsentService } from "../launch-consent-service.js";
 import type { MessageCommandService } from "../message-command-service.js";
 import type { MessageRepository } from "../message-repository.js";
 import type { OperatorAuth } from "../operator-auth.js";
@@ -88,6 +101,7 @@ import type { TerminalGateway } from "../terminal/terminal-gateway.js";
 import type { TerminalReadService } from "../terminal/terminal-read-service.js";
 import type { TopologyOrderService } from "../topology-order-service.js";
 import type { TopologyService } from "../topology-service.js";
+import { isValidationError, toPublicErrorResponse } from "./error-response.js";
 import {
   type ControlRouteDeclaration,
   controlRoute,
@@ -101,6 +115,8 @@ export interface ControlRouterServices {
   config: ConfigRepository;
   snapshot: SnapshotReadModel;
   store: NanasaStore;
+  repositoryIdentity: string;
+  launchConsent: LaunchConsentService;
   auth: OperatorAuth;
   providerStates: ProviderStateRepository;
   extensions: ProviderExtensionService;
@@ -144,37 +160,16 @@ function deterministicError(error: unknown): { statusCode: number; response: unk
     error.statusCode < 500 &&
     STABLE_IDEMPOTENCY_DOMAIN_ERROR_CODES.has(error.code)
   ) {
-    return { statusCode: error.statusCode, response: { code: error.code, message: error.message } };
+    const response = toPublicErrorResponse(error);
+    return response === undefined
+      ? undefined
+      : { statusCode: response.statusCode, response: response.payload };
   }
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "issues" in error &&
-    Array.isArray(error.issues)
-  ) {
-    const oversized = error.issues.some(
-      (issue) =>
-        typeof issue === "object" &&
-        issue !== null &&
-        "message" in issue &&
-        String(issue.message).includes(`${MAX_MESSAGE_TEXT_BYTES}-byte UTF-8 limit`),
-    );
-    return oversized
-      ? {
-          statusCode: 413,
-          response: {
-            code: "message_body_too_large",
-            message: `Message text exceeds the ${MAX_MESSAGE_TEXT_BYTES}-byte UTF-8 limit. ${OVERSIZED_MESSAGE_GUIDANCE}`,
-          },
-        }
-      : {
-          statusCode: 400,
-          response: {
-            code: "validation_error",
-            message: "Request validation failed",
-            issues: error.issues,
-          },
-        };
+  if (isValidationError(error)) {
+    const response = toPublicErrorResponse(error);
+    return response === undefined
+      ? undefined
+      : { statusCode: response.statusCode, response: response.payload };
   }
   return undefined;
 }
@@ -371,6 +366,53 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     ),
   );
   register("trust.list", () => services.store.listRepositoryTrust());
+  register("launchConsents.list", (request) => {
+    const query = CustomLaunchConsentListQuerySchema.parse(request.query);
+    return services.launchConsent.listRequests(services.repositoryIdentity, query.state);
+  });
+  register("launchConsents.get", (request) =>
+    services.launchConsent.getRequest(
+      services.repositoryIdentity,
+      record(request.params).requestId ?? "",
+    ),
+  );
+  register("launchConsents.approve", async (request) =>
+    services.launchConsent.approve(
+      record(request.params).requestId ?? "",
+      ApproveCustomLaunchConsentCommandSchema.parse(
+        routeBody(controlRoute("launchConsents.approve"), request),
+      ),
+      operatorPrincipal(services, request).operatorId,
+    ),
+  );
+  register("launchConsents.deny", (request) =>
+    services.launchConsent.deny(
+      record(request.params).requestId ?? "",
+      DenyCustomLaunchConsentCommandSchema.parse(
+        routeBody(controlRoute("launchConsents.deny"), request),
+      ),
+      operatorPrincipal(services, request).operatorId,
+    ),
+  );
+  register("launchConsents.cancel", (request) =>
+    services.launchConsent.cancel(
+      record(request.params).requestId ?? "",
+      CancelCustomLaunchConsentCommandSchema.parse(
+        routeBody(controlRoute("launchConsents.cancel"), request),
+      ),
+      operatorPrincipal(services, request).operatorId,
+    ),
+  );
+  register("launchConsents.revoke", (request) =>
+    services.launchConsent.revoke(
+      services.repositoryIdentity,
+      record(request.params).receiptId ?? "",
+      RevokeCustomLaunchConsentCommandSchema.parse(
+        routeBody(controlRoute("launchConsents.revoke"), request),
+      ),
+      operatorPrincipal(services, request).operatorId,
+    ),
+  );
   register("extensions.catalog", () => services.extensions.list());
   register("extensions.list", () => services.extensions.list());
   register("extensions.inspect", (request) =>
@@ -561,12 +603,12 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
       params.groupId ?? "",
       params.agentId ?? "",
     );
-    const run = await services.coordinator.startRun(
+    const result = await services.coordinator.startRun(
       params.groupId ?? "",
       membership.memberId,
       command,
     );
-    return reply.status(201).send(run);
+    return reply.status(201).send(result);
   });
   register("runs.stop", async (request) => {
     StopAgentRunCommandSchema.parse(routeBody(controlRoute("runs.stop"), request));
@@ -584,6 +626,42 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     return reply
       .status(201)
       .send(await services.coordinator.restartRun(record(request.params).runId ?? "", command));
+  });
+  register("runs.recoverGroup", async (request) => {
+    const groupId = record(request.params).groupId ?? "";
+    services.store.getGroup(groupId);
+    const command = ProviderUpdateRecoveryCommandSchema.parse(
+      routeBody(controlRoute("runs.recoverGroup"), request),
+    );
+    const runs = services.store.listDesiredRunningRuns().filter((run) => run.groupId === groupId);
+    const result = await services.coordinator.recoverProviderUpdates(runs, command);
+    return ProviderUpdateRecoveryResultSchema.parse({
+      groupId,
+      dryRun: command.dryRun,
+      outcomes: result.outcomes,
+    });
+  });
+  register("runs.recoverAgent", async (request) => {
+    const params = record(request.params);
+    const groupId = params.groupId ?? "";
+    const membership = services.topology.getAgentMembership(groupId, params.agentId ?? "");
+    const run = services.store.getLatestRunForMembership(groupId, membership.memberId);
+    if (run?.desiredState !== "running") {
+      throw new DomainError("run_not_found", "No active agent run is available for recovery", 404);
+    }
+    const command = ProviderUpdateRecoveryCommandSchema.parse(
+      routeBody(controlRoute("runs.recoverAgent"), request),
+    );
+    const result = await services.coordinator.recoverProviderUpdates([run], command);
+    const outcome = result.outcomes[0];
+    if (outcome === undefined) {
+      throw new DomainError(
+        "provider_update_binding_unavailable",
+        "The agent run does not have current provider metadata",
+        409,
+      );
+    }
+    return ProviderUpdateOutcomeSchema.parse(outcome);
   });
   register("runs.startAll", async (request) => {
     const declaration = controlRoute("runs.startAll");
@@ -604,7 +682,7 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     const command = StartGroupRunsCommandSchema.parse(
       routeBody(controlRoute("runs.restartAll"), request),
     );
-    return AgentRunSchema.array().parse(
+    return StartGroupRunsResultSchema.parse(
       await services.coordinator.restartAll(record(request.params).groupId ?? "", command),
     );
   });
@@ -644,6 +722,54 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
         params.groupId ?? "",
         params.memberId ?? "",
         principal.operatorId,
+      ),
+    );
+  });
+  register("attentionDismissals.list", (request) => {
+    const principal = operatorPrincipal(services, request);
+    return AttentionDismissalListSchema.parse({
+      dismissals: services.store.listAttentionDismissals(principal.operatorId),
+    });
+  });
+  register("attentionDismissals.dismiss", (request) => {
+    const principal = operatorPrincipal(services, request);
+    const command = DismissAttentionItemsCommandSchema.parse(
+      routeBody(controlRoute("attentionDismissals.dismiss"), request),
+    );
+    return AttentionDismissalListSchema.parse({
+      dismissals: services.store.dismissAttentionItems(principal.operatorId, command.itemIds),
+    });
+  });
+  register("attentionSubscriptions.list", (request) => {
+    const principal = operatorPrincipal(services, request);
+    return AttentionSubscriptionsSnapshotSchema.parse(
+      services.store.listAttentionSubscriptions(principal.operatorId),
+    );
+  });
+  register("attentionSubscriptions.set", (request) => {
+    const principal = operatorPrincipal(services, request);
+    const params = record(request.params);
+    const command = SetAttentionSubscriptionCommandSchema.parse(
+      routeBody(controlRoute("attentionSubscriptions.set"), request),
+    );
+    return MemberAttentionSubscriptionsSchema.parse(
+      services.store.setAttentionSubscription(
+        principal.operatorId,
+        params.groupId ?? "",
+        params.memberId ?? "",
+        AttentionEventTypeSchema.parse(params.eventType),
+        command.enabled,
+      ),
+    );
+  });
+  register("attentionSubscriptions.reset", (request) => {
+    const principal = operatorPrincipal(services, request);
+    const params = record(request.params);
+    return MemberAttentionSubscriptionsSchema.parse(
+      services.store.resetAttentionSubscriptions(
+        principal.operatorId,
+        params.groupId ?? "",
+        params.memberId ?? "",
       ),
     );
   });

@@ -30,6 +30,7 @@ test-results/
 
 # Persistent local agent configuration and sessions
 .nanasa/agents/
+.nanasa/backups/
 .nanasa/integrations/
 
 # nyc test coverage

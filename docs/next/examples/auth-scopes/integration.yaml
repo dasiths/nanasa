@@ -6,7 +6,6 @@ integrations:
   copilot:
     name: Shared GitHub Copilot
     kind: copilot
-    command: [copilot]
     providerState: { scope: integration }
     credentials: { kind: provider-managed }
 groups:

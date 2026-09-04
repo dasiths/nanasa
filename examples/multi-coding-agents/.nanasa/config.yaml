@@ -9,59 +9,95 @@ terminal:
     maxBytes: 1048576
     retentionSeconds: 86400
     sensitivity: repository-private
-instructions: []
+instructions:
+  - .nanasa/instructions/nanasa-mcp.md
+  - .nanasa/instructions/team.md
+attention:
+  defaults:
+    response-required: false
+    agent-health: false
+    completion: false
+    delivery-failure: false
+    action-state: false
+    provider-update-failed: false
+    provider-update-succeeded: false
+    unread-message: false
+executionProfiles:
+  autonomous:
+    continuation: autonomous
+    questions: disabled
+    approvals: unrestricted
 integrations:
   copilot:
     name: GitHub Copilot
     kind: copilot
-    command: [ copilot ]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
     model: { resumePolicy: preserve-session }
     nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+    executionProfile: autonomous
+    providerFiles:
+      mcp:
+        paths: [ .nanasa/providers/copilot/mcp.json ]
   pi:
     name: Pi
     kind: pi
-    command: [ pi ]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
     model: { resumePolicy: preserve-session }
     nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+    executionProfile: autonomous
+    providerFiles:
+      mcp:
+        paths: [ .nanasa/providers/pi/mcp.json ]
   opencode:
     name: OpenCode
     kind: opencode
-    command: [ opencode ]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
     model: { resumePolicy: preserve-session }
     nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+    executionProfile: autonomous
+    providerFiles:
+      mcp:
+        paths: [ .nanasa/providers/opencode/mcp.json ]
   claude-code:
     name: Claude Code
     kind: claude-code
-    command: [ claude ]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
     model: { resumePolicy: preserve-session }
     nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+    executionProfile: autonomous
+    providerFiles:
+      mcp:
+        paths: [ .nanasa/providers/claude-code/mcp.json ]
   claude-copilot:
     name: Claude Code via GitHub Copilot
     kind: claude-code
-    command: [ make, claude-copilot ]
+    command: [ sh, bin/claude-copilot ]
+    launcher:
+      providerArguments: append
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
     model: { resumePolicy: preserve-session }
     nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+    executionProfile: autonomous
+    providerFiles:
+      mcp:
+        paths: [ .nanasa/providers/claude-code/mcp.json ]
 extensions: {}
 roles:
   project-manager:
     name: Project Manager
     description: Coordinates assignments, dependencies, decisions, and completion
-    instructions: []
+    instructions:
+      - .nanasa/instructions/project-manager.md
     permissionPolicy: inherit
     presentation:
       icon: clipboard-list
@@ -69,7 +105,8 @@ roles:
   implementor:
     name: Implementor
     description: Implements assigned changes and validates the result
-    instructions: []
+    instructions:
+      - .nanasa/instructions/implementor.md
     permissionPolicy: inherit
     presentation:
       icon: hammer
@@ -77,7 +114,8 @@ roles:
   reviewer:
     name: Reviewer
     description: Reviews changes and reports prioritized findings without modifying files
-    instructions: []
+    instructions:
+      - .nanasa/instructions/reviewer.md
     permissionPolicy: read-only
     presentation:
       icon: shield-check
@@ -86,7 +124,8 @@ groups:
   grp_852f1819-0614-49b4-b193-71bf5e98becf:
     name: Backend Team
     order: 0
-    instructions: []
+    instructions:
+      - .nanasa/instructions/groups/agent-team.md
     agents:
       agent_318f514e-2347-4d87-8c64-aef0752e7bfb:
         memberId: nice-dijkstra
@@ -94,6 +133,12 @@ groups:
         integrationId: copilot
         roleId: project-manager
         instructions: []
+        attention:
+          response-required: true
+          agent-health: true
+          completion: true
+          delivery-failure: true
+          provider-update-failed: true
         order: 0
       agent_0ae65cd2-985d-498c-9399-0978bae77827:
         memberId: keen-hawking
@@ -111,7 +156,7 @@ groups:
         order: 2
       agent_9e2cdefb-cc96-4b4e-865f-b4ac17f6c4f9:
         memberId: vibrant-mirzakhani
-        name: Reviwer
+        name: Reviewer
         integrationId: opencode
         roleId: reviewer
         instructions: []

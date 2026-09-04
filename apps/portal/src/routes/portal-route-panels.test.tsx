@@ -7,7 +7,7 @@ import type {
   OpenWait,
   PortalSnapshot,
 } from "@nanasa/contracts";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { PortalClient } from "../api.js";
 import { deriveAttentionItems } from "../attention-items.js";
@@ -45,6 +45,7 @@ function props(
     commands: [],
     onNavigate: vi.fn(),
     onRefresh: vi.fn(),
+    onDismissAttentionItems: vi.fn().mockResolvedValue(true),
     onPatchPreferences: vi.fn(),
   } as unknown as Parameters<typeof PortalRoutePanel>[0];
 }
@@ -198,10 +199,46 @@ describe("service and remote route panels", () => {
 });
 
 describe("notification preferences", () => {
+  it("sends a test browser notification after permission is granted", () => {
+    const notifications: Array<{
+      title: string;
+      options: NotificationOptions | undefined;
+    }> = [];
+    class TestNotification {
+      public static readonly permission = "granted";
+
+      public constructor(title: string, options?: NotificationOptions) {
+        notifications.push({ title, options });
+      }
+    }
+    vi.stubGlobal("Notification", TestNotification);
+    render(
+      <PortalRoutePanel
+        {...props("settings", {} as PortalClient)}
+        preferences={{
+          ...defaultPortalPreferences,
+          notifications: { ...defaultPortalPreferences.notifications, desktop: true },
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Browser notifications: On");
+    screen.getByRole("button", { name: "Send test notification" }).click();
+    expect(notifications).toEqual([
+      {
+        title: "Nanasa browser notifications",
+        options: {
+          body: "Subscribed Attention items can appear here while the portal is open.",
+          silent: true,
+        },
+      },
+    ]);
+  });
+
   it("keeps denied desktop permission disabled and can disable an enabled preference", async () => {
     const onPatchPreferences = vi.fn();
     const requestPermission = vi.fn().mockResolvedValue("denied");
-    vi.stubGlobal("Notification", { requestPermission });
+    vi.stubGlobal("Notification", { permission: "default", requestPermission });
     const base = {
       ...props("settings", {} as PortalClient),
       preferences: defaultPortalPreferences,
@@ -215,6 +252,8 @@ describe("notification preferences", () => {
     expect(onPatchPreferences).toHaveBeenCalledWith({
       notifications: { ...defaultPortalPreferences.notifications, desktop: false },
     });
+    expect(screen.getByRole("status")).toHaveTextContent("Browser notifications: Blocked");
+    expect(screen.getByRole("button", { name: "Send test notification" })).toBeDisabled();
 
     onPatchPreferences.mockClear();
     view.rerender(
@@ -235,113 +274,135 @@ describe("notification preferences", () => {
 });
 
 describe("projected status route panels", () => {
-  it("shows only projected attention statuses in precedence order with qualified actions", async () => {
-    const doneMember = membership("group-done", "Builder");
-    const staleMember = membership("group-stale", "Watcher");
-    const approvalMember = membership("group-approval", "Reviewer");
-    const doneRun = run(doneMember);
-    const staleRun = run(staleMember);
-    const approvalRun = run(approvalMember);
-    const acknowledgeCompletion = vi.fn().mockResolvedValue(undefined);
-    const client = { acknowledgeCompletion } as unknown as PortalClient;
-    let resolveRefresh: () => void = () => undefined;
-    const onRefresh = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveRefresh = resolve;
-        }),
-    );
-    const routeProps = {
-      ...props("attention", client),
-      onRefresh,
-      snapshot: snapshot(
-        [doneMember, staleMember, approvalMember],
-        [doneRun, staleRun, approvalRun],
-        [
-          status(doneMember, doneRun, {
-            state: "idle",
-            phase: "settled",
-            outcome: "succeeded",
-            completionRevision: 2,
-            completionPending: true,
-          }),
-          status(staleMember, staleRun, {
-            state: "unknown",
-            phase: "startup",
-            attention: "reporter_stale",
-            staleAuthority: true,
-          }),
-          status(approvalMember, approvalRun, {
-            state: "blocked",
-            phase: "plan_approval",
-            attention: "decision_required",
-          }),
-        ],
-      ),
-    };
-
-    const view = render(<PortalRoutePanel {...routeProps} />);
-    const { container } = view;
-
-    expect(
-      [...container.querySelectorAll(".workflow-row strong")].map((item) => item.textContent),
-    ).toEqual(["Reviewer · Needs approval", "Builder · Completion ready"]);
-    expect(screen.queryByText(/Watcher/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/reporter stale|decision required|plan approval/i)).toBeNull();
-    screen.getByRole("button", { name: "Completions 1" }).click();
-    await waitFor(() =>
-      expect(screen.queryByText("Reviewer · Needs approval")).not.toBeInTheDocument(),
-    );
-    expect(screen.getByText("Builder · Completion ready")).toBeInTheDocument();
-    screen.getByRole("button", { name: "All 2" }).click();
-    const reviewer = (await screen.findByText("Reviewer · Needs approval")).closest("li")!;
-    within(reviewer).getByRole("button", { name: "Open terminal" }).click();
-    expect(routeProps.onNavigate).toHaveBeenCalledWith(
-      "/groups/group-approval/terminals/run-group-approval-reviewer",
-    );
-    const builder = screen.getByText("Builder · Completion ready").closest("li")!;
-    within(builder).getByRole("button", { name: "Acknowledge" }).click();
-    await waitFor(() =>
-      expect(acknowledgeCompletion).toHaveBeenCalledWith("group-done", "builder"),
-    );
-    expect(screen.queryByText("Builder · Completion ready")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "All 1" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Completions 0" })).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Completion acknowledged for Builder.");
-    expect(onRefresh).toHaveBeenCalledOnce();
-
-    const newerSnapshot = snapshot(
-      [doneMember, staleMember, approvalMember],
-      [doneRun, staleRun, approvalRun],
+  it("renders the subscribed inbox with filters and exactly two actions per item", () => {
+    const builder = membership("group-done", "Builder");
+    const reviewer = membership("group-approval", "Reviewer");
+    const recipient = membership("group-delivery", "Recipient");
+    const builderRun = run(builder);
+    const reviewerRun = run(reviewer);
+    const input = snapshot(
+      [builder, reviewer, recipient],
+      [builderRun, reviewerRun],
       [
-        status(doneMember, doneRun, {
+        status(builder, builderRun, {
           state: "idle",
-          phase: "settled",
-          outcome: "succeeded",
-          statusRevision: 4,
-          completionRevision: 3,
+          completionRevision: 2,
           completionPending: true,
         }),
-        status(staleMember, staleRun, {
-          state: "unknown",
-          phase: "startup",
-          attention: "reporter_stale",
-          staleAuthority: true,
-        }),
-        status(approvalMember, approvalRun, {
+        status(reviewer, reviewerRun, {
           state: "blocked",
           phase: "plan_approval",
           attention: "decision_required",
         }),
       ],
     );
-    view.rerender(<PortalRoutePanel {...routeProps} snapshot={newerSnapshot} />);
-    expect(screen.getByText("Completion revision 3 is ready for review.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Completions 1" })).toBeInTheDocument();
-    resolveRefresh();
+    input.messageGroups = [
+      {
+        groupId: recipient.groupId,
+        latestGroupSeq: 3,
+        retainedMessageCount: 3,
+        activeDeliveryCount: 0,
+        failedRecipientMemberIds: [recipient.memberId],
+      },
+    ];
+    const onDismissAttentionItems = vi.fn().mockResolvedValue(true);
+    const routeProps = {
+      ...props("attention", {} as PortalClient),
+      onDismissAttentionItems,
+      snapshot: input,
+      attentionItems: deriveAttentionItems(input),
+    };
+    const { container } = render(<PortalRoutePanel {...routeProps} />);
+
+    expect(screen.getByText(/subscribed inbox/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Needs action 3" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    for (const row of container.querySelectorAll(".attention-inbox-row")) {
+      expect(within(row as HTMLElement).getAllByRole("button")).toHaveLength(2);
+    }
+    expect(
+      screen.queryByRole("button", { name: /acknowledge|approve|reply|retry|cancel/i }),
+    ).toBeNull();
+
+    const reviewerRow = screen.getByText("Reviewer · Needs approval").closest("li")!;
+    within(reviewerRow).getByRole("button", { name: "Open terminal" }).click();
+    expect(routeProps.onNavigate).toHaveBeenCalledWith(
+      "/groups/group-approval/terminals/run-group-approval-reviewer",
+    );
+    within(reviewerRow).getByRole("button", { name: "Dismiss Reviewer · Needs approval" }).click();
+    expect(onDismissAttentionItems).toHaveBeenCalledWith([expect.any(String)]);
+
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "delivery" } });
+    expect(screen.getByText("Recipient · Delivery failed")).toBeInTheDocument();
+    expect(screen.queryByText("Builder · Completion ready")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Filter by type" }), {
+      target: { value: "completion" },
+    });
+    expect(screen.getByText("Builder · Completion ready")).toBeInTheDocument();
+    expect(screen.queryByText("Reviewer · Needs approval")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Filter by type" }), {
+      target: { value: "all" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Filter by team" }), {
+      target: { value: reviewer.groupId },
+    });
+    expect(screen.getByText("Reviewer · Needs approval")).toBeInTheDocument();
+    expect(screen.queryByText("Recipient · Delivery failed")).not.toBeInTheDocument();
   });
 
-  it("keeps exact wait and cancellation controls safe in group Attention", async () => {
+  it("offers selection with durable bulk dismissal and clear selection only", async () => {
+    const builder = membership("group-done", "Builder");
+    const reviewer = membership("group-done", "Reviewer");
+    const builderRun = run(builder);
+    const reviewerRun = run(reviewer);
+    const input = snapshot(
+      [builder, reviewer],
+      [builderRun, reviewerRun],
+      [
+        status(builder, builderRun, { completionRevision: 2, completionPending: true }),
+        status(reviewer, reviewerRun, { completionRevision: 3, completionPending: true }),
+      ],
+    );
+    const onDismissAttentionItems = vi.fn().mockResolvedValue(true);
+    render(
+      <PortalRoutePanel
+        {...props("attention", {} as PortalClient)}
+        snapshot={input}
+        attentionItems={deriveAttentionItems(input)}
+        onDismissAttentionItems={onDismissAttentionItems}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Builder · Completion ready" }));
+    const selection = screen.getByRole("group", { name: "Selected Attention items" });
+    expect(
+      within(selection)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Dismiss selected", "Clear selection"]);
+    fireEvent.click(within(selection).getByRole("button", { name: "Clear selection" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: "Selected Attention items" })).toBeNull(),
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Builder · Completion ready" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Reviewer · Completion ready" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss selected" }));
+    await waitFor(() =>
+      expect(onDismissAttentionItems).toHaveBeenCalledWith([
+        expect.any(String),
+        expect.any(String),
+      ]),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: "Selected Attention items" })).toBeNull(),
+    );
+  });
+
+  it("preserves partial workspace errors, retry, and action hash focus", async () => {
     const owner = membership("group-scope", "Builder", "builder");
     const ownerRun = run(owner);
     const input = snapshot(
@@ -400,19 +461,25 @@ describe("projected status route panels", () => {
       acknowledgements: [],
       openWaits: [exactWait],
     };
-    const replyOpenWait = vi.fn().mockResolvedValue({ ...exactWait, state: "replying" });
-    const cancelAgentAction = vi.fn().mockResolvedValue({ ...action, state: "cancelled" });
     const reload = vi.fn().mockResolvedValue(undefined);
-    const client = { replyOpenWait, cancelAgentAction } as unknown as PortalClient;
     const routeProps = {
-      ...props("attention", client),
+      ...props("attention", {} as PortalClient),
       route: { kind: "group", groupId: owner.groupId, section: "activity" } as const,
       group: input.groups[0]!,
       snapshot: input,
       members: [owner],
       attentionItems: deriveAttentionItems(input, [workspace]),
       attentionWorkspaceLoading: new Set<string>(),
-      attentionWorkspaceErrors: new Map([[owner.groupId, "temporarily unavailable"]]),
+      attentionWorkspaceErrors: new Map([
+        [
+          owner.groupId,
+          {
+            message: "Unable to load Attention details",
+            details: { cause: "temporarily unavailable" },
+            code: "portal_operation_failed",
+          },
+        ],
+      ]),
       onReloadAttentionWorkspace: reload,
     };
     window.history.replaceState({}, "", `/groups/${owner.groupId}/activity#action-action-1`);
@@ -420,29 +487,145 @@ describe("projected status route panels", () => {
     render(<PortalRoutePanel {...routeProps} />);
 
     expect(screen.getByRole("heading", { name: "Attention" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "All 1" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "Requires response 1" })).toBeInTheDocument();
-    expect(screen.getByText("1 active action")).toBeInTheDocument();
-    expect(screen.getByText(/temporarily unavailable/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Needs action 1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Active 1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "All 2" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Filter by team" })).toHaveValue(owner.groupId);
+    expect(screen.getByRole("combobox", { name: "Filter by team" })).toBeDisabled();
+    expect(screen.getByText("Unable to load Attention details")).toBeInTheDocument();
+    expect(screen.getByText("portal_operation_failed")).toBeInTheDocument();
     await waitFor(() => expect(document.getElementById("action-action-1")).toHaveFocus());
-
-    screen.getByRole("button", { name: "Allow once" }).click();
-    await waitFor(() =>
-      expect(replyOpenWait).toHaveBeenCalledWith("wait-1", {
-        expectedRunId: ownerRun.id,
-        expectedGeneration: ownerRun.generation,
-        expectedReporterEpoch: "epoch-one",
-        expectedStatusRevision: 7,
-        reply: { kind: "allow-once" },
-      }),
+    expect(screen.getByRole("button", { name: "Active 1" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
     );
-    expect(await screen.findByText(/Waiting for the reporter to close this wait/)).toBeVisible();
-    expect(screen.getByRole("button", { name: "Allow once" })).toBeDisabled();
+    expect(screen.getByText("Builder · Action created")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /allow once|cancel/i })).toBeNull();
 
-    screen.getByRole("button", { name: "Cancel" }).click();
-    await waitFor(() => expect(cancelAgentAction).toHaveBeenCalledWith("action-1"));
-    expect(screen.getByRole("button", { name: "Cancellation requested" })).toBeDisabled();
+    screen.getByRole("button", { name: "Retry" }).click();
     expect(reload).toHaveBeenCalledWith(owner.groupId);
+  });
+
+  it("separates active and history views with action diagnostics and timestamps", () => {
+    const owner = membership("group-history", "Builder", "builder");
+    const ownerRun = run(owner);
+    const active: AgentAction = {
+      version: 1,
+      id: "action-active",
+      kind: "prompt",
+      principal: { kind: "operator", operatorId: "operator-one" },
+      target: {
+        groupId: owner.groupId,
+        memberId: owner.memberId,
+        runId: ownerRun.id,
+        generation: ownerRun.generation,
+        daemonEpoch: 1,
+        reporterSessionId: "session-one",
+        reporterId: "reporter-one",
+        reporterEpoch: "epoch-one",
+        baselineStatusRevision: 1,
+        baselineCompletionRevision: 0,
+      },
+      idempotencyKey: "active-key",
+      requestDigest: "b".repeat(64),
+      prompt: "Continue",
+      allowWorking: false,
+      state: "created",
+      queueDeadlineAt: timestamp,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    const stalled: AgentAction = {
+      ...active,
+      id: "action-stalled",
+      idempotencyKey: "stalled-key",
+      state: "stalled",
+      error: {
+        code: "agent_prompt_stalled",
+        message: "Reporter did not acknowledge",
+        retryable: false,
+      },
+    };
+    const input = snapshot([owner], [ownerRun], []);
+    const workspace: AgentActionWorkspace = {
+      groupId: owner.groupId,
+      actions: [active, stalled],
+      attempts: [],
+      acknowledgements: [],
+      openWaits: [],
+    };
+
+    const { container } = render(
+      <PortalRoutePanel
+        {...props("attention", {} as PortalClient)}
+        snapshot={input}
+        attentionItems={deriveAttentionItems(input, [workspace])}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Active 1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "History 1" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Active 1" }));
+    expect(screen.getByText("Builder · Action created")).toBeVisible();
+    expect(screen.queryByText("Delivery unconfirmed")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "History 1" }));
+    expect(screen.queryByText("Builder · Action created")).not.toBeInTheDocument();
+    expect(screen.getByText("Delivery unconfirmed")).toBeVisible();
+    const diagnostic = screen.getByTitle("Diagnostic code: agent_prompt_stalled");
+    expect(diagnostic).toHaveTextContent(
+      "Nanasa sent this prompt to Builder, but could not confirm that the agent received it. The prompt may still have run.",
+    );
+    expect(within(diagnostic).getByText("agent_prompt_stalled")).toBeVisible();
+    expect(container.querySelector("time")).toHaveAttribute("datetime", timestamp);
+    const row = screen.getByText("Delivery unconfirmed").closest("li")!;
+    expect(within(row).getAllByRole("button")).toHaveLength(2);
+  });
+
+  it("keeps provider-update preferences as post-dismiss cleanup, not inbox filtering", async () => {
+    const builder = membership("group-update", "Builder");
+    const currentRun = run(builder);
+    const restartedRun = {
+      ...currentRun,
+      providerUpdate: {
+        id: "update-builder",
+        runId: currentRun.id,
+        generation: currentRun.generation,
+        memberId: currentRun.memberId,
+        providerId: "copilot",
+        previousSnapshotDigest: "a".repeat(64),
+        currentSnapshotDigest: "b".repeat(64),
+        state: "completed" as const,
+        outcome: "restarted" as const,
+        replacementRunId: currentRun.id,
+        detectedAt: timestamp,
+        updatedAt: timestamp,
+        completedAt: timestamp,
+      },
+    };
+    const input = snapshot([builder], [restartedRun], []);
+    const onDismissAttentionItems = vi.fn().mockResolvedValue(true);
+    const onPatchPreferences = vi.fn();
+    render(
+      <PortalRoutePanel
+        {...props("attention", {} as PortalClient)}
+        snapshot={input}
+        attentionItems={deriveAttentionItems(input)}
+        preferences={{
+          ...defaultPortalPreferences,
+          dismissedProviderUpdateIds: ["update-builder"],
+        }}
+        onDismissAttentionItems={onDismissAttentionItems}
+        onPatchPreferences={onPatchPreferences}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "History 1" }));
+    expect(screen.getByText("Builder restarted")).toBeVisible();
+    screen.getByRole("button", { name: "Dismiss Builder restarted" }).click();
+    await waitFor(() => expect(onDismissAttentionItems).toHaveBeenCalledWith([expect.any(String)]));
+    expect(onPatchPreferences).toHaveBeenCalledWith({
+      dismissedProviderUpdateIds: ["update-builder"],
+    });
   });
 
   it("routes delivery summaries to group Messages without inventing a message ID", () => {
@@ -466,7 +649,7 @@ describe("projected status route panels", () => {
     };
 
     render(<PortalRoutePanel {...routeProps} />);
-    screen.getByRole("button", { name: "Open Messages" }).click();
+    screen.getByRole("button", { name: "Open messages" }).click();
 
     expect(routeProps.onNavigate).toHaveBeenCalledWith("/groups/group-delivery/messages");
   });

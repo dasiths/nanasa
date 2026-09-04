@@ -41,7 +41,6 @@ integrations:
   copilot:
     name: GitHub Copilot
     kind: copilot
-    command: [copilot]
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }

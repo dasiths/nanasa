@@ -1,7 +1,8 @@
 import type { ProviderCatalogItem, ProviderExtensionInspect } from "@nanasa/contracts";
-import { PackageCheck, RefreshCw, ShieldCheck, TriangleAlert, Wrench } from "lucide-react";
+import { PackageCheck, RefreshCw, ShieldCheck, Wrench } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { PortalClient } from "../api.js";
+import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 
 export function ExtensionsWorkspace({
   client,
@@ -16,7 +17,7 @@ export function ExtensionsWorkspace({
   const [selectedId, setSelectedId] = useState<string>();
   const [inspect, setInspect] = useState<ProviderExtensionInspect>();
   const [busy, setBusy] = useState<string>();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   const [removeConfirmation, setRemoveConfirmation] = useState("");
 
   const load = async (preferredId = selectedId) => {
@@ -35,7 +36,7 @@ export function ExtensionsWorkspace({
 
   useEffect(() => {
     void load().catch((cause: unknown) =>
-      setError(cause instanceof Error ? cause.message : "Unable to load provider extensions"),
+      setError(toPortalError(cause, "Unable to load provider extensions")),
     );
   }, [client, revision]);
 
@@ -45,7 +46,7 @@ export function ExtensionsWorkspace({
     void client
       .inspectProviderExtension(extensionId)
       .then(setInspect, (cause: unknown) =>
-        setError(cause instanceof Error ? cause.message : "Unable to inspect provider extension"),
+        setError(toPortalError(cause, "Unable to inspect provider extension")),
       );
   };
 
@@ -57,7 +58,7 @@ export function ExtensionsWorkspace({
       await load(selectedId);
       await onChanged();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Extension operation failed");
+      setError(toPortalError(cause, "Extension operation failed"));
     } finally {
       setBusy(undefined);
     }
@@ -75,11 +76,7 @@ export function ExtensionsWorkspace({
 
   return (
     <div className="extensions-workspace">
-      {error !== undefined && (
-        <p className="route-error" role="alert">
-          <TriangleAlert aria-hidden="true" size={16} /> {error}
-        </p>
-      )}
+      {error !== undefined && <ErrorNotice error={error} className="route-error" />}
       <div className="extension-layout">
         <section
           className="workflow-card extension-catalog"

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { IdentifierSchema, RoleIdSchema, RunStatusSchema, TimestampSchema } from "./control.js";
 import { AgentTypeKeySchema, IntegrationIdSchema } from "./provider.js";
 import { AdapterIdSchema } from "./provider-runtime.js";
+import { ProviderUpdateTransitionSchema } from "./provider-update-state.js";
 
 export const STATUS_PROTOCOL_VERSION = 2 as const;
 export const REPORTER_LEASE_MS = 45_000 as const;
@@ -211,6 +212,26 @@ export const AgentStatusTransitionSchema = z
   .strict();
 export type AgentStatusTransition = z.infer<typeof AgentStatusTransitionSchema>;
 
+export const AttentionDismissalSchema = z
+  .object({
+    itemId: z.string().trim().min(1).max(2_048),
+    dismissedAt: TimestampSchema,
+  })
+  .strict();
+export type AttentionDismissal = z.infer<typeof AttentionDismissalSchema>;
+
+export const AttentionDismissalListSchema = z
+  .object({ dismissals: z.array(AttentionDismissalSchema).max(500) })
+  .strict();
+export type AttentionDismissalList = z.infer<typeof AttentionDismissalListSchema>;
+
+export const DismissAttentionItemsCommandSchema = z
+  .object({
+    itemIds: z.array(z.string().trim().min(1).max(2_048)).min(1).max(500),
+  })
+  .strict();
+export type DismissAttentionItemsCommand = z.infer<typeof DismissAttentionItemsCommandSchema>;
+
 export const RuntimeObservationSchema = z
   .object({
     id: IdentifierSchema,
@@ -297,6 +318,7 @@ export const AgentStatusSummarySchema = z
     runId: IdentifierSchema.optional(),
     generation: z.number().int().positive().optional(),
     runStatus: RunStatusSchema.optional(),
+    providerUpdate: ProviderUpdateTransitionSchema.optional(),
     state: AgentStatusStateSchema,
     phase: AgentStatusPhaseSchema,
     outcome: AgentStatusOutcomeSchema,

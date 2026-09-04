@@ -3,6 +3,7 @@ import { CircleAlert, LoaderCircle, RefreshCw, SquareTerminal, X } from "lucide-
 import { useEffect, useRef, useState } from "react";
 
 import type { PortalClient } from "../api.js";
+import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 import { useTerminalEndpoint } from "../hooks/use-terminal-endpoint.js";
 import { TerminalConsole } from "../terminal/terminal-console.js";
 
@@ -30,13 +31,19 @@ function ConsoleTerminal({
   }
 
   return (
-    <div className="console-state" role={error === undefined ? "status" : "alert"}>
-      {loading || status?.state === "starting" ? (
-        <LoaderCircle className="spin" aria-hidden="true" size={22} />
+    <div className="console-state" {...(error === undefined ? { role: "status" } : {})}>
+      {error !== undefined ? (
+        <ErrorNotice error={error} className="console-state-error" />
       ) : (
-        <CircleAlert aria-hidden="true" size={22} />
+        <>
+          {loading || status?.state === "starting" ? (
+            <LoaderCircle className="spin" aria-hidden="true" size={22} />
+          ) : (
+            <CircleAlert aria-hidden="true" size={22} />
+          )}
+          <strong>{status?.error?.message ?? "Starting console"}</strong>
+        </>
       )}
-      <strong>{error ?? status?.error?.message ?? "Starting console"}</strong>
       {(error !== undefined || status?.state === "unavailable") && (
         <button
           type="button"
@@ -54,7 +61,7 @@ function ConsoleTerminal({
 export function AdHocConsoleDialog({ client, onClose }: { client: PortalClient; onClose(): void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [session, setSession] = useState<AdHocConsoleSession>();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   const [requestRevision, setRequestRevision] = useState(0);
 
   useEffect(() => {
@@ -80,7 +87,7 @@ export function AdHocConsoleDialog({ client, onClose }: { client: PortalClient; 
         setSession(created);
       })
       .catch((cause: unknown) => {
-        if (!disposed) setError(cause instanceof Error ? cause.message : "Unable to open console");
+        if (!disposed) setError(toPortalError(cause, "Unable to open console"));
       });
     return () => {
       disposed = true;
@@ -124,9 +131,8 @@ export function AdHocConsoleDialog({ client, onClose }: { client: PortalClient; 
             onRestart={() => setRequestRevision((current) => current + 1)}
           />
         ) : error !== undefined ? (
-          <div className="console-state" role="alert">
-            <CircleAlert aria-hidden="true" size={22} />
-            <strong>{error}</strong>
+          <div className="console-state">
+            <ErrorNotice error={error} className="console-state-error" />
             <button
               type="button"
               className="compact-button"

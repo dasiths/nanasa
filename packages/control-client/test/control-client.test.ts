@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { NanasaControlClient, NanasaControlResources } from "../src/index.js";
+import { ControlClientError, NanasaControlClient, NanasaControlResources } from "../src/index.js";
 
 function response(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -10,6 +10,55 @@ function response(payload: unknown, status = 200): Response {
 }
 
 describe("NanasaControlClient", () => {
+  it("normalizes current and legacy error responses", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(
+        response(
+          {
+            message: "The configured command is unsupported",
+            details: { snapshotDigest: "abc123" },
+            code: "provider_command_unrecognized",
+          },
+          409,
+        ),
+      )
+      .mockResolvedValueOnce(
+        response(
+          {
+            version: 1,
+            requestId: "legacy-request",
+            error: {
+              message: "Legacy failure",
+              code: "legacy_failure",
+              retryable: false,
+            },
+          },
+          400,
+        ),
+      );
+    const client = new NanasaControlClient({ fetch, operatorToken: "operator-token" });
+
+    const current = await client
+      .request("/api/v1/current", z.never())
+      .catch((error: unknown) => error);
+    expect(current).toBeInstanceOf(ControlClientError);
+    expect((current as ControlClientError).toPayload()).toEqual({
+      message: "The configured command is unsupported",
+      details: { snapshotDigest: "abc123" },
+      code: "provider_command_unrecognized",
+    });
+
+    const legacy = await client
+      .request("/api/v1/legacy", z.never())
+      .catch((error: unknown) => error);
+    expect((legacy as ControlClientError).toPayload()).toEqual({
+      message: "Legacy failure",
+      details: {},
+      code: "legacy_failure",
+    });
+  });
+
   it("removes and exchanges a one-use bootstrap fragment before authenticated requests", async () => {
     const replaceLocation = vi.fn();
     const fetch = vi
@@ -86,5 +135,72 @@ describe("NanasaControlClient", () => {
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer operator-token");
     expect(new Headers(init?.headers).get("idempotency-key")).toBe("worktree-key");
     expect(JSON.parse(String(init?.body))).toMatchObject({ branch: "feature/typed-client" });
+  });
+
+  it("lists launch consent requests through the typed operator resource", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(response([]));
+    const resources = new NanasaControlResources(
+      new NanasaControlClient({
+        fetch,
+        baseUrl: "http://127.0.0.1:3210",
+        operatorToken: "operator-token",
+      }),
+    );
+
+    await expect(resources.operations.listLaunchConsents("pending")).resolves.toEqual([]);
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      "http://127.0.0.1:3210/api/v1/launch-consents?state=pending",
+    );
+    expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer operator-token",
+    );
+  });
+
+  it("recovers group and agent runs through typed provider update methods", async () => {
+    const digest = "a".repeat(64);
+    const outcome = {
+      runId: "run-one",
+      generation: 1,
+      memberId: "member-one",
+      providerId: "copilot",
+      previousSnapshotDigest: digest,
+      currentSnapshotDigest: digest,
+      status: "retained",
+    };
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(response({ groupId: "group-one", dryRun: true, outcomes: [outcome] }))
+      .mockResolvedValueOnce(response(outcome));
+    const resources = new NanasaControlResources(
+      new NanasaControlClient({
+        fetch,
+        baseUrl: "http://127.0.0.1:3210",
+        operatorToken: "operator-token",
+      }),
+    );
+
+    await expect(
+      resources.operations.recoverGroupRuns("group-one", {
+        dryRun: true,
+        forceIndeterminate: false,
+      }),
+    ).resolves.toMatchObject({ dryRun: true, outcomes: [{ status: "retained" }] });
+    await expect(
+      resources.operations.recoverAgentRun("group-one", "agent-one", {
+        dryRun: false,
+        forceIndeterminate: true,
+      }),
+    ).resolves.toMatchObject({ status: "retained" });
+
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      "http://127.0.0.1:3210/api/v1/groups/group-one/runs/recover",
+    );
+    expect(fetch.mock.calls[1]?.[0]).toBe(
+      "http://127.0.0.1:3210/api/v1/groups/group-one/agents/agent-one/run/recover",
+    );
+    expect(JSON.parse(String(fetch.mock.calls[1]?.[1]?.body))).toEqual({
+      dryRun: false,
+      forceIndeterminate: true,
+    });
   });
 });

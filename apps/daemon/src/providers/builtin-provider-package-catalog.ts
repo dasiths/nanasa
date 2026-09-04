@@ -5,8 +5,8 @@ import {
   canonicalProviderSnapshotBytes,
   digestProviderSnapshot,
   ImmutableAssetReferenceSchema,
-  ProviderPackageManifestSchema,
   type ProviderGrant,
+  ProviderPackageManifestSchema,
   ProviderPackageRecordSchema,
   ResolvedProviderAdapterSnapshotSchema,
 } from "@nanasa/contracts";
@@ -104,7 +104,6 @@ function assetReferences(assets: readonly ProviderAssetContent[]) {
 async function buildTrustedBuiltin(spec: BuiltInSpec): Promise<TrustedBuiltInProviderPackage> {
   const assets = assetReferences(spec.assets);
   const extensionId = `nanasa.${spec.providerId}`;
-  const extensionGeneration = `${extensionId}@${BUILTIN_PACKAGE_VERSION}+builtin.1`;
   const packageDigest = sha256(
     canonicalJsonBytes({
       providerId: spec.providerId,
@@ -113,6 +112,7 @@ async function buildTrustedBuiltin(spec: BuiltInSpec): Promise<TrustedBuiltInPro
       assets,
     }),
   );
+  const extensionGeneration = `${extensionId}@${BUILTIN_PACKAGE_VERSION}+builtin.${packageDigest.slice(0, 16)}`;
   const manifestDigest = sha256(
     canonicalJsonBytes({
       packageDigest,
@@ -219,7 +219,6 @@ async function buildTrustedBuiltin(spec: BuiltInSpec): Promise<TrustedBuiltInPro
 function baseCapabilities(input: {
   readonly providerId: BuiltInSpec["providerId"];
   readonly adapterId: string;
-  readonly configuredCommandMatchers: readonly Record<string, unknown>[];
   readonly observedProcessMatchers: readonly Record<string, unknown>[];
   readonly launch: Record<string, unknown>;
   readonly state: Record<string, unknown>;
@@ -245,7 +244,6 @@ function baseCapabilities(input: {
       ownedNamespaces: [input.providerId],
     }),
     capability("recognition", {
-      configuredCommandMatchers: input.configuredCommandMatchers,
       observedProcessMatchers: input.observedProcessMatchers,
       maximumWrapperDepth: input.providerId === "claude-code" ? 1 : 0,
     }),
@@ -473,23 +471,10 @@ function claudeSpec(): BuiltInSpec {
   const capabilities = baseCapabilities({
     providerId: "claude-code",
     adapterId: "nanasa.claude-code-v2",
-    configuredCommandMatchers: [
-      {
-        executableNames: ["claude", "claude.exe"],
-        requiredArgvLiterals: [],
-        wrapperExecutableNames: [],
-      },
-      {
-        executableNames: ["claude-copilot"],
-        requiredArgvLiterals: ["claude-copilot"],
-        wrapperExecutableNames: ["make"],
-      },
-    ],
     observedProcessMatchers: [
       {
         executableNames: ["claude", "claude.exe"],
         requiredArgvLiterals: [],
-        wrapperExecutableNames: [],
       },
     ],
     launch: {
@@ -501,8 +486,6 @@ function claudeSpec(): BuiltInSpec {
         "optional:claude-session",
         "optional:claude-model",
       ],
-      wrapperArgumentSlot: 2,
-      wrapperArgumentPrefix: "CLAUDE_ARGS=",
       environmentNames: ["CLAUDE_CONFIG_DIR"],
       files: [
         {
@@ -612,7 +595,7 @@ function claudeSpec(): BuiltInSpec {
         "claude.mcp.config",
         "claude.prompt.system",
       ],
-      executableNames: ["claude", "claude.exe", "make"],
+      executableNames: ["claude", "claude.exe"],
       slotId: "provider-credentials",
       targetNames: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"],
     }),
@@ -684,12 +667,7 @@ function piSpec(): BuiltInSpec {
   const capabilities = baseCapabilities({
     providerId: "pi",
     adapterId: "nanasa.pi-v2",
-    configuredCommandMatchers: [
-      { executableNames: ["pi", "pi.exe"], requiredArgvLiterals: [], wrapperExecutableNames: [] },
-    ],
-    observedProcessMatchers: [
-      { executableNames: ["pi", "pi.exe"], requiredArgvLiterals: [], wrapperExecutableNames: [] },
-    ],
+    observedProcessMatchers: [{ executableNames: ["pi", "pi.exe"], requiredArgvLiterals: [] }],
     launch: {
       executableSlot: "configured-command",
       argumentTemplate: [
@@ -900,18 +878,10 @@ function openCodeSpec(): BuiltInSpec {
   const capabilities = baseCapabilities({
     providerId: "opencode",
     adapterId: "nanasa.opencode-v2",
-    configuredCommandMatchers: [
-      {
-        executableNames: ["opencode", "opencode.exe"],
-        requiredArgvLiterals: [],
-        wrapperExecutableNames: [],
-      },
-    ],
     observedProcessMatchers: [
       {
         executableNames: ["opencode", "opencode.exe"],
         requiredArgvLiterals: [],
-        wrapperExecutableNames: [],
       },
     ],
     launch: {

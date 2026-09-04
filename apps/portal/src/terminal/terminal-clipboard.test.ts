@@ -54,21 +54,26 @@ describe("terminal clipboard policy", () => {
     expect(document.querySelector('textarea[aria-hidden="true"]')).toBeNull();
   });
 
-  it("copies a mouse selection when the selection is completed", () => {
+  it("copies a mouse selection after xterm completes the selection", async () => {
     const element = document.createElement("div");
+    const xtermScreen = document.createElement("div");
+    element.append(xtermScreen);
     document.body.append(element);
     let selected = false;
     const copy = vi.fn();
     const remove = installCopyOnSelect(element, { hasSelection: () => selected } as never, copy);
+    xtermScreen.addEventListener("mousedown", (event) => event.stopPropagation());
 
-    element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+    xtermScreen.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
     selected = true;
     document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
+    await Promise.resolve();
     expect(copy).toHaveBeenCalledOnce();
 
     remove();
-    element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+    xtermScreen.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
     document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0 }));
+    await Promise.resolve();
     expect(copy).toHaveBeenCalledOnce();
     element.remove();
   });

@@ -59,12 +59,14 @@ export function installCopyOnSelect(
   const onMouseUp = () => {
     if (!selecting) return;
     selecting = false;
-    if (terminal.hasSelection()) copy();
+    queueMicrotask(() => {
+      if (terminal.hasSelection()) copy();
+    });
   };
-  element.addEventListener("mousedown", onMouseDown);
+  element.addEventListener("mousedown", onMouseDown, true);
   element.ownerDocument.addEventListener("mouseup", onMouseUp);
   return () => {
-    element.removeEventListener("mousedown", onMouseDown);
+    element.removeEventListener("mousedown", onMouseDown, true);
     element.ownerDocument.removeEventListener("mouseup", onMouseUp);
   };
 }

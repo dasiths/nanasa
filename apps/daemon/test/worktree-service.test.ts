@@ -127,7 +127,14 @@ describe("managed worktree ownership", () => {
       const config = NanasaConfigSchema.parse({
         version: 2,
         integrations: {
-          test: { id: "test", name: "Test", kind: "pi", command: ["pi"], cwd: context.repository },
+          test: {
+            id: "test",
+            name: "Test",
+            kind: "pi",
+            command: ["pi"],
+            commandSource: "builtin",
+            cwd: context.repository,
+          },
         },
         groups: {
           team: {

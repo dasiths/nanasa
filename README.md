@@ -63,6 +63,7 @@ initializing a repository.
 * [Install Nanasa](docs/next/getting-started/install.md)
 * [Complete the quickstart](docs/next/getting-started/quickstart.md)
 * [Configure teams and providers](docs/next/guides/configuration.md)
+* [Coordinate multiple coding-agent providers](docs/next/examples/multi-coding-agents.md)
 * [Solve common problems](docs/next/troubleshooting/index.md)
 * [Contribute to Nanasa](docs/next/development/contributing.md)
 

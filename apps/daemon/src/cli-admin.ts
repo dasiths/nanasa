@@ -18,6 +18,17 @@ import {
 import { ProviderSnapshotEvaluator } from "./providers/provider-snapshot-evaluator.js";
 import { UserCredentialBroker } from "./user-credential-broker.js";
 
+export class CliAdminError extends Error {
+  public constructor(
+    public readonly code: string,
+    message: string,
+    public readonly details: Readonly<Record<string, unknown>> = {},
+  ) {
+    super(message);
+    this.name = "CliAdminError";
+  }
+}
+
 const DIRECTORY_MODE = 0o700;
 
 function inspectHostSupport(problems: string[]): void {
@@ -175,9 +186,10 @@ export function doctorIntegrations(repositoryRoot: string): void {
     }
   }
   if (problems.length > 0) {
-    for (const problem of problems) process.stderr.write(`ERROR ${problem}\n`);
-    throw new Error(
+    throw new CliAdminError(
+      "doctor_failed",
       `Nanasa doctor found ${problems.length} problem${problems.length === 1 ? "" : "s"}`,
+      { problems },
     );
   }
   process.stdout.write(

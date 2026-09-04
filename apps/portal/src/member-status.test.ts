@@ -66,17 +66,19 @@ const expectedPresentation: Record<
   MemberStatusKey,
   { label: string; rank: number; attentionWorthy: boolean }
 > = {
-  failed: { label: "Failed", rank: 1, attentionWorthy: true },
-  "needs-approval": { label: "Needs approval", rank: 2, attentionWorthy: true },
-  "needs-input": { label: "Needs input", rank: 3, attentionWorthy: true },
-  stuck: { label: "Stuck", rank: 4, attentionWorthy: true },
-  starting: { label: "Starting", rank: 5, attentionWorthy: false },
-  working: { label: "Working", rank: 6, attentionWorthy: false },
-  done: { label: "Done", rank: 7, attentionWorthy: true },
-  idle: { label: "Idle", rank: 8, attentionWorthy: false },
-  stopped: { label: "Stopped", rank: 9, attentionWorthy: false },
-  "not-started": { label: "Not started", rank: 10, attentionWorthy: false },
-  unknown: { label: "Unknown", rank: 11, attentionWorthy: false },
+  "needs-help": { label: "Needs help", rank: 1, attentionWorthy: true },
+  failed: { label: "Failed", rank: 2, attentionWorthy: true },
+  "needs-approval": { label: "Needs approval", rank: 3, attentionWorthy: true },
+  "needs-input": { label: "Needs input", rank: 4, attentionWorthy: true },
+  stuck: { label: "Stuck", rank: 5, attentionWorthy: true },
+  updating: { label: "Updating", rank: 6, attentionWorthy: false },
+  starting: { label: "Starting", rank: 7, attentionWorthy: false },
+  working: { label: "Working", rank: 8, attentionWorthy: false },
+  done: { label: "Done", rank: 9, attentionWorthy: true },
+  idle: { label: "Idle", rank: 10, attentionWorthy: false },
+  stopped: { label: "Stopped", rank: 11, attentionWorthy: false },
+  "not-started": { label: "Not started", rank: 12, attentionWorthy: false },
+  unknown: { label: "Unknown", rank: 13, attentionWorthy: false },
 };
 
 describe("memberStatusView", () => {
@@ -137,6 +139,61 @@ describe("memberStatusView", () => {
     expect(memberStatusView([status({ attention: "process_failed" })], [run()], member).key).toBe(
       "failed",
     );
+  });
+
+  it("projects provider updates ahead of stale runtime status", () => {
+    const transition = {
+      id: "provider-update-one",
+      runId: "run-one",
+      generation: 1,
+      memberId: member.memberId,
+      providerId: "copilot",
+      previousSnapshotDigest: "a".repeat(64),
+      currentSnapshotDigest: "b".repeat(64),
+      state: "in-progress" as const,
+      detectedAt: timestamp,
+      updatedAt: timestamp,
+    };
+
+    expect(
+      memberStatusView(
+        [status({ state: "failed" })],
+        [run({ providerUpdate: transition })],
+        member,
+      ),
+    ).toMatchObject({ key: "updating", label: "Updating", attentionWorthy: false });
+    expect(
+      memberStatusView(
+        [status({ state: "failed" })],
+        [
+          run({
+            providerUpdate: {
+              ...transition,
+              state: "completed",
+              outcome: "ownership-uncertain",
+              completedAt: timestamp,
+            },
+          }),
+        ],
+        member,
+      ),
+    ).toMatchObject({ key: "needs-help", label: "Needs help", attentionWorthy: true });
+    expect(
+      memberStatusView(
+        [status({ state: "failed" })],
+        [
+          run({
+            providerUpdate: {
+              ...transition,
+              state: "completed",
+              outcome: "approval-required",
+              completedAt: timestamp,
+            },
+          }),
+        ],
+        member,
+      ).key,
+    ).toBe("needs-approval");
   });
 
   it("gives approval precedence over defensive blocked and input states", () => {

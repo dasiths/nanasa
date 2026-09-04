@@ -47,8 +47,15 @@ logging or rendering the clipboard payload.
 
 ## Control notifications
 
-Completion notifications are off by default and can be enabled per agent from
-its terminal toolbar. They affect future quiet in-app or silent desktop notices,
-not status or attention counts. Attention sound has a separate default-off
-setting, requires prior browser activation, and deduplicates the same urgent
-item across same-origin tabs.
+Completion alerts are off by default and can be enabled per agent from its
+terminal toolbar. They affect future quiet in-app or silent desktop notices,
+not status or the durable Attention inbox. Completed work remains in Attention
+until it is acknowledged, individually or in bulk, even if the agent starts
+another turn. Informational provider updates can be dismissed in bulk.
+Attention sound has a separate default-off setting, requires prior browser
+activation, and deduplicates the same urgent item across same-origin tabs.
+
+Every Attention item and visible category can also be dismissed locally.
+Dismissal hides the current item in that browser without resolving, cancelling,
+or acknowledging the underlying record. A new completion revision, incident,
+wait, or action identity appears as a new item.

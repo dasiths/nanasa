@@ -13,6 +13,12 @@ response schemas, body limits, errors, and OpenAPI metadata.
 See the generated [OpenAPI registry](openapi.json) and
 [errors and limits](errors-limits.json).
 
+HTTP errors use one flat response shape with `message`, `details`, and `code`.
+Messages are safe to display, codes are stable identifiers, and details contain
+structured diagnostics such as validation issues. Request correlation remains
+in the `X-Request-Id` response header. Protocol-specific transports such as MCP
+retain their required outer envelopes.
+
 ### Idempotency
 
 The OpenAPI `x-idempotency` value is a capability boundary. An `optional` or

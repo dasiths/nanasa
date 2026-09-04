@@ -1,6 +1,7 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { type ErrorPayload, ErrorPayloadSchema } from "@nanasa/contracts";
 import { assertLoopbackControlHost } from "./authority-policy.js";
 import { discoverAndLoadNanasaConfig, loadNanasaConfig } from "./config-loader.js";
 import { isLoopbackHost, validateMcpEndpointConfiguration } from "./mcp-config.js";
@@ -15,6 +16,13 @@ export {
 } from "./config-loader.js";
 export { createDaemon } from "./server.js";
 export { DomainError, NanasaStore } from "./store.js";
+
+export function daemonStartupErrorPayload(error: unknown): ErrorPayload {
+  return ErrorPayloadSchema.parse({
+    message: error instanceof Error ? error.message : "The daemon could not be started",
+    code: "daemon_start_failed",
+  });
+}
 
 function configuredPort(value: string | undefined): number {
   const port = value === undefined ? 3210 : Number(value);
@@ -104,6 +112,16 @@ async function start(): Promise<void> {
     loadedConfig.runtimeDirectory;
   const tmuxServerName = process.env.NANASA_TMUX_SERVER ?? "nanasa";
   const mcpEnabled = configuredBoolean("NANASA_MCP_ENABLED", process.env.NANASA_MCP_ENABLED, false);
+  const allowAutonomous = configuredBoolean(
+    "NANASA_ALLOW_AUTONOMOUS",
+    process.env.NANASA_ALLOW_AUTONOMOUS,
+    false,
+  );
+  const allowProviderFiles = configuredBoolean(
+    "NANASA_ALLOW_PROVIDER_FILES",
+    process.env.NANASA_ALLOW_PROVIDER_FILES,
+    false,
+  );
   const mcpPath = process.env.NANASA_MCP_PATH ?? "/mcp";
   const mcpOperatorToken = process.env.NANASA_MCP_OPERATOR_TOKEN;
   const mcpEndpointUrl =
@@ -142,6 +160,7 @@ async function start(): Promise<void> {
       ...(mcpOperatorToken === undefined ? {} : { operatorToken: mcpOperatorToken }),
       allowedHostnames: [new URL(mcpEndpointUrl).hostname],
     },
+    providerPolicy: { allowAutonomous, allowProviderFiles },
   });
 
   const close = async () => {
@@ -162,7 +181,7 @@ async function start(): Promise<void> {
 const entryPoint = process.argv[1];
 if (entryPoint !== undefined && import.meta.url === pathToFileURL(entryPoint).href) {
   start().catch((error: unknown) => {
-    console.error(error);
+    process.stderr.write(`${JSON.stringify(daemonStartupErrorPayload(error))}\n`);
     process.exitCode = 1;
   });
 }

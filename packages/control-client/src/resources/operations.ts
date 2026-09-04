@@ -9,11 +9,29 @@ import {
   AgentStatusDetailSchema,
   type AgentStatusSummary,
   AgentStatusSummarySchema,
+  type ApproveCustomLaunchConsentCommand,
+  type AttentionDismissalList,
+  AttentionDismissalListSchema,
+  type AttentionEventType,
+  type AttentionSubscriptionsSnapshot,
+  AttentionSubscriptionsSnapshotSchema,
+  type CancelCustomLaunchConsentCommand,
   type ClearMessageHistoryResult,
   ClearMessageHistoryResultSchema,
   type CreateAgentActionCommand,
+  type CustomLaunchConsentDecision,
+  type CustomLaunchConsentDecisionResult,
+  CustomLaunchConsentDecisionResultSchema,
+  CustomLaunchConsentDecisionSchema,
+  type CustomLaunchConsentRequest,
+  CustomLaunchConsentRequestListSchema,
+  CustomLaunchConsentRequestSchema,
   type DeliveryOutcome,
   DeliveryOutcomeSchema,
+  type DenyCustomLaunchConsentCommand,
+  type DismissAttentionItemsCommand,
+  type MemberAttentionSubscriptions,
+  MemberAttentionSubscriptionsSchema,
   type MessagePage,
   MessagePageSchema,
   type MessageSubmissionResult,
@@ -22,7 +40,16 @@ import {
   OpenWaitSchema,
   type ProviderStateBinding,
   ProviderStateBindingSchema,
+  type ProviderUpdateOutcome,
+  ProviderUpdateOutcomeSchema,
+  type ProviderUpdateRecoveryCommand,
+  type ProviderUpdateRecoveryResult,
+  ProviderUpdateRecoveryResultSchema,
   type ReplyOpenWaitCommand,
+  type RevokeCustomLaunchConsentCommand,
+  type SetAttentionSubscriptionCommand,
+  type StartAgentRunResult,
+  StartAgentRunResultSchema,
   type StartGroupRunsResult,
   StartGroupRunsResultSchema,
   type SubmitMessageCommand,
@@ -50,11 +77,16 @@ export class OperationsResource {
     return request(this.client, path("runs", runId), AgentRunSchema);
   }
 
-  public startRun(groupId: string, agentId: string, size: object, key?: string): Promise<AgentRun> {
+  public startRun(
+    groupId: string,
+    agentId: string,
+    size: object,
+    key?: string,
+  ): Promise<StartAgentRunResult> {
     return request(
       this.client,
       path("groups", groupId, "agents", agentId, "run"),
-      AgentRunSchema,
+      StartAgentRunResultSchema,
       commandInit("POST", size, key),
     );
   }
@@ -73,11 +105,11 @@ export class OperationsResource {
     );
   }
 
-  public restartRun(runId: string, size: object, key?: string): Promise<AgentRun> {
+  public restartRun(runId: string, size: object, key?: string): Promise<StartAgentRunResult> {
     return request(
       this.client,
       path("runs", runId, "restart"),
-      AgentRunSchema,
+      StartAgentRunResultSchema,
       commandInit("POST", size, key),
     );
   }
@@ -100,12 +132,37 @@ export class OperationsResource {
     );
   }
 
-  public restartAll(groupId: string, size: object, key?: string): Promise<AgentRun[]> {
+  public restartAll(groupId: string, size: object, key?: string): Promise<StartGroupRunsResult> {
     return request(
       this.client,
       path("groups", groupId, "runs", "restart-all"),
-      AgentRunSchema.array(),
+      StartGroupRunsResultSchema,
       commandInit("POST", size, key),
+    );
+  }
+
+  public recoverGroupRuns(
+    groupId: string,
+    command: ProviderUpdateRecoveryCommand,
+  ): Promise<ProviderUpdateRecoveryResult> {
+    return request(
+      this.client,
+      path("groups", groupId, "runs", "recover"),
+      ProviderUpdateRecoveryResultSchema,
+      commandInit("POST", command),
+    );
+  }
+
+  public recoverAgentRun(
+    groupId: string,
+    agentId: string,
+    command: ProviderUpdateRecoveryCommand,
+  ): Promise<ProviderUpdateOutcome> {
+    return request(
+      this.client,
+      path("groups", groupId, "agents", agentId, "run", "recover"),
+      ProviderUpdateOutcomeSchema,
+      commandInit("POST", command),
     );
   }
 
@@ -142,6 +199,58 @@ export class OperationsResource {
       path("groups", groupId, "members", memberId, "status", "acknowledge"),
       AgentStatusDetailSchema,
       commandInit("POST", {}, key),
+    );
+  }
+
+  public listAttentionDismissals(): Promise<AttentionDismissalList> {
+    return request(this.client, path("attention-dismissals"), AttentionDismissalListSchema);
+  }
+
+  public dismissAttentionItems(
+    command: DismissAttentionItemsCommand,
+    key?: string,
+  ): Promise<AttentionDismissalList> {
+    return request(
+      this.client,
+      path("attention-dismissals"),
+      AttentionDismissalListSchema,
+      commandInit("POST", command, key),
+    );
+  }
+
+  public listAttentionSubscriptions(): Promise<AttentionSubscriptionsSnapshot> {
+    return request(
+      this.client,
+      path("attention-subscriptions"),
+      AttentionSubscriptionsSnapshotSchema,
+    );
+  }
+
+  public setAttentionSubscription(
+    groupId: string,
+    memberId: string,
+    eventType: AttentionEventType,
+    command: SetAttentionSubscriptionCommand,
+    key?: string,
+  ): Promise<MemberAttentionSubscriptions> {
+    return request(
+      this.client,
+      path("groups", groupId, "members", memberId, "attention-subscriptions", eventType),
+      MemberAttentionSubscriptionsSchema,
+      commandInit("PUT", command, key),
+    );
+  }
+
+  public resetAttentionSubscriptions(
+    groupId: string,
+    memberId: string,
+    key?: string,
+  ): Promise<MemberAttentionSubscriptions> {
+    return request(
+      this.client,
+      path("groups", groupId, "members", memberId, "attention-subscriptions"),
+      MemberAttentionSubscriptionsSchema,
+      commandInit("DELETE", {}, key),
     );
   }
 
@@ -265,6 +374,72 @@ export class OperationsResource {
       path("provider-states", bindingId),
       ProviderStateBindingSchema,
       commandInit("DELETE", {}, key),
+    );
+  }
+
+  public listLaunchConsents(
+    state?: CustomLaunchConsentRequest["state"],
+  ): Promise<CustomLaunchConsentRequest[]> {
+    return request(
+      this.client,
+      `${path("launch-consents")}${query({ state })}`,
+      CustomLaunchConsentRequestListSchema,
+    );
+  }
+
+  public getLaunchConsent(requestId: string): Promise<CustomLaunchConsentRequest> {
+    return request(
+      this.client,
+      path("launch-consents", requestId),
+      CustomLaunchConsentRequestSchema,
+    );
+  }
+
+  public approveLaunchConsent(
+    requestId: string,
+    command: ApproveCustomLaunchConsentCommand,
+  ): Promise<CustomLaunchConsentDecisionResult> {
+    return request(
+      this.client,
+      path("launch-consents", requestId, "approve"),
+      CustomLaunchConsentDecisionResultSchema,
+      commandInit("POST", command),
+    );
+  }
+
+  public denyLaunchConsent(
+    requestId: string,
+    command: DenyCustomLaunchConsentCommand,
+  ): Promise<CustomLaunchConsentDecisionResult> {
+    return request(
+      this.client,
+      path("launch-consents", requestId, "deny"),
+      CustomLaunchConsentDecisionResultSchema,
+      commandInit("POST", command),
+    );
+  }
+
+  public cancelLaunchConsent(
+    requestId: string,
+    command: CancelCustomLaunchConsentCommand,
+  ): Promise<CustomLaunchConsentRequest> {
+    return request(
+      this.client,
+      path("launch-consents", requestId, "cancel"),
+      CustomLaunchConsentRequestSchema,
+      commandInit("POST", command),
+    );
+  }
+
+  public revokeLaunchConsent(
+    receiptId: string,
+    command: RevokeCustomLaunchConsentCommand,
+  ): Promise<CustomLaunchConsentDecision> {
+    return request(
+      this.client,
+      path("trust", receiptId, "revoke"),
+      CustomLaunchConsentDecisionSchema,
+      commandInit("POST", command),
     );
   }
 

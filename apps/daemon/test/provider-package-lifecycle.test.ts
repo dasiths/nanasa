@@ -42,18 +42,10 @@ describe("signed provider package lifecycle", () => {
         return {
           ...capability,
           payload: {
-            configuredCommandMatchers: [
-              {
-                executableNames: ["fifth"],
-                requiredArgvLiterals: [],
-                wrapperExecutableNames: [],
-              },
-            ],
             observedProcessMatchers: [
               {
                 executableNames: ["fifth"],
                 requiredArgvLiterals: [],
-                wrapperExecutableNames: [],
               },
             ],
             maximumWrapperDepth: 0,
@@ -163,7 +155,6 @@ describe("signed provider package lifecycle", () => {
       state: "active",
     });
     const evaluator = new ProviderSnapshotEvaluator(installed.resolved, installed.reporterDrivers);
-    expect(evaluator.matchesConfiguredCommand(["fifth"])).toBe(true);
     expect(
       evaluator.launch({
         membershipId: "membership-one",
@@ -172,9 +163,11 @@ describe("signed provider package lifecycle", () => {
         overlayRoot: "/overlay/fifth",
         statusEndpointUrl: "http://127.0.0.1:3210/status",
         readOnly: false,
-        configuredCommand: ["fifth"],
-      }).command[0],
-    ).toBe("fifth");
+        configuredCommand: ["sh", "custom-fifth"],
+      }).command,
+    ).toEqual(["sh", "custom-fifth"]);
+    expect(evaluator.matchesObservedProcess(["fifth"], "/opt/bin/fifth")).toBe(true);
+    expect(evaluator.matchesObservedProcess(["sh", "custom-fifth"], "/usr/bin/sh")).toBe(false);
 
     lifecycle.disable("acme.fifth");
     expect(() => index.get("acme.fifth")).toThrow(/not active/);

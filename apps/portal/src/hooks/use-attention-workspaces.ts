@@ -1,17 +1,14 @@
 import type { AgentActionWorkspace } from "@nanasa/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PortalClient } from "../api.js";
+import { type PortalError, toPortalError } from "../errors.js";
 
 export interface AttentionWorkspaceState {
   workspaces: ReadonlyMap<string, AgentActionWorkspace>;
   loadingGroupIds: ReadonlySet<string>;
-  errors: ReadonlyMap<string, string>;
+  errors: ReadonlyMap<string, PortalError>;
   ready: boolean;
   reloadGroup(groupId: string): Promise<void>;
-}
-
-function errorMessage(cause: unknown): string {
-  return cause instanceof Error ? cause.message : "Unable to load Attention details";
 }
 
 export function useAttentionWorkspaces(
@@ -28,7 +25,7 @@ export function useAttentionWorkspaces(
   );
   const [workspaces, setWorkspaces] = useState<Map<string, AgentActionWorkspace>>(new Map());
   const [loadingGroupIds, setLoadingGroupIds] = useState<Set<string>>(new Set());
-  const [errors, setErrors] = useState<Map<string, string>>(new Map());
+  const [errors, setErrors] = useState<Map<string, PortalError>>(new Map());
   const [settledRequestKey, setSettledRequestKey] = useState<string>();
   const generationRef = useRef(0);
   const requestedRef = useRef<ReadonlySet<string>>(new Set());
@@ -63,7 +60,12 @@ export function useAttentionWorkspaces(
         new Map(
           results.flatMap((result, index) =>
             result.status === "rejected"
-              ? [[requestedGroupIds[index]!, errorMessage(result.reason)] as const]
+              ? [
+                  [
+                    requestedGroupIds[index]!,
+                    toPortalError(result.reason, "Unable to load Attention details"),
+                  ] as const,
+                ]
               : [],
           ),
         ),
@@ -89,7 +91,9 @@ export function useAttentionWorkspaces(
         });
       } catch (cause) {
         if (generationRef.current !== generation || !requestedRef.current.has(groupId)) return;
-        setErrors((current) => new Map(current).set(groupId, errorMessage(cause)));
+        setErrors((current) =>
+          new Map(current).set(groupId, toPortalError(cause, "Unable to load Attention details")),
+        );
       } finally {
         if (generationRef.current === generation && requestedRef.current.has(groupId)) {
           setLoadingGroupIds((current) => {

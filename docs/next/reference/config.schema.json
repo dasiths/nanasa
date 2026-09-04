@@ -135,6 +135,49 @@
           "maxLength": 4096
         }
       },
+      "executionProfiles": {
+        "default": {},
+        "type": "object",
+        "propertyNames": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "continuation": {
+              "type": "string",
+              "enum": [
+                "interactive",
+                "autonomous"
+              ]
+            },
+            "questions": {
+              "type": "string",
+              "enum": [
+                "enabled",
+                "disabled"
+              ]
+            },
+            "approvals": {
+              "type": "string",
+              "enum": [
+                "provider-default",
+                "allow-known",
+                "unrestricted"
+              ]
+            }
+          },
+          "required": [
+            "continuation",
+            "questions",
+            "approvals"
+          ],
+          "additionalProperties": false
+        }
+      },
       "integrations": {
         "type": "object",
         "propertyNames": {
@@ -169,6 +212,41 @@
                 "minLength": 1,
                 "maxLength": 4096
               }
+            },
+            "launcher": {
+              "type": "object",
+              "properties": {
+                "providerArguments": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "const": "append"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "environment"
+                        },
+                        "name": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "providerArguments"
+              ],
+              "additionalProperties": false
             },
             "cwd": {
               "type": "string",
@@ -315,6 +393,43 @@
               ],
               "additionalProperties": false
             },
+            "executionProfile": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+            },
+            "providerFiles": {
+              "type": "object",
+              "properties": {
+                "mcp": {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "default": "append",
+                      "type": "string",
+                      "enum": [
+                        "append",
+                        "replace",
+                        "disabled"
+                      ]
+                    },
+                    "paths": {
+                      "default": [],
+                      "maxItems": 16,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4096
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
             "extensions": {
               "default": [],
               "maxItems": 32,
@@ -341,8 +456,7 @@
           },
           "required": [
             "name",
-            "kind",
-            "command"
+            "kind"
           ],
           "additionalProperties": false
         }
@@ -542,6 +656,68 @@
                       "maxLength": 4096
                     }
                   },
+                  "providerFiles": {
+                    "type": "object",
+                    "properties": {
+                      "mcp": {
+                        "type": "object",
+                        "properties": {
+                          "mode": {
+                            "default": "append",
+                            "type": "string",
+                            "enum": [
+                              "append",
+                              "replace",
+                              "disabled"
+                            ]
+                          },
+                          "paths": {
+                            "default": [],
+                            "maxItems": 16,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 4096
+                            }
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "attention": {
+                    "default": {},
+                    "type": "object",
+                    "properties": {
+                      "response-required": {
+                        "type": "boolean"
+                      },
+                      "agent-health": {
+                        "type": "boolean"
+                      },
+                      "completion": {
+                        "type": "boolean"
+                      },
+                      "delivery-failure": {
+                        "type": "boolean"
+                      },
+                      "action-state": {
+                        "type": "boolean"
+                      },
+                      "provider-update-failed": {
+                        "type": "boolean"
+                      },
+                      "provider-update-succeeded": {
+                        "type": "boolean"
+                      },
+                      "unread-message": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
                   "order": {
                     "type": "integer",
                     "minimum": 0,
@@ -574,6 +750,74 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 100000
+          }
+        },
+        "additionalProperties": false
+      },
+      "attention": {
+        "default": {
+          "defaults": {
+            "response-required": true,
+            "agent-health": true,
+            "completion": true,
+            "delivery-failure": true,
+            "action-state": false,
+            "provider-update-failed": true,
+            "provider-update-succeeded": false,
+            "unread-message": false
+          }
+        },
+        "type": "object",
+        "properties": {
+          "defaults": {
+            "default": {
+              "response-required": true,
+              "agent-health": true,
+              "completion": true,
+              "delivery-failure": true,
+              "action-state": false,
+              "provider-update-failed": true,
+              "provider-update-succeeded": false,
+              "unread-message": false
+            },
+            "type": "object",
+            "properties": {
+              "response-required": {
+                "type": "boolean"
+              },
+              "agent-health": {
+                "type": "boolean"
+              },
+              "completion": {
+                "type": "boolean"
+              },
+              "delivery-failure": {
+                "type": "boolean"
+              },
+              "action-state": {
+                "type": "boolean"
+              },
+              "provider-update-failed": {
+                "type": "boolean"
+              },
+              "provider-update-succeeded": {
+                "type": "boolean"
+              },
+              "unread-message": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "response-required",
+              "agent-health",
+              "completion",
+              "delivery-failure",
+              "action-state",
+              "provider-update-failed",
+              "provider-update-succeeded",
+              "unread-message"
+            ],
+            "additionalProperties": false
           }
         },
         "additionalProperties": false

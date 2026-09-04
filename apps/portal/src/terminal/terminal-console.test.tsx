@@ -101,7 +101,7 @@ afterEach(() => {
 });
 
 describe("TerminalConsole", () => {
-  it("places accessible icon actions in the mode bar and leaves right click to the TUI", async () => {
+  it("places accessible icon actions in the mode bar and keeps the browser context menu", async () => {
     const user = userEvent.setup();
     render(
       <TerminalConsole

@@ -55,6 +55,9 @@ interface ReconciledPaneStatus {
   deadTime: string;
 }
 
+export type ProviderUpdatePaneStopResult = "stopped" | "missing" | "ownership-uncertain";
+export type ProviderUpdatePaneInspection = "owned" | "missing" | "ownership-uncertain";
+
 const TERMINAL_SUBMIT_DELAY_MS = 500;
 
 function shellQuote(value: string): string {
@@ -137,7 +140,11 @@ export class TmuxRuntime {
   public async recoverRun(
     previous: AgentRun,
     size: { cols: number; rows: number },
-    options: { nativeSession?: NativeSessionReference; nativeSessionId?: string } = {},
+    options: {
+      nativeSession?: NativeSessionReference;
+      nativeSessionId?: string;
+      onReplacementCreated?: (run: AgentRun) => void;
+    } = {},
   ): Promise<AgentRun> {
     const current = this.#store.getRun(previous.id);
     if (
@@ -178,7 +185,83 @@ export class TmuxRuntime {
           : { nativeSessionId: options.nativeSessionId }),
       },
     );
+    options.onReplacementCreated?.(run);
     return this.#launchCreatedRun(run, profile, membership, size, options.nativeSession);
+  }
+
+  public async inspectProviderUpdatePane(
+    run: AgentRun,
+    options: { forceIndeterminate?: boolean } = {},
+  ): Promise<ProviderUpdatePaneInspection> {
+    const inspection = await this.#inspectProviderUpdatePane(run);
+    if (
+      inspection.status === "ownership-uncertain" &&
+      inspection.forceable === true &&
+      options.forceIndeterminate === true
+    ) {
+      return "owned";
+    }
+    return inspection.status;
+  }
+
+  public async stopProviderUpdatePane(
+    run: AgentRun,
+    options: { forceIndeterminate?: boolean } = {},
+  ): Promise<ProviderUpdatePaneStopResult> {
+    const inspection = await this.#inspectProviderUpdatePane(run);
+    if (inspection.status === "missing") return "missing";
+    if (
+      inspection.status === "ownership-uncertain" &&
+      (inspection.forceable !== true || options.forceIndeterminate !== true)
+    ) {
+      return "ownership-uncertain";
+    }
+    const binding = run.terminal!;
+    const stopped = await this.#tmux(["kill-pane", "-t", binding.paneId], true);
+    if (stopped.exitCode === 0 || stopped.stderr.includes("can't find pane")) return "stopped";
+    throw new Error(stopped.stderr.trim() || "tmux kill-pane failed");
+  }
+
+  async #inspectProviderUpdatePane(
+    run: AgentRun,
+  ): Promise<{ status: ProviderUpdatePaneInspection; forceable?: boolean }> {
+    const binding = run.terminal;
+    if (binding === undefined) return { status: "missing" };
+    if (binding.serverName !== this.serverName) return { status: "ownership-uncertain" };
+    let result: CommandOutput;
+    try {
+      result = await this.#tmux(
+        [
+          "list-panes",
+          "-a",
+          "-F",
+          "#{session_id}\t#{window_id}\t#{pane_id}\t#{pane_dead}\t#{@nanasa-run-id}\t#{@nanasa-generation}",
+        ],
+        true,
+      );
+    } catch {
+      return { status: "ownership-uncertain" };
+    }
+    if (result.exitCode !== 0) return { status: "missing" };
+    const pane = result.stdout
+      .trimEnd()
+      .split("\n")
+      .map((line) => line.split("\t"))
+      .find((fields) => fields[2] === binding.paneId);
+    if (pane === undefined) return { status: "missing" };
+    const [sessionId, windowId, paneId, dead, runId, generation] = pane;
+    if (
+      sessionId !== binding.sessionId ||
+      windowId !== binding.windowId ||
+      paneId !== binding.paneId ||
+      runId !== run.id ||
+      generation !== String(run.generation)
+    ) {
+      return { status: "ownership-uncertain" };
+    }
+    if (dead === "1") return { status: "missing" };
+    if (dead !== "0") return { status: "ownership-uncertain", forceable: true };
+    return { status: "owned" };
   }
 
   public async startConsole(
@@ -387,8 +470,8 @@ export class TmuxRuntime {
       });
     }
     if (result.exitCode !== 0) {
-      return runtimeObservation(run, "indeterminate", {
-        evidenceCode: `tmux_exit_${result.exitCode}`,
+      return runtimeObservation(run, "missing", {
+        evidenceCode: `tmux_server_unavailable_${result.exitCode}`,
       });
     }
     const pane = result.stdout

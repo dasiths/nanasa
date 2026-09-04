@@ -16,10 +16,10 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { gunzipSync } from "node:zlib";
 import {
-  ExtensionPackageSignatureSchema,
-  ProviderExtensionDescriptorSchema,
   type ExtensionPackageSignature,
+  ExtensionPackageSignatureSchema,
   type ProviderExtensionDescriptor,
+  ProviderExtensionDescriptorSchema,
 } from "@nanasa/contracts";
 import { isScalar, parseDocument, visit } from "yaml";
 
@@ -37,6 +37,7 @@ export class ExtensionPackageError extends Error {
   public constructor(
     public readonly code: string,
     message: string,
+    public readonly details: Readonly<Record<string, unknown>> = {},
   ) {
     super(message);
     this.name = "ExtensionPackageError";

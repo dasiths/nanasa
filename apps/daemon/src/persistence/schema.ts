@@ -1,6 +1,77 @@
-import { PROVIDER_PLATFORM_SCHEMA_SQL } from "./provider-platform-schema.js";
+import {
+  PROVIDER_PLATFORM_SCHEMA_SQL,
+  PROVIDER_UPDATE_TRANSITION_SCHEMA_SQL,
+} from "./provider-platform-schema.js";
 
-export const DATABASE_SCHEMA_VERSION = 10;
+export const DATABASE_SCHEMA_VERSION = 14;
+
+export const DATABASE_MIGRATION_13_TO_14_SQL = `
+  CREATE TABLE attention_subscription_overrides (
+    operator_id TEXT NOT NULL,
+    group_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    event_type TEXT NOT NULL CHECK (event_type IN (
+      'response-required', 'agent-health', 'completion', 'delivery-failure',
+      'action-state', 'provider-update-failed', 'provider-update-succeeded', 'unread-message'
+    )),
+    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (operator_id, group_id, member_id, event_type)
+  ) STRICT;
+
+  CREATE INDEX attention_subscription_overrides_member
+    ON attention_subscription_overrides (group_id, member_id, operator_id);
+`;
+
+export const DATABASE_MIGRATION_12_TO_13_SQL = `
+  CREATE TABLE attention_dismissals (
+    operator_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    dismissed_at TEXT NOT NULL,
+    PRIMARY KEY (operator_id, item_id)
+  ) STRICT;
+
+  CREATE INDEX attention_dismissals_operator_recency
+    ON attention_dismissals (operator_id, dismissed_at DESC);
+`;
+
+export const DATABASE_MIGRATION_11_TO_12_SQL = PROVIDER_UPDATE_TRANSITION_SCHEMA_SQL;
+
+export const DATABASE_MIGRATION_10_TO_11_SQL = `
+  ALTER TABLE trust
+    ADD COLUMN subject_kind TEXT NOT NULL DEFAULT 'repository-launch'
+    CHECK (subject_kind IN ('repository-launch', 'custom-provider-launch'));
+
+  DROP INDEX trust_repository_subject;
+  CREATE UNIQUE INDEX trust_repository_subject
+    ON trust (subject_kind, repository_identity, subject_digest, decided_at);
+
+  CREATE TABLE launch_consent_requests (
+    id TEXT PRIMARY KEY,
+    repository_identity TEXT NOT NULL,
+    group_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    integration_id TEXT NOT NULL,
+    subject_digest TEXT NOT NULL,
+    config_revision TEXT NOT NULL,
+    redacted_subject_json TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'denied', 'cancelled', 'stale')),
+    requested_at TEXT NOT NULL,
+    decided_at TEXT,
+    decided_by TEXT,
+    CHECK (
+      (state = 'pending' AND decided_at IS NULL AND decided_by IS NULL) OR
+      (state != 'pending' AND decided_at IS NOT NULL)
+    )
+  ) STRICT;
+
+  CREATE UNIQUE INDEX launch_consent_requests_pending_subject
+    ON launch_consent_requests (repository_identity, group_id, agent_id, subject_digest)
+    WHERE state = 'pending';
+  CREATE INDEX launch_consent_requests_repository_state
+    ON launch_consent_requests (repository_identity, state, requested_at);
+`;
 
 export const DATABASE_BASELINE_SQL = `
   CREATE TABLE schema_metadata (
@@ -215,6 +286,32 @@ export const DATABASE_BASELINE_SQL = `
     acknowledged_at TEXT NOT NULL,
     PRIMARY KEY (operator_id, run_id, generation)
   ) STRICT;
+
+  CREATE TABLE attention_dismissals (
+    operator_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    dismissed_at TEXT NOT NULL,
+    PRIMARY KEY (operator_id, item_id)
+  ) STRICT;
+
+  CREATE INDEX attention_dismissals_operator_recency
+    ON attention_dismissals (operator_id, dismissed_at DESC);
+
+  CREATE TABLE attention_subscription_overrides (
+    operator_id TEXT NOT NULL,
+    group_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    event_type TEXT NOT NULL CHECK (event_type IN (
+      'response-required', 'agent-health', 'completion', 'delivery-failure',
+      'action-state', 'provider-update-failed', 'provider-update-succeeded', 'unread-message'
+    )),
+    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (operator_id, group_id, member_id, event_type)
+  ) STRICT;
+
+  CREATE INDEX attention_subscription_overrides_member
+    ON attention_subscription_overrides (group_id, member_id, operator_id);
 
   CREATE TABLE screen_observations (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -437,13 +534,41 @@ export const DATABASE_BASELINE_SQL = `
     repository_id TEXT REFERENCES repositories(id),
     repository_identity TEXT NOT NULL,
     principal_id TEXT NOT NULL,
+    subject_kind TEXT NOT NULL CHECK (subject_kind IN ('repository-launch', 'custom-provider-launch')),
     subject_digest TEXT NOT NULL,
     decision TEXT NOT NULL CHECK (decision IN ('trusted', 'denied', 'revoked')),
     decided_at TEXT NOT NULL,
     revoked_at TEXT
   ) STRICT;
 
-  CREATE UNIQUE INDEX trust_repository_subject ON trust (repository_identity, subject_digest, decided_at);
+  CREATE UNIQUE INDEX trust_repository_subject
+    ON trust (subject_kind, repository_identity, subject_digest, decided_at);
+
+  CREATE TABLE launch_consent_requests (
+    id TEXT PRIMARY KEY,
+    repository_identity TEXT NOT NULL,
+    group_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    integration_id TEXT NOT NULL,
+    subject_digest TEXT NOT NULL,
+    config_revision TEXT NOT NULL,
+    redacted_subject_json TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'denied', 'cancelled', 'stale')),
+    requested_at TEXT NOT NULL,
+    decided_at TEXT,
+    decided_by TEXT,
+    CHECK (
+      (state = 'pending' AND decided_at IS NULL AND decided_by IS NULL) OR
+      (state != 'pending' AND decided_at IS NOT NULL)
+    )
+  ) STRICT;
+
+  CREATE UNIQUE INDEX launch_consent_requests_pending_subject
+    ON launch_consent_requests (repository_identity, group_id, agent_id, subject_digest)
+    WHERE state = 'pending';
+  CREATE INDEX launch_consent_requests_repository_state
+    ON launch_consent_requests (repository_identity, state, requested_at);
 
   CREATE TABLE terminal_checkpoints (
     id TEXT PRIMARY KEY,

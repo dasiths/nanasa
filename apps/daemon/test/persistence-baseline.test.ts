@@ -55,6 +55,8 @@ describe("database baseline", () => {
         "actions",
         "action_attempts",
         "action_acknowledgements",
+        "attention_dismissals",
+        "attention_subscription_overrides",
         "open_waits",
         "provider_state",
         "overlays",
@@ -78,6 +80,7 @@ describe("database baseline", () => {
         "provider_process_incarnations",
         "provider_authority_fences",
         "provider_operation_audits",
+        "provider_update_transitions",
         "status_source_claims",
         "reporter_turn_cycles",
       ]),
@@ -89,6 +92,139 @@ describe("database baseline", () => {
       .all();
     expect(nonStrict).toEqual([]);
     database.close();
+  });
+
+  it("migrates schema 10 trust receipts and adds launch consent requests", () => {
+    const path = join(directory(), "nanasa-v10.sqlite");
+    const database = new DatabaseSync(path);
+    database.exec(`
+      CREATE TABLE schema_metadata (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        schema_version INTEGER NOT NULL,
+        initialized_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO schema_metadata VALUES (1, 10, '2026-09-01T00:00:00.000Z');
+      CREATE TABLE trust (
+        id TEXT PRIMARY KEY,
+        repository_id TEXT,
+        repository_identity TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        subject_digest TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK (decision IN ('trusted', 'denied', 'revoked')),
+        decided_at TEXT NOT NULL,
+        revoked_at TEXT
+      ) STRICT;
+      CREATE UNIQUE INDEX trust_repository_subject
+        ON trust (repository_identity, subject_digest, decided_at);
+      INSERT INTO trust VALUES (
+        'trust-existing', NULL, 'repo-one', 'operator-one', '${"a".repeat(64)}',
+        'trusted', '2026-09-01T00:00:00.000Z', NULL
+      );
+      PRAGMA user_version = 10;
+    `);
+    database.close();
+
+    openNanasaDatabase(path).close();
+    const migrated = new DatabaseSync(path, { readOnly: true });
+    expect(
+      (migrated.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
+    ).toBe(DATABASE_SCHEMA_VERSION);
+    expect(
+      migrated.prepare("SELECT subject_kind FROM trust WHERE id = 'trust-existing'").get(),
+    ).toEqual({ subject_kind: "repository-launch" });
+    expect(tableNames(migrated)).toContain("launch_consent_requests");
+    expect(
+      migrated
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'launch_consent_requests'")
+        .get(),
+    ).toEqual({ strict: 1 });
+    migrated.close();
+  });
+
+  it("migrates schema 11 databases to provider update transition persistence", () => {
+    const path = join(directory(), "nanasa-v11.sqlite");
+    const database = new DatabaseSync(path);
+    database.exec(`
+      CREATE TABLE schema_metadata (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        schema_version INTEGER NOT NULL,
+        initialized_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO schema_metadata VALUES (1, 11, '2026-09-01T00:00:00.000Z');
+      PRAGMA user_version = 11;
+    `);
+    database.close();
+
+    openNanasaDatabase(path).close();
+    const migrated = new DatabaseSync(path, { readOnly: true });
+    expect(
+      (migrated.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
+    ).toBe(DATABASE_SCHEMA_VERSION);
+    expect(tableNames(migrated)).toContain("provider_update_transitions");
+    expect(
+      migrated
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'provider_update_transitions'")
+        .get(),
+    ).toEqual({ strict: 1 });
+    migrated.close();
+  });
+
+  it("migrates schema 12 databases to durable attention dismissals", () => {
+    const path = join(directory(), "nanasa-v12.sqlite");
+    const database = new DatabaseSync(path);
+    database.exec(`
+      CREATE TABLE schema_metadata (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        schema_version INTEGER NOT NULL,
+        initialized_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO schema_metadata VALUES (1, 12, '2026-09-03T00:00:00.000Z');
+      PRAGMA user_version = 12;
+    `);
+    database.close();
+
+    openNanasaDatabase(path).close();
+    const migrated = new DatabaseSync(path, { readOnly: true });
+    expect(
+      (migrated.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
+    ).toBe(DATABASE_SCHEMA_VERSION);
+    expect(tableNames(migrated)).toContain("attention_dismissals");
+    expect(
+      migrated
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'attention_dismissals'")
+        .get(),
+    ).toEqual({ strict: 1 });
+    migrated.close();
+  });
+
+  it("migrates schema 13 databases to durable Attention subscriptions", () => {
+    const path = join(directory(), "nanasa-v13.sqlite");
+    const database = new DatabaseSync(path);
+    database.exec(`
+      CREATE TABLE schema_metadata (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        schema_version INTEGER NOT NULL,
+        initialized_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO schema_metadata VALUES (1, 13, '2026-09-03T00:00:00.000Z');
+      PRAGMA user_version = 13;
+    `);
+    database.close();
+
+    openNanasaDatabase(path).close();
+    const migrated = new DatabaseSync(path, { readOnly: true });
+    expect(
+      (migrated.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
+    ).toBe(DATABASE_SCHEMA_VERSION);
+    expect(tableNames(migrated)).toContain("attention_subscription_overrides");
+    expect(
+      migrated
+        .prepare(
+          "SELECT strict FROM pragma_table_list WHERE name = 'attention_subscription_overrides'",
+        )
+        .get(),
+    ).toEqual({ strict: 1 });
+    migrated.close();
   });
 
   it("keeps checkpoints default-off, owner-only, and metadata-only", () => {

@@ -72,6 +72,161 @@ describe("Nanasa configuration", () => {
     expect(first.runtimeDirectory).toBe(join(repository, ".nanasa", "runtime"));
   });
 
+  it.each([
+    ["copilot", "copilot"],
+    ["claude-code", "claude"],
+    ["pi", "pi"],
+    ["opencode", "opencode"],
+  ] as const)("defaults the %s command when omitted", (kind, executable) => {
+    const repository = temporaryRepository(`version: 2
+integrations:
+  provider:
+    name: Provider
+    kind: ${kind}
+`);
+
+    expect(loadNanasaConfig(repository).config.integrations.provider).toMatchObject({
+      command: [executable],
+      commandSource: "builtin",
+    });
+    expect(loadNanasaConfig(repository).config.integrations.provider?.launcher).toBeUndefined();
+  });
+
+  it("preserves an explicit integration command override as a custom append launcher", () => {
+    const repository = temporaryRepository(`version: 2
+integrations:
+  claude-copilot:
+    name: Claude Code via GitHub Copilot
+    kind: claude-code
+    command: [make, claude-copilot]
+`);
+
+    expect(loadNanasaConfig(repository).config.integrations["claude-copilot"]).toMatchObject({
+      command: ["make", "claude-copilot"],
+      commandSource: "custom",
+      launcher: { providerArguments: "append" },
+    });
+  });
+
+  it("loads execution profiles and scoped provider MCP files without changing built-in origin", () => {
+    const repository = temporaryRepository(`version: 2
+executionProfiles:
+  autonomous:
+    continuation: autonomous
+    questions: disabled
+    approvals: unrestricted
+integrations:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+    executionProfile: autonomous
+    providerFiles:
+      mcp:
+        paths: [.nanasa/providers/copilot/mcp.json]
+groups:
+  team:
+    name: Team
+    agents:
+      worker:
+        memberId: worker
+        name: Worker
+        integrationId: copilot
+        providerFiles:
+          mcp:
+            mode: replace
+            paths: [.nanasa/providers/copilot/worker.json]
+`);
+
+    const config = loadNanasaConfig(repository).config;
+    expect(config.executionProfiles!.autonomous).toEqual({
+      continuation: "autonomous",
+      questions: "disabled",
+      approvals: "unrestricted",
+    });
+    expect(config.integrations.copilot).toMatchObject({
+      command: ["copilot"],
+      commandSource: "builtin",
+      executionProfile: "autonomous",
+      providerFiles: {
+        mcp: { mode: "append", paths: [".nanasa/providers/copilot/mcp.json"] },
+      },
+    });
+    expect(config.groups.team?.agents.worker?.providerFiles).toEqual({
+      mcp: { mode: "replace", paths: [".nanasa/providers/copilot/worker.json"] },
+    });
+  });
+
+  it("rejects unknown execution profiles and invalid provider file selections", () => {
+    const unknownProfile = temporaryRepository(`version: 2
+integrations:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+    executionProfile: missing
+`);
+    const invalidFiles = temporaryRepository(`version: 2
+integrations:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+    providerFiles:
+      mcp:
+        mode: disabled
+        paths: [../outside.json]
+`);
+
+    expect(() => loadNanasaConfig(unknownProfile)).toThrow(ConfigLoadError);
+    expect(() => loadNanasaConfig(invalidFiles)).toThrow(ConfigLoadError);
+  });
+
+  it("treats an explicit built-in executable as a custom command", () => {
+    const repository = temporaryRepository(`version: 2
+integrations:
+  claude:
+    name: Explicit Claude Code
+    kind: claude-code
+    command: [claude]
+`);
+
+    expect(loadNanasaConfig(repository).config.integrations.claude).toMatchObject({
+      command: ["claude"],
+      commandSource: "custom",
+      launcher: { providerArguments: "append" },
+    });
+  });
+
+  it("loads an environment provider-argument strategy for a custom command", () => {
+    const repository = temporaryRepository(`version: 2
+integrations:
+  claude-wrapper:
+    name: Claude wrapper
+    kind: claude-code
+    command: [sh, bin/claude-wrapper]
+    launcher:
+      providerArguments:
+        kind: environment
+        name: CLAUDE_ARGS
+`);
+
+    expect(loadNanasaConfig(repository).config.integrations["claude-wrapper"]?.launcher).toEqual({
+      providerArguments: { kind: "environment", name: "CLAUDE_ARGS" },
+    });
+  });
+
+  it.each([
+    ["launcher without a command", "    launcher: { providerArguments: append }\n"],
+    ["author-supplied command origin", "    commandSource: builtin\n"],
+  ])("rejects %s", (_name, integrationFields) => {
+    const repository = temporaryRepository(`version: 2
+integrations:
+  copilot:
+    name: GitHub Copilot
+    kind: copilot
+${integrationFields}`);
+
+    expect(() => loadNanasaConfig(repository)).toThrow(ConfigLoadError);
+  });
+
   it("loads minimal terminal-only YAML with canonical defaults", () => {
     const repository = temporaryRepository(minimalConfig());
 
@@ -88,6 +243,19 @@ describe("Nanasa configuration", () => {
         },
       },
       instructions: [],
+      executionProfiles: {},
+      attention: {
+        defaults: {
+          "response-required": true,
+          "agent-health": true,
+          completion: true,
+          "delivery-failure": true,
+          "action-state": false,
+          "provider-update-failed": true,
+          "provider-update-succeeded": false,
+          "unread-message": false,
+        },
+      },
       roles: {},
       extensions: {},
       integrations: {
@@ -96,6 +264,8 @@ describe("Nanasa configuration", () => {
           name: "OpenCode",
           kind: "opencode",
           command: ["opencode"],
+          commandSource: "custom",
+          launcher: { providerArguments: "append" },
           cwd: repository,
           providerState: { scope: "membership" },
           credentials: { kind: "provider-managed" },
@@ -107,6 +277,31 @@ describe("Nanasa configuration", () => {
       },
       groups: {},
       messages: { retentionPerGroup: 1_000 },
+    });
+  });
+
+  it("loads authored Attention defaults", () => {
+    const repository = temporaryRepository(`${minimalConfig()}attention:
+  defaults:
+    response-required: false
+    agent-health: false
+    completion: false
+    delivery-failure: false
+    action-state: false
+    provider-update-failed: false
+    provider-update-succeeded: false
+    unread-message: false
+`);
+
+    expect(loadNanasaConfig(repository).config.attention.defaults).toEqual({
+      "response-required": false,
+      "agent-health": false,
+      completion: false,
+      "delivery-failure": false,
+      "action-state": false,
+      "provider-update-failed": false,
+      "provider-update-succeeded": false,
+      "unread-message": false,
     });
   });
 

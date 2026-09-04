@@ -268,5 +268,73 @@
         "additionalProperties": false
       }
     ]
+  },
+  "launchConsentLifecyclePayload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "state": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "approved",
+          "denied",
+          "cancelled",
+          "stale",
+          "revoked"
+        ]
+      },
+      "repositoryIdentity": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "subjectDigest": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "requestId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "groupId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "agentId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+      },
+      "memberId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "integrationId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+      },
+      "configRevision": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "decisionId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      }
+    },
+    "required": [
+      "state",
+      "repositoryIdentity",
+      "subjectDigest"
+    ],
+    "additionalProperties": false
   }
 }

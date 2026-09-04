@@ -121,7 +121,12 @@ export class ProviderBoundRuntimePlanner {
       ...(input.mcpEndpointUrl === undefined ? {} : { mcpEndpointUrl: input.mcpEndpointUrl }),
       ...(input.prompt === undefined ? {} : { prompt: input.prompt }),
       readOnly: input.readOnly,
+      ...(input.executionProfile === undefined ? {} : { executionProfile: input.executionProfile }),
+      ...(input.providerFiles === undefined ? {} : { providerFiles: input.providerFiles }),
       configuredCommand: input.configuredCommand,
+      ...(input.providerArgumentStrategy === undefined
+        ? {}
+        : { providerArgumentStrategy: input.providerArgumentStrategy }),
       ...(input.model === undefined ? {} : { model: input.model }),
       ...(input.nativeSession === undefined ? {} : { nativeSession: input.nativeSession }),
       enforceConfiguredModelOnResume: input.modelResumePolicy === "enforce-configured",
@@ -132,6 +137,7 @@ export class ProviderBoundRuntimePlanner {
     });
     const launchPlan = RunProviderLaunchSelectionSchema.parse({
       configuredCommand: input.configuredCommand,
+      providerArgumentStrategy: input.providerArgumentStrategy ?? "append",
       command: planned.command,
       overlayArguments: planned.overlay.commandArguments,
       environmentNames: [
@@ -141,6 +147,24 @@ export class ProviderBoundRuntimePlanner {
       ...(input.workingDirectory === undefined ? {} : { workingDirectory: input.workingDirectory }),
       ...(input.model === undefined ? {} : { desiredModel: input.model }),
       modelResumePolicy: input.modelResumePolicy,
+      ...(input.configRevision === undefined ? {} : { configRevision: input.configRevision }),
+      ...(input.executionProfileId === undefined || input.executionProfile === undefined
+        ? {}
+        : {
+            executionProfile: {
+              id: input.executionProfileId,
+              digest: digest(input.executionProfile),
+            },
+          }),
+      ...(input.providerFiles === undefined || input.providerFiles.length === 0
+        ? {}
+        : {
+            providerFiles: input.providerFiles.map((file) => ({
+              path: file.sourcePath,
+              scope: file.scope,
+              digest: file.digest,
+            })),
+          }),
     });
     const overlayDigests = {
       recipeDigest: digest(
@@ -237,7 +261,11 @@ export class ProviderBoundRuntimePlanner {
         ? evaluator.modelArguments(launchPlan.desiredModel)
         : []),
     ];
-    return evaluator.augmentConfiguredCommand(launchPlan.configuredCommand, argumentsList);
+    return evaluator.augmentConfiguredCommand(
+      launchPlan.configuredCommand,
+      argumentsList,
+      launchPlan.providerArgumentStrategy,
+    );
   }
 
   #evaluator(snapshot: ResolvedProviderAdapter): ProviderSnapshotEvaluator {

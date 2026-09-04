@@ -22,12 +22,12 @@ import {
   ChevronDown,
   ChevronRight,
   CircleStop,
+  Command,
   Copy,
   EllipsisVertical,
   Info,
   MailWarning,
   MoveRight,
-  Palette,
   Pencil,
   Play,
   Plus,
@@ -50,6 +50,7 @@ import {
 import { createPortal } from "react-dom";
 
 import { copyToClipboard } from "../copy-to-clipboard.js";
+import { ErrorNotice, type PortalError, portalErrorFromCode, toPortalError } from "../errors.js";
 import { memberStatusView } from "../member-status.js";
 import { RoleIdentity } from "./role-identity.js";
 
@@ -66,6 +67,7 @@ interface GroupTreeProps {
   config: NanasaConfig;
   repositoryNavigation?: ReactNode;
   utilities?: ReactNode;
+  onOpenCommandPalette?(): void;
   selectedGroupId?: string;
   unreadCounts: ReadonlyMap<string, number>;
   busyAction?: string;
@@ -79,7 +81,6 @@ interface GroupTreeProps {
   onAddAgent(input: AddAgentInput): Promise<void>;
   onRenameAgent(groupId: string, agentId: string, name: string): Promise<void>;
   onUpdateAgent?(groupId: string, agentId: string, command: UpdateGroupAgentCommand): Promise<void>;
-  onUpdateRolePresentation?(roleId: string, command: UpdateRolePresentationCommand): Promise<void>;
   onReorderAgents?(groupId: string, command: ReorderGroupAgentsCommand): Promise<void>;
   onReorderGroups?(groupIds: string[], expectedOrderRevision: number): Promise<void>;
   onReparentAgent?(sourceGroupId: string, agentId: string, targetGroupId: string): Promise<void>;
@@ -475,7 +476,7 @@ function CreateGroupForm({
 }) {
   const [name, setName] = useState("");
   const [instructions, setInstructions] = useState("");
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -485,7 +486,7 @@ function CreateGroupForm({
       setInstructions("");
       setError(undefined);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to create group");
+      setError(toPortalError(cause, "Unable to create group"));
     }
   };
 
@@ -517,7 +518,7 @@ function CreateGroupForm({
         rows={3}
         placeholder=".nanasa/instructions/groups/backend.md"
       />
-      {error !== undefined && <p className="form-error">{error}</p>}
+      {error !== undefined && <ErrorNotice error={error} className="form-error" />}
     </form>
   );
 }
@@ -537,7 +538,7 @@ function GroupSettingsDialog({
   const [name, setName] = useState(group.name);
   const [instructionText, setInstructionText] = useState(instructionPathText(instructions));
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -556,7 +557,7 @@ function GroupSettingsDialog({
     try {
       await onUpdate({ name, instructions: parseInstructionPaths(instructionText) });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to update group settings");
+      setError(toPortalError(cause, "Unable to update group settings"));
     } finally {
       setBusy(false);
     }
@@ -600,7 +601,7 @@ function GroupSettingsDialog({
             placeholder=".nanasa/instructions/groups/backend.md"
           />
         </label>
-        {error !== undefined && <p className="form-error">{error}</p>}
+        {error !== undefined && <ErrorNotice error={error} className="form-error" />}
         <button type="submit" className="compact-button" disabled={busy}>
           <Check aria-hidden="true" size={15} />
           {busy ? "Saving..." : "Save group"}
@@ -623,7 +624,7 @@ function RolePresentationSection({
   const [color, setColor] = useState(role.presentation?.color ?? "slate");
   const [shortName, setShortName] = useState(role.presentation?.shortName ?? "");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -636,7 +637,7 @@ function RolePresentationSection({
         ...(shortName.trim() === "" ? {} : { shortName: shortName.trim() }),
       });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to update role presentation");
+      setError(toPortalError(cause, "Unable to update role presentation"));
     } finally {
       setBusy(false);
     }
@@ -700,7 +701,7 @@ function RolePresentationSection({
           />
         </label>
       </div>
-      {error !== undefined && <p className="form-error">{error}</p>}
+      {error !== undefined && <ErrorNotice error={error} className="form-error" />}
       <button type="submit" className="compact-button" disabled={busy}>
         <Check aria-hidden="true" size={15} />
         {busy ? "Saving..." : `Save ${role.name}`}
@@ -709,7 +710,7 @@ function RolePresentationSection({
   );
 }
 
-function RoleSettingsDialog({
+export function RoleSettingsDialog({
   roles,
   onClose,
   onUpdate,
@@ -789,7 +790,7 @@ function AgentSettingsDialog({
   const [roleId, setRoleId] = useState(agent.roleId ?? "");
   const [instructions, setInstructions] = useState(instructionPathText(agent.instructions));
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
   const inheritedInstructions = [
     ...config.instructions.map((path) => ({ source: "Global", path })),
     ...(config.groups[groupId]?.instructions ?? []).map((path) => ({
@@ -824,7 +825,7 @@ function AgentSettingsDialog({
         instructions: parseInstructionPaths(instructions),
       });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to update agent settings");
+      setError(toPortalError(cause, "Unable to update agent settings"));
     } finally {
       setBusy(false);
     }
@@ -923,7 +924,7 @@ function AgentSettingsDialog({
               </dd>
             </div>
           </dl>
-          {error !== undefined && <p className="form-error">{error}</p>}
+          {error !== undefined && <ErrorNotice error={error} className="form-error" />}
           <button type="submit" className="compact-button" disabled={busy}>
             <Check aria-hidden="true" size={15} />
             {busy ? "Saving..." : "Save agent"}
@@ -934,7 +935,7 @@ function AgentSettingsDialog({
   );
 }
 
-function AddAgentDialog({
+export function AddAgentDialog({
   group,
   config,
   onAdd,
@@ -952,7 +953,7 @@ function AddAgentDialog({
   const [roleId, setRoleId] = useState("");
   const [instructions, setInstructions] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<PortalError>();
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -978,7 +979,7 @@ function AddAgentDialog({
       });
       onClose();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to add agent");
+      setError(toPortalError(cause, "Unable to add agent"));
     } finally {
       setBusy(false);
     }
@@ -1048,7 +1049,7 @@ function AddAgentDialog({
           <UserPlus aria-hidden="true" size={15} />
           {busy ? "Adding..." : "Add agent"}
         </button>
-        {error !== undefined && <p className="form-error">{error}</p>}
+        {error !== undefined && <ErrorNotice error={error} className="form-error" />}
       </form>
     </dialog>
   );
@@ -1059,6 +1060,7 @@ export function GroupTree({
   config,
   repositoryNavigation,
   utilities,
+  onOpenCommandPalette,
   selectedGroupId,
   busyAction,
   onSelectGroup,
@@ -1071,7 +1073,6 @@ export function GroupTree({
   onAddAgent,
   onRenameAgent,
   onUpdateAgent,
-  onUpdateRolePresentation,
   onReorderAgents,
   onReorderGroups,
   onReparentAgent,
@@ -1085,7 +1086,6 @@ export function GroupTree({
   );
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [showAddAgent, setShowAddAgent] = useState(false);
-  const [showRoleSettings, setShowRoleSettings] = useState(false);
   const [settingsGroupId, setSettingsGroupId] = useState<string>();
   const [editTarget, setEditTarget] = useState<EditTarget>();
   const [settingsTarget, setSettingsTarget] = useState<{
@@ -1172,15 +1172,17 @@ export function GroupTree({
           <strong className="brand">Nanasa</strong>
         </div>
         <div className="rail-heading-actions">
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="Role settings"
-            title="Role settings"
-            onClick={() => setShowRoleSettings(true)}
-          >
-            <Palette aria-hidden="true" size={16} />
-          </button>
+          {onOpenCommandPalette !== undefined && (
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Open command palette"
+              title="Open command palette"
+              onClick={onOpenCommandPalette}
+            >
+              <Command aria-hidden="true" size={16} />
+            </button>
+          )}
           <button
             type="button"
             className="icon-button"
@@ -1219,10 +1221,16 @@ export function GroupTree({
               );
               return member === undefined ? [] : [{ agentId, agent, member }];
             });
+          const teamWorking = agents.some(
+            ({ member }) =>
+              memberStatusView(snapshot.agentStatuses, snapshot.runs, member).key === "working",
+          );
           const expanded = expandedGroups.has(group.id);
           return (
             <div className="tree-group" key={group.id}>
-              <div className={`tree-group-row ${selectedGroupId === group.id ? "selected" : ""}`}>
+              <div
+                className={`tree-group-row${selectedGroupId === group.id ? " selected" : ""}${teamWorking ? " team-working" : ""}`}
+              >
                 <button
                   type="button"
                   className="tree-toggle"
@@ -1250,6 +1258,7 @@ export function GroupTree({
                   <button
                     type="button"
                     className="tree-select"
+                    title={teamWorking ? `${group.name} has agents working` : undefined}
                     aria-current={selectedGroupId === group.id ? "page" : undefined}
                     onClick={() => {
                       onSelectGroup(group.id);
@@ -1381,6 +1390,12 @@ export function GroupTree({
                     const deliveryFailed =
                       failedRecipientsByGroup.get(group.id)?.has(member.memberId) === true;
                     const action = runAction(run);
+                    const recoveryRetryAt =
+                      run?.recoveryNotBefore !== undefined &&
+                      activeRecoveryPhases.has(run.recoveryPhase) &&
+                      Date.parse(run.recoveryNotBefore) > Date.now()
+                        ? run.recoveryNotBefore
+                        : undefined;
                     const actionKey = `${group.id}:${agentId}`;
                     const integration = config.integrations[agent.integrationId];
                     const checkout = snapshot.checkouts.find(
@@ -1388,9 +1403,13 @@ export function GroupTree({
                     );
                     const role =
                       agent.roleId === undefined ? undefined : config.roles[agent.roleId];
-                    const recoveryDetail = run?.recoveryReason;
+                    const recoveryCode =
+                      run?.recoveryReason !== undefined &&
+                      /^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(run.recoveryReason)
+                        ? run.recoveryReason
+                        : undefined;
                     const statusTitle = [
-                      recoveryDetail,
+                      recoveryCode,
                       agentStatus?.blocker,
                       agentStatus?.lastProgressSummary,
                     ]
@@ -1430,8 +1449,8 @@ export function GroupTree({
                             <RoleIdentity role={role} />
                             <small title={statusTitle || undefined}>
                               {statusLabel}
-                              {run?.recoveryNotBefore !== undefined &&
-                                ` · retry ${new Date(run.recoveryNotBefore).toLocaleTimeString()}`}
+                              {recoveryRetryAt !== undefined &&
+                                ` · retry ${new Date(recoveryRetryAt).toLocaleTimeString()}`}
                             </small>
                           </button>
                         )}
@@ -1608,7 +1627,20 @@ export function GroupTree({
                                     {run.recoveryReason !== undefined && (
                                       <div>
                                         <dt>Recovery reason</dt>
-                                        <dd>{run.recoveryReason}</dd>
+                                        <dd>
+                                          {statusKey === "failed" ? (
+                                            <ErrorNotice
+                                              announce={false}
+                                              className="member-runtime-error"
+                                              error={portalErrorFromCode(
+                                                run.recoveryReason,
+                                                "The agent runtime failed.",
+                                              )}
+                                            />
+                                          ) : (
+                                            run.recoveryReason.replaceAll("_", " ")
+                                          )}
+                                        </dd>
                                       </div>
                                     )}
                                   </>
@@ -1854,13 +1886,6 @@ export function GroupTree({
           instructions={config.groups[settingsGroupId]?.instructions ?? []}
           onClose={() => setSettingsGroupId(undefined)}
           onUpdate={(command) => onUpdateGroup(settingsGroupId, command)}
-        />
-      )}
-      {showRoleSettings && onUpdateRolePresentation !== undefined && (
-        <RoleSettingsDialog
-          roles={config.roles}
-          onClose={() => setShowRoleSettings(false)}
-          onUpdate={onUpdateRolePresentation}
         />
       )}
       {showAddAgent && selectedGroupId !== undefined && (

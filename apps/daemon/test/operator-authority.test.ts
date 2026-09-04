@@ -87,6 +87,15 @@ describe("operator authority", () => {
       });
       expect(hostileOrigin.statusCode).toBe(403);
 
+      for (const url of [
+        "/api/v1/groups/group-one/runs/recover",
+        "/api/v1/groups/group-one/agents/agent-one/run/recover",
+      ]) {
+        const recovery = await daemon.app.inject({ method: "POST", url, payload: {} });
+        expect(recovery.statusCode).toBe(401);
+        expect(recovery.json()).toMatchObject({ code: "operator_unauthorized" });
+      }
+
       expect(
         (await daemon.app.inject({ method: "POST", url: "/api/v1/auth/portal", payload: {} }))
           .statusCode,

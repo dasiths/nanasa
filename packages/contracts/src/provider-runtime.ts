@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { canonicalJsonBytes } from "./canonical-json.js";
+import { ProviderArgumentStrategySchema } from "./config.js";
 
 const OpenIdPattern = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
 const OperationIdPattern = /^[a-z0-9]+(?:[._/-][a-z0-9]+)*$/;
@@ -68,7 +69,6 @@ const MatcherSchema = z
   .object({
     executableNames: z.array(z.string().min(1).max(128)).min(1).max(32),
     requiredArgvLiterals: z.array(z.string().min(1).max(256)).max(16).default([]),
-    wrapperExecutableNames: z.array(z.string().min(1).max(128)).max(8).default([]),
   })
   .strict();
 const FileRecipeSchema = z
@@ -108,7 +108,6 @@ export const IdentityCapabilityPayloadSchema = z
   .strict();
 export const RecognitionCapabilityPayloadSchema = z
   .object({
-    configuredCommandMatchers: z.array(MatcherSchema).min(1).max(32),
     observedProcessMatchers: z.array(MatcherSchema).min(1).max(32),
     maximumWrapperDepth: z.number().int().min(0).max(16),
   })
@@ -117,23 +116,11 @@ export const LaunchCapabilityPayloadSchema = z
   .object({
     executableSlot: z.literal("configured-command"),
     argumentTemplate: z.array(z.string().max(4_096)).max(128),
-    wrapperArgumentSlot: z.number().int().nonnegative().max(127).optional(),
-    wrapperArgumentPrefix: z
-      .string()
-      .min(1)
-      .max(128)
-      .regex(/^[A-Za-z_][A-Za-z0-9_]*=$/)
-      .optional(),
     environmentNames: z.array(z.string().regex(EnvironmentNamePattern)).max(128),
     files: z.array(FileRecipeSchema).max(128),
     directExec: z.literal(true),
   })
-  .strict()
-  .refine(
-    (payload) =>
-      (payload.wrapperArgumentSlot === undefined) === (payload.wrapperArgumentPrefix === undefined),
-    { message: "Wrapper argument slot and prefix must be declared together" },
-  );
+  .strict();
 export const StateCapabilityPayloadSchema = z
   .object({
     scopes: z
@@ -990,6 +977,7 @@ export async function parseResolvedProviderAdapterSnapshot(
 export const RunProviderLaunchSelectionSchema = z
   .object({
     configuredCommand: z.array(z.string().min(1).max(4_096)).min(1).max(256),
+    providerArgumentStrategy: ProviderArgumentStrategySchema.optional(),
     command: z.array(z.string().min(1).max(4_096)).min(1).max(256),
     overlayArguments: z.array(z.string().min(1).max(4_096)).max(256),
     environmentNames: z.array(z.string().regex(EnvironmentNamePattern)).max(256),
@@ -997,6 +985,26 @@ export const RunProviderLaunchSelectionSchema = z
     workingDirectory: z.string().min(1).max(4_096).optional(),
     desiredModel: z.string().min(1).max(256).optional(),
     modelResumePolicy: z.enum(["preserve-session", "enforce-configured"]),
+    configRevision: SnapshotDigestSchema.optional(),
+    executionProfile: z
+      .object({
+        id: z.string().trim().min(1).max(64),
+        digest: SnapshotDigestSchema,
+      })
+      .strict()
+      .optional(),
+    providerFiles: z
+      .array(
+        z
+          .object({
+            path: z.string().trim().min(1).max(4_096),
+            scope: z.enum(["integration", "agent"]),
+            digest: SnapshotDigestSchema,
+          })
+          .strict(),
+      )
+      .max(32)
+      .optional(),
   })
   .strict()
   .superRefine((selection, context) => {
