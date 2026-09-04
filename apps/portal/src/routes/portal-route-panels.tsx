@@ -154,96 +154,6 @@ function formatAttentionTime(timestamp: string | undefined): string | undefined 
   return new Date(timestamp).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-function GroupSettingsPanel({
-  group,
-  members,
-  snapshot,
-  config,
-}: Pick<PortalRoutePanelProps, "group" | "members" | "snapshot" | "config"> & { group: Group }) {
-  const configured = config.groups[group.id];
-  return (
-    <RouteSurface
-      title="Overview"
-      eyebrow={group.name}
-      description="Models, recovery state, and retention policy for this group."
-    >
-      <div className="workflow-grid">
-        <section className="workflow-card">
-          <h3>Models and provider state</h3>
-          <ul className="definition-list">
-            {members.map((member) => {
-              const agent = Object.values(configured?.agents ?? {}).find(
-                (candidate) => candidate.memberId === member.memberId,
-              );
-              const integration =
-                agent === undefined ? undefined : config.integrations[agent.integrationId];
-              const run = snapshot.runs
-                .filter((item) => item.memberId === member.memberId)
-                .sort((a, b) => b.generation - a.generation)[0];
-              return (
-                <li key={member.id}>
-                  <strong>{member.alias}</strong>
-                  <span>
-                    {run?.effectiveModel ??
-                      agent?.desiredModel ??
-                      integration?.model.model ??
-                      "provider default"}
-                  </span>
-                  <small>
-                    {integration?.providerState.scope ?? "unknown"} state ·{" "}
-                    {run?.requestedModelSource ?? "not started"}
-                  </small>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-        <section className="workflow-card">
-          <h3>Recovery</h3>
-          <ul className="definition-list">
-            {snapshot.runs
-              .filter((run) => run.groupId === group.id)
-              .map((run) => (
-                <li key={run.id}>
-                  <strong>{run.memberId}</strong>
-                  <span>{run.recoveryPhase}</span>
-                  <small>
-                    {run.recoveryOutcome ?? run.recoveryReason ?? "No recovery outcome"} · attempt{" "}
-                    {run.recoveryAttempts}
-                  </small>
-                </li>
-              ))}
-          </ul>
-        </section>
-        <section className="workflow-card">
-          <h3>Retention</h3>
-          <dl>
-            <div>
-              <dt>Messages per group</dt>
-              <dd>{config.messages.retentionPerGroup}</dd>
-            </div>
-            <div>
-              <dt>Terminal checkpoints</dt>
-              <dd>
-                {config.terminal.checkpoints.enabled
-                  ? `${config.terminal.checkpoints.retentionSeconds}s`
-                  : "disabled"}
-              </dd>
-            </div>
-            <div>
-              <dt>Checkpoint bounds</dt>
-              <dd>
-                {config.terminal.checkpoints.maxLines} lines /{" "}
-                {config.terminal.checkpoints.maxBytes} bytes
-              </dd>
-            </div>
-          </dl>
-        </section>
-      </div>
-    </RouteSurface>
-  );
-}
-
 function AttentionPanel({
   route,
   snapshot,
@@ -1072,15 +982,6 @@ export function PortalRoutePanel(props: PortalRoutePanelProps) {
   const { route, group } = props;
   if (route.kind === "group" && group !== undefined) {
     if (route.section === "activity") return <AttentionPanel {...props} group={group} />;
-    if (route.section === "settings")
-      return (
-        <GroupSettingsPanel
-          group={group}
-          members={props.members}
-          snapshot={props.snapshot}
-          config={props.config}
-        />
-      );
   }
   if (route.kind !== "global") return null;
   switch (route.destination) {
@@ -1106,9 +1007,9 @@ export function PortalRoutePanel(props: PortalRoutePanelProps) {
     case "extensions":
       return (
         <RouteSurface
-          title="Extensions"
+          title="Providers"
           eyebrow="Provider capabilities"
-          description="Install and inspect strict data-only provider packages with exact trust, permissions, health, drift, and ownership evidence."
+          description="Set up agent providers and resolve the issues preventing them from running."
         >
           <ExtensionsWorkspace
             client={props.client}

@@ -322,8 +322,36 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
       revision: "a".repeat(64),
       diagnostics: [],
     }),
-    loadServiceStatus: vi.fn(),
-    loadRemoteStatus: vi.fn(),
+    loadServiceStatus: vi.fn().mockResolvedValue({
+      formatVersion: 1,
+      repositoryId: "repo-test",
+      instanceName: "nanasa-test",
+      unitName: "nanasa-test.service",
+      repositoryRoot: "/repo",
+      packageRoot: "/package",
+      nodePath: "/usr/bin/node",
+      cliPath: "/package/bin/nanasa.js",
+      portalUrl: "http://127.0.0.1:3210",
+      state: "not-installed",
+      detail: "Project-local service is not installed",
+      killMode: "process",
+    }),
+    loadRemoteStatus: vi.fn().mockResolvedValue({
+      formatVersion: 1,
+      repositoryId: "repo-test",
+      instanceId: snapshot.instanceId,
+      build: { packageVersion: "0.0.0", commit: "a".repeat(40) },
+      apiVersion: 1,
+      eventProtocolVersion: 1,
+      terminalProtocolVersion: 1,
+      service: {
+        instanceName: "nanasa-test",
+        unitName: "nanasa-test.service",
+        state: "not-installed",
+      },
+      loopbackHost: "127.0.0.1",
+      port: 3210,
+    }),
     planServiceRestart: vi.fn(),
     listProviderStates: vi.fn().mockResolvedValue([]),
     listProviderExtensions: vi.fn().mockResolvedValue([]),
@@ -2581,7 +2609,8 @@ describe("portal application", () => {
 
   it("separates group, repository, system, and mobile navigation", async () => {
     const user = userEvent.setup();
-    render(<App client={createClient()} />);
+    const client = createClient();
+    render(<App client={client} />);
     await screen.findByRole("heading", { name: "Backend" });
 
     const groupNavigation = screen.getByRole("navigation", { name: "Backend sections" });
@@ -2589,7 +2618,7 @@ describe("portal application", () => {
       within(groupNavigation)
         .getAllByRole("link")
         .map((link) => link.textContent),
-    ).toEqual(["Terminals", "Messages", "Attention", "Overview"]);
+    ).toEqual(["Terminals", "Messages", "Attention"]);
     const groupAttention = within(groupNavigation).getByRole("link", { name: "Attention" });
     expect(groupAttention).toHaveAttribute("href", "/groups/group-backend/activity");
     await user.click(groupAttention);
@@ -2597,29 +2626,54 @@ describe("portal application", () => {
     expect(screen.getByRole("combobox", { name: "Filter by team" })).toHaveValue("group-backend");
     expect(screen.getByRole("combobox", { name: "Filter by team" })).toBeDisabled();
 
-    const repositoryNavigation = screen.getByRole("navigation", {
+    const operationsNavigation = screen.getByRole("navigation", {
       name: "Repository operations",
     });
-    expect(within(repositoryNavigation).getByRole("link", { name: "Attention" })).toHaveAttribute(
+    expect(within(operationsNavigation).getByRole("link", { name: "Attention" })).toHaveAttribute(
       "href",
       "/attention",
     );
-    expect(within(repositoryNavigation).getByRole("link", { name: "All agents" })).toHaveAttribute(
+    expect(within(operationsNavigation).getByRole("link", { name: "All agents" })).toHaveAttribute(
       "href",
       "/agents",
     );
-    await user.click(within(repositoryNavigation).getByText("System"));
-    expect(within(repositoryNavigation).getByRole("link", { name: "Extensions" })).toHaveAttribute(
+    const repositoryNavigation = screen.getByRole("navigation", { name: "Repository" });
+    expect(within(repositoryNavigation).getByRole("link", { name: "Checkouts" })).toHaveAttribute(
+      "href",
+      "/checkouts",
+    );
+    expect(within(repositoryNavigation).getByRole("link", { name: "Providers" })).toHaveAttribute(
       "href",
       "/extensions",
     );
+    expect(within(repositoryNavigation).queryByRole("link", { name: "Diagnostics" })).toBeNull();
+    const systemStatus = screen.getByRole("button", {
+      name: /System (?:connected|reconnecting|disconnected), open System status/,
+    });
+    expect(systemStatus).toHaveClass("event-status", "system-status-control", "event-disconnected");
+    expect(systemStatus).toHaveTextContent("disconnected");
+    expect(client.loadServiceStatus).not.toHaveBeenCalled();
+    await user.click(systemStatus);
+    const systemDialog = await screen.findByRole("dialog", { name: "System status" });
+    expect(within(systemDialog).getByText("Review required")).toBeInTheDocument();
+    expect(within(systemDialog).getByText("Portal event stream disconnected")).toBeInTheDocument();
     expect(
-      within(repositoryNavigation).getByRole("link", { name: "Remote access" }),
-    ).toHaveAttribute("href", "/remote");
+      within(systemDialog).queryByText("Project-local service is not installed"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(systemDialog).getByText(/Not installed · optional for this session/),
+    ).toBeInTheDocument();
+    expect(
+      within(systemDialog).getByText("Technical details").closest("details"),
+    ).not.toHaveAttribute("open");
+    expect(client.loadServiceStatus).toHaveBeenCalledOnce();
+    expect(client.loadRemoteStatus).toHaveBeenCalledOnce();
+    await user.click(within(systemDialog).getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog", { name: "System status" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Open command palette" }));
     const palette = screen.getByRole("dialog", { name: "Command palette" });
-    expect(within(palette).getByRole("button", { name: /Open extensions/ })).toBeInTheDocument();
+    expect(within(palette).getByRole("button", { name: /Open providers/ })).toBeInTheDocument();
     expect(within(palette).getByRole("button", { name: /Open About Nanasa/ })).toBeInTheDocument();
     await user.click(within(palette).getByRole("button", { name: "Close command palette" }));
 
@@ -2635,6 +2689,7 @@ describe("portal application", () => {
     await user.click(mobileTrigger);
     const drawer = screen.getByRole("dialog", { name: "Nanasa" });
     expect(within(drawer).getByRole("link", { name: "Backend" })).toBeInTheDocument();
+    expect(within(drawer).queryByRole("button", { name: "Open System status" })).toBeNull();
     expect(within(drawer).getByRole("link", { name: "Preferences" })).toHaveAttribute(
       "href",
       "/settings",

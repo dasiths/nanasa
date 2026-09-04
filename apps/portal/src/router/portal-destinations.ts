@@ -30,16 +30,9 @@ export const groupDestinations = [
     commandDescription: "Review responses, health, completions, delivery, and durable progress",
     keywords: ["activity", "attention", "waits", "approvals"],
   },
-  {
-    id: "settings",
-    label: "Overview",
-    commandLabel: "Open group overview",
-    commandDescription: "Review models, recovery, and retention for the selected group",
-    keywords: ["group settings", "runtime", "policy"],
-  },
 ] as const satisfies readonly GroupDestinationDefinition[];
 
-export type GlobalDestinationGroup = "operations" | "system" | "utilities";
+export type GlobalDestinationGroup = "operations" | "repository" | "system" | "utilities";
 
 export interface GlobalDestinationDefinition {
   id:
@@ -87,7 +80,7 @@ export const globalDestinationDefinitions = [
     id: "checkouts",
     label: "Checkouts",
     heading: "Checkouts",
-    group: "operations",
+    group: "repository",
     commandLabel: "Open checkouts",
     commandDescription: "Manage Git checkouts and worktrees",
     keywords: ["git", "branches", "worktrees"],
@@ -95,11 +88,11 @@ export const globalDestinationDefinitions = [
   },
   {
     id: "extensions",
-    label: "Extensions",
-    heading: "Extensions",
-    group: "system",
-    commandLabel: "Open extensions",
-    commandDescription: "Inspect provider packages, trust, health, and drift",
+    label: "Providers",
+    heading: "Providers",
+    group: "repository",
+    commandLabel: "Open providers",
+    commandDescription: "Set up providers and resolve issues preventing agents from running",
     keywords: ["providers", "packages", "integrations"],
   },
   {

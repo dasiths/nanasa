@@ -21,17 +21,11 @@ describe("portal destination registry", () => {
   });
 
   it("keeps stable group routes while exposing distinct labels", () => {
-    expect(groupDestinations.map(({ id }) => id)).toEqual([
-      "terminals",
-      "messages",
-      "activity",
-      "settings",
-    ]);
+    expect(groupDestinations.map(({ id }) => id)).toEqual(["terminals", "messages", "activity"]);
     expect(groupDestinations.map(({ label }) => label)).toEqual([
       "Terminals",
       "Messages",
       "Attention",
-      "Overview",
     ]);
     expect(groupDestinations.find(({ id }) => id === "activity")).toMatchObject({
       commandLabel: "Open group attention",

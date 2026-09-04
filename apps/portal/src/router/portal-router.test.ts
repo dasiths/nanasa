@@ -22,6 +22,7 @@ describe("portal router", () => {
 
   it("rejects malformed routes and encodes stable IDs", () => {
     expect(parsePortalRoute("/groups/group-one/messages/run-one").kind).toBe("invalid");
+    expect(parsePortalRoute("/groups/group-one/settings").kind).toBe("invalid");
     expect(parsePortalRoute("/unknown").kind).toBe("invalid");
     expect(groupRoute("group one", "terminals", "run/one")).toBe(
       "/groups/group%20one/terminals/run%2Fone",

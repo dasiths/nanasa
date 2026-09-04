@@ -2,7 +2,6 @@ import type { Group } from "@nanasa/contracts";
 import {
   Bell,
   Bot,
-  Boxes,
   CircleHelp,
   Command,
   GitBranch,
@@ -102,12 +101,11 @@ export function RepositoryNavigation({
   onLink: PortalLinkHandler;
 }) {
   const operations = globalDestinationDefinitions.filter(({ group }) => group === "operations");
-  const system = globalDestinationDefinitions.filter(({ group }) => group === "system");
-  const systemSelected = system.some(({ id }) => id === currentDestination);
+  const repository = globalDestinationDefinitions.filter(({ group }) => group === "repository");
   return (
     <section className="repository-navigation" aria-labelledby="repository-navigation-title">
       <span id="repository-navigation-title" className="rail-section-label">
-        Repository operations
+        Operations
       </span>
       <nav className="portal-navigation-list" aria-label="Repository operations">
         {operations.map((destination) => (
@@ -119,26 +117,18 @@ export function RepositoryNavigation({
             onLink={onLink}
           />
         ))}
-        <details className="portal-navigation-disclosure" open={systemSelected || undefined}>
-          <summary className={systemSelected ? "has-active-destination" : undefined}>
-            <Boxes aria-hidden="true" size={15} />
-            <span>System</span>
-            <span className="disclosure-chevron" aria-hidden="true">
-              ›
-            </span>
-          </summary>
-          <div className="portal-navigation-sublist">
-            {system.map((destination) => (
-              <DestinationLink
-                key={destination.id}
-                destination={destination}
-                currentDestination={currentDestination}
-                attentionCount={attentionCount}
-                onLink={onLink}
-              />
-            ))}
-          </div>
-        </details>
+      </nav>
+      <span className="rail-section-label repository-destination-label">Repository</span>
+      <nav className="portal-navigation-list" aria-label="Repository">
+        {repository.map((destination) => (
+          <DestinationLink
+            key={destination.id}
+            destination={destination}
+            currentDestination={currentDestination}
+            attentionCount={attentionCount}
+            onLink={onLink}
+          />
+        ))}
       </nav>
     </section>
   );
@@ -298,9 +288,8 @@ export function MobileNavigationDialog({
 }) {
   const currentDestination = route.kind === "global" ? route.destination : undefined;
   const operations = globalDestinationDefinitions.filter(({ group }) => group === "operations");
-  const system = globalDestinationDefinitions.filter(({ group }) => group === "system");
+  const repository = globalDestinationDefinitions.filter(({ group }) => group === "repository");
   const utilities = globalDestinationDefinitions.filter(({ group }) => group === "utilities");
-  const systemSelected = system.some(({ id }) => id === currentDestination);
   const closeAfterLink: PortalLinkHandler = (path) => (event) => {
     const handled =
       event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
@@ -328,7 +317,7 @@ export function MobileNavigationDialog({
         <div className="mobile-navigation-scroll">
           <section aria-labelledby="mobile-operations-title">
             <span id="mobile-operations-title" className="rail-section-label">
-              Repository operations
+              Operations
             </span>
             <nav className="portal-navigation-list" aria-label="Repository operations">
               {operations.map((destination) => (
@@ -340,26 +329,22 @@ export function MobileNavigationDialog({
                   onLink={closeAfterLink}
                 />
               ))}
-              <details className="portal-navigation-disclosure" open={systemSelected || undefined}>
-                <summary className={systemSelected ? "has-active-destination" : undefined}>
-                  <Boxes aria-hidden="true" size={15} />
-                  <span>System</span>
-                  <span className="disclosure-chevron" aria-hidden="true">
-                    ›
-                  </span>
-                </summary>
-                <div className="portal-navigation-sublist">
-                  {system.map((destination) => (
-                    <DestinationLink
-                      key={destination.id}
-                      destination={destination}
-                      currentDestination={currentDestination}
-                      attentionCount={attentionCount}
-                      onLink={closeAfterLink}
-                    />
-                  ))}
-                </div>
-              </details>
+            </nav>
+          </section>
+          <section className="mobile-groups" aria-labelledby="mobile-repository-title">
+            <span id="mobile-repository-title" className="rail-section-label">
+              Repository
+            </span>
+            <nav className="portal-navigation-list" aria-label="Repository">
+              {repository.map((destination) => (
+                <DestinationLink
+                  key={destination.id}
+                  destination={destination}
+                  currentDestination={currentDestination}
+                  attentionCount={attentionCount}
+                  onLink={closeAfterLink}
+                />
+              ))}
             </nav>
           </section>
           <section className="mobile-groups" aria-labelledby="mobile-groups-title">
