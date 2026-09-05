@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "./fixtures/package-fixture.js";
@@ -120,11 +120,22 @@ test("team workspace lifecycle remains consistent across runs and restart", asyn
   ).toBe(true);
   expect(linkedRuns.map((run) => run.id)).not.toEqual(initialRuns.map((run) => run.id));
 
+  const remote = join(nanasa.root, "remote.git");
+  execFileSync("git", ["clone", "--bare", "--quiet", nanasa.repository, remote]);
+  execFileSync("git", ["-C", nanasa.repository, "remote", "add", "origin", remote]);
+  execFileSync("git", ["-C", remote, "update-ref", "refs/heads/frontend-base", "HEAD"]);
+  execFileSync("git", ["-C", remote, "tag", "v1.0"]);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(nanasa.portalUrl);
   await page.getByRole("link", { name: "Team workspaces" }).click();
   await expect(page.getByRole("heading", { level: 2, name: "Team workspaces" })).toBeVisible();
   await expect(page.getByLabel("Workspace for Workspace team")).toHaveValue(created.checkout.id);
+  const fetchResponse = page.waitForResponse((response) =>
+    response.url().endsWith(`/checkouts/${primary!.id}/fetch`),
+  );
+  await page.getByRole("button", { name: "Fetch updates" }).click();
+  expect((await fetchResponse).status()).toBe(200);
+  await expect(page.getByRole("button", { name: "Fetch updates" })).toBeEnabled();
   await page.getByText("Exclusive", { exact: true }).hover();
   await expect(page.getByText("A linked working tree reserved for this team.")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("team-workspaces-desktop.png") });
@@ -135,6 +146,16 @@ test("team workspace lifecycle remains consistent across runs and restart", asyn
     "aria-pressed",
     "true",
   );
+  const baseInput = addDialog.getByLabel("Start from");
+  await expect(baseInput).toHaveValue("HEAD");
+  await expect(addDialog.locator('datalist option[value="origin/frontend-base"]')).toHaveCount(1);
+  await expect(addDialog.locator('datalist option[value="v1.0"]')).toHaveCount(1);
+  expect(await baseInput.evaluate((input: HTMLInputElement) => input.list?.tagName)).toBe(
+    "DATALIST",
+  );
+  await baseInput.fill("origin/frontend-base");
+  await expect(baseInput).toHaveValue("origin/frontend-base");
+  await page.screenshot({ path: testInfo.outputPath("base-revision-desktop.png") });
   await addDialog.getByRole("button", { name: "Attach existing" }).click();
   await expect(addDialog.getByLabel("Existing worktree path")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("add-workspace-desktop.png") });
@@ -144,6 +165,9 @@ test("team workspace lifecycle remains consistent across runs and restart", asyn
   await page.screenshot({ path: testInfo.outputPath("team-workspaces-mobile.png") });
   await page.getByRole("button", { name: "Add workspace" }).click();
   await expect(addDialog).toBeVisible();
+  await addDialog.getByRole("button", { name: "Create new" }).click();
+  await expect(addDialog.locator('datalist option[value="origin/frontend-base"]')).toHaveCount(1);
+  await expect(baseInput).toHaveValue("origin/frontend-base");
   await page.screenshot({ path: testInfo.outputPath("add-workspace-mobile.png") });
   await addDialog.getByRole("button", { name: "Close add workspace" }).click();
 

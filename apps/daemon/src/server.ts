@@ -205,7 +205,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       store,
       git,
       checkouts,
-      join(dirname(loadedConfig.repoRoot), ".nanasa-worktrees"),
+      join(dirname(repositoryCheckout.checkout.path), ".nanasa-worktrees"),
     );
     await worktrees.recover();
     const bootstrapFragment = `nanasa-bootstrap=${operatorAuth.createBootstrapToken()}`;

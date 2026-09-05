@@ -682,10 +682,12 @@ describe("projected status route panels", () => {
     render(<PortalRoutePanel {...routeProps} />);
 
     expect(
-      within(screen.getByText("Alpha").closest("li")!).getByText("Unknown · model-one"),
+      within(screen.getByRole("button", { name: "Inspect Alpha" })).getByText(
+        "Unknown · model-one",
+      ),
     ).toBeInTheDocument();
     expect(
-      within(screen.getByText("Beta").closest("li")!).getByText("Failed · model-two"),
+      within(screen.getByRole("button", { name: "Inspect Beta" })).getByText("Failed · model-two"),
     ).toBeInTheDocument();
   });
 });

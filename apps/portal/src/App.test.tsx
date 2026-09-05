@@ -394,6 +394,8 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     reparentAgent: vi.fn(),
     assignCheckout: vi.fn(),
     refreshCheckout: vi.fn(),
+    listCheckoutReferences: vi.fn().mockResolvedValue([]),
+    fetchCheckout: vi.fn().mockResolvedValue([]),
     createWorktree: vi.fn(),
     openCheckout: vi.fn(),
     removeWorktree: vi.fn(),

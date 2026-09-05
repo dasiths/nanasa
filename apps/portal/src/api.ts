@@ -52,6 +52,7 @@ import {
   type ExtensionLifecycleCommand,
   type ExtensionTrustReceipt,
   ExtensionTrustReceiptSchema,
+  type GitReference,
   type GitStatusProjection,
   type Group,
   type GroupMembership,
@@ -208,6 +209,8 @@ export interface PortalClient {
     command: AssignGroupCheckoutCommand,
   ): Promise<AssignGroupCheckoutResult>;
   refreshCheckout(checkoutId: string): Promise<GitStatusProjection>;
+  listCheckoutReferences(checkoutId: string): Promise<GitReference[]>;
+  fetchCheckout(checkoutId: string): Promise<GitStatusProjection[]>;
   createWorktree(command: CreateWorktreeCommand): Promise<WorktreeOperationResult>;
   openCheckout(command: OpenCheckoutCommand): Promise<WorktreeOperationResult>;
   removeWorktree(
@@ -451,6 +454,8 @@ export const api: PortalClient = {
   assignCheckout: (groupId, command) =>
     resources.topology.assignCheckout(groupId, AssignGroupCheckoutCommandSchema.parse(command)),
   refreshCheckout: (checkoutId) => resources.workspace.refreshCheckout(checkoutId),
+  listCheckoutReferences: (checkoutId) => resources.workspace.listCheckoutReferences(checkoutId),
+  fetchCheckout: (checkoutId) => resources.workspace.fetchCheckout(checkoutId),
   createWorktree: (command) =>
     resources.workspace.createWorktree(CreateWorktreeCommandSchema.parse(command)),
   openCheckout: (command) =>

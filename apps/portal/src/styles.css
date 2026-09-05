@@ -1305,6 +1305,12 @@ textarea {
   gap: 6px;
 }
 
+.workspace-heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .team-workspace-list {
   display: grid;
   margin: 0;

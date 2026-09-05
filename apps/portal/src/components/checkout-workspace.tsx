@@ -1,4 +1,5 @@
 import type {
+  GitReference,
   GitStatusProjection,
   GroupCheckoutSwitchPolicy,
   PortalSnapshot,
@@ -10,15 +11,15 @@ import {
   FolderGit2,
   GitBranch,
   LockKeyhole,
+  type LucideIcon,
   Plus,
   RefreshCw,
   Share2,
   Trash2,
   Users,
   X,
-  type LucideIcon,
 } from "lucide-react";
-import { type FormEvent, useId, useState } from "react";
+import { type FormEvent, useEffect, useId, useState } from "react";
 import type { PortalClient } from "../api.js";
 import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 import { currentMemberRun } from "../member-status.js";
@@ -93,6 +94,32 @@ export function CheckoutWorkspace({
   const [pendingSwitch, setPendingSwitch] = useState<PendingSwitch>();
   const [statuses, setStatuses] = useState<Record<string, GitStatusProjection>>({});
   const currentTeamRuns = currentRuns(snapshot);
+  const [references, setReferences] = useState<GitReference[]>([]);
+  const [referenceState, setReferenceState] = useState<"loading" | "ready" | "error">("ready");
+  const [referenceRefresh, setReferenceRefresh] = useState(0);
+  const referenceListId = useId();
+  const sourceCheckoutId = sourceCheckout?.id;
+
+  useEffect(() => {
+    if (!addWorkspaceOpen || addWorkspaceMode !== "create" || sourceCheckoutId === undefined)
+      return;
+    let cancelled = false;
+    setReferences([]);
+    setReferenceState("loading");
+    client.listCheckoutReferences(sourceCheckoutId).then(
+      (result) => {
+        if (cancelled) return;
+        setReferences(result);
+        setReferenceState("ready");
+      },
+      () => {
+        if (!cancelled) setReferenceState("error");
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [client, sourceCheckoutId, addWorkspaceOpen, addWorkspaceMode, referenceRefresh]);
 
   const execute = async (operation: () => Promise<unknown>) => {
     setBusy(true);
@@ -117,6 +144,15 @@ export function CheckoutWorkspace({
           expectedCheckoutRevision: group.checkoutRevision,
           switchPolicy: "require-stopped" as const,
         };
+  };
+
+  const fetchUpdates = async () => {
+    if (sourceCheckoutId === undefined) return;
+    await execute(async () => {
+      const updated = await client.fetchCheckout(sourceCheckoutId);
+      setStatuses(Object.fromEntries(updated.map((status) => [status.checkoutId, status])));
+      setReferenceRefresh((revision) => revision + 1);
+    });
   };
 
   const create = async (event: FormEvent) => {
@@ -213,16 +249,28 @@ export function CheckoutWorkspace({
             <h3 id="team-workspaces-title">Team workspaces</h3>
             <p>One workspace shared by every agent on a team.</p>
           </div>
-          <button
-            type="button"
-            className="primary-button"
-            disabled={busy || sourceCheckout === undefined}
-            title={sourceCheckout === undefined ? "A primary checkout is required" : undefined}
-            onClick={() => setAddWorkspaceOpen(true)}
-          >
-            <Plus aria-hidden="true" size={15} />
-            Add workspace
-          </button>
+          <div className="workspace-heading-actions">
+            <button
+              type="button"
+              className="compact-button"
+              disabled={busy || sourceCheckout === undefined}
+              title="Run git fetch --all --prune, then refresh workspace statuses. Working files are unchanged."
+              onClick={() => void fetchUpdates().catch(() => undefined)}
+            >
+              <RefreshCw aria-hidden="true" size={15} />
+              Fetch updates
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              disabled={busy || sourceCheckout === undefined}
+              title={sourceCheckout === undefined ? "A primary checkout is required" : undefined}
+              onClick={() => setAddWorkspaceOpen(true)}
+            >
+              <Plus aria-hidden="true" size={15} />
+              Add workspace
+            </button>
+          </div>
         </header>
         {snapshot.groups.length === 0 ? (
           <p>No teams are configured.</p>
@@ -469,8 +517,38 @@ export function CheckoutWorkspace({
                 </label>
                 <label>
                   Start from
-                  <input value={base} onChange={(event) => setBase(event.target.value)} required />
+                  <input
+                    value={base}
+                    onChange={(event) => setBase(event.target.value)}
+                    list={referenceListId}
+                    autoComplete="off"
+                    title="HEAD means the current commit in the source checkout, without uncommitted changes. You can also enter a branch, tag, or commit ID."
+                    required
+                  />
                 </label>
+                <datalist id={referenceListId}>
+                  <option value="HEAD" label="Current commit in the source checkout" />
+                  {references.map((reference) => (
+                    <option
+                      key={`${reference.kind}:${reference.name}`}
+                      value={reference.name}
+                      label={
+                        reference.kind === "remote"
+                          ? "Remote branch"
+                          : reference.kind === "tag"
+                            ? "Tag"
+                            : "Local branch"
+                      }
+                    />
+                  ))}
+                </datalist>
+                {referenceState !== "ready" && (
+                  <small role="status">
+                    {referenceState === "loading"
+                      ? "Loading revisions..."
+                      : "Revision suggestions unavailable"}
+                  </small>
+                )}
                 <label>
                   Assign to team
                   <select

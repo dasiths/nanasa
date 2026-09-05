@@ -2,7 +2,7 @@ import { PortalSnapshotSchema } from "@nanasa/contracts";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { PortalClient } from "../api.js";
+import { ApiError, type PortalClient } from "../api.js";
 import { CheckoutWorkspace } from "./checkout-workspace.js";
 
 const timestamp = "2026-08-29T12:00:00.000Z";
@@ -129,11 +129,96 @@ function client(overrides: Partial<PortalClient> = {}): PortalClient {
     removeWorktree: vi.fn(),
     assignCheckout: vi.fn(),
     refreshCheckout: vi.fn(),
+    listCheckoutReferences: vi.fn().mockResolvedValue([]),
+    fetchCheckout: vi.fn().mockResolvedValue([]),
     ...overrides,
   } as PortalClient;
 }
 
 describe("CheckoutWorkspace", () => {
+  it("fetches explicitly and loads refreshed base suggestions without fetching on dialog open", async () => {
+    const user = userEvent.setup();
+    const portal = client({
+      listCheckoutReferences: vi.fn().mockResolvedValue([
+        { name: "main", kind: "branch" },
+        { name: "origin/frontend", kind: "remote" },
+        { name: "v1.0", kind: "tag" },
+      ]),
+      fetchCheckout: vi.fn().mockResolvedValue([
+        {
+          checkoutId: checkout.id,
+          head: checkout.head,
+          branch: "main",
+          detached: false,
+          staged: 0,
+          modified: 0,
+          untracked: 0,
+          ahead: 1,
+          behind: 2,
+          observedAt: timestamp,
+        },
+      ]),
+      createWorktree: vi.fn().mockResolvedValue({}),
+    });
+    const changed = vi.fn().mockResolvedValue(undefined);
+    render(<CheckoutWorkspace client={portal} snapshot={snapshot} onChanged={changed} />);
+    expect(portal.fetchCheckout).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Fetch updates" }));
+    await waitFor(() => expect(changed).toHaveBeenCalledOnce());
+    expect(portal.fetchCheckout).toHaveBeenCalledWith(checkout.id);
+    expect(screen.getByText(/1 ahead.*2 behind/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Add workspace" }));
+    await waitFor(() => expect(portal.listCheckoutReferences).toHaveBeenCalledWith(checkout.id));
+    const input = screen.getByLabelText("Start from");
+    const list = document.getElementById(input.getAttribute("list")!);
+    expect(list?.querySelector('option[value="HEAD"]')).not.toBeNull();
+    expect(list?.querySelector('option[value="origin/frontend"]')).not.toBeNull();
+    expect(list?.querySelector('option[value="v1.0"]')).not.toBeNull();
+    await user.type(screen.getByLabelText("New branch"), "feature/ui");
+    await user.clear(input);
+    await user.type(input, "origin/frontend");
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+    await waitFor(() =>
+      expect(portal.createWorktree).toHaveBeenCalledWith({
+        sourceCheckoutId: checkout.id,
+        branch: "feature/ui",
+        base: "origin/frontend",
+      }),
+    );
+    expect(portal.fetchCheckout).toHaveBeenCalledOnce();
+  });
+
+  it("keeps manual revisions usable after fetch and suggestion failures", async () => {
+    const user = userEvent.setup();
+    const portal = client({
+      listCheckoutReferences: vi.fn().mockRejectedValue(new Error("refs unavailable")),
+      fetchCheckout: vi
+        .fn()
+        .mockRejectedValue(new ApiError("Remote authentication failed", 502, "git_command_failed")),
+      createWorktree: vi.fn().mockResolvedValue({}),
+    });
+    const changed = vi.fn().mockResolvedValue(undefined);
+    render(<CheckoutWorkspace client={portal} snapshot={snapshot} onChanged={changed} />);
+    await user.click(screen.getByRole("button", { name: "Fetch updates" }));
+    expect(await screen.findByText("Remote authentication failed")).toBeVisible();
+    expect(changed).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Fetch updates" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Add workspace" }));
+    expect(await screen.findByText("Revision suggestions unavailable")).toBeVisible();
+    const input = screen.getByLabelText("Start from");
+    await user.clear(input);
+    await user.type(input, "HEAD~2");
+    await user.type(screen.getByLabelText("New branch"), "feature/manual");
+    await user.click(screen.getByRole("button", { name: "Create workspace" }));
+    await waitFor(() =>
+      expect(portal.createWorktree).toHaveBeenCalledWith({
+        sourceCheckoutId: checkout.id,
+        branch: "feature/manual",
+        base: "HEAD~2",
+      }),
+    );
+  });
+
   it("submits branch and base through the managed-worktree route", async () => {
     const user = userEvent.setup();
     const portal = client({ createWorktree: vi.fn().mockResolvedValue({}) });

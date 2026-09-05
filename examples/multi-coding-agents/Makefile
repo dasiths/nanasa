@@ -58,6 +58,9 @@ help:
 		'' \
 		'Provider authentication:' \
 		'  make auth            Authenticate the configured agent providers' \
+		'  make auth-frontend   Authenticate both Frontend Team agent homes' \
+		'  make auth-frontend-pi        Authenticate the frontend implementor' \
+		'  make auth-frontend-opencode  Authenticate the frontend reviewer' \
 		'  make auth-copilot    Authenticate the project manager home' \
 		'  make auth-pi         Authenticate the Pi implementor home' \
 		'  make auth-opencode   Authenticate the reviewer home' \
@@ -129,13 +132,24 @@ portal-auth: package
 portal-dev:
 	@$(call open_url,DEV_PORTAL_URL)
 
-.PHONY: auth auth-copilot auth-pi auth-opencode auth-litellm
+.PHONY: auth auth-copilot auth-pi auth-opencode auth-litellm auth-frontend auth-frontend-pi auth-frontend-opencode
 
 auth:
 	@$(MAKE) --no-print-directory auth-copilot
 	@$(MAKE) --no-print-directory auth-pi
 	@$(MAKE) --no-print-directory auth-opencode
 	@$(MAKE) --no-print-directory auth-litellm
+	@$(MAKE) --no-print-directory auth-frontend
+
+auth-frontend:
+	@$(MAKE) --no-print-directory auth-frontend-pi
+	@$(MAKE) --no-print-directory auth-frontend-opencode
+
+auth-frontend-pi: setup
+	$(NANASA) auth login pi --agent frontend-builder
+
+auth-frontend-opencode: setup
+	$(NANASA) auth login opencode --agent frontend-reviewer
 
 auth-copilot: setup
 	$(NANASA) auth login copilot --agent agent_318f514e-2347-4d87-8c64-aef0752e7bfb

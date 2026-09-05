@@ -152,6 +152,38 @@ afterEach(() => {
 });
 
 describe("daemon REST API", () => {
+  it("exposes Git references and explicit fetch through checkout routes", async () => {
+    const daemon = await createDaemon({ dataPath: ":memory:" });
+    try {
+      const source = daemon.store.listCheckouts()[0]!;
+      execFileSync("git", ["-C", source.path, "branch", "feature/suggestions"]);
+      const references = await daemon.app.inject(`/api/v1/checkouts/${source.id}/references`);
+      expect(references.statusCode).toBe(200);
+      expect(references.json()).toContainEqual({ name: "feature/suggestions", kind: "branch" });
+      const fetched = await daemon.app.inject({
+        method: "POST",
+        url: `/api/v1/checkouts/${source.id}/fetch`,
+        payload: {},
+      });
+      expect(fetched.statusCode).toBe(200);
+      expect(fetched.json()).toContainEqual(expect.objectContaining({ checkoutId: source.id }));
+      expect((await daemon.app.inject("/api/v1/checkouts/missing/references")).statusCode).toBe(
+        404,
+      );
+      expect(
+        (
+          await daemon.app.inject({
+            method: "POST",
+            url: "/api/v1/checkouts/missing/fetch",
+            payload: {},
+          })
+        ).statusCode,
+      ).toBe(404);
+    } finally {
+      await daemon.app.close();
+    }
+  });
+
   it("round-trips durable Attention dismissals through authenticated routes", async () => {
     const daemon = await createDaemon({ dataPath: ":memory:" });
     const dismissed = await daemon.app.inject({

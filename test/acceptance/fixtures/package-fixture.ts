@@ -129,6 +129,7 @@ async function waitForExit(child: ChildProcess): Promise<void> {
 export class PackageAcceptanceService {
   readonly root: string;
   readonly repository: string;
+  readonly configRoot: string;
   readonly port: number;
   readonly tmuxServer: string;
   readonly baseUrl: string;
@@ -138,9 +139,16 @@ export class PackageAcceptanceService {
   #operatorToken?: string;
   #log = createWriteStream("/dev/null");
 
-  private constructor(root: string, repository: string, port: number, tmuxServer: string) {
+  private constructor(
+    root: string,
+    repository: string,
+    configRoot: string,
+    port: number,
+    tmuxServer: string,
+  ) {
     this.root = root;
     this.repository = repository;
+    this.configRoot = configRoot;
     this.port = port;
     this.tmuxServer = tmuxServer;
     this.baseUrl = `http://127.0.0.1:${port}`;
@@ -150,7 +158,10 @@ export class PackageAcceptanceService {
     this.#log = createWriteStream(this.logPath, { flags: "a" });
   }
 
-  static async create(browserName: string): Promise<PackageAcceptanceService> {
+  static async create(
+    browserName: string,
+    options: { configSubdirectory?: string; integrationCwd?: string } = {},
+  ): Promise<PackageAcceptanceService> {
     const root = mkdtempSync(join(tmpdir(), "nanasa-acceptance-"));
     const repository = join(root, "repository");
     mkdirSync(repository);
@@ -160,9 +171,10 @@ export class PackageAcceptanceService {
     if (initialized.status !== 0) {
       throw new Error(initialized.stderr || "Could not initialize acceptance Git repository");
     }
-    mkdirSync(join(repository, ".nanasa"));
+    const configRoot = join(repository, options.configSubdirectory ?? "");
+    mkdirSync(join(configRoot, ".nanasa"), { recursive: true });
     writeFileSync(
-      join(repository, ".nanasa", "config.yaml"),
+      join(configRoot, ".nanasa", "config.yaml"),
       [
         "version: 2",
         "repository: { path: ., checkout: { kind: current } }",
@@ -171,7 +183,7 @@ export class PackageAcceptanceService {
         "    name: Safe Echo",
         "    kind: opencode",
         `    command: [${JSON.stringify(process.execPath)}, ${JSON.stringify(echoAgentPath)}]`,
-        "    cwd: packages/api",
+        `    cwd: ${JSON.stringify(options.integrationCwd ?? "packages/api")}`,
         "    providerState: { scope: integration }",
         "    credentials: { kind: provider-managed }",
         "    model: { resumePolicy: preserve-session }",
@@ -179,8 +191,8 @@ export class PackageAcceptanceService {
         "",
       ].join("\n"),
     );
-    mkdirSync(join(repository, "packages", "api"), { recursive: true });
-    writeFileSync(join(repository, "packages", "api", "README.md"), "# API fixture\n");
+    mkdirSync(join(configRoot, "packages", "api"), { recursive: true });
+    writeFileSync(join(configRoot, "packages", "api", "README.md"), "# API fixture\n");
     const committed = spawnSync(
       "git",
       [
@@ -213,7 +225,7 @@ export class PackageAcceptanceService {
       { encoding: "utf8" },
     );
     if (initialCommit.status !== 0) throw new Error(initialCommit.stderr);
-    const service = new PackageAcceptanceService(root, repository, port, tmuxServer);
+    const service = new PackageAcceptanceService(root, repository, configRoot, port, tmuxServer);
     try {
       await service.startDaemon();
       return service;
@@ -231,7 +243,7 @@ export class PackageAcceptanceService {
       process.execPath,
       [cliPath, "start", "--host", "127.0.0.1", "--port", String(this.port), "--mcp"],
       {
-        cwd: this.repository,
+        cwd: this.configRoot,
         env: { ...process.env, NANASA_TMUX_SERVER: this.tmuxServer },
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -251,7 +263,7 @@ export class PackageAcceptanceService {
       return response.ok;
     });
     this.#operatorToken = readFileSync(
-      join(this.repository, ".nanasa", "runtime", "operator-secret"),
+      join(this.configRoot, ".nanasa", "runtime", "operator-secret"),
     ).toString("base64url");
     await waitFor("portal bootstrap URL", async () =>
       this.portalUrl.includes("#nanasa-bootstrap="),

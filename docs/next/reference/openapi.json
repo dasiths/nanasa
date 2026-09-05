@@ -2300,6 +2300,56 @@
         ]
       }
     },
+    "/api/v1/checkouts/:checkoutId/references": {
+      "get": {
+        "operationId": "checkouts.references",
+        "summary": "List up to 500 locally known branch and tag revisions",
+        "tags": [
+          "checkout"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "checkout_not_found"
+        ]
+      }
+    },
+    "/api/v1/checkouts/:checkoutId/fetch": {
+      "post": {
+        "operationId": "checkouts.fetch",
+        "summary": "Fetch all remotes, prune remote refs, and refresh repository checkout statuses",
+        "tags": [
+          "checkout"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "checkout_not_found",
+          "checkout_unavailable",
+          "checkout_identity_changed"
+        ]
+      }
+    },
     "/api/v1/checkouts/open": {
       "post": {
         "operationId": "checkouts.open",

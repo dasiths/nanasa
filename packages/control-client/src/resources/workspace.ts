@@ -4,6 +4,8 @@ import {
   type Checkout,
   CheckoutSchema,
   type CreateWorktreeCommand,
+  type GitReference,
+  GitReferenceListSchema,
   type GitStatusProjection,
   GitStatusProjectionSchema,
   type OpenCheckoutCommand,
@@ -42,6 +44,23 @@ export class WorkspaceResource {
       path("checkouts", checkoutId, "refresh"),
       GitStatusProjectionSchema,
       commandInit("POST", {}, key),
+    );
+  }
+
+  public listCheckoutReferences(checkoutId: string): Promise<GitReference[]> {
+    return request(
+      this.client,
+      path("checkouts", checkoutId, "references"),
+      GitReferenceListSchema,
+    );
+  }
+
+  public fetchCheckout(checkoutId: string): Promise<GitStatusProjection[]> {
+    return request(
+      this.client,
+      path("checkouts", checkoutId, "fetch"),
+      GitStatusProjectionSchema.array(),
+      commandInit("POST", {}),
     );
   }
 

@@ -22,12 +22,12 @@ import {
   attentionItemsForScope,
   deriveAttentionItems,
 } from "../attention-items.js";
+import { AgentDirectory } from "../components/agent-directory.js";
 import { CheckoutWorkspace } from "../components/checkout-workspace.js";
 import { ExtensionsWorkspace } from "../components/extensions-workspace.js";
 import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 import { generatedOfflineHelp } from "../help/generated-offline-help.js";
 import type { PortalPreferences } from "../hooks/use-portal-preferences.js";
-import { memberStatusView } from "../member-status.js";
 import type { PortalRoute } from "../router/portal-router.js";
 import type { PortalCommand } from "../shell/command-palette.js";
 
@@ -475,48 +475,6 @@ function AttentionPanel({
           })}
         </ul>
       )}
-    </RouteSurface>
-  );
-}
-
-function AgentDirectory({
-  snapshot,
-  onNavigate,
-}: Pick<PortalRoutePanelProps, "snapshot" | "onNavigate">) {
-  return (
-    <RouteSurface
-      title="All agents"
-      eyebrow="Global directory"
-      description="All configured agents, provider models, and projected status across groups."
-    >
-      <ul className="workflow-list">
-        {snapshot.memberships
-          .filter((member) => member.state === "active")
-          .map((member) => {
-            const status = memberStatusView(snapshot.agentStatuses, snapshot.runs, member);
-            const { run } = status;
-            return (
-              <li className="workflow-row" key={member.id}>
-                <div>
-                  <strong>{member.alias}</strong>
-                  <small>
-                    {status.label} · {run?.effectiveModel ?? "provider model pending"}
-                  </small>
-                </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onNavigate(
-                      `/groups/${encodeURIComponent(member.groupId)}/terminals${run === undefined ? "" : `/${encodeURIComponent(run.id)}`}`,
-                    )
-                  }
-                >
-                  Open agent
-                </button>
-              </li>
-            );
-          })}
-      </ul>
     </RouteSurface>
   );
 }
@@ -988,7 +946,13 @@ export function PortalRoutePanel(props: PortalRoutePanelProps) {
     case "attention":
       return <AttentionPanel {...props} />;
     case "agents":
-      return <AgentDirectory snapshot={props.snapshot} onNavigate={props.onNavigate} />;
+      return (
+        <AgentDirectory
+          snapshot={props.snapshot}
+          config={props.config}
+          onNavigate={props.onNavigate}
+        />
+      );
     case "checkouts":
       return (
         <RouteSurface

@@ -1,9 +1,15 @@
 ---
-title: Agent Team group instructions
-description: Shared mission and handoff rules for the primary Nanasa agent group
+title: Backend Team group instructions
+description: Backend ownership and handoff rules for the primary checkout team
 ---
 
 ## Group mission
+
+Own backend and API work in the primary checkout, principally `apps/daemon`.
+Coordinate shared `packages/contracts` changes with the Human before editing;
+send the API contract, example payloads, and validation results for the Frontend
+Team to consume. Leave portal changes to Frontend unless explicitly assigned.
+Do not switch the primary branch or create worktrees on behalf of another team.
 
 Collaborate on the current repository objective as one delivery team. The
 project manager coordinates assignments and dependencies, implementors own

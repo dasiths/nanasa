@@ -28,6 +28,7 @@ import {
   DismissAttentionItemsCommandSchema,
   EventServerFrameSchema,
   ExtensionLifecycleCommandSchema,
+  GitReferenceListSchema,
   GitStatusProjectionSchema,
   InstallProviderExtensionCommandSchema,
   InterruptAgentRunCommandSchema,
@@ -942,6 +943,16 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
   register("checkouts.refresh", async (request) =>
     GitStatusProjectionSchema.parse(
       await services.checkouts.refresh(record(request.params).checkoutId ?? ""),
+    ),
+  );
+  register("checkouts.references", async (request) =>
+    GitReferenceListSchema.parse(
+      await services.worktrees.listReferences(record(request.params).checkoutId ?? ""),
+    ),
+  );
+  register("checkouts.fetch", async (request) =>
+    GitStatusProjectionSchema.array().parse(
+      await services.worktrees.fetch(record(request.params).checkoutId ?? ""),
     ),
   );
   register("checkouts.open", async (request) => {

@@ -36,6 +36,15 @@ export const CheckoutSchema = z
   .strict();
 export type Checkout = z.infer<typeof CheckoutSchema>;
 
+export const GitReferenceSchema = z
+  .object({
+    name: z.string().min(1).max(1_024),
+    kind: z.enum(["branch", "remote", "tag"]),
+  })
+  .strict();
+export type GitReference = z.infer<typeof GitReferenceSchema>;
+export const GitReferenceListSchema = z.array(GitReferenceSchema).max(500);
+
 export const WorktreeSchema = z
   .object({
     id: IdentifierSchema,

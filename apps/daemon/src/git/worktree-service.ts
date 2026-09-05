@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync } f
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type {
   CreateWorktreeCommand,
+  GitReference,
+  GitStatusProjection,
   OpenCheckoutCommand,
   Worktree,
   WorktreeOperationResult,
@@ -66,6 +68,48 @@ export class WorktreeService {
 
   public list(repositoryId: string): Worktree[] {
     return this.store.listWorktrees(repositoryId);
+  }
+
+  public fetch(checkoutId: string): Promise<GitStatusProjection[]> {
+    return this.#serialize(async () => {
+      const source = this.store.getCheckout(checkoutId);
+      await this.checkouts.refresh(source.id);
+      await this.git.run(["-C", source.path, "fetch", "--all", "--prune"], {
+        timeoutMs: 120_000,
+      });
+      const statuses: GitStatusProjection[] = [];
+      for (const checkout of this.checkouts.list(source.repositoryId)) {
+        if (checkout.kind !== "bare") statuses.push(await this.checkouts.refresh(checkout.id));
+      }
+      return statuses;
+    });
+  }
+
+  public async listReferences(checkoutId: string): Promise<GitReference[]> {
+    const checkout = this.store.getCheckout(checkoutId);
+    const result = await this.git.run([
+      "-C",
+      checkout.path,
+      "-c",
+      "core.warnAmbiguousRefs=true",
+      "for-each-ref",
+      "--count=500",
+      "--sort=refname",
+      "--format=%(refname)%00%(refname:short)%00%(symref)",
+      "refs/heads/",
+      "refs/remotes/",
+      "refs/tags/",
+    ]);
+    return result.stdout.split("\n").flatMap((line): GitReference[] => {
+      const [ref, name, symbolicTarget] = line.split("\0");
+      if (!ref || !name || symbolicTarget) return [];
+      const kind = ref.startsWith("refs/heads/")
+        ? "branch"
+        : ref.startsWith("refs/remotes/")
+          ? "remote"
+          : "tag";
+      return name.length > 1_024 ? [] : [{ name, kind }];
+    });
   }
 
   public create(command: CreateWorktreeCommand): Promise<WorktreeOperationResult> {

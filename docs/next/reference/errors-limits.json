@@ -287,6 +287,14 @@
       "checkout_not_found",
       "checkout_unavailable"
     ],
+    "checkouts.references": [
+      "checkout_not_found"
+    ],
+    "checkouts.fetch": [
+      "checkout_not_found",
+      "checkout_unavailable",
+      "checkout_identity_changed"
+    ],
     "checkouts.open": [
       "checkout_not_found",
       "worktree_operation_in_progress"
@@ -405,6 +413,8 @@
     "repositories.list": 65536,
     "checkouts.list": 65536,
     "checkouts.refresh": 65536,
+    "checkouts.references": 65536,
+    "checkouts.fetch": 65536,
     "checkouts.open": 65536,
     "worktrees.list": 65536,
     "worktrees.create": 65536,

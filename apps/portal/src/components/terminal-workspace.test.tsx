@@ -88,6 +88,8 @@ function client(): PortalClient {
     retainProviderState: vi.fn(),
     deleteProviderState: vi.fn(),
     refreshCheckout: vi.fn(),
+    listCheckoutReferences: vi.fn().mockResolvedValue([]),
+    fetchCheckout: vi.fn().mockResolvedValue([]),
     createGroup: vi.fn(),
     updateGroup: vi.fn(),
     deleteGroup: vi.fn(),

@@ -869,6 +869,26 @@
       "summary": "Assign team checkout"
     },
     {
+      "id": "checkout.references",
+      "family": "checkout",
+      "command": "references",
+      "mode": "control",
+      "positionals": [
+        "checkout-id"
+      ],
+      "summary": "List locally known branch and tag revisions"
+    },
+    {
+      "id": "checkout.fetch",
+      "family": "checkout",
+      "command": "fetch",
+      "mode": "control",
+      "positionals": [
+        "checkout-id"
+      ],
+      "summary": "Fetch all remotes and prune remote refs"
+    },
+    {
       "id": "worktree.list",
       "family": "worktree",
       "command": "list",

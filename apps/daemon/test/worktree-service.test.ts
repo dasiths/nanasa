@@ -48,6 +48,76 @@ function fixture() {
 }
 
 describe("managed worktree ownership", () => {
+  it("fetches and prunes remote refs without changing the current branch or local files", async () => {
+    const context = fixture();
+    try {
+      const source = (await context.checkouts.initialize(context.repository)).checkout;
+      const remote = join(context.root, "remote.git");
+      execFileSync("git", ["clone", "--bare", "--quiet", context.repository, remote]);
+      execFileSync("git", ["-C", context.repository, "remote", "add", "origin", remote]);
+      execFileSync("git", ["-C", remote, "update-ref", "refs/heads/outdated", "HEAD"]);
+      await context.worktrees.fetch(source.id);
+      expect(await context.worktrees.listReferences(source.id)).toContainEqual({
+        name: "origin/outdated",
+        kind: "remote",
+      });
+      execFileSync("git", ["-C", remote, "update-ref", "-d", "refs/heads/outdated"]);
+      execFileSync("git", ["-C", remote, "update-ref", "refs/heads/new-feature", "HEAD"]);
+      const localFile = join(context.repository, "uncommitted.txt");
+      writeFileSync(localFile, "keep these changes\n");
+      const statuses = await context.worktrees.fetch(source.id);
+      const references = await context.worktrees.listReferences(source.id);
+      expect(references).toContainEqual({ name: "origin/new-feature", kind: "remote" });
+      expect(references).not.toContainEqual({ name: "origin/outdated", kind: "remote" });
+      expect(statuses).toContainEqual(
+        expect.objectContaining({ checkoutId: source.id, untracked: 1, branch: source.branch }),
+      );
+      expect(context.store.getCheckout(source.id).head).toBe(source.head);
+      expect(readFileSync(localFile, "utf8")).toBe("keep these changes\n");
+    } finally {
+      context.store.close();
+    }
+  });
+
+  it("lists local, remote, and tag base references without ambiguous names", async () => {
+    const context = fixture();
+    try {
+      const source = (await context.checkouts.initialize(context.repository)).checkout;
+      execFileSync("git", ["-C", context.repository, "branch", "feature/frontend"]);
+      execFileSync("git", ["-C", context.repository, "branch", "release"]);
+      execFileSync("git", ["-C", context.repository, "tag", "release"]);
+      execFileSync("git", [
+        "-C",
+        context.repository,
+        "update-ref",
+        "refs/remotes/origin/main",
+        "HEAD",
+      ]);
+      execFileSync("git", [
+        "-C",
+        context.repository,
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+      ]);
+      const references = await context.worktrees.listReferences(source.id);
+      expect(references).toEqual(
+        expect.arrayContaining([
+          { name: "feature/frontend", kind: "branch" },
+          { name: "heads/release", kind: "branch" },
+          { name: "tags/release", kind: "tag" },
+          { name: "origin/main", kind: "remote" },
+        ]),
+      );
+      expect(references.some((ref) => ref.name === "origin/HEAD")).toBe(false);
+      await expect(context.worktrees.listReferences("missing-checkout")).rejects.toMatchObject({
+        code: "checkout_not_found",
+      });
+    } finally {
+      context.store.close();
+    }
+  });
+
   it("creates once, safely reuses a concurrent branch request, and records provenance", async () => {
     const context = fixture();
     try {
