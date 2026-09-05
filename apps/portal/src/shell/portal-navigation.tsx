@@ -101,26 +101,13 @@ export function RepositoryNavigation({
   onLink: PortalLinkHandler;
 }) {
   const operations = globalDestinationDefinitions.filter(({ group }) => group === "operations");
-  const repository = globalDestinationDefinitions.filter(({ group }) => group === "repository");
   return (
     <section className="repository-navigation" aria-labelledby="repository-navigation-title">
       <span id="repository-navigation-title" className="rail-section-label">
         Operations
       </span>
-      <nav className="portal-navigation-list" aria-label="Repository operations">
+      <nav className="portal-navigation-list" aria-label="Operations">
         {operations.map((destination) => (
-          <DestinationLink
-            key={destination.id}
-            destination={destination}
-            currentDestination={currentDestination}
-            attentionCount={attentionCount}
-            onLink={onLink}
-          />
-        ))}
-      </nav>
-      <span className="rail-section-label repository-destination-label">Repository</span>
-      <nav className="portal-navigation-list" aria-label="Repository">
-        {repository.map((destination) => (
           <DestinationLink
             key={destination.id}
             destination={destination}
@@ -288,7 +275,6 @@ export function MobileNavigationDialog({
 }) {
   const currentDestination = route.kind === "global" ? route.destination : undefined;
   const operations = globalDestinationDefinitions.filter(({ group }) => group === "operations");
-  const repository = globalDestinationDefinitions.filter(({ group }) => group === "repository");
   const utilities = globalDestinationDefinitions.filter(({ group }) => group === "utilities");
   const closeAfterLink: PortalLinkHandler = (path) => (event) => {
     const handled =
@@ -310,33 +296,31 @@ export function MobileNavigationDialog({
             <span className="eyebrow">Operations</span>
             <h2 id="mobile-navigation-title">Nanasa</h2>
           </div>
-          <button type="button" className="icon-button" aria-label="Close menu" onClick={onClose}>
-            <X aria-hidden="true" size={16} />
-          </button>
+          <div className="mobile-navigation-heading-actions">
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Open command palette"
+              title="Open command palette"
+              onClick={() => {
+                onClose();
+                onOpenCommandPalette();
+              }}
+            >
+              <Command aria-hidden="true" size={16} />
+            </button>
+            <button type="button" className="icon-button" aria-label="Close menu" onClick={onClose}>
+              <X aria-hidden="true" size={16} />
+            </button>
+          </div>
         </header>
         <div className="mobile-navigation-scroll">
           <section aria-labelledby="mobile-operations-title">
             <span id="mobile-operations-title" className="rail-section-label">
               Operations
             </span>
-            <nav className="portal-navigation-list" aria-label="Repository operations">
+            <nav className="portal-navigation-list" aria-label="Operations">
               {operations.map((destination) => (
-                <DestinationLink
-                  key={destination.id}
-                  destination={destination}
-                  currentDestination={currentDestination}
-                  attentionCount={attentionCount}
-                  onLink={closeAfterLink}
-                />
-              ))}
-            </nav>
-          </section>
-          <section className="mobile-groups" aria-labelledby="mobile-repository-title">
-            <span id="mobile-repository-title" className="rail-section-label">
-              Repository
-            </span>
-            <nav className="portal-navigation-list" aria-label="Repository">
-              {repository.map((destination) => (
                 <DestinationLink
                   key={destination.id}
                   destination={destination}
@@ -413,17 +397,6 @@ export function MobileNavigationDialog({
             </button>
           </div>
           <nav className="portal-navigation-list" aria-label="Portal utilities">
-            <button
-              type="button"
-              className="portal-nav-link"
-              onClick={() => {
-                onClose();
-                onOpenCommandPalette();
-              }}
-            >
-              <Command aria-hidden="true" size={15} />
-              <span>Commands</span>
-            </button>
             {utilities.map((destination) => (
               <DestinationLink
                 key={destination.id}

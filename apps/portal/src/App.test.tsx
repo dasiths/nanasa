@@ -2607,7 +2607,7 @@ describe("portal application", () => {
     });
   });
 
-  it("separates group, repository, system, and mobile navigation", async () => {
+  it("separates group, operations, utilities, system, and mobile navigation", async () => {
     const user = userEvent.setup();
     const client = createClient();
     render(<App client={client} />);
@@ -2627,7 +2627,7 @@ describe("portal application", () => {
     expect(screen.getByRole("combobox", { name: "Filter by team" })).toBeDisabled();
 
     const operationsNavigation = screen.getByRole("navigation", {
-      name: "Repository operations",
+      name: "Operations",
     });
     expect(within(operationsNavigation).getByRole("link", { name: "Attention" })).toHaveAttribute(
       "href",
@@ -2637,16 +2637,11 @@ describe("portal application", () => {
       "href",
       "/agents",
     );
-    const repositoryNavigation = screen.getByRole("navigation", { name: "Repository" });
-    expect(within(repositoryNavigation).getByRole("link", { name: "Checkouts" })).toHaveAttribute(
+    expect(within(operationsNavigation).getByRole("link", { name: "Checkouts" })).toHaveAttribute(
       "href",
       "/checkouts",
     );
-    expect(within(repositoryNavigation).getByRole("link", { name: "Providers" })).toHaveAttribute(
-      "href",
-      "/extensions",
-    );
-    expect(within(repositoryNavigation).queryByRole("link", { name: "Diagnostics" })).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Repository" })).toBeNull();
     const systemStatus = screen.getByRole("button", {
       name: /System (?:connected|reconnecting|disconnected), open System status/,
     });
@@ -2679,6 +2674,11 @@ describe("portal application", () => {
 
     await user.click(screen.getByLabelText("Portal utilities", { selector: "summary" }));
     expect(
+      within(screen.getByRole("navigation", { name: "Portal utilities" })).getByRole("link", {
+        name: "Providers",
+      }),
+    ).toHaveAttribute("href", "/extensions");
+    expect(
       within(screen.getByRole("navigation", { name: "Portal utilities" })).queryByRole("button", {
         name: "Commands",
       }),
@@ -2694,7 +2694,17 @@ describe("portal application", () => {
       "href",
       "/settings",
     );
-    expect(within(drawer).getByRole("button", { name: "Commands" })).toBeInTheDocument();
+    expect(within(drawer).getByRole("link", { name: "Providers" })).toHaveAttribute(
+      "href",
+      "/extensions",
+    );
+    expect(within(drawer).queryByText("Repository")).not.toBeInTheDocument();
+    expect(within(drawer).getByRole("button", { name: "Open command palette" })).toBeInTheDocument();
+    expect(
+      within(
+        within(drawer).getByRole("navigation", { name: "Portal utilities" }),
+      ).queryByRole("button"),
+    ).toBeNull();
     expect(
       within(drawer).queryByRole("button", { name: "Role presentation" }),
     ).not.toBeInTheDocument();

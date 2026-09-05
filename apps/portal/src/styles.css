@@ -252,12 +252,6 @@ h2 {
   font-weight: 600;
 }
 
-.repository-destination-label {
-  margin-top: 12px;
-  border-top: 1px solid var(--line);
-  padding-top: 11px;
-}
-
 .eyebrow {
   display: block;
   color: var(--text-muted);
@@ -3447,6 +3441,12 @@ textarea {
   padding: 10px 11px 10px 16px;
 }
 
+.mobile-navigation-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .mobile-navigation-scroll {
   min-height: 0;
   flex: 1;
@@ -4075,6 +4075,11 @@ textarea {
   justify-content: flex-start;
 }
 
+.extension-action-control {
+  display: inline-flex;
+  position: relative;
+}
+
 .extension-actions button,
 .extension-remove button {
   display: inline-flex;
@@ -4085,6 +4090,38 @@ textarea {
   border-radius: 5px;
   background: var(--surface);
   padding: 5px 10px;
+}
+
+.extension-action-tooltip {
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 110;
+  visibility: hidden;
+  width: max-content;
+  max-width: min(340px, 80vw);
+  border: 1px solid var(--terminal-popup-border);
+  border-radius: 5px;
+  background: var(--terminal-popup-bg);
+  box-shadow: 0 8px 28px #0008;
+  color: var(--terminal-popup-text);
+  font-size: 0.72rem;
+  opacity: 0;
+  padding: 7px 9px;
+  pointer-events: none;
+  position: absolute;
+}
+
+.extension-action-control:hover .extension-action-tooltip,
+.extension-action-control:focus-within .extension-action-tooltip {
+  visibility: visible;
+  opacity: 1;
+}
+
+.extension-detail:focus-within
+  .extension-action-control:hover:not(:focus-within)
+  .extension-action-tooltip {
+  visibility: hidden;
+  opacity: 0;
 }
 
 .extension-remove label {
@@ -4099,6 +4136,21 @@ textarea {
   .extension-layout,
   .extension-preview-grid {
     grid-template-columns: 1fr;
+  }
+
+  .extension-actions {
+    position: relative;
+  }
+
+  .extension-actions .extension-action-control {
+    position: static;
+  }
+
+  .extension-actions .extension-action-tooltip {
+    right: 0;
+    left: 0;
+    width: auto;
+    max-width: none;
   }
 }
 

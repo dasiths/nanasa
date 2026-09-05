@@ -120,16 +120,26 @@ describe("ExtensionsWorkspace", () => {
     expect(screen.getByText("copilot --model gpt")).toBeVisible();
     expect(screen.getByText(/environment names COPILOT_HOME, NANASA_STATUS_URL/)).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: /Trust exact plan/ }));
+    const approve = screen.getByRole("button", { name: "Approve exact plan" });
+    expect(approve).toHaveAccessibleDescription(
+      /Approve the displayed package, permissions, commands, and managed changes/,
+    );
+    await user.click(approve);
     await waitFor(() => expect(portal.trustProviderExtension).toHaveBeenCalled());
-    await user.click(screen.getByRole("button", { name: /Repair owned state/ }));
+    const repair = screen.getByRole("button", { name: "Repair owned state" });
+    expect(repair).toHaveAccessibleDescription(/without changing authentication, sessions/);
+    await user.click(repair);
     await waitFor(() => expect(portal.repairProviderExtension).toHaveBeenCalled());
-    await user.click(screen.getByRole("button", { name: "Rollback" }));
+    const rollback = screen.getByRole("button", { name: "Rollback" });
+    expect(rollback).toHaveAccessibleDescription("Restore the previous verified extension generation.");
+    await user.click(rollback);
     await waitFor(() => expect(portal.rollbackProviderExtension).toHaveBeenCalled());
 
-    const remove = screen.getByRole("button", { name: "Remove extension lock" });
+    const remove = screen.getByRole("button", { name: "Remove from Nanasa" });
     expect(remove).toBeDisabled();
+    expect(remove).toHaveAccessibleDescription("Type nanasa.copilot above to enable removal.");
     await user.type(screen.getByLabelText(/Type nanasa.copilot to confirm/), "nanasa.copilot");
     expect(remove).toBeEnabled();
+    expect(remove).toHaveAccessibleDescription(/retaining provider state, authentication, sessions/);
   });
 });

@@ -32,7 +32,7 @@ export const groupDestinations = [
   },
 ] as const satisfies readonly GroupDestinationDefinition[];
 
-export type GlobalDestinationGroup = "operations" | "repository" | "system" | "utilities";
+export type GlobalDestinationGroup = "operations" | "system" | "utilities";
 
 export interface GlobalDestinationDefinition {
   id:
@@ -80,7 +80,7 @@ export const globalDestinationDefinitions = [
     id: "checkouts",
     label: "Checkouts",
     heading: "Checkouts",
-    group: "repository",
+    group: "operations",
     commandLabel: "Open checkouts",
     commandDescription: "Manage Git checkouts and worktrees",
     keywords: ["git", "branches", "worktrees"],
@@ -90,7 +90,7 @@ export const globalDestinationDefinitions = [
     id: "extensions",
     label: "Providers",
     heading: "Providers",
-    group: "repository",
+    group: "utilities",
     commandLabel: "Open providers",
     commandDescription: "Set up providers and resolve issues preventing agents from running",
     keywords: ["providers", "packages", "integrations"],

@@ -44,4 +44,13 @@ describe("portal destination registry", () => {
     );
     expect(new Set(shortcuts).size).toBe(shortcuts.length);
   });
+
+  it("keeps checkouts primary and providers in utilities", () => {
+    expect(globalDestinationDefinitions.find(({ id }) => id === "checkouts")?.group).toBe(
+      "operations",
+    );
+    expect(globalDestinationDefinitions.find(({ id }) => id === "extensions")?.group).toBe(
+      "utilities",
+    );
+  });
 });

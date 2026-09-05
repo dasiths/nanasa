@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, lstatSync, readFileSync } from "node:fs";
+import { accessSync, constants, existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import type { ExtensionLockEntry, NanasaConfig, ProviderExtensionHealth } from "@nanasa/contracts";
 import type { ExtensionLockRepository } from "./extension-lock-repository.js";
@@ -18,8 +18,8 @@ function available(command: string, cwd: string): boolean {
         .map((directory) => join(directory, command));
   return candidates.some((candidate) => {
     try {
-      const status = lstatSync(candidate);
-      if (!status.isFile() || status.isSymbolicLink()) return false;
+      const status = statSync(candidate);
+      if (!status.isFile()) return false;
       accessSync(candidate, constants.X_OK);
       return true;
     } catch {
