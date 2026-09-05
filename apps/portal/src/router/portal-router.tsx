@@ -16,6 +16,14 @@ export type PortalRoute =
 
 const workspaceSections: readonly WorkspaceSection[] = groupDestinations.map(({ id }) => id);
 
+function canonicalPortalPath(pathname: string): string {
+  const segments = pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  if (segments.length === 3 && segments[0] === "groups" && segments[2] === "settings") {
+    return groupRoute(segments[1]!, "terminals");
+  }
+  return pathname;
+}
+
 export function parsePortalRoute(pathname: string): PortalRoute {
   const segments = pathname.split("/").filter(Boolean).map(decodeURIComponent);
   if (segments.length === 0) return { kind: "home" };
@@ -63,7 +71,13 @@ function activeFocusKey(): string | undefined {
 }
 
 export function usePortalRouter() {
-  const [route, setRoute] = useState<PortalRoute>(() => parsePortalRoute(window.location.pathname));
+  const [route, setRoute] = useState<PortalRoute>(() => {
+    const canonicalPath = canonicalPortalPath(window.location.pathname);
+    if (canonicalPath !== window.location.pathname) {
+      window.history.replaceState(window.history.state, "", canonicalPath);
+    }
+    return parsePortalRoute(canonicalPath);
+  });
 
   const navigate = useCallback((path: string, options: { replace?: boolean } = {}) => {
     const currentState = (window.history.state ?? {}) as PortalHistoryState;
@@ -79,7 +93,11 @@ export function usePortalRouter() {
 
   useEffect(() => {
     const onPopState = (event: PopStateEvent) => {
-      setRoute(parsePortalRoute(window.location.pathname));
+      const canonicalPath = canonicalPortalPath(window.location.pathname);
+      if (canonicalPath !== window.location.pathname) {
+        window.history.replaceState(event.state, "", canonicalPath);
+      }
+      setRoute(parsePortalRoute(canonicalPath));
       const focusKey = (event.state as PortalHistoryState | null)?.nanasa?.focusKey;
       window.setTimeout(() => {
         const target =

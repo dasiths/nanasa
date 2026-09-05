@@ -28,7 +28,7 @@ import {
   Users,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-
+import { Dialog } from "./a11y/primitives.js";
 import { api, type PortalClient } from "./api.js";
 import {
   attentionReviewCount,
@@ -48,6 +48,7 @@ import {
   RoleSettingsDialog,
 } from "./components/group-tree.js";
 import { MessageWorkspace } from "./components/message-workspace.js";
+import { SystemStatusDialog } from "./components/system-status-dialog.js";
 import { TeamRecoveryResults } from "./components/team-recovery-results.js";
 import { ErrorNotice, type PortalError, toPortalError } from "./errors.js";
 import { useAttentionWorkspaces } from "./hooks/use-attention-workspaces.js";
@@ -74,7 +75,6 @@ import {
   RepositoryNavigation,
 } from "./shell/portal-navigation.js";
 import { PortalShell } from "./shell/portal-shell.js";
-import { Dialog } from "./a11y/primitives.js";
 
 const TerminalWorkspace = lazy(() =>
   import("./components/terminal-workspace.js").then((module) => ({
@@ -281,6 +281,7 @@ export function App({ client = api }: AppProps) {
   const [terminalConnectionRevision, setTerminalConnectionRevision] = useState(0);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
+  const [systemStatusOpen, setSystemStatusOpen] = useState(false);
   const [dismissedAttentionItemIds, setDismissedAttentionItemIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -1098,10 +1099,16 @@ export function App({ client = api }: AppProps) {
               )}
             </button>
           )}
-          <span className={`event-status event-${eventStatus}`} title="Domain event connection">
+          <button
+            type="button"
+            className={`event-status system-status-control event-${eventStatus}`}
+            aria-label={`System ${eventStatus}, open System status`}
+            title={`System ${eventStatus}`}
+            onClick={() => setSystemStatusOpen(true)}
+          >
             <Cable aria-hidden="true" size={14} />
-            {eventStatus}
-          </span>
+            <span>{eventStatus}</span>
+          </button>
         </div>
       </header>
       {actionError !== undefined && (
@@ -1328,6 +1335,14 @@ export function App({ client = api }: AppProps) {
         )}
       </div>
       {consoleOpen && <AdHocConsoleDialog client={client} onClose={() => setConsoleOpen(false)} />}
+      <SystemStatusDialog
+        open={systemStatusOpen}
+        client={client}
+        snapshot={snapshot}
+        config={config}
+        connectionStatus={eventStatus}
+        onClose={() => setSystemStatusOpen(false)}
+      />
       <MobileNavigationDialog
         open={mobileNavigationOpen}
         route={route}

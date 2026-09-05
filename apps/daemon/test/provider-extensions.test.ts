@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NanasaConfig } from "@nanasa/contracts";
@@ -180,6 +180,32 @@ groups: {}
     });
     const drift = health.inspect("example.copilot");
     expect(drift).toMatchObject({ state: "drifted", repairable: true });
+    store.close();
+  });
+
+  it("follows executable command symlinks while rejecting dangling links", () => {
+    const { root, store, health } = fixture();
+    const target = join(root, "provider-command");
+    const command = join(root, "provider-command-link");
+    writeFileSync(target, "#!/bin/sh\n");
+    chmodSync(target, 0o755);
+    symlinkSync(target, command);
+    writeFileSync(
+      join(root, ".nanasa", "config.yaml"),
+      `version: 2
+integrations:
+  copilot:
+    name: Copilot
+    kind: copilot
+    command: [${JSON.stringify(command)}]
+    cwd: .
+groups: {}
+`,
+    );
+
+    expect(health.inspect("nanasa.copilot")).toMatchObject({ state: "current" });
+    rmSync(target);
+    expect(health.inspect("nanasa.copilot")).toMatchObject({ state: "unavailable" });
     store.close();
   });
 });

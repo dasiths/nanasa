@@ -47,6 +47,11 @@ describe("portal preferences v2", () => {
       theme: "dark",
       dismissedProviderUpdateIds: [],
     });
+    expect(
+      parsePortalPreferences(
+        '{"version":2,"lastSectionByGroup":{"legacy":"settings","active":"activity"}}',
+      ).lastSectionByGroup,
+    ).toEqual({ active: "activity" });
   });
 
   it("parses a bounded set of dismissed provider updates", () => {

@@ -1,8 +1,49 @@
 import type { ProviderCatalogItem, ProviderExtensionInspect } from "@nanasa/contracts";
 import { PackageCheck, RefreshCw, ShieldCheck, Wrench } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 import type { PortalClient } from "../api.js";
 import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
+
+function ExtensionActionButton({
+  label,
+  description,
+  disabledReason,
+  disabled,
+  className,
+  icon,
+  onClick,
+}: {
+  label: string;
+  description: string;
+  disabledReason?: string;
+  disabled: boolean;
+  className?: string;
+  icon?: ReactNode;
+  onClick(): void;
+}) {
+  const tooltipId = useId();
+  const tooltip = disabled && disabledReason !== undefined ? disabledReason : description;
+  return (
+    <span
+      className="extension-action-control"
+      {...(disabled ? { tabIndex: 0, "aria-label": label, "aria-describedby": tooltipId } : {})}
+    >
+      <button
+        type="button"
+        className={className}
+        disabled={disabled}
+        aria-describedby={tooltipId}
+        onClick={onClick}
+      >
+        {icon}
+        {label}
+      </button>
+      <span id={tooltipId} className="extension-action-tooltip" role="tooltip">
+        {tooltip}
+      </span>
+    </span>
+  );
+}
 
 export function ExtensionsWorkspace({
   client,
@@ -222,9 +263,11 @@ export function ExtensionsWorkspace({
             </section>
 
             <div className="extension-actions" aria-label="Extension lifecycle actions">
-              <button
-                type="button"
+              <ExtensionActionButton
+                label="Approve exact plan"
+                description="Approve the displayed package, permissions, commands, and managed changes. A changed plan requires new approval."
                 disabled={busy !== undefined}
+                icon={<ShieldCheck aria-hidden="true" size={15} />}
                 onClick={() =>
                   void perform("trust", () =>
                     client.trustProviderExtension(selected.descriptor.metadata.id, {
@@ -233,14 +276,14 @@ export function ExtensionsWorkspace({
                     }),
                   )
                 }
-              >
-                <ShieldCheck aria-hidden="true" size={15} /> Trust exact plan
-              </button>
+              />
               {!selected.installed ? (
-                <button
-                  type="button"
+                <ExtensionActionButton
+                  label="Install"
+                  description="Install this approved provider extension and apply its Nanasa-owned configuration."
                   className="primary-button"
                   disabled={busy !== undefined || planCommand === undefined}
+                  icon={<PackageCheck aria-hidden="true" size={15} />}
                   onClick={() =>
                     void perform("install", () =>
                       client.installProviderExtension(
@@ -249,14 +292,14 @@ export function ExtensionsWorkspace({
                       ),
                     )
                   }
-                >
-                  <PackageCheck aria-hidden="true" size={15} /> Install
-                </button>
+                />
               ) : (
                 <>
-                  <button
-                    type="button"
+                  <ExtensionActionButton
+                    label="Repair owned state"
+                    description="Restore Nanasa-owned provider files and settings without changing authentication, sessions, or unrelated configuration."
                     disabled={busy !== undefined || planCommand === undefined}
+                    icon={<Wrench aria-hidden="true" size={15} />}
                     onClick={() =>
                       void perform("repair", () =>
                         client.repairProviderExtension(
@@ -265,11 +308,10 @@ export function ExtensionsWorkspace({
                         ),
                       )
                     }
-                  >
-                    <Wrench aria-hidden="true" size={15} /> Repair owned state
-                  </button>
-                  <button
-                    type="button"
+                  />
+                  <ExtensionActionButton
+                    label="Disable"
+                    description="Prevent this provider extension from being used for new runs. Provider state is retained."
                     disabled={busy !== undefined}
                     onClick={() =>
                       void perform("disable", () =>
@@ -278,11 +320,13 @@ export function ExtensionsWorkspace({
                         }),
                       )
                     }
-                  >
-                    Disable
-                  </button>
-                  <button
-                    type="button"
+                  />
+                  <ExtensionActionButton
+                    label="Rollback"
+                    description="Restore the previous verified extension generation."
+                    {...(selected.health.rollbackAvailable
+                      ? {}
+                      : { disabledReason: "No previous verified generation is available." })}
                     disabled={busy !== undefined || !selected.health.rollbackAvailable}
                     onClick={() =>
                       void perform("rollback", () =>
@@ -291,18 +335,16 @@ export function ExtensionsWorkspace({
                         }),
                       )
                     }
-                  >
-                    Rollback
-                  </button>
+                  />
                 </>
               )}
-              <button
-                type="button"
+              <ExtensionActionButton
+                label="Refresh health"
+                description="Check command availability, package integrity, compatibility, approval, and configuration drift again."
                 disabled={busy !== undefined}
+                icon={<RefreshCw aria-hidden="true" size={15} />}
                 onClick={() => void load(selectedId)}
-              >
-                <RefreshCw aria-hidden="true" size={15} /> Refresh health
-              </button>
+              />
             </div>
 
             {selected.installed && (
@@ -319,8 +361,10 @@ export function ExtensionsWorkspace({
                     onChange={(event) => setRemoveConfirmation(event.target.value)}
                   />
                 </label>
-                <button
-                  type="button"
+                <ExtensionActionButton
+                  label="Remove from Nanasa"
+                  description="Remove this extension from Nanasa while retaining provider state, authentication, sessions, and changed files."
+                  disabledReason={`Type ${selected.descriptor.metadata.id} above to enable removal.`}
                   className="danger-button"
                   disabled={
                     busy !== undefined || removeConfirmation !== selected.descriptor.metadata.id
@@ -332,9 +376,7 @@ export function ExtensionsWorkspace({
                       }),
                     )
                   }
-                >
-                  Remove extension lock
-                </button>
+                />
               </fieldset>
             )}
           </section>

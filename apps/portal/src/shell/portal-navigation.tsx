@@ -2,7 +2,6 @@ import type { Group } from "@nanasa/contracts";
 import {
   Bell,
   Bot,
-  Boxes,
   CircleHelp,
   Command,
   GitBranch,
@@ -102,14 +101,12 @@ export function RepositoryNavigation({
   onLink: PortalLinkHandler;
 }) {
   const operations = globalDestinationDefinitions.filter(({ group }) => group === "operations");
-  const system = globalDestinationDefinitions.filter(({ group }) => group === "system");
-  const systemSelected = system.some(({ id }) => id === currentDestination);
   return (
     <section className="repository-navigation" aria-labelledby="repository-navigation-title">
       <span id="repository-navigation-title" className="rail-section-label">
-        Repository operations
+        Operations
       </span>
-      <nav className="portal-navigation-list" aria-label="Repository operations">
+      <nav className="portal-navigation-list" aria-label="Operations">
         {operations.map((destination) => (
           <DestinationLink
             key={destination.id}
@@ -119,26 +116,6 @@ export function RepositoryNavigation({
             onLink={onLink}
           />
         ))}
-        <details className="portal-navigation-disclosure" open={systemSelected || undefined}>
-          <summary className={systemSelected ? "has-active-destination" : undefined}>
-            <Boxes aria-hidden="true" size={15} />
-            <span>System</span>
-            <span className="disclosure-chevron" aria-hidden="true">
-              ›
-            </span>
-          </summary>
-          <div className="portal-navigation-sublist">
-            {system.map((destination) => (
-              <DestinationLink
-                key={destination.id}
-                destination={destination}
-                currentDestination={currentDestination}
-                attentionCount={attentionCount}
-                onLink={onLink}
-              />
-            ))}
-          </div>
-        </details>
       </nav>
     </section>
   );
@@ -298,9 +275,7 @@ export function MobileNavigationDialog({
 }) {
   const currentDestination = route.kind === "global" ? route.destination : undefined;
   const operations = globalDestinationDefinitions.filter(({ group }) => group === "operations");
-  const system = globalDestinationDefinitions.filter(({ group }) => group === "system");
   const utilities = globalDestinationDefinitions.filter(({ group }) => group === "utilities");
-  const systemSelected = system.some(({ id }) => id === currentDestination);
   const closeAfterLink: PortalLinkHandler = (path) => (event) => {
     const handled =
       event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
@@ -321,16 +296,30 @@ export function MobileNavigationDialog({
             <span className="eyebrow">Operations</span>
             <h2 id="mobile-navigation-title">Nanasa</h2>
           </div>
-          <button type="button" className="icon-button" aria-label="Close menu" onClick={onClose}>
-            <X aria-hidden="true" size={16} />
-          </button>
+          <div className="mobile-navigation-heading-actions">
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Open command palette"
+              title="Open command palette"
+              onClick={() => {
+                onClose();
+                onOpenCommandPalette();
+              }}
+            >
+              <Command aria-hidden="true" size={16} />
+            </button>
+            <button type="button" className="icon-button" aria-label="Close menu" onClick={onClose}>
+              <X aria-hidden="true" size={16} />
+            </button>
+          </div>
         </header>
         <div className="mobile-navigation-scroll">
           <section aria-labelledby="mobile-operations-title">
             <span id="mobile-operations-title" className="rail-section-label">
-              Repository operations
+              Operations
             </span>
-            <nav className="portal-navigation-list" aria-label="Repository operations">
+            <nav className="portal-navigation-list" aria-label="Operations">
               {operations.map((destination) => (
                 <DestinationLink
                   key={destination.id}
@@ -340,26 +329,6 @@ export function MobileNavigationDialog({
                   onLink={closeAfterLink}
                 />
               ))}
-              <details className="portal-navigation-disclosure" open={systemSelected || undefined}>
-                <summary className={systemSelected ? "has-active-destination" : undefined}>
-                  <Boxes aria-hidden="true" size={15} />
-                  <span>System</span>
-                  <span className="disclosure-chevron" aria-hidden="true">
-                    ›
-                  </span>
-                </summary>
-                <div className="portal-navigation-sublist">
-                  {system.map((destination) => (
-                    <DestinationLink
-                      key={destination.id}
-                      destination={destination}
-                      currentDestination={currentDestination}
-                      attentionCount={attentionCount}
-                      onLink={closeAfterLink}
-                    />
-                  ))}
-                </div>
-              </details>
             </nav>
           </section>
           <section className="mobile-groups" aria-labelledby="mobile-groups-title">
@@ -428,17 +397,6 @@ export function MobileNavigationDialog({
             </button>
           </div>
           <nav className="portal-navigation-list" aria-label="Portal utilities">
-            <button
-              type="button"
-              className="portal-nav-link"
-              onClick={() => {
-                onClose();
-                onOpenCommandPalette();
-              }}
-            >
-              <Command aria-hidden="true" size={15} />
-              <span>Commands</span>
-            </button>
             {utilities.map((destination) => (
               <DestinationLink
                 key={destination.id}
