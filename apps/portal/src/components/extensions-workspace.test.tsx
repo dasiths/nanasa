@@ -131,7 +131,9 @@ describe("ExtensionsWorkspace", () => {
     await user.click(repair);
     await waitFor(() => expect(portal.repairProviderExtension).toHaveBeenCalled());
     const rollback = screen.getByRole("button", { name: "Rollback" });
-    expect(rollback).toHaveAccessibleDescription("Restore the previous verified extension generation.");
+    expect(rollback).toHaveAccessibleDescription(
+      "Restore the previous verified extension generation.",
+    );
     await user.click(rollback);
     await waitFor(() => expect(portal.rollbackProviderExtension).toHaveBeenCalled());
 
@@ -140,6 +142,8 @@ describe("ExtensionsWorkspace", () => {
     expect(remove).toHaveAccessibleDescription("Type nanasa.copilot above to enable removal.");
     await user.type(screen.getByLabelText(/Type nanasa.copilot to confirm/), "nanasa.copilot");
     expect(remove).toBeEnabled();
-    expect(remove).toHaveAccessibleDescription(/retaining provider state, authentication, sessions/);
+    expect(remove).toHaveAccessibleDescription(
+      /retaining provider state, authentication, sessions/,
+    );
   });
 });

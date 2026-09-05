@@ -26,9 +26,7 @@ function ExtensionActionButton({
   return (
     <span
       className="extension-action-control"
-      {...(disabled
-        ? { tabIndex: 0, "aria-label": label, "aria-describedby": tooltipId }
-        : {})}
+      {...(disabled ? { tabIndex: 0, "aria-label": label, "aria-describedby": tooltipId } : {})}
     >
       <button
         type="button"

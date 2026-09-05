@@ -2699,11 +2699,13 @@ describe("portal application", () => {
       "/extensions",
     );
     expect(within(drawer).queryByText("Repository")).not.toBeInTheDocument();
-    expect(within(drawer).getByRole("button", { name: "Open command palette" })).toBeInTheDocument();
     expect(
-      within(
-        within(drawer).getByRole("navigation", { name: "Portal utilities" }),
-      ).queryByRole("button"),
+      within(drawer).getByRole("button", { name: "Open command palette" }),
+    ).toBeInTheDocument();
+    expect(
+      within(within(drawer).getByRole("navigation", { name: "Portal utilities" })).queryByRole(
+        "button",
+      ),
     ).toBeNull();
     expect(
       within(drawer).queryByRole("button", { name: "Role presentation" }),
