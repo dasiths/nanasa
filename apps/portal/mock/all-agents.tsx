@@ -1,5 +1,3 @@
-import { useState, type ReactNode } from "react";
-import { createRoot } from "react-dom/client";
 import {
   Activity,
   ArrowRight,
@@ -14,6 +12,7 @@ import {
   KeyRound,
   Layers,
   LockKeyhole,
+  type LucideIcon,
   Moon,
   Search,
   Settings2,
@@ -22,8 +21,9 @@ import {
   Users,
   X,
   Zap,
-  type LucideIcon,
 } from "lucide-react";
+import { type ReactNode, useState } from "react";
+import { createRoot } from "react-dom/client";
 import "@fontsource/ibm-plex-sans-condensed/400.css";
 import "@fontsource/ibm-plex-sans-condensed/500.css";
 import "@fontsource/ibm-plex-sans-condensed/600.css";

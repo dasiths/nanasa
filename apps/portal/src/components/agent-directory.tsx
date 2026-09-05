@@ -10,6 +10,7 @@ import {
   GitBranch,
   Layers,
   LockKeyhole,
+  type LucideIcon,
   Search,
   Settings2,
   ShieldCheck,
@@ -17,7 +18,6 @@ import {
   Users,
   X,
   Zap,
-  type LucideIcon,
 } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { groupRoute } from "../router/portal-router.js";

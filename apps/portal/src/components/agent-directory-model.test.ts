@@ -2,8 +2,8 @@ import { AgentRunSchema, NanasaConfigSchema, PortalSnapshotSchema } from "@nanas
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { createElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { agentDirectoryEntries } from "./agent-directory-model.js";
 import { AgentDirectory } from "./agent-directory.js";
+import { agentDirectoryEntries } from "./agent-directory-model.js";
 
 const timestamp = "2026-09-05T12:00:00.000Z";
 const directoryConfig = NanasaConfigSchema.parse({
