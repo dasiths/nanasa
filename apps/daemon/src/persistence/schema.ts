@@ -3,7 +3,35 @@ import {
   PROVIDER_UPDATE_TRANSITION_SCHEMA_SQL,
 } from "./provider-platform-schema.js";
 
-export const DATABASE_SCHEMA_VERSION = 14;
+export const DATABASE_SCHEMA_VERSION = 15;
+
+export const DATABASE_MIGRATION_14_TO_15_SQL = `
+  ALTER TABLE groups ADD COLUMN checkout_id TEXT REFERENCES checkouts(id);
+  ALTER TABLE groups ADD COLUMN checkout_revision INTEGER NOT NULL DEFAULT 0
+    CHECK (checkout_revision >= 0);
+
+  UPDATE groups
+  SET checkout_id = (
+    SELECT MIN(m.checkout_id)
+    FROM memberships m
+    WHERE m.group_id = groups.id
+      AND m.state = 'active'
+      AND m.checkout_id IS NOT NULL
+  )
+  WHERE (
+    SELECT COUNT(DISTINCT m.checkout_id)
+    FROM memberships m
+    WHERE m.group_id = groups.id
+      AND m.state = 'active'
+      AND m.checkout_id IS NOT NULL
+  ) = 1
+  AND (
+    SELECT COUNT(*) = COUNT(m.checkout_id)
+    FROM memberships m
+    WHERE m.group_id = groups.id
+      AND m.state = 'active'
+  );
+`;
 
 export const DATABASE_MIGRATION_13_TO_14_SQL = `
   CREATE TABLE attention_subscription_overrides (
@@ -94,6 +122,8 @@ export const DATABASE_BASELINE_SQL = `
     name TEXT NOT NULL,
     order_index INTEGER NOT NULL CHECK (order_index >= 0),
     membership_revision INTEGER NOT NULL CHECK (membership_revision >= 0),
+    checkout_id TEXT REFERENCES checkouts(id),
+    checkout_revision INTEGER NOT NULL DEFAULT 0 CHECK (checkout_revision >= 0),
     message_sequence INTEGER NOT NULL DEFAULT 0 CHECK (message_sequence >= 0),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL

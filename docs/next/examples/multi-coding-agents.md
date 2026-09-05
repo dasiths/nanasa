@@ -194,9 +194,11 @@ Provider and role are separate choices. You can add another implementor using a
 different CLI, move an existing agent to a reviewer role, or define another
 group without duplicating global guidance.
 
-Stop affected agents before changing integrations, roles, checkouts, models, or
-instruction paths. Run `setup` and `doctor` after edits, then start new runs so
-Nanasa can generate immutable launch overlays from the new configuration.
+Stop affected agents before changing integrations, roles, models, or instruction
+paths. Select one workspace for the whole team through **Team workspaces**; that
+binding remains local and is not written into this shared configuration. Run
+`setup` and `doctor` after configuration edits, then start new runs so Nanasa can
+generate immutable launch overlays from the new configuration.
 
 Continue with [Configure Nanasa](../guides/configuration.md),
 [Add scoped prompts](../guides/prompts.md), and

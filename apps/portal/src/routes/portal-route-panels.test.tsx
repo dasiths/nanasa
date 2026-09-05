@@ -134,6 +134,7 @@ function snapshot(
       name: `Group ${order + 1}`,
       order,
       membershipRevision: 1,
+      checkoutRevision: 0,
       createdAt: timestamp,
       updatedAt: timestamp,
     })),

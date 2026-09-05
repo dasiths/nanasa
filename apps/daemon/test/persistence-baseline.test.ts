@@ -30,6 +30,31 @@ function tableNames(database: DatabaseSync): string[] {
   ).map((row) => row.name);
 }
 
+const legacyCheckoutTables = `
+  CREATE TABLE repositories (
+    id TEXT PRIMARY KEY,
+    primary_checkout_id TEXT
+  ) STRICT;
+  CREATE TABLE checkouts (
+    id TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL REFERENCES repositories(id)
+  ) STRICT;
+  CREATE TABLE groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    order_index INTEGER NOT NULL,
+    membership_revision INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE memberships (
+    id TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL REFERENCES groups(id),
+    checkout_id TEXT REFERENCES checkouts(id),
+    state TEXT NOT NULL
+  ) STRICT;
+`;
+
 describe("database baseline", () => {
   it("creates every final domain as strict tables and reopens idempotently", () => {
     const path = join(directory(), "nanasa.sqlite");
@@ -116,6 +141,7 @@ describe("database baseline", () => {
       ) STRICT;
       CREATE UNIQUE INDEX trust_repository_subject
         ON trust (repository_identity, subject_digest, decided_at);
+      ${legacyCheckoutTables}
       INSERT INTO trust VALUES (
         'trust-existing', NULL, 'repo-one', 'operator-one', '${"a".repeat(64)}',
         'trusted', '2026-09-01T00:00:00.000Z', NULL
@@ -151,6 +177,7 @@ describe("database baseline", () => {
         initialized_at TEXT NOT NULL
       ) STRICT;
       INSERT INTO schema_metadata VALUES (1, 11, '2026-09-01T00:00:00.000Z');
+      ${legacyCheckoutTables}
       PRAGMA user_version = 11;
     `);
     database.close();
@@ -179,6 +206,7 @@ describe("database baseline", () => {
         initialized_at TEXT NOT NULL
       ) STRICT;
       INSERT INTO schema_metadata VALUES (1, 12, '2026-09-03T00:00:00.000Z');
+      ${legacyCheckoutTables}
       PRAGMA user_version = 12;
     `);
     database.close();
@@ -207,6 +235,7 @@ describe("database baseline", () => {
         initialized_at TEXT NOT NULL
       ) STRICT;
       INSERT INTO schema_metadata VALUES (1, 13, '2026-09-03T00:00:00.000Z');
+      ${legacyCheckoutTables}
       PRAGMA user_version = 13;
     `);
     database.close();
@@ -225,6 +254,71 @@ describe("database baseline", () => {
         .get(),
     ).toEqual({ strict: 1 });
     migrated.close();
+  });
+
+  it("migrates a unanimous schema 14 checkout assignment to its group", () => {
+    const path = join(directory(), "nanasa-v14.sqlite");
+    const database = new DatabaseSync(path);
+    database.exec(`
+      CREATE TABLE schema_metadata (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        schema_version INTEGER NOT NULL,
+        initialized_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO schema_metadata VALUES (1, 14, '2026-09-05T00:00:00.000Z');
+      ${legacyCheckoutTables}
+      INSERT INTO repositories VALUES ('repo-one', 'checkout-feature');
+      INSERT INTO checkouts VALUES ('checkout-feature', 'repo-one');
+      INSERT INTO groups VALUES (
+        'group-one', 'Team', 0, 0, '2026-09-05T00:00:00.000Z', '2026-09-05T00:00:00.000Z'
+      );
+      INSERT INTO memberships VALUES ('agent-one', 'group-one', 'checkout-feature', 'active');
+      INSERT INTO memberships VALUES ('agent-two', 'group-one', 'checkout-feature', 'active');
+      PRAGMA user_version = 14;
+    `);
+    database.close();
+
+    openNanasaDatabase(path).close();
+    const migrated = new DatabaseSync(path, { readOnly: true });
+    expect(
+      migrated
+        .prepare("SELECT checkout_id, checkout_revision FROM groups WHERE id = 'group-one'")
+        .get(),
+    ).toEqual({ checkout_id: "checkout-feature", checkout_revision: 0 });
+    migrated.close();
+  });
+
+  it("rejects conflicting schema 14 agent checkout assignments", () => {
+    const path = join(directory(), "nanasa-v14-conflict.sqlite");
+    const database = new DatabaseSync(path);
+    database.exec(`
+      CREATE TABLE schema_metadata (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        schema_version INTEGER NOT NULL,
+        initialized_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO schema_metadata VALUES (1, 14, '2026-09-05T00:00:00.000Z');
+      ${legacyCheckoutTables}
+      INSERT INTO repositories VALUES ('repo-one', 'checkout-one');
+      INSERT INTO checkouts VALUES ('checkout-one', 'repo-one');
+      INSERT INTO checkouts VALUES ('checkout-two', 'repo-one');
+      INSERT INTO groups VALUES (
+        'group-one', 'Team', 0, 0, '2026-09-05T00:00:00.000Z', '2026-09-05T00:00:00.000Z'
+      );
+      INSERT INTO memberships VALUES ('agent-one', 'group-one', 'checkout-one', 'active');
+      INSERT INTO memberships VALUES ('agent-two', 'group-one', 'checkout-two', 'active');
+      PRAGMA user_version = 14;
+    `);
+    database.close();
+
+    expect(() => openNanasaDatabase(path)).toThrowError(
+      /team group-one: active agents have conflicting checkout assignments/,
+    );
+    const unchanged = new DatabaseSync(path, { readOnly: true });
+    expect(
+      (unchanged.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
+    ).toBe(14);
+    unchanged.close();
   });
 
   it("keeps checkpoints default-off, owner-only, and metadata-only", () => {

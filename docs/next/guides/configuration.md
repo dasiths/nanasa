@@ -424,10 +424,12 @@ review.
 ## Change a running configuration
 
 Configuration changes are not all equivalent. Names, ordering, and
-presentation affect the portal. Integrations, roles, checkouts, instruction
-paths, and models affect how an agent launches. Stop affected agents before
-changing launch-affecting fields. Global prompt changes affect every agent;
-group prompt changes affect every agent in that group.
+presentation affect the portal. Integrations, roles, instruction paths, and
+models affect how an agent launches. Stop affected agents before changing
+launch-affecting fields. Team workspace selection is local daemon state managed
+through the portal or control API, not checked-in configuration. Global prompt
+changes affect every agent; group prompt changes affect every agent in that
+group.
 
 Nanasa stores a revision of the authored YAML and a separate revision of each
 composed prompt. New runs receive newly generated provider overlays. Existing

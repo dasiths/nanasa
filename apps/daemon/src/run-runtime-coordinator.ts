@@ -1,6 +1,9 @@
 import type {
   AgentRun,
+  AssignGroupCheckoutCommand,
+  AssignGroupCheckoutResult,
   DeleteGroupResult,
+  GroupCheckoutMemberOutcome,
   GroupMembership,
   NativeRecoveryPolicy,
   ProviderUpdateOutcome,
@@ -58,6 +61,7 @@ export interface RunRuntimeCoordinatorOptions {
     }>;
   };
   onRuntimeObservation?: (observation: RuntimeObservation) => void | Promise<void>;
+  validateCheckout?: (checkoutId: string) => Promise<void>;
 }
 
 const RECOVERY_TERMINAL_SIZE = { cols: 120, rows: 40 } as const;
@@ -77,6 +81,7 @@ export class RunRuntimeCoordinator {
   readonly #launchConsent: RuntimeLaunchConsentGate | undefined;
   readonly #providerUpdates: RunRuntimeCoordinatorOptions["providerUpdates"];
   readonly #onRuntimeObservation: RunRuntimeCoordinatorOptions["onRuntimeObservation"];
+  readonly #validateCheckout: RunRuntimeCoordinatorOptions["validateCheckout"];
   #pending: Promise<void> = Promise.resolve();
   #closing = false;
   #lastStatusProbeAt = 0;
@@ -101,6 +106,7 @@ export class RunRuntimeCoordinator {
     this.#launchConsent = options.launchConsent;
     this.#providerUpdates = options.providerUpdates;
     this.#onRuntimeObservation = options.onRuntimeObservation;
+    this.#validateCheckout = options.validateCheckout;
     this.#reconcileTimer = setInterval(
       () => void this.reconcile().catch(() => undefined),
       options.reconcileIntervalMs ?? 1_000,
@@ -307,6 +313,115 @@ export class RunRuntimeCoordinator {
         }
       }
       return { groupId, outcomes };
+    });
+  }
+
+  public assignGroupCheckout(
+    groupId: string,
+    command: AssignGroupCheckoutCommand,
+  ): Promise<AssignGroupCheckoutResult> {
+    return this.#serialize(async () => {
+      const previousCheckoutId = this.#store.getEffectiveGroupCheckout(groupId)?.id;
+      await this.#validateCheckout?.(command.checkoutId);
+      this.#store.validateGroupCheckoutAssignment(
+        groupId,
+        command.checkoutId,
+        command.expectedCheckoutRevision,
+      );
+      const memberships = this.#store.listActiveMemberships(groupId);
+      const requiringStop = this.#store.listGroupRunsRequiringStop(groupId);
+      if (command.switchPolicy === "require-stopped" && requiringStop.length > 0) {
+        throw new DomainError(
+          "active_run_group_checkout_change_requires_stop",
+          "Stop every agent in the team before changing its workspace",
+          409,
+        );
+      }
+
+      const outcomes = new Map<string, GroupCheckoutMemberOutcome>(
+        memberships.map((membership) => [
+          membership.memberId,
+          { memberId: membership.memberId, status: "not-running" },
+        ]),
+      );
+      for (const run of requiringStop) {
+        try {
+          await this.#stopRun(groupId, run.memberId);
+          outcomes.set(run.memberId, {
+            memberId: run.memberId,
+            status: "stopped",
+            runId: run.id,
+          });
+        } catch (error) {
+          const failure = errorPayloadFromUnknown(
+            error,
+            "group_checkout_stop_failed",
+            "An agent could not be stopped before changing the team workspace",
+          );
+          outcomes.set(run.memberId, {
+            memberId: run.memberId,
+            status: "failed",
+            runId: run.id,
+            reason: failure.code,
+            error: failure,
+          });
+          throw new DomainError(
+            failure.code,
+            failure.message,
+            error instanceof DomainError ? error.statusCode : 500,
+            {
+              outcomes: [...outcomes.values()],
+            },
+          );
+        }
+      }
+
+      const group = this.#store.assignGroupCheckout(
+        groupId,
+        command.checkoutId,
+        command.expectedCheckoutRevision,
+      );
+      if (command.switchPolicy === "stop-switch-restart") {
+        for (const run of requiringStop) {
+          try {
+            const consent = await this.#resolveConsent(groupId, run.memberId);
+            if (consent !== undefined) {
+              outcomes.set(run.memberId, {
+                memberId: run.memberId,
+                status: consent.status,
+                runId: run.id,
+                request: consent.request,
+              });
+              continue;
+            }
+            const result = await this.#launchRun(groupId, run.memberId, RECOVERY_TERMINAL_SIZE);
+            outcomes.set(run.memberId, {
+              memberId: run.memberId,
+              status: "restarted",
+              runId: result.run.id,
+            });
+          } catch (error) {
+            const failure = errorPayloadFromUnknown(
+              error,
+              "group_checkout_restart_failed",
+              "An agent could not be restarted in the new team workspace",
+            );
+            outcomes.set(run.memberId, {
+              memberId: run.memberId,
+              status: "failed",
+              runId: run.id,
+              reason: failure.code,
+              error: failure,
+            });
+          }
+        }
+      }
+      return {
+        group,
+        previousCheckoutId,
+        checkoutId: command.checkoutId,
+        outcomes: memberships.map((membership) => outcomes.get(membership.memberId)!),
+      };
     });
   }
 

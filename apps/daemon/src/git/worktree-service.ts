@@ -193,6 +193,16 @@ export class WorktreeService {
         409,
       );
     }
+    const worktreeHelp = await this.git.run(["-C", source.path, "worktree", "add", "-h"], {
+      allowFailure: true,
+    });
+    if (!`${worktreeHelp.stdout}\n${worktreeHelp.stderr}`.includes("relative-paths")) {
+      throw new DomainError(
+        "git_relative_worktrees_unsupported",
+        "This Git version cannot create relocatable worktrees; upgrade Git to use managed worktrees",
+        409,
+      );
+    }
     const branchCheck = await this.git.run(
       ["-C", source.path, "check-ref-format", "--branch", command.branch],
       { allowFailure: true },
@@ -273,8 +283,18 @@ export class WorktreeService {
       );
       const addArguments =
         localBranch.exitCode === 0
-          ? ["-C", source.path, "worktree", "add", targetPath, command.branch]
-          : ["-C", source.path, "worktree", "add", "-b", command.branch, targetPath, command.base];
+          ? ["-C", source.path, "worktree", "add", "--relative-paths", targetPath, command.branch]
+          : [
+              "-C",
+              source.path,
+              "worktree",
+              "add",
+              "--relative-paths",
+              "-b",
+              command.branch,
+              targetPath,
+              command.base,
+            ];
       await this.git.run(addArguments);
       gitAdded = true;
       const checkout = await this.checkouts.discover(targetPath);
@@ -338,10 +358,10 @@ export class WorktreeService {
         409,
       );
     }
-    if (this.store.listMembershipsBoundToCheckout(worktree.checkoutId).length > 0) {
+    if (this.store.listGroupsBoundToCheckout(worktree.checkoutId).length > 0) {
       throw new DomainError(
         "worktree_has_assignments",
-        "Reassign every agent from this worktree before removal",
+        "Reassign every team from this worktree before removal",
         409,
       );
     }

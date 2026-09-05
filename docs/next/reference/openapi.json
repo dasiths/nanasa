@@ -965,6 +965,35 @@
         ]
       }
     },
+    "/api/v1/groups/:groupId/checkout": {
+      "put": {
+        "operationId": "groups.assignCheckout",
+        "summary": "Assign a checkout to a team",
+        "tags": [
+          "checkout"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "group_not_found",
+          "checkout_not_found",
+          "checkout_unavailable",
+          "checkout_already_assigned",
+          "group_checkout_revision_stale",
+          "active_run_group_checkout_change_requires_stop"
+        ]
+      }
+    },
     "/api/v1/groups/:groupId/agents": {
       "get": {
         "operationId": "agents.list",
@@ -1127,31 +1156,6 @@
         "x-errors": [
           "active_run_reparent_forbidden",
           "topology_order_stale"
-        ]
-      }
-    },
-    "/api/v1/groups/:groupId/agents/:agentId/checkout": {
-      "put": {
-        "operationId": "agents.assignCheckout",
-        "summary": "Assign a checkout to a stopped agent",
-        "tags": [
-          "checkout"
-        ],
-        "security": [
-          {
-            "operatorSession": []
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Validated response"
-          }
-        },
-        "x-body-limit": 65536,
-        "x-idempotency": "forbidden",
-        "x-errors": [
-          "active_run_checkout_change_forbidden",
-          "checkout_not_found"
         ]
       }
     },
@@ -2269,6 +2273,31 @@
         "x-body-limit": 65536,
         "x-idempotency": "forbidden",
         "x-errors": []
+      }
+    },
+    "/api/v1/checkouts/:checkoutId/refresh": {
+      "post": {
+        "operationId": "checkouts.refresh",
+        "summary": "Refresh checkout Git status",
+        "tags": [
+          "checkout"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "checkout_not_found",
+          "checkout_unavailable"
+        ]
       }
     },
     "/api/v1/checkouts/open": {

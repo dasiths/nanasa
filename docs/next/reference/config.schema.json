@@ -636,11 +636,6 @@
                     "maxLength": 64,
                     "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
                   },
-                  "checkoutId": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 128
-                  },
                   "desiredModel": {
                     "type": "string",
                     "minLength": 1,

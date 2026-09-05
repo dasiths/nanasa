@@ -16,7 +16,10 @@
   "containerEnv": {
     "PNPM_HOME": "/home/node/.local/share/pnpm"
   },
-  "initializeCommand": "test -f .devcontainer/.env || cp .devcontainer/.env.example .devcontainer/.env",
+  "initializeCommand": "mkdir -p ../.nanasa-worktrees && (test -f .devcontainer/.env || cp .devcontainer/.env.example .devcontainer/.env)",
+  "mounts": [
+    "source=${localWorkspaceFolder}/../.nanasa-worktrees,target=/workspaces/.nanasa-worktrees,type=bind,consistency=cached"
+  ],
   "remoteEnv": {
     "PATH": "/home/node/.local/bin:/home/node/.opencode/bin:/home/node/.local/share/pnpm:${containerEnv:PATH}"
   },

@@ -109,6 +109,14 @@
     "groups.reorder": [
       "topology_order_stale"
     ],
+    "groups.assignCheckout": [
+      "group_not_found",
+      "checkout_not_found",
+      "checkout_unavailable",
+      "checkout_already_assigned",
+      "group_checkout_revision_stale",
+      "active_run_group_checkout_change_requires_stop"
+    ],
     "agents.list": [
       "group_not_found"
     ],
@@ -132,10 +140,6 @@
     "agents.reparent": [
       "active_run_reparent_forbidden",
       "topology_order_stale"
-    ],
-    "agents.assignCheckout": [
-      "active_run_checkout_change_forbidden",
-      "checkout_not_found"
     ],
     "roles.list": [],
     "roles.get": [
@@ -279,6 +283,10 @@
     ],
     "repositories.list": [],
     "checkouts.list": [],
+    "checkouts.refresh": [
+      "checkout_not_found",
+      "checkout_unavailable"
+    ],
     "checkouts.open": [
       "checkout_not_found",
       "worktree_operation_in_progress"
@@ -341,6 +349,7 @@
     "groups.update": 65536,
     "groups.delete": 65536,
     "groups.reorder": 65536,
+    "groups.assignCheckout": 65536,
     "agents.list": 65536,
     "agents.get": 65536,
     "agents.create": 65536,
@@ -348,7 +357,6 @@
     "agents.delete": 65536,
     "agents.reorder": 65536,
     "agents.reparent": 65536,
-    "agents.assignCheckout": 65536,
     "roles.list": 65536,
     "roles.get": 65536,
     "roles.updatePresentation": 65536,
@@ -396,6 +404,7 @@
     "consoles.delete": 65536,
     "repositories.list": 65536,
     "checkouts.list": 65536,
+    "checkouts.refresh": 65536,
     "checkouts.open": 65536,
     "worktrees.list": 65536,
     "worktrees.create": 65536,

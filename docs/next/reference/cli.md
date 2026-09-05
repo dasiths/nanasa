@@ -62,6 +62,8 @@ Examples:
 ```bash
 npx nanasa group list
 npx nanasa agent list group_product
+npx nanasa checkout assign group_product --body <json>
+npx nanasa checkout refresh <checkout-id>
 npx nanasa run start group_product agent_builder
 npx nanasa status list
 npx nanasa message list group_product

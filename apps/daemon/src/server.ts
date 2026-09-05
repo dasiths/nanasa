@@ -479,6 +479,9 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       nativeSessions,
       launchConsent,
       providerUpdates,
+      validateCheckout: async (checkoutId) => {
+        await checkouts.refresh(checkoutId);
+      },
       onRuntimeObservation: (observation) => statusService.observeRuntime(observation),
       nativeRecoveryPolicy,
     });

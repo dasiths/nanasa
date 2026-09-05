@@ -992,14 +992,13 @@ export function PortalRoutePanel(props: PortalRoutePanelProps) {
     case "checkouts":
       return (
         <RouteSurface
-          title="Checkouts"
+          title="Team workspaces"
           eyebrow="Git workspaces"
-          description="Create, open, assign, inspect, and provenance-check managed worktrees."
+          description="Select a shared working tree for each team and manage repository worktrees."
         >
           <CheckoutWorkspace
             client={props.client}
             snapshot={props.snapshot}
-            config={props.config}
             onChanged={props.onRefresh}
           />
         </RouteSurface>

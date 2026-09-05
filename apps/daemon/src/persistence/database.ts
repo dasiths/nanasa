@@ -7,6 +7,7 @@ import {
   DATABASE_MIGRATION_11_TO_12_SQL,
   DATABASE_MIGRATION_12_TO_13_SQL,
   DATABASE_MIGRATION_13_TO_14_SQL,
+  DATABASE_MIGRATION_14_TO_15_SQL,
   DATABASE_SCHEMA_VERSION,
 } from "./schema.js";
 
@@ -85,6 +86,26 @@ function migrateDatabase(database: DatabaseSync, version: number): void {
   }
   if (currentVersion === 13) {
     applyMigration(database, currentVersion, DATABASE_MIGRATION_13_TO_14_SQL);
+    currentVersion = 14;
+  }
+  if (currentVersion === 14) {
+    const conflict = database
+      .prepare(
+        `SELECT group_id FROM memberships
+         WHERE state = 'active'
+         GROUP BY group_id
+         HAVING COUNT(DISTINCT checkout_id) > 1
+           OR (COUNT(checkout_id) > 0 AND COUNT(checkout_id) < COUNT(*))
+         ORDER BY group_id LIMIT 1`,
+      )
+      .get() as { group_id: string } | undefined;
+    if (conflict !== undefined) {
+      throw new DatabaseSchemaError(
+        currentVersion,
+        `Cannot migrate team ${conflict.group_id}: active agents have conflicting checkout assignments`,
+      );
+    }
+    applyMigration(database, currentVersion, DATABASE_MIGRATION_14_TO_15_SQL);
   }
 }
 

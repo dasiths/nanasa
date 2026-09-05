@@ -245,6 +245,7 @@ const snapshot: PortalSnapshot = {
       name: "Backend",
       order: 0,
       membershipRevision: 4,
+      checkoutRevision: 0,
       createdAt: timestamp,
       updatedAt: timestamp,
     },
@@ -253,6 +254,7 @@ const snapshot: PortalSnapshot = {
       name: "Review",
       order: 1,
       membershipRevision: 2,
+      checkoutRevision: 0,
       createdAt: timestamp,
       updatedAt: timestamp,
     },
@@ -391,6 +393,7 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     reorderGroups: vi.fn(),
     reparentAgent: vi.fn(),
     assignCheckout: vi.fn(),
+    refreshCheckout: vi.fn(),
     createWorktree: vi.fn(),
     openCheckout: vi.fn(),
     removeWorktree: vi.fn(),
@@ -2637,10 +2640,9 @@ describe("portal application", () => {
       "href",
       "/agents",
     );
-    expect(within(operationsNavigation).getByRole("link", { name: "Checkouts" })).toHaveAttribute(
-      "href",
-      "/checkouts",
-    );
+    expect(
+      within(operationsNavigation).getByRole("link", { name: "Team workspaces" }),
+    ).toHaveAttribute("href", "/checkouts");
     expect(screen.queryByRole("navigation", { name: "Repository" })).toBeNull();
     const systemStatus = screen.getByRole("button", {
       name: /System (?:connected|reconnecting|disconnected), open System status/,

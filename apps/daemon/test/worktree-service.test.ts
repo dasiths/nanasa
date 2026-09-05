@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NanasaConfigSchema } from "@nanasa/contracts";
@@ -56,7 +56,6 @@ describe("managed worktree ownership", () => {
         sourceCheckoutId: source.id,
         branch: "feature/safe-race",
         base: "HEAD",
-        assignAgentIds: [],
       };
       const [first, second] = await Promise.all([
         context.worktrees.create(command),
@@ -70,6 +69,9 @@ describe("managed worktree ownership", () => {
       expect(second.checkout?.id).toBe(first.checkout?.id);
       expect(context.store.listWorktrees()).toHaveLength(1);
       expect(first.checkout?.path).toContain(safeWorktreeSlug("feature/safe-race"));
+      expect(readFileSync(join(first.checkout!.path, ".git"), "utf8")).not.toContain(
+        context.repository,
+      );
     } finally {
       context.store.close();
     }
@@ -83,7 +85,6 @@ describe("managed worktree ownership", () => {
         sourceCheckoutId: source.id,
         branch: "feature/dirty",
         base: "HEAD",
-        assignAgentIds: [],
       });
       writeFileSync(join(created.checkout!.path, "dirty.txt"), "keep me\n");
       await expect(
@@ -100,6 +101,9 @@ describe("managed worktree ownership", () => {
         }),
       ).resolves.toMatchObject({ worktree: { state: "removed" } });
       expect(existsSync(created.checkout!.path)).toBe(false);
+      expect(context.store.listCheckouts()).not.toContainEqual(
+        expect.objectContaining({ id: created.checkout!.id }),
+      );
       expect(
         execFileSync(
           "git",
@@ -122,7 +126,6 @@ describe("managed worktree ownership", () => {
         sourceCheckoutId: source.id,
         branch: "feature/active",
         base: "HEAD",
-        assignAgentIds: [],
       });
       const config = NanasaConfigSchema.parse({
         version: 2,
@@ -144,7 +147,6 @@ describe("managed worktree ownership", () => {
                 memberId: "worker",
                 name: "Worker",
                 integrationId: "test",
-                checkoutId: created.checkout!.id,
                 order: 0,
               },
             },
@@ -152,6 +154,13 @@ describe("managed worktree ownership", () => {
         },
       });
       context.store.reconcileTopology(config);
+      context.store.assignGroupCheckout("team", created.checkout!.id, 0);
+      await expect(
+        context.worktrees.remove(created.worktree!.id, {
+          force: true,
+          expectedOperationGeneration: created.worktree!.operationGeneration,
+        }),
+      ).rejects.toMatchObject({ code: "worktree_has_assignments" });
       const run = context.store.createRunForMembership("team", "worker").run;
       expect(run).toMatchObject({
         checkoutId: created.checkout!.id,

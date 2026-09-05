@@ -123,7 +123,6 @@ describe("NanasaControlClient", () => {
         sourceCheckoutId: "checkout-1",
         branch: "feature/typed-client",
         base: "HEAD",
-        assignAgentIds: [],
       },
       "worktree-key",
     );

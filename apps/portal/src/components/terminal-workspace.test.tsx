@@ -87,6 +87,7 @@ function client(): PortalClient {
     removeProviderExtension: vi.fn(),
     retainProviderState: vi.fn(),
     deleteProviderState: vi.fn(),
+    refreshCheckout: vi.fn(),
     createGroup: vi.fn(),
     updateGroup: vi.fn(),
     deleteGroup: vi.fn(),

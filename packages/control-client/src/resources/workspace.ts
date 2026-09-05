@@ -1,10 +1,11 @@
 import {
   type AdHocConsoleSession,
   AdHocConsoleSessionSchema,
-  type AssignAgentCheckoutCommand,
   type Checkout,
   CheckoutSchema,
   type CreateWorktreeCommand,
+  type GitStatusProjection,
+  GitStatusProjectionSchema,
   type OpenCheckoutCommand,
   type RemoveWorktreeCommand,
   type Repository,
@@ -32,6 +33,15 @@ export class WorkspaceResource {
       this.client,
       path("repositories", repositoryId, "checkouts"),
       CheckoutSchema.array(),
+    );
+  }
+
+  public refreshCheckout(checkoutId: string, key?: string): Promise<GitStatusProjection> {
+    return request(
+      this.client,
+      path("checkouts", checkoutId, "refresh"),
+      GitStatusProjectionSchema,
+      commandInit("POST", {}, key),
     );
   }
 
@@ -77,18 +87,6 @@ export class WorkspaceResource {
       path("worktrees", worktreeId),
       WorktreeOperationResultSchema,
       commandInit("DELETE", command, key),
-    );
-  }
-
-  public assignCheckout(
-    groupId: string,
-    agentId: string,
-    command: AssignAgentCheckoutCommand,
-    key?: string,
-  ): Promise<void> {
-    return this.client.requestVoid(
-      path("groups", groupId, "agents", agentId, "checkout"),
-      commandInit("PUT", command, key),
     );
   }
 

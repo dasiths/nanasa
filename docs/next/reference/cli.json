@@ -467,17 +467,6 @@
       "summary": "Reparent stopped agent"
     },
     {
-      "id": "agent.checkout",
-      "family": "agent",
-      "command": "checkout",
-      "mode": "control",
-      "positionals": [
-        "group-id",
-        "agent-id"
-      ],
-      "summary": "Assign agent checkout"
-    },
-    {
       "id": "agent.prompt",
       "family": "agent",
       "command": "prompt",
@@ -860,15 +849,24 @@
       "summary": "Open checkout"
     },
     {
+      "id": "checkout.refresh",
+      "family": "checkout",
+      "command": "refresh",
+      "mode": "control",
+      "positionals": [
+        "checkout-id"
+      ],
+      "summary": "Refresh checkout status"
+    },
+    {
       "id": "checkout.assign",
       "family": "checkout",
       "command": "assign",
       "mode": "control",
       "positionals": [
-        "group-id",
-        "agent-id"
+        "group-id"
       ],
-      "summary": "Assign checkout"
+      "summary": "Assign team checkout"
     },
     {
       "id": "worktree.list",

@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { ConfiguredAgentIdSchema, IdentifierSchema, TimestampSchema } from "./control.js";
+import { ErrorPayloadSchema, GroupSchema, IdentifierSchema, TimestampSchema } from "./control.js";
+import { CustomLaunchConsentRequestSchema } from "./launch-consent.js";
 export const GitObjectFormatSchema = z.enum(["sha1", "sha256"]);
 export const GitRefStorageSchema = z.enum(["files", "reftable"]);
 export const CheckoutKindSchema = z.enum(["primary", "linked", "bare"]);
@@ -86,14 +87,53 @@ export const GitStatusProjectionSchema = z
   .strict();
 export type GitStatusProjection = z.infer<typeof GitStatusProjectionSchema>;
 
+export const GroupCheckoutSwitchPolicySchema = z.enum([
+  "require-stopped",
+  "stop-and-switch",
+  "stop-switch-restart",
+]);
+export type GroupCheckoutSwitchPolicy = z.infer<typeof GroupCheckoutSwitchPolicySchema>;
+
+const TeamActivationFields = {
+  groupId: IdentifierSchema.optional(),
+  expectedCheckoutRevision: z.number().int().nonnegative().optional(),
+  switchPolicy: GroupCheckoutSwitchPolicySchema.optional(),
+};
+
+function validateTeamActivation(
+  value: {
+    groupId?: string | undefined;
+    expectedCheckoutRevision?: number | undefined;
+    switchPolicy?: string | undefined;
+  },
+  context: z.RefinementCtx,
+): void {
+  const hasActivation = value.groupId !== undefined;
+  if (hasActivation !== (value.expectedCheckoutRevision !== undefined)) {
+    context.addIssue({
+      code: "custom",
+      message: "Team activation requires groupId and expectedCheckoutRevision together",
+      path: [hasActivation ? "expectedCheckoutRevision" : "groupId"],
+    });
+  }
+  if (!hasActivation && value.switchPolicy !== undefined) {
+    context.addIssue({
+      code: "custom",
+      message: "Team activation policy requires a groupId",
+      path: ["switchPolicy"],
+    });
+  }
+}
+
 export const CreateWorktreeCommandSchema = z
   .object({
     sourceCheckoutId: IdentifierSchema,
     branch: z.string().trim().min(1).max(1_024),
     base: z.string().trim().min(1).max(1_024).default("HEAD"),
-    assignAgentIds: z.array(ConfiguredAgentIdSchema).max(256).default([]),
+    ...TeamActivationFields,
   })
-  .strict();
+  .strict()
+  .superRefine(validateTeamActivation);
 export type CreateWorktreeCommand = z.infer<typeof CreateWorktreeCommandSchema>;
 
 export const OpenCheckoutCommandSchema = z
@@ -101,11 +141,13 @@ export const OpenCheckoutCommandSchema = z
     sourceCheckoutId: IdentifierSchema,
     path: z.string().trim().min(1).max(4_096).optional(),
     branch: z.string().trim().min(1).max(1_024).optional(),
+    ...TeamActivationFields,
   })
   .strict()
   .refine((value) => (value.path === undefined) !== (value.branch === undefined), {
     message: "Open checkout requires exactly one path or branch selector",
-  });
+  })
+  .superRefine(validateTeamActivation);
 export type OpenCheckoutCommand = z.infer<typeof OpenCheckoutCommandSchema>;
 
 export const RemoveWorktreeCommandSchema = z
@@ -116,14 +158,50 @@ export const RemoveWorktreeCommandSchema = z
   .strict();
 export type RemoveWorktreeCommand = z.infer<typeof RemoveWorktreeCommandSchema>;
 
-export const AssignAgentCheckoutCommandSchema = z.object({ checkoutId: IdentifierSchema }).strict();
-export type AssignAgentCheckoutCommand = z.infer<typeof AssignAgentCheckoutCommandSchema>;
+export const AssignGroupCheckoutCommandSchema = z
+  .object({
+    checkoutId: IdentifierSchema,
+    expectedCheckoutRevision: z.number().int().nonnegative(),
+    switchPolicy: GroupCheckoutSwitchPolicySchema.default("require-stopped"),
+  })
+  .strict();
+export type AssignGroupCheckoutCommand = z.infer<typeof AssignGroupCheckoutCommandSchema>;
+
+export const GroupCheckoutMemberOutcomeSchema = z
+  .object({
+    memberId: IdentifierSchema,
+    status: z.enum([
+      "not-running",
+      "stopped",
+      "restarted",
+      "approval-required",
+      "denied",
+      "failed",
+    ]),
+    runId: IdentifierSchema.optional(),
+    request: CustomLaunchConsentRequestSchema.optional(),
+    reason: z.string().trim().min(1).optional(),
+    error: ErrorPayloadSchema.optional(),
+  })
+  .strict();
+export type GroupCheckoutMemberOutcome = z.infer<typeof GroupCheckoutMemberOutcomeSchema>;
+
+export const AssignGroupCheckoutResultSchema = z
+  .object({
+    group: GroupSchema,
+    previousCheckoutId: IdentifierSchema.optional(),
+    checkoutId: IdentifierSchema,
+    outcomes: z.array(GroupCheckoutMemberOutcomeSchema),
+  })
+  .strict();
+export type AssignGroupCheckoutResult = z.infer<typeof AssignGroupCheckoutResultSchema>;
 
 export const WorktreeOperationResultSchema = z
   .object({
     operation: GitOperationSchema,
     checkout: CheckoutSchema.optional(),
     worktree: WorktreeSchema.optional(),
+    assignment: AssignGroupCheckoutResultSchema.optional(),
   })
   .strict();
 export type WorktreeOperationResult = z.infer<typeof WorktreeOperationResultSchema>;

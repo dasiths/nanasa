@@ -1,5 +1,7 @@
 import {
-  type AssignAgentCheckoutCommand,
+  type AssignGroupCheckoutCommand,
+  type AssignGroupCheckoutResult,
+  AssignGroupCheckoutResultSchema,
   type CreateGroupAgentCommand,
   type CreateGroupCommand,
   type Group,
@@ -157,12 +159,13 @@ export class TopologyResource {
 
   public assignCheckout(
     groupId: string,
-    agentId: string,
-    command: AssignAgentCheckoutCommand,
+    command: AssignGroupCheckoutCommand,
     key?: string,
-  ): Promise<void> {
-    return this.client.requestVoid(
-      path("groups", groupId, "agents", agentId, "checkout"),
+  ): Promise<AssignGroupCheckoutResult> {
+    return request(
+      this.client,
+      path("groups", groupId, "checkout"),
+      AssignGroupCheckoutResultSchema,
       commandInit("PUT", command, key),
     );
   }

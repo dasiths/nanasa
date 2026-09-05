@@ -740,7 +740,23 @@ describe("Git ownership contracts", () => {
         sourceCheckoutId: "checkout_main",
         branch: "feature/one",
       }),
-    ).toMatchObject({ base: "HEAD", assignAgentIds: [] });
+    ).toMatchObject({ base: "HEAD" });
+    expect(
+      CreateWorktreeCommandSchema.parse({
+        sourceCheckoutId: "checkout_main",
+        branch: "feature/team",
+        groupId: "team_one",
+        expectedCheckoutRevision: 2,
+        switchPolicy: "stop-switch-restart",
+      }),
+    ).toMatchObject({ groupId: "team_one", expectedCheckoutRevision: 2 });
+    expect(() =>
+      CreateWorktreeCommandSchema.parse({
+        sourceCheckoutId: "checkout_main",
+        branch: "feature/incomplete",
+        groupId: "team_one",
+      }),
+    ).toThrow();
   });
 });
 
