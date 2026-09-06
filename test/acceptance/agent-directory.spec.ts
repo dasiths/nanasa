@@ -136,6 +136,7 @@ test("All agents groups live configuration and opens selected terminals or teams
     );
     await page.screenshot({ path: testInfo.outputPath(`all-agents-${width}.png`) });
   }
+  await inspector.getByRole("button", { name: "Back to list", exact: true }).click();
   await directory.getByRole("button", { name: "Inspect Frontend Engineer", exact: true }).click();
   await expect(
     inspector.getByRole("heading", { name: "Frontend Engineer", exact: true }),

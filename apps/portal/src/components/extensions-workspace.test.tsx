@@ -114,8 +114,10 @@ describe("ExtensionsWorkspace", () => {
     const portal = client();
     const user = userEvent.setup();
     render(<ExtensionsWorkspace client={portal} revision={1} onChanged={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: /GitHub Copilot/ }));
     expect(await screen.findByRole("heading", { name: "GitHub Copilot" })).toBeVisible();
     expect(screen.getByText("extension_package_drift")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Plan" }));
     expect(screen.getByText("runtime:launch-provider")).toBeVisible();
     expect(screen.getByText("copilot --model gpt")).toBeVisible();
     expect(screen.getByText(/environment names COPILOT_HOME, NANASA_STATUS_URL/)).toBeVisible();
@@ -126,6 +128,7 @@ describe("ExtensionsWorkspace", () => {
     );
     await user.click(approve);
     await waitFor(() => expect(portal.trustProviderExtension).toHaveBeenCalled());
+    await user.click(screen.getByRole("button", { name: "Lifecycle" }));
     const repair = screen.getByRole("button", { name: "Repair owned state" });
     expect(repair).toHaveAccessibleDescription(/without changing authentication, sessions/);
     await user.click(repair);
@@ -137,6 +140,7 @@ describe("ExtensionsWorkspace", () => {
     await user.click(rollback);
     await waitFor(() => expect(portal.rollbackProviderExtension).toHaveBeenCalled());
 
+    await user.click(screen.getByText("Remove provider", { selector: "summary" }));
     const remove = screen.getByRole("button", { name: "Remove from Nanasa" });
     expect(remove).toBeDisabled();
     expect(remove).toHaveAccessibleDescription("Type nanasa.copilot above to enable removal.");

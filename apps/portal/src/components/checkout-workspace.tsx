@@ -4,25 +4,12 @@ import type {
   GroupCheckoutSwitchPolicy,
   PortalSnapshot,
 } from "@nanasa/contracts";
-import {
-  Activity,
-  CircleCheck,
-  FileWarning,
-  FolderGit2,
-  GitBranch,
-  LockKeyhole,
-  type LucideIcon,
-  Plus,
-  RefreshCw,
-  Share2,
-  Trash2,
-  Users,
-  X,
-} from "lucide-react";
+import { FolderGit2, GitBranch, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { type FormEvent, useEffect, useId, useState } from "react";
 import type { PortalClient } from "../api.js";
 import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 import { currentMemberRun } from "../member-status.js";
+import { EntityInspector, EntitySection, EntityTabs } from "./entity-inspector.js";
 
 interface PendingSwitch {
   groupId: string;
@@ -30,27 +17,6 @@ interface PendingSwitch {
 }
 
 type AddWorkspaceMode = "create" | "attach";
-
-function WorkspaceFact({
-  icon: Icon,
-  label,
-  tooltip,
-}: {
-  icon: LucideIcon;
-  label: string;
-  tooltip: string;
-}) {
-  const tooltipId = useId();
-  return (
-    <span className="workspace-fact" tabIndex={0} aria-describedby={tooltipId}>
-      <Icon aria-hidden="true" size={13} />
-      <span>{label}</span>
-      <span id={tooltipId} className="workspace-fact-tooltip" role="tooltip">
-        {tooltip}
-      </span>
-    </span>
-  );
-}
 
 function runIsActive(run: PortalSnapshot["runs"][number]): boolean {
   return run.desiredState === "running" || ["starting", "running", "stopping"].includes(run.status);
@@ -87,6 +53,9 @@ export function CheckoutWorkspace({
   const [activateCreated, setActivateCreated] = useState(false);
   const [activateOpened, setActivateOpened] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [selectedCheckoutId, setSelectedCheckoutId] = useState<string>();
+  const [query, setQuery] = useState("");
+  const [detailTab, setDetailTab] = useState("Assignment");
   const [error, setError] = useState<PortalError>();
   const [addWorkspaceOpen, setAddWorkspaceOpen] = useState(false);
   const [addWorkspaceMode, setAddWorkspaceMode] = useState<AddWorkspaceMode>("create");
@@ -240,222 +209,308 @@ export function CheckoutWorkspace({
   const pendingRunningCount = currentTeamRuns.filter(
     (run) => run.groupId === pendingGroup?.id && runIsActive(run),
   ).length;
+  const selectedCheckout = snapshot.checkouts.find(
+    (checkout) => checkout.id === selectedCheckoutId,
+  );
 
   return (
-    <div className="checkout-workspace">
-      <section className="workflow-card" aria-labelledby="team-workspaces-title">
-        <header className="workspace-section-heading">
-          <div>
-            <h3 id="team-workspaces-title">Team workspaces</h3>
-            <p>One workspace shared by every agent on a team.</p>
+    <div className={`checkout-workspace${selectedCheckout ? " entity-detail-open" : ""}`}>
+      <header className="workspace-section-heading">
+        <div>
+          <label className="entity-search">
+            <Search size={15} aria-hidden="true" />
+            <input
+              aria-label="Search workspaces"
+              placeholder="Search branches or paths..."
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+        </div>
+        <div className="workspace-heading-actions">
+          <button
+            type="button"
+            className="compact-button"
+            disabled={busy || sourceCheckout === undefined}
+            title="Run git fetch --all --prune, then refresh workspace statuses. Working files are unchanged."
+            onClick={() => void fetchUpdates().catch(() => undefined)}
+          >
+            <RefreshCw aria-hidden="true" size={15} />
+            Fetch updates
+          </button>
+          <button
+            type="button"
+            className="primary-button"
+            disabled={busy || sourceCheckout === undefined}
+            title={sourceCheckout === undefined ? "A primary checkout is required" : undefined}
+            onClick={() => setAddWorkspaceOpen(true)}
+          >
+            <Plus aria-hidden="true" size={15} />
+            Add workspace
+          </button>
+        </div>
+      </header>
+      <div className={`entity-layout${selectedCheckout ? " has-inspector" : ""}`}>
+        <section
+          className="entity-collection workspace-inventory"
+          aria-labelledby="workspace-inventory-title"
+        >
+          <div className="entity-columns workspace-entity-columns">
+            <span id="workspace-inventory-title">Workspace / branch</span>
+            <span>Team binding</span>
+            <span>Working tree</span>
           </div>
-          <div className="workspace-heading-actions">
-            <button
-              type="button"
-              className="compact-button"
-              disabled={busy || sourceCheckout === undefined}
-              title="Run git fetch --all --prune, then refresh workspace statuses. Working files are unchanged."
-              onClick={() => void fetchUpdates().catch(() => undefined)}
-            >
-              <RefreshCw aria-hidden="true" size={15} />
-              Fetch updates
-            </button>
-            <button
-              type="button"
-              className="primary-button"
-              disabled={busy || sourceCheckout === undefined}
-              title={sourceCheckout === undefined ? "A primary checkout is required" : undefined}
-              onClick={() => setAddWorkspaceOpen(true)}
-            >
-              <Plus aria-hidden="true" size={15} />
-              Add workspace
-            </button>
-          </div>
-        </header>
-        {snapshot.groups.length === 0 ? (
-          <p>No teams are configured.</p>
-        ) : (
-          <ul className="team-workspace-list">
-            {snapshot.groups.map((group) => {
-              const checkout = selectableCheckouts.find(
-                (candidate) => candidate.id === (group.checkoutId ?? sourceCheckout?.id),
-              );
-              const agentCount = snapshot.memberships.filter(
-                (membership) => membership.groupId === group.id && membership.state === "active",
-              ).length;
-              const runningCount = currentTeamRuns.filter(
-                (run) => run.groupId === group.id && runIsActive(run),
-              ).length;
-              const owners =
-                checkout === undefined
-                  ? []
-                  : snapshot.groups.filter(
-                      (candidate) => (candidate.checkoutId ?? sourceCheckout?.id) === checkout.id,
-                    );
-              return (
-                <li key={group.id}>
-                  <div className="team-workspace-summary">
-                    <strong>{group.name}</strong>
-                    <span>{checkout?.branch ?? "Unavailable checkout"}</span>
-                    <small>{checkout?.path ?? "Select another workspace"}</small>
-                  </div>
-                  <div className="workspace-facts">
-                    <WorkspaceFact
-                      icon={checkout?.kind === "primary" ? GitBranch : LockKeyhole}
-                      label={checkout?.kind === "primary" ? "Primary" : "Exclusive"}
-                      tooltip={
-                        checkout?.kind === "primary"
-                          ? "The repository's main working tree. Multiple teams may use it."
-                          : "A linked working tree reserved for this team."
-                      }
-                    />
-                    <WorkspaceFact
-                      icon={checkout?.dirty ? FileWarning : CircleCheck}
-                      label={checkout?.dirty ? "Dirty" : "Clean"}
-                      tooltip={
-                        checkout?.dirty
-                          ? "This workspace has staged, modified, or untracked files."
-                          : "This workspace has no local file changes."
-                      }
-                    />
-                    <WorkspaceFact
-                      icon={Share2}
-                      label={owners.length > 1 ? `Shared by ${owners.length} teams` : "Not shared"}
-                      tooltip={
-                        owners.length > 1
-                          ? `${owners.length} teams currently use this workspace.`
-                          : "No other team currently uses this workspace."
-                      }
-                    />
-                    <WorkspaceFact
-                      icon={Users}
-                      label={`${agentCount} ${agentCount === 1 ? "agent" : "agents"}`}
-                      tooltip="Active agents configured in this team."
-                    />
-                    <WorkspaceFact
-                      icon={Activity}
-                      label={`${runningCount} active ${runningCount === 1 ? "agent" : "agents"}`}
-                      tooltip="Agents that must be stopped before this team changes workspace."
-                    />
-                  </div>
-                  <select
-                    aria-label={`Workspace for ${group.name}`}
-                    value={checkout?.id ?? ""}
-                    disabled={busy || selectableCheckouts.length === 0}
-                    onChange={(event) =>
-                      setPendingSwitch({ groupId: group.id, checkoutId: event.target.value })
-                    }
-                  >
-                    {selectableCheckouts.map((candidate) => (
-                      <option key={candidate.id} value={candidate.id}>
-                        {candidate.branch ?? "Detached HEAD"}
-                      </option>
-                    ))}
-                  </select>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
-
-      <section
-        className="workflow-card workspace-inventory"
-        aria-labelledby="workspace-inventory-title"
-      >
-        <header className="workspace-section-heading">
-          <div>
-            <h3 id="workspace-inventory-title">Workspace inventory</h3>
-            <p>{snapshot.checkouts.length} known workspaces</p>
-          </div>
-        </header>
-        {snapshot.checkouts.length === 0 ? (
-          <p>No workspaces are available.</p>
-        ) : (
-          <ul className="checkout-list">
-            {snapshot.checkouts.map((checkout) => {
-              const managed = snapshot.worktrees.find(
-                (worktree) => worktree.checkoutId === checkout.id && worktree.state !== "removed",
-              );
-              const owners = snapshot.groups.filter(
-                (group) => (group.checkoutId ?? sourceCheckout?.id) === checkout.id,
-              );
-              const activeRuns = currentTeamRuns.filter(
-                (run) => run.checkoutId === checkout.id && runIsActive(run),
-              );
-              const removalBlocker =
-                owners.length > 0
-                  ? `Assigned to ${owners.map((group) => group.name).join(", ")}`
-                  : activeRuns.length > 0
-                    ? `${activeRuns.length} active runs`
-                    : undefined;
-              const status = statuses[checkout.id];
-              const badge =
-                checkout.kind === "primary"
-                  ? "Primary"
-                  : managed === undefined
-                    ? "External"
-                    : "Managed";
-              return (
-                <li key={checkout.id}>
-                  <div>
-                    <strong>{checkout.branch ?? "Detached HEAD"}</strong>
-                    <small>{checkout.path}</small>
-                    <span>
-                      {badge} · {checkout.dirty ? "dirty" : "clean"}
-                      {owners.length > 0
-                        ? ` · ${owners.length} team${owners.length === 1 ? "" : "s"}`
-                        : ""}
-                    </span>
-                    {status !== undefined && (
-                      <span>
-                        {status.staged} staged · {status.modified} modified · {status.untracked}{" "}
-                        untracked · {status.ahead} ahead · {status.behind} behind
-                      </span>
-                    )}
-                  </div>
-                  <div className="checkout-actions">
+          <ul className="entity-record-list">
+            {snapshot.checkouts
+              .filter((checkout) =>
+                `${checkout.branch} ${checkout.path}`.toLowerCase().includes(query.toLowerCase()),
+              )
+              .map((checkout) => {
+                const owners = snapshot.groups.filter(
+                  (group) => (group.checkoutId ?? sourceCheckout?.id) === checkout.id,
+                );
+                const managed = snapshot.worktrees.find(
+                  (item) => item.checkoutId === checkout.id && item.state !== "removed",
+                );
+                return (
+                  <li key={checkout.id}>
                     <button
+                      className="entity-row workspace-entity-columns"
                       type="button"
-                      className="icon-button"
-                      aria-label={`Refresh ${checkout.branch ?? checkout.id}`}
-                      title="Refresh Git status"
-                      disabled={busy || checkout.kind === "bare"}
-                      onClick={() => void refresh(checkout.id)}
+                      aria-label={`Inspect workspace ${checkout.branch ?? checkout.id}`}
+                      aria-pressed={checkout.id === selectedCheckoutId}
+                      onClick={() => setSelectedCheckoutId(checkout.id)}
                     >
-                      <RefreshCw aria-hidden="true" size={15} />
+                      <span className="entity-identity">
+                        <span className="entity-glyph">
+                          <GitBranch size={18} />
+                        </span>
+                        <span>
+                          <strong>{checkout.branch ?? "Detached HEAD"}</strong>
+                          <small>
+                            <code>{checkout.path}</code>
+                          </small>
+                          <small>
+                            {checkout.kind === "primary"
+                              ? "Primary"
+                              : managed
+                                ? "Managed worktree"
+                                : "External checkout"}
+                          </small>
+                        </span>
+                      </span>
+                      <span>{owners.map((group) => group.name).join(", ") || "Unassigned"}</span>
+                      <span
+                        className="entity-state-label"
+                        data-tone={checkout.dirty ? "warning" : "ready"}
+                      >
+                        {checkout.dirty ? "Dirty" : "Clean"}
+                      </span>
                     </button>
-                    {managed !== undefined &&
-                      managed.state === "ready" &&
-                      (forceWorktreeId === managed.id ? (
-                        <button
-                          type="button"
-                          className="compact-button danger-button"
-                          disabled={busy || removalBlocker !== undefined}
-                          title={removalBlocker}
-                          onClick={() => void remove(managed.id, true)}
-                        >
-                          Confirm force remove
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          className="icon-button danger-button"
-                          aria-label={`Remove worktree ${checkout.branch ?? checkout.id}`}
-                          disabled={busy || removalBlocker !== undefined}
-                          title={removalBlocker ?? "Remove managed worktree"}
-                          onClick={() => void remove(managed.id, false)}
-                        >
-                          <Trash2 aria-hidden="true" size={15} />
-                        </button>
-                      ))}
-                  </div>
-                </li>
-              );
-            })}
+                  </li>
+                );
+              })}
           </ul>
+          {snapshot.checkouts.length === 0 && (
+            <p className="entity-context-note">No workspaces are available.</p>
+          )}
+        </section>
+        {selectedCheckout && (
+          <EntityInspector
+            title={selectedCheckout.branch ?? "Detached checkout"}
+            context={selectedCheckout.kind === "primary" ? "Primary checkout" : "Linked checkout"}
+            icon={GitBranch}
+            onClose={() => setSelectedCheckoutId(undefined)}
+          >
+            <EntityTabs
+              label="Workspace details"
+              tabs={["Assignment", "Git facts", "Maintenance"]}
+              selected={detailTab}
+              onSelect={setDetailTab}
+            />
+            {detailTab === "Assignment" && (
+              <EntitySection title="Team assignment">
+                <code className="entity-checkout-path">{selectedCheckout.path}</code>
+                <p className="entity-context-note">
+                  {selectedCheckout.kind === "primary"
+                    ? "Shared primary workspace"
+                    : "Exclusive linked workspace"}{" "}
+                  / {selectedCheckout.dirty ? "Local changes" : "Clean working tree"}
+                </p>
+                {snapshot.groups.length === 0 ? (
+                  <p>No teams are configured.</p>
+                ) : (
+                  <ul className="team-assignment-list">
+                    {snapshot.groups
+                      .filter(
+                        (group) => (group.checkoutId ?? sourceCheckout?.id) === selectedCheckout.id,
+                      )
+                      .map((group) => {
+                        const checkout = selectableCheckouts.find(
+                          (candidate) => candidate.id === (group.checkoutId ?? sourceCheckout?.id),
+                        );
+                        const agentCount = snapshot.memberships.filter(
+                          (membership) =>
+                            membership.groupId === group.id && membership.state === "active",
+                        ).length;
+                        const runningCount = currentTeamRuns.filter(
+                          (run) => run.groupId === group.id && runIsActive(run),
+                        ).length;
+                        return (
+                          <li key={group.id}>
+                            <div className="team-workspace-summary">
+                              <strong>{group.name}</strong>
+                              <small>
+                                {agentCount} agents / {runningCount} active runs
+                              </small>
+                            </div>
+                            <select
+                              aria-label={`Workspace for ${group.name}`}
+                              value={checkout?.id ?? ""}
+                              disabled={busy || selectableCheckouts.length === 0}
+                              onChange={(event) =>
+                                setPendingSwitch({
+                                  groupId: group.id,
+                                  checkoutId: event.target.value,
+                                })
+                              }
+                            >
+                              {selectableCheckouts.map((candidate) => (
+                                <option key={candidate.id} value={candidate.id}>
+                                  {candidate.branch ?? "Detached HEAD"}
+                                </option>
+                              ))}
+                            </select>
+                          </li>
+                        );
+                      })}
+                  </ul>
+                )}
+                <label className="entity-edit-form">
+                  Assign another team
+                  <select
+                    aria-label="Assign team to workspace"
+                    value=""
+                    disabled={busy}
+                    onChange={(event) => {
+                      if (event.target.value)
+                        setPendingSwitch({
+                          groupId: event.target.value,
+                          checkoutId: selectedCheckout.id,
+                        });
+                    }}
+                  >
+                    <option value="">Choose a team</option>
+                    {snapshot.groups
+                      .filter(
+                        (group) => (group.checkoutId ?? sourceCheckout?.id) !== selectedCheckout.id,
+                      )
+                      .map((group) => (
+                        <option key={group.id} value={group.id}>
+                          {group.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              </EntitySection>
+            )}
+
+            {(detailTab === "Git facts" || detailTab === "Maintenance") && (
+              <EntitySection title={detailTab}>
+                <ul className="checkout-detail-list">
+                  {[selectedCheckout].map((checkout) => {
+                    const managed = snapshot.worktrees.find(
+                      (worktree) =>
+                        worktree.checkoutId === checkout.id && worktree.state !== "removed",
+                    );
+                    const owners = snapshot.groups.filter(
+                      (group) => (group.checkoutId ?? sourceCheckout?.id) === checkout.id,
+                    );
+                    const activeRuns = currentTeamRuns.filter(
+                      (run) => run.checkoutId === checkout.id && runIsActive(run),
+                    );
+                    const removalBlocker =
+                      owners.length > 0
+                        ? `Assigned to ${owners.map((group) => group.name).join(", ")}`
+                        : activeRuns.length > 0
+                          ? `${activeRuns.length} active runs`
+                          : undefined;
+                    const status = statuses[checkout.id];
+                    const badge =
+                      checkout.kind === "primary"
+                        ? "Primary"
+                        : managed === undefined
+                          ? "External"
+                          : "Managed";
+                    return (
+                      <li key={checkout.id}>
+                        <div>
+                          <code className="entity-checkout-path">{checkout.path}</code>
+                          <p className="entity-context-note">
+                            {badge} · {checkout.dirty ? "dirty" : "clean"}
+                            {owners.length > 0
+                              ? ` · ${owners.length} team${owners.length === 1 ? "" : "s"}`
+                              : ""}
+                          </p>
+                          {status !== undefined && (
+                            <span>
+                              {status.staged} staged · {status.modified} modified ·{" "}
+                              {status.untracked} untracked · {status.ahead} ahead · {status.behind}{" "}
+                              behind
+                            </span>
+                          )}
+                        </div>
+                        <div className="checkout-actions">
+                          <button
+                            type="button"
+                            className="icon-button"
+                            aria-label={`Refresh ${checkout.branch ?? checkout.id}`}
+                            title="Refresh Git status"
+                            disabled={busy || checkout.kind === "bare"}
+                            onClick={() => void refresh(checkout.id)}
+                          >
+                            <RefreshCw aria-hidden="true" size={15} />
+                          </button>
+                          {detailTab === "Maintenance" &&
+                            managed !== undefined &&
+                            managed.state === "ready" &&
+                            (forceWorktreeId === managed.id ? (
+                              <button
+                                type="button"
+                                className="compact-button danger-button"
+                                disabled={busy || removalBlocker !== undefined}
+                                title={removalBlocker}
+                                onClick={() => void remove(managed.id, true)}
+                              >
+                                Confirm force remove
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="icon-button danger-button"
+                                aria-label={`Remove worktree ${checkout.branch ?? checkout.id}`}
+                                disabled={busy || removalBlocker !== undefined}
+                                title={removalBlocker ?? "Remove managed worktree"}
+                                onClick={() => void remove(managed.id, false)}
+                              >
+                                <Trash2 aria-hidden="true" size={15} />
+                              </button>
+                            ))}
+                        </div>
+                        {detailTab === "Maintenance" && (removalBlocker || !managed) && (
+                          <p className="entity-context-note">
+                            {removalBlocker ?? "Only Nanasa-managed worktrees can be removed."}
+                          </p>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </EntitySection>
+            )}
+          </EntityInspector>
         )}
-      </section>
+      </div>
 
       {addWorkspaceOpen && repository !== undefined && sourceCheckout !== undefined && (
         <div className="workspace-dialog-backdrop" role="presentation">

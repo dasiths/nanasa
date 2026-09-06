@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { expect, test } from "./fixtures/package-fixture.js";
 
 test("managed browser requests become actionable Attention on desktop and mobile", async ({
@@ -54,11 +55,11 @@ test("managed browser requests become actionable Attention on desktop and mobile
     await expect(notices).toContainText("Browser Agent wants to open a URL");
     await expect(notices).not.toContainText("private");
     await notices.getByRole("button", { name: "Open", exact: true }).click();
-    const item = page
-      .locator(".attention-inbox-row")
-      .filter({ hasText: "Browser Agent wants to open a URL" });
+    const item = page.getByRole("complementary", {
+      name: "Browser Agent wants to open a URL",
+      exact: true,
+    });
     await expect(item.getByRole("button", { name: "Open URL", exact: true })).toBeVisible();
-    await item.getByText("Full URL", { exact: true }).click();
     await expect(item).toContainText(url);
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
@@ -66,6 +67,10 @@ test("managed browser requests become actionable Attention on desktop and mobile
     await page.screenshot({
       path: testInfo.outputPath(`url-request-${viewport.width}.png`),
       fullPage: true,
+    });
+    mkdirSync(resolve("test-results/portal-production"), { recursive: true });
+    await page.screenshot({
+      path: resolve(`test-results/portal-production/url-request-${viewport.width}.png`),
     });
     const popupPromise = page.waitForEvent("popup");
     await item.getByRole("button", { name: "Open URL", exact: true }).click();

@@ -144,6 +144,71 @@ function client(): PortalClient {
 afterEach(() => window.localStorage.clear());
 
 describe("TerminalWorkspace", () => {
+  it.each(["clipboard-list", "hammer", "shield-check"] as const)(
+    "uses the configured %s glyph in terminal session tabs",
+    async (icon) => {
+      const member: GroupMembership = {
+        id: "member",
+        groupId: "team",
+        memberId: "engineer",
+        agentProfileId: "profile",
+        alias: "Engineer",
+        roleId: "role",
+        state: "active",
+        order: 0,
+        joinedAt: timestamp,
+      };
+      const run: AgentRun = {
+        id: "run",
+        groupId: "team",
+        memberId: "engineer",
+        agentProfileId: "profile",
+        generation: 1,
+        status: "running",
+        desiredState: "running",
+        recoveryPhase: "idle",
+        recoveryAttempts: 0,
+        launchKind: "fresh",
+        requestedModelSource: "provider-default",
+        startedAt: timestamp,
+      };
+      const onSetFocusedRun = vi.fn();
+      const view = render(
+        <TerminalWorkspace
+          client={client()}
+          members={[member]}
+          runs={[run]}
+          roles={{
+            role: {
+              name: "Engineer role",
+              permissionPolicy: "inherit",
+              instructions: [],
+              presentation: { icon, color: "amber" },
+            },
+          }}
+          onSetFocusedRun={onSetFocusedRun}
+        />,
+      );
+      const tab = screen.getByRole("button", { name: "Focus terminal Engineer" });
+      expect(tab.querySelector(`.role-color-amber .lucide-${icon}`)).not.toBeNull();
+      expect(tab.querySelector(".terminal-session-glyph")).toHaveAttribute(
+        "title",
+        "Engineer role",
+      );
+      fireEvent.click(tab);
+      expect(onSetFocusedRun).toHaveBeenCalledWith("run");
+      view.rerender(
+        <TerminalWorkspace
+          client={client()}
+          members={[{ ...member, roleId: undefined }]}
+          runs={[run]}
+        />,
+      );
+      expect(tab.querySelector(".role-color-slate .lucide-bot")).not.toBeNull();
+      await waitFor(() => expect(screen.getByTestId("owned-xterm")).toBeInTheDocument());
+    },
+  );
+
   it("renders and keyboard-operates a no-PTY launch consent pane with safely wrapped details", async () => {
     const user = userEvent.setup();
     const request = launchConsentRequest();

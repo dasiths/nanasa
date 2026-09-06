@@ -79,7 +79,10 @@ test("preferences synchronize, mobile switching works, and xterm mounts stay sta
 
   const secondPage = await context.newPage();
   await secondPage.goto(`${nanasa.baseUrl}/settings`);
-  await secondPage.getByRole("combobox", { name: "Theme", exact: true }).selectOption("dark");
+  await secondPage
+    .getByRole("group", { name: "Theme", exact: true })
+    .getByRole("button", { name: "Dark", exact: true })
+    .click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(page.locator(`[data-terminal-mount-id="${mountId}"]`)).toHaveCount(1);
 
@@ -112,7 +115,10 @@ test("portal has no serious or critical a11y findings at 200 percent zoom", asyn
   await expectNoHighImpactViolations(page);
 
   await page.locator('summary[aria-label="Portal utilities"]').click();
-  await page.getByRole("link", { name: "Preferences", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Portal utilities", exact: true })
+    .getByRole("link", { name: "Preferences", exact: true })
+    .click();
   await page.getByLabel("Motion").selectOption("reduce");
   await page.getByLabel("Contrast").selectOption("forced");
   await expectNoHighImpactViolations(page);
@@ -123,15 +129,19 @@ test("provider extension catalog previews permissions and runs trusted lifecycle
   nanasa,
 }) => {
   await page.goto(deepLink(nanasa, "/extensions"));
-  await expect(page.getByRole("heading", { name: "Provider catalog" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Provider catalog" })).toBeVisible();
   await page.getByRole("button", { name: /OpenCode/ }).click();
+  await page.getByRole("button", { name: "Plan", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Permission preview" })).toBeVisible();
   await expect(page.getByText("runtime:launch-provider")).toBeVisible();
   await expect(page.getByText(/environment names/)).toBeVisible();
-  await page.getByRole("button", { name: /Trust exact plan/ }).click();
+  await page.getByRole("button", { name: "Approve exact plan", exact: true }).click();
+  await page.getByRole("button", { name: "Lifecycle", exact: true }).click();
   await page.getByRole("button", { name: "Disable" }).click();
   await expect(page.getByText("disabled", { exact: true }).first()).toBeVisible();
-  await page.getByRole("button", { name: /Trust exact plan/ }).click();
+  await page.getByRole("button", { name: "Plan", exact: true }).click();
+  await page.getByRole("button", { name: "Approve exact plan", exact: true }).click();
+  await page.getByRole("button", { name: "Lifecycle", exact: true }).click();
   await page.getByRole("button", { name: /Repair owned state/ }).click();
   await expect(page.getByText("current", { exact: true }).first()).toBeVisible();
   await expectNoHighImpactViolations(page);

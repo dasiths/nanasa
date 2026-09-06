@@ -1,0 +1,662 @@
+{
+  "version": 1,
+  "status": "design-model-not-implementation-coverage",
+  "principle": "Preserve capabilities and safeguards, not existing components or control placement.",
+  "entities": [
+    {
+      "id": "project",
+      "name": "Project",
+      "relationship": "Contains teams, configured integrations, repository workspaces, and daemon state.",
+      "primarySurface": "Persistent project context; project inspector for connection and configuration facts.",
+      "capabilities": [
+        {
+          "id": "project.inspect",
+          "intent": "Inspect project, configuration, and connection health",
+          "methods": [
+            "loadMetadata",
+            "loadSnapshot",
+            "loadConfig",
+            "loadConfigStatus",
+            "createEventsSocket"
+          ],
+          "exposure": "current-ui",
+          "pattern": "read-only-inspector",
+          "guard": "Distinguish configured facts from observed state; never show stale state as connected."
+        },
+        {
+          "id": "project.navigate",
+          "intent": "Navigate destinations, find commands, use history and keyboard navigation",
+          "methods": [],
+          "exposure": "current-ui",
+          "pattern": "persistent-navigation-and-command-search",
+          "guard": "Preserve route scope, focus return, browser history, and mobile access to the same destinations."
+        }
+      ]
+    },
+    {
+      "id": "team",
+      "name": "Team",
+      "relationship": "Owns configured agent memberships and a checkout binding; scopes conversations and activity.",
+      "primarySurface": "Team directory and team workspace header, with Members, Terminals, Messages, and Attention views.",
+      "capabilities": [
+        {
+          "id": "team.create",
+          "intent": "Create a named team with instruction paths",
+          "methods": ["createGroup"],
+          "exposure": "current-ui",
+          "pattern": "create-sheet",
+          "guard": "Validate name and instruction paths; preserve draft on failure."
+        },
+        {
+          "id": "team.edit",
+          "intent": "Rename a team or edit its instructions",
+          "methods": ["updateGroup"],
+          "exposure": "current-ui",
+          "pattern": "inspector-edit-mode",
+          "guard": "Show inherited versus authored values; saving configuration is not restarting agents."
+        },
+        {
+          "id": "team.order",
+          "intent": "Change team order",
+          "methods": ["reorderGroups"],
+          "exposure": "current-ui",
+          "pattern": "explicit-organize-mode",
+          "guard": "Keyboard-accessible move up/down; preserve expected order revision."
+        },
+        {
+          "id": "team.remove",
+          "intent": "Delete a team",
+          "methods": ["deleteGroup"],
+          "exposure": "current-ui",
+          "pattern": "impact-confirmation",
+          "guard": "Show affected memberships, runs, and message history; do not conflate team deletion with deleting a Git checkout."
+        }
+      ]
+    },
+    {
+      "id": "agent",
+      "name": "Configured agent membership",
+      "relationship": "Belongs to a team; selects an integration, optional role, and instructions; has zero or more runs over time.",
+      "primarySurface": "All agents and team Members directories with one shared inspector.",
+      "capabilities": [
+        {
+          "id": "agent.browse",
+          "intent": "Search, group, collapse groups, inspect identity and prompt composition, copy member ID, open team or terminal",
+          "methods": [],
+          "exposure": "current-ui",
+          "pattern": "grouped-directory-and-inspector",
+          "guard": "Separate configured model/policy/workspace from last observed run facts; preserve long IDs and source provenance."
+        },
+        {
+          "id": "agent.create",
+          "intent": "Add an agent with name, integration, optional role, and instruction paths",
+          "methods": ["createAgent"],
+          "exposure": "current-ui",
+          "pattern": "create-sheet",
+          "guard": "Membership creation is distinct from starting a process."
+        },
+        {
+          "id": "agent.edit",
+          "intent": "Rename or edit agent integration, role, and instructions",
+          "methods": ["updateAgent"],
+          "exposure": "current-ui",
+          "pattern": "inspector-edit-mode",
+          "guard": "Inherited execution policy and model values are read-only unless the existing command supports editing them."
+        },
+        {
+          "id": "agent.organize",
+          "intent": "Reorder members or move an agent between teams",
+          "methods": ["reorderAgents", "reparentAgent"],
+          "exposure": "current-ui",
+          "pattern": "explicit-organize-mode",
+          "guard": "Moving requires stopped state; destination and order revision must be explicit; no drag-only behavior."
+        },
+        {
+          "id": "agent.remove",
+          "intent": "Remove an agent membership",
+          "methods": ["removeAgent"],
+          "exposure": "current-ui",
+          "pattern": "impact-confirmation",
+          "guard": "Retain the existing confirmation and explain affected runs/deliveries; do not label this as provider removal."
+        }
+      ]
+    },
+    {
+      "id": "run",
+      "name": "Agent run",
+      "relationship": "One generation of a configured agent process; owns runtime status, terminal binding, and recovery state.",
+      "primarySurface": "Agent inspector Session tab and team-scoped run actions.",
+      "capabilities": [
+        {
+          "id": "run.start",
+          "intent": "Start an agent or all eligible team agents",
+          "methods": ["startRun", "startAllRuns"],
+          "exposure": "current-ui",
+          "pattern": "contextual-primary-action",
+          "guard": "Show running, starting, approval-required, denied, and failed outcomes separately; starting an existing run is not unconditional restart."
+        },
+        {
+          "id": "run.stop",
+          "intent": "Stop one run or confirmed stop of all active team runs",
+          "methods": ["stopRun", "stopAllRuns"],
+          "exposure": "current-ui",
+          "pattern": "contextual-action-and-impact-confirmation",
+          "guard": "Keep entity identity and scope visible; preserve individual versus team confirmation behavior."
+        },
+        {
+          "id": "run.recover",
+          "intent": "Inspect setup changes, preview recovery, retry, or recover eligible runs",
+          "methods": ["recoverGroupRuns", "recoverAgentRun"],
+          "exposure": "current-ui",
+          "pattern": "plan-review-and-outcome-list",
+          "guard": "Preview before apply; preserve uncertain ownership and explicit force confirmation; show partial success and approval-required outcomes."
+        },
+        {
+          "id": "run.inspect",
+          "intent": "Inspect observed status, completion, failure, health, provider update, and restart advisories",
+          "methods": [],
+          "exposure": "current-ui",
+          "pattern": "read-only-inspector",
+          "guard": "A connected terminal is not evidence that an agent is healthy or has completed a task."
+        }
+      ]
+    },
+    {
+      "id": "terminal",
+      "name": "Terminal view and input lease",
+      "relationship": "Observes a run; input control is a separate browser lease, not the run lifecycle.",
+      "primarySurface": "Unframed team terminal workspace with session strip and one active terminal toolbar.",
+      "capabilities": [
+        {
+          "id": "terminal.attach",
+          "intent": "Attach, observe connection/reconnect state, and fit the terminal",
+          "methods": ["getTerminalEndpointStatus"],
+          "exposure": "current-ui",
+          "pattern": "terminal-work-surface",
+          "guard": "Reuse the proven terminal engine and protocol, not old chrome; do not lose terminal mounts on view changes."
+        },
+        {
+          "id": "terminal.layout",
+          "intent": "Automatic or 1/2/3 columns, focus/restore, pin/unpin, copy member identity",
+          "methods": [],
+          "exposure": "current-ui",
+          "pattern": "view-toolbar-and-session-strip",
+          "guard": "Keep fixed responsive dimensions and visible active-agent identity; focus is not stop/hide process."
+        },
+        {
+          "id": "terminal.input",
+          "intent": "Take control, observe/release, type, paste, resize, handle automated-input suspension and clipboard requests",
+          "methods": [],
+          "exposure": "current-ui",
+          "pattern": "explicit-lease-control",
+          "guard": "Require current controller lease and interactive state; retain clipboard consent and browser restrictions."
+        },
+        {
+          "id": "terminal.tools",
+          "intent": "Find next, select all scrollback, clear selection, copy selection, read selection help, open links",
+          "methods": [],
+          "exposure": "current-ui",
+          "pattern": "active-view-tools",
+          "guard": "Copy requires a selection; clear selection is not clear history; links and clipboard actions remain deliberate."
+        },
+        {
+          "id": "terminal.transcript",
+          "intent": "Read bounded live output and previous checkpoints",
+          "methods": ["readTerminal"],
+          "exposure": "current-ui",
+          "pattern": "read-only-transcript-view",
+          "guard": "Mark historical output explicitly; never replay a checkpoint into the PTY."
+        }
+      ]
+    },
+    {
+      "id": "console",
+      "name": "Ad-hoc console",
+      "relationship": "A separately owned console session; not an agent membership.",
+      "primarySurface": "Project console workspace using the same terminal tools.",
+      "capabilities": [
+        {
+          "id": "console.lifecycle",
+          "intent": "Open and close an ad-hoc console",
+          "methods": ["createConsole", "closeConsole"],
+          "exposure": "current-ui",
+          "pattern": "terminal-work-surface",
+          "guard": "Do not conflate closing the console with merely leaving a screen; show session identity and ownership."
+        }
+      ]
+    },
+    {
+      "id": "checkpoint",
+      "name": "Terminal checkpoint",
+      "relationship": "Read-only historical output for a specific run generation.",
+      "primarySurface": "Transcript History view; maintenance entry from System.",
+      "capabilities": [
+        {
+          "id": "checkpoint.inspect",
+          "intent": "List and select historical output",
+          "methods": ["listTerminalCheckpoints", "getTerminalCheckpoint"],
+          "exposure": "current-ui",
+          "pattern": "history-list-and-reader",
+          "guard": "Preserve generation, timestamp, truncation, and sensitivity metadata."
+        },
+        {
+          "id": "checkpoint.delete",
+          "intent": "Delete a stored checkpoint",
+          "methods": ["deleteTerminalCheckpoint"],
+          "exposure": "current-ui",
+          "pattern": "contextual-maintenance-action",
+          "guard": "Deleting historical output is separate from the live terminal and run."
+        },
+        {
+          "id": "checkpoint.capture",
+          "intent": "Capture a checkpoint explicitly",
+          "methods": ["createTerminalCheckpoint"],
+          "exposure": "api-only",
+          "pattern": "not-promoted-without-approval",
+          "guard": "No current production UI caller found; do not claim this as an existing button."
+        }
+      ]
+    },
+    {
+      "id": "conversation",
+      "name": "Team conversation and message",
+      "relationship": "Messages have audience, intent, delivery outcomes, and read state; prompting an agent is a separate action.",
+      "primarySurface": "Conversation list and timeline with an attached composer.",
+      "capabilities": [
+        {
+          "id": "message.read",
+          "intent": "Read history, fetch older/newer pages, jump to latest, inspect delivery and unread state",
+          "methods": ["loadMessages"],
+          "exposure": "current-ui",
+          "pattern": "conversation-and-timeline",
+          "guard": "Preserve read cursors, pinned scroll position, recipient outcomes, and failure navigation."
+        },
+        {
+          "id": "message.send",
+          "intent": "Send direct, multicast, or group messages with inform/request/response/control intent",
+          "methods": ["submitMessage"],
+          "exposure": "current-ui",
+          "pattern": "attached-composer",
+          "guard": "Explicit recipient scope; multicast needs at least two; preserve byte limit, sender restrictions, and drafts on failure."
+        },
+        {
+          "id": "message.clear",
+          "intent": "Clear stored team message history",
+          "methods": ["clearMessages"],
+          "exposure": "current-ui",
+          "pattern": "impact-confirmation",
+          "guard": "Keep confirmation and explain history versus active run effects; not a per-message delete."
+        }
+      ]
+    },
+    {
+      "id": "work-item",
+      "name": "Durable work item",
+      "relationship": "Tracks a prompt's execution independently of message delivery.",
+      "primarySurface": "Message execution details and Attention activity inspector.",
+      "capabilities": [
+        {
+          "id": "work.prompt",
+          "intent": "Prompt when ready, separately from delivering the message",
+          "methods": ["createAgentAction"],
+          "exposure": "current-ui",
+          "pattern": "explicit-composer-execution-option",
+          "guard": "Keep execution opt-in and distinct from delivery acknowledgement; show partial failure."
+        },
+        {
+          "id": "work.inspect",
+          "intent": "Inspect durable actions, attempts, acknowledgements, and open waits",
+          "methods": ["loadActionWorkspace"],
+          "exposure": "current-ui",
+          "pattern": "activity-inspector",
+          "guard": "Preserve partial-loading errors and distinguish acknowledged, completed, failed, and unverified."
+        },
+        {
+          "id": "work.cancel",
+          "intent": "Cancel a durable action",
+          "methods": ["cancelAgentAction"],
+          "exposure": "api-only",
+          "pattern": "not-promoted-without-approval",
+          "guard": "No current production UI caller found."
+        }
+      ]
+    },
+    {
+      "id": "attention",
+      "name": "Attention item",
+      "relationship": "A projection pointing to another entity, not an independent source of agent truth.",
+      "primarySurface": "One inbox with optional team scope; selection opens an inspector beside the list.",
+      "capabilities": [
+        {
+          "id": "attention.browse",
+          "intent": "Needs action/Active/History/All, search, type/team filters, selection, bulk selection, source navigation",
+          "methods": [],
+          "exposure": "current-ui",
+          "pattern": "grouped-inbox-and-inspector",
+          "guard": "Keep selected scope visible; preserve partial errors, empty results, and dismissal eligibility."
+        },
+        {
+          "id": "attention.dismiss",
+          "intent": "Dismiss eligible items individually or in bulk",
+          "methods": ["listAttentionDismissals", "dismissAttentionItems"],
+          "exposure": "current-ui",
+          "pattern": "selection-action-bar",
+          "guard": "Dismiss is not resolve, approve, answer, or acknowledge completion."
+        },
+        {
+          "id": "attention.reply",
+          "intent": "Submit a structured wait reply",
+          "methods": ["replyOpenWait"],
+          "exposure": "api-only",
+          "pattern": "not-promoted-without-approval",
+          "guard": "Current UI routes to the terminal; expected run/generation/reporter/status are mandatory if exposed later."
+        },
+        {
+          "id": "attention.acknowledge",
+          "intent": "Acknowledge agent completion explicitly",
+          "methods": ["acknowledgeCompletion"],
+          "exposure": "api-only",
+          "pattern": "not-promoted-without-approval",
+          "guard": "Current UI dismissal is not this operation."
+        }
+      ]
+    },
+    {
+      "id": "subscription",
+      "name": "Agent attention subscription",
+      "relationship": "Per-member event preferences layered over repository and agent defaults.",
+      "primarySurface": "Agent inspector Attention tab, reachable from inbox and terminal bell.",
+      "capabilities": [
+        {
+          "id": "subscription.configure",
+          "intent": "Inspect nine event types, enable/disable each or all, and reset overrides",
+          "methods": [
+            "listAttentionSubscriptions",
+            "setAttentionSubscription",
+            "resetAttentionSubscriptions"
+          ],
+          "exposure": "current-ui",
+          "pattern": "inspector-toggle-list",
+          "guard": "Keep inherited/config versus operator-override provenance; reset means inherit, not disable all."
+        },
+        {
+          "id": "subscription.notifications",
+          "intent": "Open/dismiss in-app notification and pause expiration on hover/focus",
+          "methods": [],
+          "exposure": "current-ui",
+          "pattern": "transient-notification",
+          "guard": "Toast dismissal is separate from durable inbox dismissal; honor subscribed events and current context."
+        }
+      ]
+    },
+    {
+      "id": "launch-consent",
+      "name": "Custom-launch consent request",
+      "relationship": "Binds a decision to an exact launcher subject and configuration revision before a run starts.",
+      "primarySurface": "Attention inspector with an explicit command/permissions review step.",
+      "capabilities": [
+        {
+          "id": "consent.review",
+          "intent": "Inspect the exact launch request, command, paths, environment names, and permission floor",
+          "methods": ["listLaunchConsents"],
+          "exposure": "current-ui",
+          "pattern": "decision-inspector",
+          "guard": "Never expose credentials or collapse review to a generic green button; distinguish pending/stale/denied/cancelled/approved."
+        },
+        {
+          "id": "consent.detail-read",
+          "intent": "Fetch a launch request individually",
+          "methods": ["getLaunchConsent"],
+          "exposure": "api-only",
+          "pattern": "read-model-not-an-extra-button",
+          "guard": "Current UI reads complete requests from the list; a separate endpoint is not a separate feature."
+        },
+        {
+          "id": "consent.approve",
+          "intent": "Trust and start; approve and retry applicable team recovery requests",
+          "methods": ["approveLaunchConsent"],
+          "exposure": "current-ui",
+          "pattern": "explicit-scoped-decision",
+          "guard": "Exact subject digest/config revision; approval and successful process start are different outcomes."
+        },
+        {
+          "id": "consent.cancel",
+          "intent": "Cancel a pending launch request",
+          "methods": ["cancelLaunchConsent"],
+          "exposure": "current-ui",
+          "pattern": "explicit-scoped-decision",
+          "guard": "Cancel stores no trust decision; it is not durable denial."
+        },
+        {
+          "id": "consent.deny",
+          "intent": "Durably deny the exact launcher",
+          "methods": ["denyLaunchConsent"],
+          "exposure": "api-only",
+          "pattern": "not-promoted-without-approval",
+          "guard": "No current production UI caller found; the existing launch pane supports trust/start and cancellation, not a denial control."
+        },
+        {
+          "id": "consent.revoke",
+          "intent": "Revoke a trust receipt",
+          "methods": ["revokeLaunchConsent"],
+          "exposure": "api-only",
+          "pattern": "not-promoted-without-approval",
+          "guard": "No current production UI caller found; revocation is distinct from cancelling a request."
+        }
+      ]
+    },
+    {
+      "id": "url-request",
+      "name": "Browser URL request",
+      "relationship": "An expiring request from an identified run to open an HTTP(S) URL.",
+      "primarySurface": "Attention inspector showing origin, full URL, and requesting agent.",
+      "capabilities": [
+        {
+          "id": "url.review",
+          "intent": "Inspect origin/full URL, revalidate freshness, explicitly open or dismiss",
+          "methods": ["listUrlOpenRequests", "getUrlOpenRequest"],
+          "exposure": "current-ui",
+          "pattern": "decision-inspector",
+          "guard": "No auto-open; stale/expired requests and browser popup blocking remain visible; dismiss does not approve."
+        }
+      ]
+    },
+    {
+      "id": "workspace",
+      "name": "Git checkout and team binding",
+      "relationship": "Belongs to a repository; a team can bind to it; a managed worktree additionally has provenance and lifecycle.",
+      "primarySurface": "Branch directory with inspector tabs for Assignment, Changes, and Maintenance.",
+      "capabilities": [
+        {
+          "id": "workspace.inspect",
+          "intent": "Inspect checkout status, references, primary/linked/managed identity, and team bindings",
+          "methods": ["refreshCheckout", "listCheckoutReferences"],
+          "exposure": "current-ui",
+          "pattern": "directory-and-inspector",
+          "guard": "Primary, linked, and Nanasa-managed are not interchangeable; refresh is not fetch."
+        },
+        {
+          "id": "workspace.fetch",
+          "intent": "Fetch updates and refresh projected statuses",
+          "methods": ["fetchCheckout"],
+          "exposure": "current-ui",
+          "pattern": "explicit-toolbar-command",
+          "guard": "Network fetch remains deliberate; never perform it just by opening a form."
+        },
+        {
+          "id": "workspace.create",
+          "intent": "Create a branch worktree from a revision, optionally assign and activate",
+          "methods": ["createWorktree"],
+          "exposure": "current-ui",
+          "pattern": "create-sheet",
+          "guard": "Preserve branch/base, unassigned default, activation opt-in, and configuration versus runtime binding distinction."
+        },
+        {
+          "id": "workspace.attach",
+          "intent": "Attach an existing checkout by path",
+          "methods": ["openCheckout"],
+          "exposure": "current-ui",
+          "pattern": "create-sheet-alternate-mode",
+          "guard": "Existing path is not a new worktree; preserve assignment and activation choices."
+        },
+        {
+          "id": "workspace.assign",
+          "intent": "Bind a team to a checkout, with an explicit active-run transition policy",
+          "methods": ["assignCheckout"],
+          "exposure": "current-ui",
+          "pattern": "impact-confirmation",
+          "guard": "Revision checks; stopped-only, stop-and-switch, or stop-switch-restart; show per-member outcomes."
+        },
+        {
+          "id": "workspace.remove",
+          "intent": "Remove a managed worktree when eligible",
+          "methods": ["removeWorktree"],
+          "exposure": "current-ui",
+          "pattern": "guarded-maintenance-action",
+          "guard": "Preserve primary/external/dirty/assigned/running protections and expected operation generation; never implement arbitrary folder deletion."
+        }
+      ]
+    },
+    {
+      "id": "provider",
+      "name": "Provider extension and configured integration",
+      "relationship": "An extension supplies provider capabilities; an integration selects command, credentials, model, execution policy, and recovery used by agents.",
+      "primarySurface": "Provider directory and read-only integration inspector, with a separate plan-review mode for maintenance.",
+      "capabilities": [
+        {
+          "id": "provider.inspect",
+          "intent": "Inspect installed/catalog state, integration use, health, drift, version, permissions, owned mutations, and command preview",
+          "methods": ["listProviderExtensions", "inspectProviderExtension"],
+          "exposure": "current-ui",
+          "pattern": "directory-and-inspector",
+          "guard": "Configured integration is not extension package state; no unsupported OAuth/login or arbitrary integration editor."
+        },
+        {
+          "id": "provider.trust",
+          "intent": "Approve an exact provider change plan",
+          "methods": ["trustProviderExtension"],
+          "exposure": "current-ui",
+          "pattern": "plan-review",
+          "guard": "Package/plan digest, permissions, mutations, affected agents, and stopped-run requirements remain visible."
+        },
+        {
+          "id": "provider.maintain",
+          "intent": "Install, repair owned state, disable, or roll back",
+          "methods": [
+            "installProviderExtension",
+            "repairProviderExtension",
+            "disableProviderExtension",
+            "rollbackProviderExtension"
+          ],
+          "exposure": "current-ui",
+          "pattern": "plan-review-and-outcome",
+          "guard": "Distinct lifecycle verbs and trust requirements; no generic Update button that hides actual effects."
+        },
+        {
+          "id": "provider.remove",
+          "intent": "Remove an extension from Nanasa",
+          "methods": ["removeProviderExtension"],
+          "exposure": "current-ui",
+          "pattern": "typed-impact-confirmation",
+          "guard": "Retain exact extension-ID confirmation and clarify retained auth/session/provider data."
+        },
+        {
+          "id": "provider.extra-reads",
+          "intent": "Fetch separate plan or health endpoints",
+          "methods": ["planProviderExtension", "providerExtensionHealth"],
+          "exposure": "api-only",
+          "pattern": "read-model-not-an-extra-button",
+          "guard": "Current inspection already supplies the displayed plan and health; do not duplicate commands to match API count."
+        }
+      ]
+    },
+    {
+      "id": "provider-state",
+      "name": "Provider state binding",
+      "relationship": "Managed state with credential reference and retention lifecycle, distinct from the installed extension.",
+      "primarySurface": "Provider inspector State view, with System diagnostics as another entry point.",
+      "capabilities": [
+        {
+          "id": "provider-state.maintain",
+          "intent": "Inspect, retain, or delete provider state",
+          "methods": ["listProviderStates", "retainProviderState", "deleteProviderState"],
+          "exposure": "current-ui",
+          "pattern": "state-list-and-maintenance-action",
+          "guard": "State retention/deletion is not package uninstall or credential editing; preserve lifecycle and storage reference."
+        }
+      ]
+    },
+    {
+      "id": "role",
+      "name": "Role presentation",
+      "relationship": "Shared visual identity applied to configured roles; does not change the role's permission policy.",
+      "primarySurface": "Preferences Roles view and role link in agent inspector.",
+      "capabilities": [
+        {
+          "id": "role.edit",
+          "intent": "Choose a supported glyph, color, and compact name",
+          "methods": ["updateRolePresentation"],
+          "exposure": "current-ui",
+          "pattern": "visual-picker-and-preview",
+          "guard": "Supported enum values only; real swatches and glyphs with names; presentation never grants permissions."
+        }
+      ]
+    },
+    {
+      "id": "system",
+      "name": "Daemon service and remote connection",
+      "relationship": "Hosts coordination; process continuity and SSH forwarding are separate from team execution.",
+      "primarySurface": "System hub with Health, Service, and Remote views; connection indicator links to the same facts.",
+      "capabilities": [
+        {
+          "id": "system.service",
+          "intent": "Inspect service lifecycle and preview planned reconnect behavior",
+          "methods": ["loadServiceStatus", "planServiceRestart"],
+          "exposure": "current-ui",
+          "pattern": "facts-and-plan-review",
+          "guard": "Current action previews a restart; do not invent a restart execution button; tmux process continuity differs from WebSocket reconnect."
+        },
+        {
+          "id": "system.remote",
+          "intent": "Inspect loopback endpoints, SSH/authentication boundary, and recovery guidance",
+          "methods": ["loadRemoteStatus"],
+          "exposure": "current-ui",
+          "pattern": "read-only-facts",
+          "guard": "No browser-managed tunnel, public exposure, or multi-user hosting controls are currently supported."
+        },
+        {
+          "id": "system.support",
+          "intent": "Read offline help, discover shortcuts, inspect build identity, and copy diagnostics",
+          "methods": [],
+          "exposure": "current-ui",
+          "pattern": "searchable-reference-and-read-only-inspector",
+          "guard": "Preserve actual product/build compatibility and offline access; fixture versions must not imply installed truth."
+        }
+      ]
+    },
+    {
+      "id": "preferences",
+      "name": "Browser preferences",
+      "relationship": "Browser-owned presentation and notifications, not daemon configuration.",
+      "primarySurface": "Preferences with Appearance, Accessibility, Notifications, and Roles views.",
+      "capabilities": [
+        {
+          "id": "preferences.edit",
+          "intent": "System/light/dark, comfortable/compact, system/reduced/full motion, system/forced/standard contrast",
+          "methods": [],
+          "exposure": "current-ui",
+          "pattern": "labeled-setting-rows",
+          "guard": "Preserve system-following choices, cross-tab persistence, and focus/reduced-motion behavior."
+        },
+        {
+          "id": "preferences.notifications",
+          "intent": "Enable sound, request/disable desktop notifications, send a test",
+          "methods": [],
+          "exposure": "current-ui",
+          "pattern": "toggle-and-permission-action",
+          "guard": "OS permission is not a fake switch; show unsupported, denied, permission-required, and granted states."
+        }
+      ]
+    }
+  ]
+}

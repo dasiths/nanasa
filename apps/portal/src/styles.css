@@ -1,26 +1,26 @@
 :root {
-  color: #18211e;
-  background: #e9eeeb;
+  color: #202b24;
+  background: #f4f6f4;
   font-family: "IBM Plex Sans Condensed", sans-serif;
   font-synthesis: none;
-  --canvas: #eef1ef;
+  --canvas: #f4f6f4;
   --surface: #ffffff;
-  --surface-muted: #f2f5f3;
-  --line: #cbd4cf;
-  --line-strong: #9eada5;
-  --text: #18211e;
-  --text-muted: #5b6963;
+  --surface-muted: #edf1ee;
+  --line: #d6ded8;
+  --line-strong: #afbeb3;
+  --text: #202b24;
+  --text-muted: #5c6b61;
   --green: #216e58;
-  --green-soft: #dcece5;
-  --amber: #a9660c;
+  --green-soft: #e5f0e8;
+  --amber: #8d5c14;
   --blue: #285f8f;
   --blue-soft: #e2edf6;
   --red: #a23b32;
   --red-soft: #f8e4e1;
   --terminal: #14201e;
-  --rail: rgb(249 251 250 / 96%);
-  --workspace-surface: rgb(242 245 243 / 91%);
-  --header-surface: rgb(255 255 255 / 94%);
+  --rail: #f9fbf9;
+  --workspace-surface: #f4f6f4;
+  --header-surface: #f4f6f4;
   --selected-text: #114d3b;
   --primary-hover: #175d49;
   --danger-border: #e8b7b0;
@@ -32,6 +32,9 @@
   --control-shadow: rgb(27 45 39 / 14%);
   --panel-shadow: rgb(22 39 33 / 22%);
   --on-accent: #ffffff;
+  --entity-primary-size: 14px;
+  --entity-secondary-size: 12px;
+  --entity-technical-size: 11px;
   --outcome-text: #155540;
   --terminal-chrome-bg: #e7eeea;
   --terminal-chrome-accent: #d8e8e1;
@@ -48,26 +51,26 @@
 }
 
 :root[data-theme="dark"] {
-  color: #eeeae1;
-  background: #171816;
-  --canvas: #171816;
-  --surface: #24231f;
-  --surface-muted: #2d2b25;
-  --line: #46443c;
-  --line-strong: #666258;
-  --text: #eeeae1;
-  --text-muted: #b8b2a7;
-  --green: #75c7a6;
-  --green-soft: #273e34;
-  --amber: #e2ad5d;
-  --blue: #7db3d8;
-  --blue-soft: #263944;
+  color: #ecf0e8;
+  background: #1b1f1b;
+  --canvas: #1b1f1b;
+  --surface: #242a24;
+  --surface-muted: #2c332c;
+  --line: #3e483f;
+  --line-strong: #798b7c;
+  --text: #ecf0e8;
+  --text-muted: #b4bfb2;
+  --green: #8dd1b0;
+  --green-soft: #293e30;
+  --amber: #e7bd7a;
+  --blue: #9dc9ea;
+  --blue-soft: #293e4b;
   --red: #e98479;
   --red-soft: #482b28;
   --terminal: #111614;
-  --rail: rgb(31 31 28 / 98%);
-  --workspace-surface: rgb(27 27 24 / 96%);
-  --header-surface: rgb(36 35 31 / 98%);
+  --rail: #20251f;
+  --workspace-surface: #1b1f1b;
+  --header-surface: #1b1f1b;
   --selected-text: #b8e5d2;
   --primary-hover: #3f9f7a;
   --danger-border: #70413c;
@@ -96,6 +99,7 @@
 
 * {
   box-sizing: border-box;
+  letter-spacing: 0;
 }
 
 html,
@@ -108,10 +112,7 @@ body,
 
 body {
   min-height: 100vh;
-  background:
-    linear-gradient(90deg, rgb(33 110 88 / 5%) 1px, transparent 1px),
-    linear-gradient(rgb(33 110 88 / 5%) 1px, transparent 1px), var(--canvas);
-  background-size: 24px 24px;
+  background: var(--canvas);
 }
 
 button,
@@ -2484,7 +2485,7 @@ textarea {
 .terminal-workspace {
   display: grid;
   height: 100%;
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   background: var(--surface);
 }
 
@@ -3424,7 +3425,7 @@ textarea {
   }
 
   .terminal-lease-status strong {
-    display: none;
+    display: inline;
   }
 
   .terminal-actions .icon-button,

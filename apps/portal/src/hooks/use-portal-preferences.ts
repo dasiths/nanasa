@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 export type ThemePreference = "light" | "dark" | "system";
 export type TerminalColumnsPreference = "auto" | 1 | 2 | 3;
-export type WorkspaceSection = "terminals" | "messages" | "activity";
+export type WorkspaceSection = "members" | "terminals" | "messages" | "activity";
 export type MotionPreference = "system" | "reduce" | "full";
 export type ContrastPreference = "system" | "forced" | "standard";
 
@@ -119,6 +119,7 @@ export function parsePortalPreferences(value: string | null): PortalPreferences 
           ]
         : [],
       lastSectionByGroup: stringRecord(parsed.lastSectionByGroup, [
+        "members",
         "terminals",
         "messages",
         "activity",

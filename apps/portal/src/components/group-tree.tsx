@@ -67,6 +67,7 @@ interface GroupTreeProps {
   config: NanasaConfig;
   repositoryNavigation?: ReactNode;
   utilities?: ReactNode;
+  headingMode?: "brand" | "teams";
   onOpenCommandPalette?(): void;
   selectedGroupId?: string;
   unreadCounts: ReadonlyMap<string, number>;
@@ -1060,6 +1061,7 @@ export function GroupTree({
   config,
   repositoryNavigation,
   utilities,
+  headingMode = "brand",
   onOpenCommandPalette,
   selectedGroupId,
   busyAction,
@@ -1166,10 +1168,17 @@ export function GroupTree({
 
   return (
     <>
+      {headingMode === "teams" && repositoryNavigation}
       <div className="rail-heading">
         <div>
-          <span className="eyebrow">Operations</span>
-          <strong className="brand">Nanasa</strong>
+          {headingMode === "brand" ? (
+            <>
+              <span className="eyebrow">Operations</span>
+              <strong className="brand">Nanasa</strong>
+            </>
+          ) : (
+            <strong className="rail-section-label">Teams</strong>
+          )}
         </div>
         <div className="rail-heading-actions">
           {onOpenCommandPalette !== undefined && (
@@ -1195,7 +1204,7 @@ export function GroupTree({
         </div>
       </div>
       {showCreateGroup && <CreateGroupForm onCreate={onCreateGroup} />}
-      {repositoryNavigation}
+      {headingMode === "brand" && repositoryNavigation}
       <nav className="group-tree" aria-label="Group tree">
         {snapshot.groups.length === 0 && (
           <div className="empty-state compact-empty">

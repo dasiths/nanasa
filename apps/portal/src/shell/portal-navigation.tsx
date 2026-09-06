@@ -15,6 +15,7 @@ import {
   Settings,
   Stethoscope,
   Sun,
+  Users,
   X,
 } from "lucide-react";
 import { type MouseEvent, type ReactNode, useRef } from "react";
@@ -31,6 +32,7 @@ import { groupRoute, type PortalRoute } from "../router/portal-router.js";
 export type PortalLinkHandler = (path: string) => (event: MouseEvent<HTMLAnchorElement>) => void;
 
 const destinationIcons: Record<GlobalDestination, ReactNode> = {
+  teams: <Users aria-hidden="true" size={15} />,
   attention: <Bell aria-hidden="true" size={15} />,
   agents: <Bot aria-hidden="true" size={15} />,
   checkouts: <GitBranch aria-hidden="true" size={15} />,
@@ -60,7 +62,9 @@ function DestinationLink({
   onLink: PortalLinkHandler;
   onSelected?(): void;
 }) {
-  const selected = destination.id === currentDestination;
+  const selected =
+    destination.id === currentDestination ||
+    (destination.id === "teams" && currentDestination === "agents");
   return (
     <a
       className="portal-nav-link"
@@ -95,10 +99,12 @@ export function RepositoryNavigation({
   currentDestination,
   attentionCount,
   onLink,
+  children,
 }: {
   currentDestination: GlobalDestination | undefined;
   attentionCount: number;
   onLink: PortalLinkHandler;
+  children?: ReactNode;
 }) {
   const operations = globalDestinationDefinitions.filter(({ group }) => group === "operations");
   return (
@@ -117,6 +123,7 @@ export function RepositoryNavigation({
           />
         ))}
       </nav>
+      {children}
     </section>
   );
 }
@@ -132,7 +139,9 @@ export function PortalUtilities({
   onSetTheme(theme: ThemePreference): void;
   onLink: PortalLinkHandler;
 }) {
-  const utilities = globalDestinationDefinitions.filter(({ group }) => group === "utilities");
+  const utilities = globalDestinationDefinitions.filter(
+    ({ group }) => group === "utilities" || group === "system",
+  );
   const utilitySelected = utilities.some(({ id }) => id === currentDestination);
   const menuRef = useRef<HTMLDetailsElement>(null);
   return (
@@ -275,7 +284,9 @@ export function MobileNavigationDialog({
 }) {
   const currentDestination = route.kind === "global" ? route.destination : undefined;
   const operations = globalDestinationDefinitions.filter(({ group }) => group === "operations");
-  const utilities = globalDestinationDefinitions.filter(({ group }) => group === "utilities");
+  const utilities = globalDestinationDefinitions.filter(
+    ({ group }) => group === "utilities" || group === "system",
+  );
   const closeAfterLink: PortalLinkHandler = (path) => (event) => {
     const handled =
       event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
@@ -365,6 +376,23 @@ export function MobileNavigationDialog({
               })}
             </nav>
           </section>
+          <details className="mobile-more-navigation">
+            <summary className="compact-button">
+              <Menu size={15} aria-hidden="true" />
+              More
+            </summary>
+            <nav className="portal-navigation-list" aria-label="Portal utilities">
+              {utilities.map((destination) => (
+                <DestinationLink
+                  key={destination.id}
+                  destination={destination}
+                  currentDestination={currentDestination}
+                  attentionCount={0}
+                  onLink={closeAfterLink}
+                />
+              ))}
+            </nav>
+          </details>
         </div>
         <footer className="mobile-navigation-footer">
           <div className="utility-theme-switch" role="group" aria-label="Color theme">
@@ -396,17 +424,6 @@ export function MobileNavigationDialog({
               Dark
             </button>
           </div>
-          <nav className="portal-navigation-list" aria-label="Portal utilities">
-            {utilities.map((destination) => (
-              <DestinationLink
-                key={destination.id}
-                destination={destination}
-                currentDestination={currentDestination}
-                attentionCount={0}
-                onLink={closeAfterLink}
-              />
-            ))}
-          </nav>
         </footer>
       </div>
     </Dialog>

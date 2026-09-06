@@ -10,6 +10,13 @@ export interface GroupDestinationDefinition {
 
 export const groupDestinations = [
   {
+    id: "members",
+    label: "Members",
+    commandLabel: "Open team members",
+    commandDescription: "Inspect and configure agents in the selected team",
+    keywords: ["agents", "roles", "instructions"],
+  },
+  {
     id: "terminals",
     label: "Terminals",
     commandLabel: "Open group terminals",
@@ -32,12 +39,13 @@ export const groupDestinations = [
   },
 ] as const satisfies readonly GroupDestinationDefinition[];
 
-export type GlobalDestinationGroup = "operations" | "system" | "utilities";
+export type GlobalDestinationGroup = "operations" | "teams" | "system" | "utilities";
 
 export interface GlobalDestinationDefinition {
   id:
     | "attention"
     | "agents"
+    | "teams"
     | "checkouts"
     | "extensions"
     | "settings"
@@ -57,6 +65,25 @@ export interface GlobalDestinationDefinition {
 
 export const globalDestinationDefinitions = [
   {
+    id: "checkouts",
+    label: "Workspaces",
+    heading: "Workspaces",
+    group: "operations",
+    commandLabel: "Open workspaces",
+    commandDescription: "Assign team workspaces and manage worktrees",
+    keywords: ["git", "branches", "worktrees"],
+    shortcut: "Alt+c",
+  },
+  {
+    id: "teams",
+    label: "Teams",
+    heading: "Teams",
+    group: "operations",
+    commandLabel: "Open teams",
+    commandDescription: "Create and organize agent teams",
+    keywords: ["groups", "members", "organization"],
+  },
+  {
     id: "attention",
     label: "Attention",
     heading: "Attention",
@@ -70,21 +97,11 @@ export const globalDestinationDefinitions = [
     id: "agents",
     label: "All agents",
     heading: "All agents",
-    group: "operations",
+    group: "teams",
     commandLabel: "Open all agents",
     commandDescription: "Browse agents across every group",
     keywords: ["directory", "members", "runs"],
     shortcut: "Alt+g",
-  },
-  {
-    id: "checkouts",
-    label: "Team workspaces",
-    heading: "Team workspaces",
-    group: "operations",
-    commandLabel: "Open team workspaces",
-    commandDescription: "Assign team workspaces and manage worktrees",
-    keywords: ["git", "branches", "worktrees"],
-    shortcut: "Alt+c",
   },
   {
     id: "extensions",

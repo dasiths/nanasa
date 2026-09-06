@@ -12,7 +12,7 @@ import type {
   ServiceDescriptor,
   TerminalCheckpoint,
 } from "@nanasa/contracts";
-import { Bell, RefreshCw, X } from "lucide-react";
+import { Bell, RefreshCw, X, ArrowRight, Inbox } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { PortalClient } from "../api.js";
 import {
@@ -24,6 +24,8 @@ import {
 } from "../attention-items.js";
 import { AgentDirectory } from "../components/agent-directory.js";
 import { CheckoutWorkspace } from "../components/checkout-workspace.js";
+import { EntityInspector, EntitySection } from "../components/entity-inspector.js";
+import { TeamsWorkspace } from "../components/entity-management.js";
 import { ExtensionsWorkspace } from "../components/extensions-workspace.js";
 import { UrlOpenAction } from "../components/url-open-action.js";
 import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
@@ -192,6 +194,7 @@ function AttentionPanel({
   const routeTeamFilter = route.kind === "group" ? route.groupId : "all";
   const [teamFilter, setTeamFilter] = useState(routeTeamFilter);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [inspectedId, setInspectedId] = useState<string>();
   const allItems = attentionItems ?? deriveAttentionItems(snapshot);
   const scope =
     route.kind === "group"
@@ -244,13 +247,14 @@ function AttentionPanel({
     ].some((value) => value.toLocaleLowerCase().includes(normalizedSearch));
   });
   const selectedItems = scopedItems.filter((item) => selectedIds.has(item.id));
+  const inspected = scopedItems.find((item) => item.id === inspectedId);
 
   useEffect(() => {
     const fragment = window.location.hash.slice(1);
-    if (!fragment.startsWith("wait-") && !fragment.startsWith("action-")) return;
+    if (!fragment) return;
     const target = scopedItems.find((item) => item.targetPath.split("#")[1] === fragment);
     if (target === undefined) return;
-    if (target.kind !== "wait" && target.kind !== "action") return;
+    setInspectedId(target.id);
     const targetView = attentionInboxView(target);
     if (
       view !== targetView ||
@@ -403,103 +407,162 @@ function AttentionPanel({
           ))}
         </section>
       )}
-      {visibleItems.length === 0 ? (
-        <Empty text="No Attention items match this view." />
-      ) : (
-        <ul className="attention-inbox-list">
-          {visibleItems.map((item) => {
-            const fragment = item.targetPath.split("#")[1];
-            const destination = attentionDestination(item);
-            const timestamp = attentionItemTimestamp(item);
-            const diagnostic = item.kind === "action" ? actionErrorMessage(item) : undefined;
-            return (
-              <li
-                className={`attention-inbox-row attention-${attentionInboxView(item)}`}
-                id={fragment}
-                key={item.id}
-                tabIndex={fragment === undefined ? undefined : -1}
-              >
-                <label className="attention-row-select">
-                  <input
-                    type="checkbox"
-                    aria-label={`Select ${item.title}`}
-                    checked={selectedIds.has(item.id)}
-                    onChange={(event) => {
-                      setSelectedIds((current) => {
-                        const next = new Set(current);
-                        if (event.target.checked) next.add(item.id);
-                        else next.delete(item.id);
-                        return next;
-                      });
-                    }}
-                  />
-                </label>
-                <span className="attention-state-indicator" aria-hidden="true" />
-                <div className="attention-inbox-main">
-                  <div className="attention-inbox-title">
-                    <strong>{item.title}</strong>
-                    <span className="attention-state-badge">{attentionStateLabel(item)}</span>
-                  </div>
-                  <small className="attention-inbox-meta">
-                    <span>{item.group.name}</span>
-                    <span>{ATTENTION_CATEGORY_LABELS[item.category]}</span>
-                    {item.kind === "action" && <span>{actionKindLabel(item.action.kind)}</span>}
-                    {timestamp !== undefined && (
-                      <time dateTime={timestamp}>{formatAttentionTime(timestamp)}</time>
-                    )}
-                  </small>
-                  <p>{item.summary}</p>
-                  {item.kind === "url-open-request" && (
-                    <details>
-                      <summary>Full URL</summary>
-                      <code className="attention-request-url">{item.request.url}</code>
-                    </details>
-                  )}
-                  {item.kind === "action" && diagnostic !== undefined && (
-                    <p
-                      className="attention-diagnostic"
-                      title={
-                        item.action.error === undefined
-                          ? undefined
-                          : `Diagnostic code: ${item.action.error.code}`
-                      }
-                    >
-                      {diagnostic}
-                      {item.action.error !== undefined && <code>{item.action.error.code}</code>}
-                    </p>
-                  )}
-                </div>
-                <div className="attention-item-actions">
-                  {item.kind === "url-open-request" ? (
-                    <UrlOpenAction
-                      item={item}
-                      client={client}
-                      onDismiss={onDismissAttentionItems}
-                    />
-                  ) : (
+      <div className={`entity-layout attention-entity-layout${inspected ? " has-inspector" : ""}`}>
+        <div className="entity-collection">
+          {visibleItems.length === 0 ? (
+            <Empty text="No Attention items match this view." />
+          ) : (
+            <ul className="attention-inbox-list">
+              {visibleItems.map((item) => {
+                const fragment = item.targetPath.split("#")[1];
+                const timestamp = attentionItemTimestamp(item);
+                const diagnostic = item.kind === "action" ? actionErrorMessage(item) : undefined;
+                return (
+                  <li
+                    className={`attention-inbox-row attention-${attentionInboxView(item)}`}
+                    id={fragment}
+                    key={item.id}
+                    tabIndex={fragment === undefined ? undefined : -1}
+                  >
+                    <label className="attention-row-select">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${item.title}`}
+                        checked={selectedIds.has(item.id)}
+                        onChange={(event) => {
+                          setSelectedIds((current) => {
+                            const next = new Set(current);
+                            if (event.target.checked) next.add(item.id);
+                            else next.delete(item.id);
+                            return next;
+                          });
+                        }}
+                      />
+                    </label>
+                    <span className="attention-state-indicator" aria-hidden="true" />
                     <button
                       type="button"
-                      className="compact-button"
-                      onClick={() => onNavigate(destination.path)}
+                      className="attention-inbox-main attention-inspect-trigger"
+                      aria-label={`Inspect ${item.title}`}
+                      aria-pressed={inspectedId === item.id}
+                      onClick={() => setInspectedId(item.id)}
                     >
-                      {destination.label}
+                      <div className="attention-inbox-title">
+                        <strong>{item.title}</strong>
+                        <span className="attention-state-badge">{attentionStateLabel(item)}</span>
+                      </div>
+                      <small className="attention-inbox-meta">
+                        <span>{item.group.name}</span>
+                        <span>{ATTENTION_CATEGORY_LABELS[item.category]}</span>
+                        {item.kind === "action" && <span>{actionKindLabel(item.action.kind)}</span>}
+                        {timestamp !== undefined && (
+                          <time dateTime={timestamp}>{formatAttentionTime(timestamp)}</time>
+                        )}
+                      </small>
+                      <p>{item.summary}</p>
+                      {item.kind === "action" && diagnostic !== undefined && (
+                        <p
+                          className="attention-diagnostic"
+                          title={
+                            item.action.error === undefined
+                              ? undefined
+                              : `Diagnostic code: ${item.action.error.code}`
+                          }
+                        >
+                          {diagnostic}
+                          {item.action.error !== undefined && <code>{item.action.error.code}</code>}
+                        </p>
+                      )}
                     </button>
-                  )}
+                    <div className="attention-item-actions">
+                      <ArrowRight size={14} aria-hidden="true" />
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+        {inspected && (
+          <EntityInspector
+            key={inspected.id}
+            title={inspected.title}
+            context={inspected.group.name}
+            icon={Inbox}
+            onClose={() => setInspectedId(undefined)}
+          >
+            <EntitySection title="Event context">
+              <span
+                className="entity-state-label"
+                data-tone={inspected.counted ? "warning" : "muted"}
+              >
+                {attentionStateLabel(inspected)}
+              </span>
+              <p className="entity-context-note">{inspected.summary}</p>
+              <dl>
+                <div>
+                  <dt>Team</dt>
+                  <dd>{inspected.group.name}</dd>
+                </div>
+                <div>
+                  <dt>Category</dt>
+                  <dd>{ATTENTION_CATEGORY_LABELS[inspected.category]}</dd>
+                </div>
+                <div>
+                  <dt>Received</dt>
+                  <dd>
+                    {formatAttentionTime(attentionItemTimestamp(inspected)) ?? "Not recorded"}
+                  </dd>
+                </div>
+              </dl>
+              {inspected.kind === "action" && actionErrorMessage(inspected) && (
+                <p className="attention-diagnostic">{actionErrorMessage(inspected)}</p>
+              )}
+            </EntitySection>
+            {inspected.kind === "url-open-request" && (
+              <EntitySection title="Browser request">
+                <code className="attention-request-url">{inspected.request.url}</code>
+              </EntitySection>
+            )}
+            <EntitySection title="Actions">
+              <div className="entity-command-stack">
+                {inspected.kind === "url-open-request" ? (
+                  <UrlOpenAction
+                    item={inspected}
+                    client={client}
+                    onDismiss={onDismissAttentionItems}
+                  />
+                ) : (
                   <button
                     type="button"
-                    aria-label={`Dismiss ${item.title}`}
-                    className="compact-button"
-                    onClick={() => void dismissAttentionItems([item])}
+                    className="primary-button"
+                    onClick={() => onNavigate(attentionDestination(inspected).path)}
                   >
-                    <X aria-hidden="true" size={14} />
-                    Dismiss
+                    {attentionDestination(inspected).label}
+                    <ArrowRight size={14} />
                   </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                )}
+                <button
+                  type="button"
+                  className="compact-button"
+                  aria-label={`Dismiss ${inspected.title}`}
+                  onClick={() =>
+                    void dismissAttentionItems([inspected]).then((saved) => {
+                      if (saved) setInspectedId(undefined);
+                    })
+                  }
+                >
+                  <X size={14} />
+                  Dismiss
+                </button>
+              </div>
+              <p className="entity-context-note">
+                Dismissal removes this inbox item, not the underlying request.
+              </p>
+            </EntitySection>
+          </EntityInspector>
+        )}
+      </div>
     </RouteSurface>
   );
 }
@@ -532,11 +595,15 @@ function DiagnosticsPanel({
     );
   useEffect(load, [client, snapshot.sequence]);
   const lifecycle = async (bindingId: string, action: "retain" | "delete") => {
-    await (action === "retain"
-      ? client.retainProviderState(bindingId)
-      : client.deleteProviderState(bindingId));
-    load();
-    await onRefresh();
+    try {
+      await (action === "retain"
+        ? client.retainProviderState(bindingId)
+        : client.deleteProviderState(bindingId));
+      load();
+      await onRefresh();
+    } catch (cause) {
+      setError(toPortalError(cause, "Unable to update provider state"));
+    }
   };
   return (
     <RouteSurface
@@ -642,7 +709,14 @@ function DiagnosticsPanel({
                 </div>
                 <button
                   type="button"
-                  onClick={() => void client.deleteTerminalCheckpoint(checkpoint.id).then(load)}
+                  onClick={() =>
+                    void client
+                      .deleteTerminalCheckpoint(checkpoint.id)
+                      .then(load)
+                      .catch((cause) =>
+                        setError(toPortalError(cause, "Unable to delete checkpoint")),
+                      )
+                  }
                 >
                   Delete
                 </button>
@@ -703,28 +777,33 @@ function SettingsPanel({
           <legend>Appearance</legend>
           <label>
             Theme
-            <select
-              value={preferences.theme}
-              onChange={(event) =>
-                onPatchPreferences({ theme: event.target.value as PortalPreferences["theme"] })
-              }
-            >
-              <option value="system">System</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-            </select>
+            <span className="entity-segmented" role="group" aria-label="Theme">
+              {(["system", "light", "dark"] as const).map((theme) => (
+                <button
+                  type="button"
+                  key={theme}
+                  aria-pressed={preferences.theme === theme}
+                  onClick={() => onPatchPreferences({ theme })}
+                >
+                  {theme[0]!.toUpperCase() + theme.slice(1)}
+                </button>
+              ))}
+            </span>
           </label>
           <label>
             Density
-            <select
-              value={preferences.density}
-              onChange={(event) =>
-                onPatchPreferences({ density: event.target.value as PortalPreferences["density"] })
-              }
-            >
-              <option value="comfortable">Comfortable</option>
-              <option value="compact">Compact</option>
-            </select>
+            <span className="entity-segmented" role="group" aria-label="Density">
+              {(["comfortable", "compact"] as const).map((density) => (
+                <button
+                  type="button"
+                  key={density}
+                  aria-pressed={preferences.density === density}
+                  onClick={() => onPatchPreferences({ density })}
+                >
+                  {density === "comfortable" ? "Comfortable" : "Compact"}
+                </button>
+              ))}
+            </span>
           </label>
           <button type="button" onClick={onOpenRoleSettings}>
             Edit role presentation
@@ -766,6 +845,8 @@ function SettingsPanel({
           <p>Subscribed Attention items always show a temporary in-app toast.</p>
           <label>
             <input
+              className="entity-switch"
+              role="switch"
               type="checkbox"
               checked={preferences.notifications.sound}
               onChange={(event) => setNotification("sound", event.target.checked)}
@@ -861,7 +942,12 @@ function ServicePanel({ client }: Pick<PortalRoutePanelProps, "client">) {
         </dl>
         <button
           type="button"
-          onClick={() => void client.planServiceRestart("operator-restart").then(setRestart)}
+          onClick={() =>
+            void client
+              .planServiceRestart("operator-restart")
+              .then(setRestart)
+              .catch((cause) => setError(toPortalError(cause, "Unable to preview restart")))
+          }
         >
           Preview planned restart
         </button>
@@ -929,8 +1015,6 @@ function RemotePanel({ client }: Pick<PortalRoutePanelProps, "client">) {
 
 function RouteSurface({
   title,
-  eyebrow,
-  description,
   children,
 }: {
   title: string;
@@ -939,13 +1023,11 @@ function RouteSurface({
   children: React.ReactNode;
 }) {
   return (
-    <article className="route-surface">
+    <article className="route-surface entity-route">
       <header className="route-heading">
-        <span className="eyebrow">{eyebrow}</span>
         <h2 data-route-heading tabIndex={-1}>
           {title}
         </h2>
-        <p>{description}</p>
       </header>
       {children}
     </article>
@@ -964,24 +1046,66 @@ function Empty({ text }: { text: string }) {
 export function PortalRoutePanel(props: PortalRoutePanelProps) {
   const { route, group } = props;
   if (route.kind === "group" && group !== undefined) {
-    if (route.section === "activity") return <AttentionPanel {...props} group={group} />;
-  }
-  if (route.kind !== "global") return null;
-  switch (route.destination) {
-    case "attention":
-      return <AttentionPanel {...props} />;
-    case "agents":
+    if (route.section === "members")
       return (
         <AgentDirectory
           snapshot={props.snapshot}
           config={props.config}
+          groupId={group.id}
           onNavigate={props.onNavigate}
         />
       );
+    if (route.section === "activity") return <AttentionPanel {...props} group={group} />;
+  }
+  if (route.kind !== "global") return null;
+  switch (route.destination) {
+    case "teams":
+    case "agents":
+      return (
+        <div className="teams-destination">
+          <nav className="teams-destination-tabs" aria-label="Teams views">
+            {[
+              { path: "/teams", label: "Teams", id: "teams" },
+              { path: "/agents", label: "All agents", id: "agents" },
+            ].map((view) => (
+              <a
+                key={view.id}
+                href={view.path}
+                aria-current={route.destination === view.id ? "page" : undefined}
+                onClick={(event) => {
+                  if (
+                    event.button !== 0 ||
+                    event.metaKey ||
+                    event.ctrlKey ||
+                    event.shiftKey ||
+                    event.altKey
+                  )
+                    return;
+                  event.preventDefault();
+                  props.onNavigate(view.path);
+                }}
+              >
+                {view.label}
+              </a>
+            ))}
+          </nav>
+          {route.destination === "teams" ? (
+            <TeamsWorkspace />
+          ) : (
+            <AgentDirectory
+              snapshot={props.snapshot}
+              config={props.config}
+              onNavigate={props.onNavigate}
+            />
+          )}
+        </div>
+      );
+    case "attention":
+      return <AttentionPanel {...props} />;
     case "checkouts":
       return (
         <RouteSurface
-          title="Team workspaces"
+          title="Workspaces"
           eyebrow="Git workspaces"
           description="Select a shared working tree for each team and manage repository worktrees."
         >

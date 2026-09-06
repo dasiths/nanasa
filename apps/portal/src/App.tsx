@@ -3,11 +3,8 @@ import type {
   CustomLaunchConsentRequest,
   ProviderUpdateOutcome,
   ProviderUpdateRecoveryResult,
-  ReorderGroupAgentsCommand,
   StartGroupRunsResult,
   SubmitMessageCommand,
-  UpdateGroupAgentCommand,
-  UpdateGroupCommand,
   UpdateRolePresentationCommand,
 } from "@nanasa/contracts";
 import {
@@ -15,15 +12,14 @@ import {
   ArrowLeft,
   Bell,
   Bot,
-  Cable,
   Grid2X2,
   LoaderCircle,
-  Menu,
   Play,
   RadioTower,
   RefreshCw,
   ScanSearch,
   Square,
+  SquareTerminal,
   UserPlus,
   Users,
 } from "lucide-react";
@@ -41,19 +37,14 @@ import {
   useAttentionNotifications,
 } from "./attention-notifications.js";
 import { AdHocConsoleDialog } from "./components/ad-hoc-console-dialog.js";
-import {
-  AddAgentDialog,
-  type AddAgentInput,
-  GroupTree,
-  RoleSettingsDialog,
-} from "./components/group-tree.js";
+import { EntityManagementContext } from "./components/entity-management.js";
+import { AddAgentDialog, type AddAgentInput, RoleSettingsDialog } from "./components/group-tree.js";
 import { MessageWorkspace } from "./components/message-workspace.js";
 import { SystemStatusDialog } from "./components/system-status-dialog.js";
 import { TeamRecoveryResults } from "./components/team-recovery-results.js";
 import { ErrorNotice, type PortalError, toPortalError } from "./errors.js";
 import { useAttentionWorkspaces } from "./hooks/use-attention-workspaces.js";
 import { useLaunchConsents } from "./hooks/use-launch-consents.js";
-import { useUrlOpenRequests } from "./hooks/use-url-open-requests.js";
 import { useMessageReadCursors } from "./hooks/use-message-read-cursors.js";
 import {
   type TerminalColumnsPreference,
@@ -61,6 +52,7 @@ import {
   usePortalPreferences,
 } from "./hooks/use-portal-preferences.js";
 import { useDomainEvents, usePortalSnapshot } from "./hooks/use-portal-snapshot.js";
+import { useUrlOpenRequests } from "./hooks/use-url-open-requests.js";
 import { memberStatusView } from "./member-status.js";
 import {
   globalDestinationDefinition,
@@ -76,6 +68,9 @@ import {
   RepositoryNavigation,
 } from "./shell/portal-navigation.js";
 import { PortalShell } from "./shell/portal-shell.js";
+import { PortalTopbar } from "./shell/portal-topbar.js";
+import { ProjectContext } from "./shell/project-context.js";
+import { TeamShortcuts } from "./shell/team-shortcuts.js";
 
 const TerminalWorkspace = lazy(() =>
   import("./components/terminal-workspace.js").then((module) => ({
@@ -140,7 +135,7 @@ function shouldShowRecoveryResults(
   }
   if (recovery === undefined) return false;
   if (recovery.dryRun) {
-    return recovery.outcomes.some((outcome) => outcome.status !== "retained");
+    return true;
   }
   return recovery.outcomes.some((outcome) =>
     ["approval-required", "ownership-uncertain", "failed"].includes(outcome.status),
@@ -251,7 +246,8 @@ function StopAllDialog({
 }
 
 export function App({ client = api }: AppProps) {
-  const { snapshot, config, status, error, errorSource, refresh } = usePortalSnapshot(client);
+  const { snapshot, config, status, error, errorSource, receivedAt, refresh } =
+    usePortalSnapshot(client);
   const eventStatus = useDomainEvents(client, snapshot, () => void refresh());
   const {
     preferences,
@@ -620,10 +616,6 @@ export function App({ client = api }: AppProps) {
     }
   };
 
-  const renameGroup = (groupId: string, name: string) =>
-    runAction(`${groupId}:rename`, () => client.updateGroup(groupId, { name }));
-  const updateGroup = (groupId: string, command: UpdateGroupCommand) =>
-    runAction(`${groupId}:settings`, () => client.updateGroup(groupId, command));
   const deleteGroup = async (groupId: string) => {
     const groupIndex = snapshot?.groups.findIndex((group) => group.id === groupId) ?? -1;
     const fallbackGroupId =
@@ -653,27 +645,8 @@ export function App({ client = api }: AppProps) {
     );
   };
 
-  const renameAgent = (groupId: string, agentId: string, name: string) =>
-    runAction(`${groupId}:${agentId}:rename`, () => client.updateAgent(groupId, agentId, { name }));
-  const updateAgent = (groupId: string, agentId: string, command: UpdateGroupAgentCommand) =>
-    runAction(`${groupId}:${agentId}:settings`, () =>
-      client.updateAgent(groupId, agentId, command),
-    );
   const updateRolePresentation = (roleId: string, command: UpdateRolePresentationCommand) =>
     runAction(`role:${roleId}:presentation`, () => client.updateRolePresentation(roleId, command));
-  const reorderAgents = (groupId: string, command: ReorderGroupAgentsCommand) =>
-    runAction(`${groupId}:reorder`, () => client.reorderAgents(groupId, command));
-  const reorderGroups = (groupIds: string[], expectedOrderRevision: number) =>
-    runAction("groups:reorder", () => client.reorderGroups({ groupIds, expectedOrderRevision }));
-  const reparentAgent = (sourceGroupId: string, agentId: string, targetGroupId: string) =>
-    runAction(`${sourceGroupId}:${agentId}:reparent`, () =>
-      client.reparentAgent(sourceGroupId, agentId, {
-        targetGroupId,
-        expectedOrderRevision: snapshot?.orderRevision ?? 0,
-      }),
-    );
-  const removeAgent = (groupId: string, agentId: string) =>
-    runAction(`${groupId}:${agentId}:remove`, () => client.removeAgent(groupId, agentId));
 
   const launchConsentPath = (request: CustomLaunchConsentRequest) =>
     `${groupRoute(request.groupId, "terminals")}#launch-consent-${encodeURIComponent(request.id)}`;
@@ -874,445 +847,306 @@ export function App({ client = api }: AppProps) {
     restartAdvisorySignature.length > 0 && restartAdvisorySignature !== dismissedRestartAdvisory;
 
   return (
-    <PortalShell
-      routeLabel={routeLabel}
-      density={preferences.density}
-      motion={preferences.motion}
-      contrast={preferences.contrast}
-      notifications={attentionNotifications.toasts}
-      onOpenNotification={attentionNotifications.openToast}
-      onDismissNotification={attentionNotifications.dismissToast}
-      onPauseNotification={attentionNotifications.pauseToast}
-      onResumeNotification={attentionNotifications.resumeToast}
-      rail={
-        <aside className="group-rail" aria-label="Groups and agents">
-          <GroupTree
-            snapshot={snapshot}
-            config={config}
-            repositoryNavigation={
-              <RepositoryNavigation
-                currentDestination={route.kind === "global" ? route.destination : undefined}
-                attentionCount={globalAttentionCount}
+    <EntityManagementContext.Provider
+      value={{
+        client,
+        snapshot,
+        config,
+        ...(attentionSubscriptions ? { subscriptions: attentionSubscriptions } : {}),
+        refresh,
+        navigate,
+        start: startRun,
+        stop: stopRun,
+        recover: recoverAgent,
+        setSubscription: setMemberAttentionSubscription,
+        resetSubscriptions: resetMemberAttentionSubscriptions,
+        createTeam: createGroup,
+        deleteTeam: deleteGroup,
+        busy: busyAction !== undefined,
+      }}
+    >
+      <PortalShell
+        header={
+          <PortalTopbar
+            onOpenCommands={() => setPaletteOpen(true)}
+            onOpenNavigation={() => setMobileNavigationOpen(true)}
+          />
+        }
+        project={
+          <ProjectContext
+            name={snapshot.repositories[0]?.displayName ?? "Repository"}
+            {...(snapshot.configStatus?.repoRoot ? { source: snapshot.configStatus.repoRoot } : {})}
+            connectionStatus={eventStatus}
+            {...(receivedAt === undefined ? {} : { receivedAt })}
+            onOpenStatus={() => setSystemStatusOpen(true)}
+          />
+        }
+        routeLabel={routeLabel}
+        density={preferences.density}
+        motion={preferences.motion}
+        contrast={preferences.contrast}
+        notifications={attentionNotifications.toasts}
+        onOpenNotification={attentionNotifications.openToast}
+        onDismissNotification={attentionNotifications.dismissToast}
+        onPauseNotification={attentionNotifications.pauseToast}
+        onResumeNotification={attentionNotifications.resumeToast}
+        rail={
+          <aside className="group-rail" aria-label="Groups and agents">
+            <RepositoryNavigation
+              currentDestination={route.kind === "global" ? route.destination : undefined}
+              attentionCount={globalAttentionCount}
+              onLink={link}
+            >
+              <TeamShortcuts
+                snapshot={snapshot}
+                {...(route.kind === "group" ? { selectedGroupId: route.groupId } : {})}
                 onLink={link}
               />
-            }
-            utilities={
+            </RepositoryNavigation>
+            <footer className="rail-footer">
+              <button type="button" className="compact-button" onClick={() => setConsoleOpen(true)}>
+                <SquareTerminal size={15} />
+                Console
+              </button>
               <PortalUtilities
                 currentDestination={route.kind === "global" ? route.destination : undefined}
                 theme={preferences.theme}
                 onSetTheme={setTheme}
                 onLink={link}
               />
-            }
-            unreadCounts={unreadCounts}
-            {...(selectedGroupId === undefined ? {} : { selectedGroupId })}
-            {...(busyAction === undefined ? {} : { busyAction })}
-            onSelectGroup={(groupId) => {
-              const section = preferences.lastSectionByGroup[groupId] ?? "terminals";
-              if (focusedTerminalGroupId !== groupId) setFocusedTerminalGroupId(undefined);
-              setSelectedGroup(groupId, section);
-              navigate(groupRoute(groupId, section));
-            }}
-            onSelectTerminal={(groupId, runId) => {
-              if (runId === undefined || focusedTerminalGroupId !== groupId) {
-                setFocusedTerminalGroupId(undefined);
-              }
-              setSelectedGroup(groupId, "terminals");
-              if (runId !== undefined) setActiveRun(groupId, runId);
-              navigate(groupRoute(groupId, "terminals", runId));
-            }}
-            onOpenMessages={(groupId) => {
-              setSelectedGroup(groupId, "messages");
-              navigate(groupRoute(groupId, "messages"));
-            }}
-            onCreateGroup={createGroup}
-            onRenameGroup={renameGroup}
-            onUpdateGroup={updateGroup}
-            onDeleteGroup={deleteGroup}
-            onAddAgent={addAgent}
-            onRenameAgent={renameAgent}
-            onUpdateAgent={updateAgent}
-            onReorderAgents={reorderAgents}
-            onReorderGroups={reorderGroups}
-            onReparentAgent={reparentAgent}
-            onRemoveAgent={removeAgent}
-            onStartRun={startRun}
-            onStopRun={stopRun}
-            onOpenConsole={() => setConsoleOpen(true)}
-            onOpenCommandPalette={() => setPaletteOpen(true)}
-          />
-        </aside>
-      }
-    >
-      <header
-        className={`workspace-header${route.kind === "group" && selectedGroup !== undefined ? " workspace-header-group" : ""}`}
+            </footer>
+          </aside>
+        }
       >
-        <div className="workspace-identity">
-          {route.kind === "group" && selectedGroup !== undefined ? (
-            <>
-              <span className="workspace-identity-mark" aria-hidden="true">
-                <Users size={18} />
-              </span>
-              <div className="workspace-identity-copy">
-                <h1 ref={workspaceHeadingRef} tabIndex={-1} data-route-heading>
-                  {selectedGroup.name}
-                </h1>
-                <p
-                  className="group-status-summary"
-                  aria-label={`${members.length} agents, ${runningCount} live terminals, ${workingCount} working${startingCount > 0 ? `, ${startingCount} starting or recovering` : ""}`}
-                >
-                  <span className="group-status-agents" title="Configured agents">
-                    <Bot aria-hidden="true" size={12} />
-                    {members.length} agents
-                  </span>
-                  <span
-                    className={`group-status-live${runningCount === 0 ? " group-status-empty" : ""}`}
-                    title="Live terminals"
+        <header
+          className={`workspace-header${route.kind === "group" && selectedGroup !== undefined ? " workspace-header-group" : ""}`}
+        >
+          <div className="workspace-identity">
+            {route.kind === "group" && selectedGroup !== undefined ? (
+              <>
+                <span className="workspace-identity-mark" aria-hidden="true">
+                  <Users size={18} />
+                </span>
+                <div className="workspace-identity-copy">
+                  <h1 ref={workspaceHeadingRef} tabIndex={-1} data-route-heading>
+                    {selectedGroup.name}
+                  </h1>
+                  <p
+                    className="group-status-summary"
+                    aria-label={`${members.length} agents, ${runningCount} live terminals, ${workingCount} working${startingCount > 0 ? `, ${startingCount} starting or recovering` : ""}`}
                   >
-                    <RadioTower aria-hidden="true" size={12} />
-                    {runningCount} live
-                  </span>
-                  <span
-                    className={`group-status-working${workingCount === 0 ? " group-status-empty" : ""}`}
-                    title="Agents currently working"
-                  >
-                    <Activity aria-hidden="true" size={12} />
-                    {workingCount} working
-                  </span>
-                  {startingCount > 0 && (
-                    <span className="group-status-starting" title="Agents starting or recovering">
-                      <LoaderCircle className="spin" aria-hidden="true" size={12} />
-                      {startingCount} starting
+                    <span className="group-status-agents" title="Configured agents">
+                      <Bot aria-hidden="true" size={12} />
+                      {members.length} agents
                     </span>
-                  )}
-                </p>
+                    <span
+                      className={`group-status-live${runningCount === 0 ? " group-status-empty" : ""}`}
+                      title="Live terminals"
+                    >
+                      <RadioTower aria-hidden="true" size={12} />
+                      {runningCount} live
+                    </span>
+                    <span
+                      className={`group-status-working${workingCount === 0 ? " group-status-empty" : ""}`}
+                      title="Agents currently working"
+                    >
+                      <Activity aria-hidden="true" size={12} />
+                      {workingCount} working
+                    </span>
+                    {startingCount > 0 && (
+                      <span className="group-status-starting" title="Agents starting or recovering">
+                        <LoaderCircle className="spin" aria-hidden="true" size={12} />
+                        {startingCount} starting
+                      </span>
+                    )}
+                  </p>
+                </div>
+              </>
+            ) : (
+              <div className="workspace-identity-copy">
+                <h1
+                  className="portal-route-context"
+                  ref={workspaceHeadingRef}
+                  tabIndex={-1}
+                  data-route-heading
+                >
+                  <span aria-hidden="true">Workspace / </span>
+                  {route.kind === "global"
+                    ? globalDestinationDefinition(route.destination).heading
+                    : "No group selected"}
+                </h1>
               </div>
-            </>
-          ) : (
-            <div className="workspace-identity-copy">
-              <span className="eyebrow">Global operations</span>
-              <h1 ref={workspaceHeadingRef} tabIndex={-1} data-route-heading>
-                {route.kind === "global"
-                  ? globalDestinationDefinition(route.destination).heading
-                  : "No group selected"}
-              </h1>
-            </div>
+            )}
+          </div>
+          {route.kind === "group" && selectedGroup !== undefined && (
+            <GroupNavigation
+              group={selectedGroup}
+              route={route}
+              unreadCount={unreadCounts.get(selectedGroup.id) ?? 0}
+              attentionCount={groupAttentionCount}
+              {...(route.kind === "group" && route.section === "terminals"
+                ? {
+                    actions: (
+                      <TerminalNavigationActions
+                        columns={preferences.terminalColumnsByGroup[selectedGroup.id] ?? "auto"}
+                        focused={focusedTerminalRunId !== undefined}
+                        onSetColumns={(columns) => setTerminalColumns(selectedGroup.id, columns)}
+                        onRestore={() => setFocusedTerminalGroupId(undefined)}
+                      />
+                    ),
+                  }
+                : {})}
+              onLink={link}
+            />
           )}
-        </div>
-        {route.kind === "group" && selectedGroup !== undefined && (
-          <GroupNavigation
-            group={selectedGroup}
-            route={route}
-            unreadCount={unreadCounts.get(selectedGroup.id) ?? 0}
-            attentionCount={groupAttentionCount}
-            {...(route.kind === "group" && route.section === "terminals"
-              ? {
-                  actions: (
-                    <TerminalNavigationActions
-                      columns={preferences.terminalColumnsByGroup[selectedGroup.id] ?? "auto"}
-                      focused={focusedTerminalRunId !== undefined}
-                      onSetColumns={(columns) => setTerminalColumns(selectedGroup.id, columns)}
-                      onRestore={() => setFocusedTerminalGroupId(undefined)}
-                    />
-                  ),
+          <div className="header-actions">
+            <a
+              className="compact-button header-attention-link"
+              href="/attention"
+              aria-label={
+                globalAttentionCount === 0
+                  ? "Open Attention"
+                  : `Open Attention, ${globalAttentionCount} ${globalAttentionCount === 1 ? "review item" : "review items"} across all groups`
+              }
+              onClick={link("/attention")}
+            >
+              <Bell aria-hidden="true" size={15} />
+              {globalAttentionCount > 0 && (
+                <span className="navigation-badge attention-navigation-badge">
+                  {globalAttentionCount > 99 ? "99+" : globalAttentionCount}
+                </span>
+              )}
+            </a>
+            {route.kind === "group" && selectedGroup !== undefined && (
+              <button
+                type="button"
+                className="compact-button header-icon-button add-agent-button"
+                aria-label={`Add agent to ${selectedGroup.name}`}
+                title={`Add agent to ${selectedGroup.name}`}
+                onClick={() => setAddAgentGroupId(selectedGroup.id)}
+              >
+                <UserPlus aria-hidden="true" size={15} />
+              </button>
+            )}
+            {route.kind === "group" && selectedGroup !== undefined && (
+              <button
+                type="button"
+                className="compact-button header-icon-button recovery-check-button"
+                aria-label={`Check setup and restart needs for ${selectedGroup.name}`}
+                title="Check whether running agents need a restart for updated prompts, hooks, MCP, or provider tools. Preview only; makes no changes."
+                disabled={recoveringGroupId === selectedGroup.id || members.length === 0}
+                onClick={() => void recoverGroup(selectedGroup.id, true).catch(() => undefined)}
+              >
+                {recoveringGroupId === selectedGroup.id ? (
+                  <RefreshCw className="spin" aria-hidden="true" size={15} />
+                ) : (
+                  <ScanSearch aria-hidden="true" size={15} />
+                )}
+              </button>
+            )}
+            {route.kind === "group" && selectedGroup !== undefined && (
+              <button
+                type="button"
+                className="compact-button header-icon-button start-all-button"
+                aria-label={`Start all non-running agents in ${selectedGroup.name}`}
+                title={
+                  hasStartableMembers
+                    ? `Start all non-running agents in ${selectedGroup.name}`
+                    : `All agents are active in ${selectedGroup.name}`
                 }
-              : {})}
-            onLink={link}
+                disabled={startingAllGroupId === selectedGroup.id || !hasStartableMembers}
+                onClick={() => void startAll(selectedGroup.id).catch(() => undefined)}
+              >
+                {startingAllGroupId === selectedGroup.id ? (
+                  <RefreshCw className="spin" aria-hidden="true" size={15} />
+                ) : (
+                  <Play aria-hidden="true" size={15} />
+                )}
+              </button>
+            )}
+            {route.kind === "group" && selectedGroup !== undefined && (
+              <button
+                type="button"
+                className="compact-button header-icon-button stop-all-button"
+                aria-label={`Stop all active agents in ${selectedGroup.name}`}
+                title={`Stop all active agents in ${selectedGroup.name} and close their terminals`}
+                disabled={stoppingAllGroupId === selectedGroup.id || activeRunCount === 0}
+                onClick={() => setConfirmStopAllGroupId(selectedGroup.id)}
+              >
+                {stoppingAllGroupId === selectedGroup.id ? (
+                  <LoaderCircle className="spin" aria-hidden="true" size={15} />
+                ) : (
+                  <Square aria-hidden="true" size={14} />
+                )}
+              </button>
+            )}
+          </div>
+        </header>
+        {urlRequests.error !== undefined && <ErrorNotice error={urlRequests.error} />}
+        {actionError !== undefined && (
+          <ErrorNotice
+            className="action-banner"
+            error={actionError}
+            onDismiss={() => setActionError(undefined)}
           />
         )}
-        <div className="header-actions">
-          <button
-            type="button"
-            className="icon-button mobile-navigation-trigger"
-            aria-label="Open application menu"
-            onClick={() => setMobileNavigationOpen(true)}
-          >
-            <Menu aria-hidden="true" size={15} />
-          </button>
-          <a
-            className="compact-button header-attention-link"
-            href="/attention"
-            aria-label={
-              globalAttentionCount === 0
-                ? "Open Attention"
-                : `Open Attention, ${globalAttentionCount} ${globalAttentionCount === 1 ? "review item" : "review items"} across all groups`
-            }
-            onClick={link("/attention")}
-          >
-            <Bell aria-hidden="true" size={15} />
-            {globalAttentionCount > 0 && (
-              <span className="navigation-badge attention-navigation-badge">
-                {globalAttentionCount > 99 ? "99+" : globalAttentionCount}
-              </span>
-            )}
-          </a>
-          {route.kind === "group" && selectedGroup !== undefined && (
-            <button
-              type="button"
-              className="compact-button header-icon-button add-agent-button"
-              aria-label={`Add agent to ${selectedGroup.name}`}
-              title={`Add agent to ${selectedGroup.name}`}
-              onClick={() => setAddAgentGroupId(selectedGroup.id)}
-            >
-              <UserPlus aria-hidden="true" size={15} />
-            </button>
-          )}
-          {route.kind === "group" && selectedGroup !== undefined && (
-            <button
-              type="button"
-              className="compact-button header-icon-button recovery-check-button"
-              aria-label={`Check setup and restart needs for ${selectedGroup.name}`}
-              title="Check whether running agents need a restart for updated prompts, hooks, MCP, or provider tools. Preview only; makes no changes."
-              disabled={recoveringGroupId === selectedGroup.id || members.length === 0}
-              onClick={() => void recoverGroup(selectedGroup.id, true).catch(() => undefined)}
-            >
-              {recoveringGroupId === selectedGroup.id ? (
-                <RefreshCw className="spin" aria-hidden="true" size={15} />
-              ) : (
-                <ScanSearch aria-hidden="true" size={15} />
-              )}
-            </button>
-          )}
-          {route.kind === "group" && selectedGroup !== undefined && (
-            <button
-              type="button"
-              className="compact-button header-icon-button start-all-button"
-              aria-label={`Start all non-running agents in ${selectedGroup.name}`}
-              title={
-                hasStartableMembers
-                  ? `Start all non-running agents in ${selectedGroup.name}`
-                  : `All agents are active in ${selectedGroup.name}`
-              }
-              disabled={startingAllGroupId === selectedGroup.id || !hasStartableMembers}
-              onClick={() => void startAll(selectedGroup.id).catch(() => undefined)}
-            >
-              {startingAllGroupId === selectedGroup.id ? (
-                <RefreshCw className="spin" aria-hidden="true" size={15} />
-              ) : (
-                <Play aria-hidden="true" size={15} />
-              )}
-            </button>
-          )}
-          {route.kind === "group" && selectedGroup !== undefined && (
-            <button
-              type="button"
-              className="compact-button header-icon-button stop-all-button"
-              aria-label={`Stop all active agents in ${selectedGroup.name}`}
-              title={`Stop all active agents in ${selectedGroup.name} and close their terminals`}
-              disabled={stoppingAllGroupId === selectedGroup.id || activeRunCount === 0}
-              onClick={() => setConfirmStopAllGroupId(selectedGroup.id)}
-            >
-              {stoppingAllGroupId === selectedGroup.id ? (
-                <LoaderCircle className="spin" aria-hidden="true" size={15} />
-              ) : (
-                <Square aria-hidden="true" size={14} />
-              )}
-            </button>
-          )}
-          <button
-            type="button"
-            className={`event-status system-status-control event-${eventStatus}`}
-            aria-label={`System ${eventStatus}, open System status`}
-            title={`System ${eventStatus}`}
-            onClick={() => setSystemStatusOpen(true)}
-          >
-            <Cable aria-hidden="true" size={14} />
-            <span>{eventStatus}</span>
-          </button>
-        </div>
-      </header>
-      {urlRequests.error !== undefined && <ErrorNotice error={urlRequests.error} />}
-      {actionError !== undefined && (
-        <ErrorNotice
-          className="action-banner"
-          error={actionError}
-          onDismiss={() => setActionError(undefined)}
-        />
-      )}
-      {showRestartAdvisory && selectedGroup !== undefined && (
-        <div className="restart-advisory-banner" role="status">
-          <RefreshCw aria-hidden="true" size={15} />
-          <span>
-            Configuration or provider setup changed. {selectedRestartAdvisories.length} active
-            {selectedRestartAdvisories.length === 1 ? " agent may" : " agents may"} need a restart.
-          </span>
-          <div className="restart-advisory-actions">
-            <button
-              type="button"
-              className="compact-button"
-              onClick={() => setConfirmStopAllGroupId(selectedGroup.id)}
-            >
-              Stop all
-            </button>
-            <button
-              type="button"
-              className="compact-button"
-              onClick={() => setDismissedRestartAdvisory(restartAdvisorySignature)}
-            >
-              Dismiss
-            </button>
-          </div>
-        </div>
-      )}
-      {showRecoveryResults && (
-        <TeamRecoveryResults
-          recoveryResult={displayedRecoveryResult}
-          startAllResult={displayedStartAllResult}
-          counts={recoveryCounts}
-          agentNames={new Map(members.map((member) => [member.memberId, member.alias]))}
-          pendingApprovalCount={startAllPendingRequests.length}
-          recovering={recoveringGroupId === displayedRecoveryResult?.groupId}
-          approving={approvingStartAllGroupId === selectedGroupId}
-          onRecover={() => {
-            if (displayedRecoveryResult !== undefined) {
-              void recoverGroup(displayedRecoveryResult.groupId, false).catch(() => undefined);
-            }
-          }}
-          onApproveAndRetry={() => {
-            if (selectedGroupId !== undefined) {
-              void approveStartAll(selectedGroupId, startAllPendingRequests);
-            }
-          }}
-          onReview={(outcome) => {
-            if (outcome.request !== undefined) navigate(launchConsentPath(outcome.request));
-          }}
-          onDismiss={() => {
-            setStartAllResult(undefined);
-            setRecoveryResult(undefined);
-          }}
-        />
-      )}
-      <div className="workspace-body">
-        {route.kind === "global" ? (
-          <div className="unified-workspace">
-            <Suspense
-              fallback={
-                <div className="loading-state" role="status">
-                  Loading route...
-                </div>
-              }
-            >
-              <PortalRoutePanel
-                route={route}
-                snapshot={snapshot}
-                config={config}
-                members={members}
-                client={client}
-                preferences={preferences}
-                commands={commands}
-                attentionItems={attentionItems}
-                attentionWorkspaceLoading={attentionWorkspaces.loadingGroupIds}
-                attentionWorkspaceErrors={attentionWorkspaces.errors}
-                onNavigate={navigate}
-                onRefresh={refresh}
-                onReloadAttentionWorkspace={attentionWorkspaces.reloadGroup}
-                onApproveLaunchConsent={approveLaunchConsent}
-                onDismissAttentionItems={dismissAttentionItems}
-                onOpenRoleSettings={() => setRoleSettingsOpen(true)}
-                onPatchPreferences={patchPreferences}
-              />
-            </Suspense>
-          </div>
-        ) : selectedGroup === undefined ? (
-          <div className="empty-state workspace-empty">
-            <h2>Create a group to begin</h2>
-            <p>Groups contain agents, active runs, terminals, and routed messages.</p>
-          </div>
-        ) : (
-          <div className="unified-workspace">
-            <section
-              className="terminal-surface persistent-route-surface"
-              aria-label="Agent terminals"
-              hidden={route.kind !== "group" || route.section !== "terminals"}
-            >
-              <Suspense
-                fallback={
-                  <div className="loading-state" role="status">
-                    Loading terminal workspace...
-                  </div>
-                }
+        {showRestartAdvisory && selectedGroup !== undefined && (
+          <div className="restart-advisory-banner" role="status">
+            <RefreshCw aria-hidden="true" size={15} />
+            <span>
+              Configuration or provider setup changed. {selectedRestartAdvisories.length} active
+              {selectedRestartAdvisories.length === 1 ? " agent may" : " agents may"} need a
+              restart.
+            </span>
+            <div className="restart-advisory-actions">
+              <button
+                type="button"
+                className="compact-button"
+                onClick={() => setConfirmStopAllGroupId(selectedGroup.id)}
               >
-                <TerminalWorkspace
-                  client={client}
-                  config={config}
-                  members={members}
-                  roles={config.roles}
-                  runs={runs}
-                  agentStatuses={snapshot.agentStatuses ?? []}
-                  attentionSubscriptions={attentionSubscriptions?.members ?? []}
-                  launchConsents={launchConsents.latestRequests.filter(
-                    (request) => request.groupId === selectedGroup.id,
-                  )}
-                  launchConsentsLoading={launchConsents.loading}
-                  launchConsentsError={
-                    launchConsents.error === undefined ? undefined : (
-                      <div className="launch-consent-load-error">
-                        <ErrorNotice error={launchConsents.error} />
-                        <button type="button" onClick={() => void launchConsents.reload()}>
-                          <RefreshCw aria-hidden="true" size={15} />
-                          Retry
-                        </button>
-                      </div>
-                    )
-                  }
-                  onApproveLaunchConsent={approveLaunchConsent}
-                  onCancelLaunchConsent={cancelLaunchConsent}
-                  onRecoverAgent={recoverAgent}
-                  onSetAttentionSubscription={setMemberAttentionSubscription}
-                  onResetAttentionSubscriptions={resetMemberAttentionSubscriptions}
-                  connectionRevision={terminalConnectionRevision}
-                  theme={appliedTheme}
-                  columns={preferences.terminalColumnsByGroup[selectedGroup.id] ?? "auto"}
-                  {...(() => {
-                    const activeRunId =
-                      route.kind === "group" && route.runId !== undefined
-                        ? route.runId
-                        : preferences.activeRunByGroup[selectedGroup.id];
-                    return activeRunId === undefined ? {} : { activeRunId };
-                  })()}
-                  {...(focusedTerminalRunId === undefined
-                    ? {}
-                    : { focusedRunId: focusedTerminalRunId })}
-                  onSetFocusedRun={(runId) => {
-                    if (runId === undefined) {
-                      setFocusedTerminalGroupId(undefined);
-                      return;
-                    }
-                    setFocusedTerminalGroupId(selectedGroup.id);
-                    setActiveRun(selectedGroup.id, runId);
-                    navigate(groupRoute(selectedGroup.id, "terminals", runId));
-                  }}
-                />
-              </Suspense>
-            </section>
-            {route.kind === "group" && route.section === "messages" && (
-              <MessageWorkspace
-                presentation="route"
-                group={selectedGroup}
-                members={members}
-                historyMembers={groupMemberships}
-                onReadThrough={(sequence) => markReadThrough(selectedGroup.id, sequence)}
-                {...(selectedMessageState === undefined
-                  ? {}
-                  : { messageState: selectedMessageState })}
-                client={client}
-                onSubmit={submitMessage}
-              />
-            )}
-            {route.kind === "group" && route.section === "terminals" && (
-              <MessageWorkspace
-                presentation="quick"
-                group={selectedGroup}
-                members={members}
-                historyMembers={groupMemberships}
-                {...(selectedMessageState === undefined
-                  ? {}
-                  : { messageState: selectedMessageState })}
-                client={client}
-                onSubmit={submitMessage}
-              />
-            )}
-            {!(route.kind === "group" && ["terminals", "messages"].includes(route.section)) && (
+                Stop all
+              </button>
+              <button
+                type="button"
+                className="compact-button"
+                onClick={() => setDismissedRestartAdvisory(restartAdvisorySignature)}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+        {showRecoveryResults && (
+          <TeamRecoveryResults
+            recoveryResult={displayedRecoveryResult}
+            startAllResult={displayedStartAllResult}
+            counts={recoveryCounts}
+            agentNames={new Map(members.map((member) => [member.memberId, member.alias]))}
+            pendingApprovalCount={startAllPendingRequests.length}
+            recovering={recoveringGroupId === displayedRecoveryResult?.groupId}
+            approving={approvingStartAllGroupId === selectedGroupId}
+            onRecover={() => {
+              if (displayedRecoveryResult !== undefined) {
+                void recoverGroup(displayedRecoveryResult.groupId, false).catch(() => undefined);
+              }
+            }}
+            onApproveAndRetry={() => {
+              if (selectedGroupId !== undefined) {
+                void approveStartAll(selectedGroupId, startAllPendingRequests);
+              }
+            }}
+            onReview={(outcome) => {
+              if (outcome.request !== undefined) navigate(launchConsentPath(outcome.request));
+            }}
+            onDismiss={() => {
+              setStartAllResult(undefined);
+              setRecoveryResult(undefined);
+            }}
+          />
+        )}
+        <div className="workspace-body">
+          {route.kind === "global" ? (
+            <div className="unified-workspace">
               <Suspense
                 fallback={
                   <div className="loading-state" role="status">
@@ -1324,7 +1158,6 @@ export function App({ client = api }: AppProps) {
                   route={route}
                   snapshot={snapshot}
                   config={config}
-                  group={selectedGroup}
                   members={members}
                   client={client}
                   preferences={preferences}
@@ -1341,66 +1174,198 @@ export function App({ client = api }: AppProps) {
                   onPatchPreferences={patchPreferences}
                 />
               </Suspense>
-            )}
-          </div>
+            </div>
+          ) : selectedGroup === undefined ? (
+            <div className="empty-state workspace-empty">
+              <h2>Create a group to begin</h2>
+              <p>Groups contain agents, active runs, terminals, and routed messages.</p>
+            </div>
+          ) : (
+            <div className="unified-workspace">
+              <section
+                className="terminal-surface persistent-route-surface"
+                aria-label="Agent terminals"
+                hidden={route.kind !== "group" || route.section !== "terminals"}
+              >
+                <Suspense
+                  fallback={
+                    <div className="loading-state" role="status">
+                      Loading terminal workspace...
+                    </div>
+                  }
+                >
+                  <TerminalWorkspace
+                    client={client}
+                    config={config}
+                    members={members}
+                    roles={config.roles}
+                    runs={runs}
+                    agentStatuses={snapshot.agentStatuses ?? []}
+                    attentionSubscriptions={attentionSubscriptions?.members ?? []}
+                    launchConsents={launchConsents.latestRequests.filter(
+                      (request) => request.groupId === selectedGroup.id,
+                    )}
+                    launchConsentsLoading={launchConsents.loading}
+                    launchConsentsError={
+                      launchConsents.error === undefined ? undefined : (
+                        <div className="launch-consent-load-error">
+                          <ErrorNotice error={launchConsents.error} />
+                          <button type="button" onClick={() => void launchConsents.reload()}>
+                            <RefreshCw aria-hidden="true" size={15} />
+                            Retry
+                          </button>
+                        </div>
+                      )
+                    }
+                    onApproveLaunchConsent={approveLaunchConsent}
+                    onCancelLaunchConsent={cancelLaunchConsent}
+                    onRecoverAgent={recoverAgent}
+                    onSetAttentionSubscription={setMemberAttentionSubscription}
+                    onResetAttentionSubscriptions={resetMemberAttentionSubscriptions}
+                    connectionRevision={terminalConnectionRevision}
+                    theme={appliedTheme}
+                    columns={preferences.terminalColumnsByGroup[selectedGroup.id] ?? "auto"}
+                    {...(() => {
+                      const activeRunId =
+                        route.kind === "group" && route.runId !== undefined
+                          ? route.runId
+                          : preferences.activeRunByGroup[selectedGroup.id];
+                      return activeRunId === undefined ? {} : { activeRunId };
+                    })()}
+                    {...(focusedTerminalRunId === undefined
+                      ? {}
+                      : { focusedRunId: focusedTerminalRunId })}
+                    onSetFocusedRun={(runId) => {
+                      if (runId === undefined) {
+                        setFocusedTerminalGroupId(undefined);
+                        return;
+                      }
+                      setFocusedTerminalGroupId(selectedGroup.id);
+                      setActiveRun(selectedGroup.id, runId);
+                      navigate(groupRoute(selectedGroup.id, "terminals", runId));
+                    }}
+                  />
+                </Suspense>
+              </section>
+              {route.kind === "group" && route.section === "messages" && (
+                <MessageWorkspace
+                  presentation="route"
+                  group={selectedGroup}
+                  members={members}
+                  historyMembers={groupMemberships}
+                  onReadThrough={(sequence) => markReadThrough(selectedGroup.id, sequence)}
+                  {...(selectedMessageState === undefined
+                    ? {}
+                    : { messageState: selectedMessageState })}
+                  client={client}
+                  onSubmit={submitMessage}
+                />
+              )}
+              {route.kind === "group" && route.section === "terminals" && (
+                <MessageWorkspace
+                  presentation="quick"
+                  group={selectedGroup}
+                  members={members}
+                  historyMembers={groupMemberships}
+                  {...(selectedMessageState === undefined
+                    ? {}
+                    : { messageState: selectedMessageState })}
+                  client={client}
+                  onSubmit={submitMessage}
+                />
+              )}
+              {!(route.kind === "group" && ["terminals", "messages"].includes(route.section)) && (
+                <Suspense
+                  fallback={
+                    <div className="loading-state" role="status">
+                      Loading route...
+                    </div>
+                  }
+                >
+                  <PortalRoutePanel
+                    route={route}
+                    snapshot={snapshot}
+                    config={config}
+                    group={selectedGroup}
+                    members={members}
+                    client={client}
+                    preferences={preferences}
+                    commands={commands}
+                    attentionItems={attentionItems}
+                    attentionWorkspaceLoading={attentionWorkspaces.loadingGroupIds}
+                    attentionWorkspaceErrors={attentionWorkspaces.errors}
+                    onNavigate={navigate}
+                    onRefresh={refresh}
+                    onReloadAttentionWorkspace={attentionWorkspaces.reloadGroup}
+                    onApproveLaunchConsent={approveLaunchConsent}
+                    onDismissAttentionItems={dismissAttentionItems}
+                    onOpenRoleSettings={() => setRoleSettingsOpen(true)}
+                    onPatchPreferences={patchPreferences}
+                  />
+                </Suspense>
+              )}
+            </div>
+          )}
+        </div>
+        {consoleOpen && (
+          <AdHocConsoleDialog client={client} onClose={() => setConsoleOpen(false)} />
         )}
-      </div>
-      {consoleOpen && <AdHocConsoleDialog client={client} onClose={() => setConsoleOpen(false)} />}
-      <SystemStatusDialog
-        open={systemStatusOpen}
-        client={client}
-        snapshot={snapshot}
-        config={config}
-        connectionStatus={eventStatus}
-        onClose={() => setSystemStatusOpen(false)}
-      />
-      <MobileNavigationDialog
-        open={mobileNavigationOpen}
-        route={route}
-        groups={snapshot.groups}
-        {...(selectedGroupId === undefined ? {} : { selectedGroupId })}
-        lastSectionByGroup={preferences.lastSectionByGroup}
-        attentionCount={globalAttentionCount}
-        theme={preferences.theme}
-        onSetTheme={setTheme}
-        onLink={link}
-        onSelectGroup={(groupId, section) => {
-          setSelectedGroup(groupId, section);
-          navigate(groupRoute(groupId, section));
-        }}
-        onOpenCommandPalette={() => setPaletteOpen(true)}
-        onClose={() => setMobileNavigationOpen(false)}
-      />
-      {roleSettingsOpen && (
-        <RoleSettingsDialog
-          roles={config.roles}
-          onClose={() => setRoleSettingsOpen(false)}
-          onUpdate={updateRolePresentation}
-        />
-      )}
-      {addAgentGroupId !== undefined && (
-        <AddAgentDialog
-          group={snapshot.groups.find((group) => group.id === addAgentGroupId)!}
+        <SystemStatusDialog
+          open={systemStatusOpen}
+          client={client}
+          snapshot={snapshot}
           config={config}
-          onAdd={addAgent}
-          onClose={() => setAddAgentGroupId(undefined)}
+          connectionStatus={eventStatus}
+          onClose={() => setSystemStatusOpen(false)}
         />
-      )}
-      {selectedGroup !== undefined && (
-        <StopAllDialog
-          open={confirmStopAllGroupId === selectedGroup.id}
-          groupName={selectedGroup.name}
-          activeCount={activeRunCount}
-          busy={stoppingAllGroupId === selectedGroup.id}
-          onClose={() => setConfirmStopAllGroupId(undefined)}
-          onConfirm={() => stopAll(selectedGroup.id)}
+        <MobileNavigationDialog
+          open={mobileNavigationOpen}
+          route={route}
+          groups={snapshot.groups}
+          {...(selectedGroupId === undefined ? {} : { selectedGroupId })}
+          lastSectionByGroup={preferences.lastSectionByGroup}
+          attentionCount={globalAttentionCount}
+          theme={preferences.theme}
+          onSetTheme={setTheme}
+          onLink={link}
+          onSelectGroup={(groupId, section) => {
+            setSelectedGroup(groupId, section);
+            navigate(groupRoute(groupId, section));
+          }}
+          onOpenCommandPalette={() => setPaletteOpen(true)}
+          onClose={() => setMobileNavigationOpen(false)}
         />
-      )}
-      <CommandPalette
-        open={paletteOpen}
-        commands={commands}
-        onClose={() => setPaletteOpen(false)}
-      />
-    </PortalShell>
+        {roleSettingsOpen && (
+          <RoleSettingsDialog
+            roles={config.roles}
+            onClose={() => setRoleSettingsOpen(false)}
+            onUpdate={updateRolePresentation}
+          />
+        )}
+        {addAgentGroupId !== undefined && (
+          <AddAgentDialog
+            group={snapshot.groups.find((group) => group.id === addAgentGroupId)!}
+            config={config}
+            onAdd={addAgent}
+            onClose={() => setAddAgentGroupId(undefined)}
+          />
+        )}
+        {selectedGroup !== undefined && (
+          <StopAllDialog
+            open={confirmStopAllGroupId === selectedGroup.id}
+            groupName={selectedGroup.name}
+            activeCount={activeRunCount}
+            busy={stoppingAllGroupId === selectedGroup.id}
+            onClose={() => setConfirmStopAllGroupId(undefined)}
+            onConfirm={() => stopAll(selectedGroup.id)}
+          />
+        )}
+        <CommandPalette
+          open={paletteOpen}
+          commands={commands}
+          onClose={() => setPaletteOpen(false)}
+        />
+      </PortalShell>
+    </EntityManagementContext.Provider>
   );
 }

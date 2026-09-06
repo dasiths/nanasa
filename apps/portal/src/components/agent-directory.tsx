@@ -1,16 +1,23 @@
 import type { NanasaConfig, PortalSnapshot } from "@nanasa/contracts";
 import {
   Activity,
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
   Braces,
   ChevronDown,
   ChevronRight,
   CircleHelp,
+  Copy,
   FileCode2,
   FolderGit2,
   GitBranch,
   Layers,
+  ListFilter,
   LockKeyhole,
   type LucideIcon,
+  Pencil,
+  Plus,
   Search,
   Settings2,
   ShieldCheck,
@@ -24,6 +31,15 @@ import { groupRoute } from "../router/portal-router.js";
 import { type AgentDirectoryEntry, agentDirectoryEntries } from "./agent-directory-model.js";
 import { RoleGlyph, roleColorClass } from "./role-identity.js";
 import "./agent-directory.css";
+import { copyToClipboard } from "../copy-to-clipboard.js";
+import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
+import {
+  AgentAttentionSettings,
+  AgentSessionActions,
+  EntityCreateDialog,
+  EntityEditor,
+  useEntityManagement,
+} from "./entity-management.js";
 
 type Grouping = "team" | "provider" | "none";
 
@@ -177,11 +193,18 @@ function AgentInspector({
   headingRef: React.RefObject<HTMLHeadingElement | null>;
 }) {
   const [tab, setTab] = useState("configuration");
+  const management = useEntityManagement();
+  const [editing, setEditing] = useState(false);
+  const [copyState, setCopyState] = useState("");
   const { member, integration, role, checkout, state, profile } = entry;
   const hasTerminal = state.run?.status === "running" && state.run.terminal !== undefined;
   const recovery = integration?.nativeRecovery.mode;
   return (
     <aside className="ad-inspector" aria-label="Agent configuration">
+      <button type="button" className="entity-detail-back" onClick={onClose}>
+        <ArrowLeft size={15} aria-hidden="true" />
+        Back to list
+      </button>
       <header className="ad-inspector-heading">
         <span
           className={`ad-avatar ${roleColorClass(role)}`}
@@ -196,7 +219,22 @@ function AgentInspector({
           </h3>
           <small className="ad-member-id">
             Member ID: <code>{member.memberId}</code>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label={`Copy member ID ${member.memberId}`}
+              title="Copy member ID"
+              onClick={() =>
+                void copyToClipboard(member.memberId).then(
+                  () => setCopyState("Member ID copied"),
+                  () => setCopyState("Unable to copy member ID"),
+                )
+              }
+            >
+              <Copy size={12} />
+            </button>
           </small>
+          {copyState && <small role="status">{copyState}</small>}
           <small>
             {integration?.name ?? "Integration unavailable"} / {role?.name ?? "Unassigned role"}
           </small>
@@ -237,6 +275,37 @@ function AgentInspector({
           Open team
         </AgentLink>
       </div>
+      <details className="ad-runtime-details">
+        <summary>Runtime details</summary>
+        <dl className="ad-fields">
+          {Object.entries({
+            "Process state": state.status?.processState,
+            State: state.status?.state,
+            Attention: state.status?.attention,
+            "Progress stage": state.status?.progressStage,
+            Confidence: state.status?.confidence,
+            Authority: state.status?.authorityKind,
+            "Authority ID": state.status?.authorityId,
+            "Stale authority": state.status
+              ? state.status.staleAuthority
+                ? "Yes"
+                : "No"
+              : undefined,
+            "Progress summary": state.status?.lastProgressSummary,
+            Blocker: state.status?.blocker,
+            "Next step": state.status?.nextStep,
+            "Last activity": state.status?.lastActivityKind,
+            "Last activity at": state.status?.lastActivityAt,
+            "Terminal status": state.run?.status,
+            "Recovery phase": state.run?.recoveryPhase,
+            "Recovery reason": state.run?.recoveryReason,
+          })
+            .filter(([, value]) => value !== undefined)
+            .map(([label, value]) => (
+              <Field key={label} label={label} value={String(value)} />
+            ))}
+        </dl>
+      </details>
       <nav className="ad-tabs" aria-label="Agent detail views">
         <button
           type="button"
@@ -250,11 +319,58 @@ function AgentInspector({
           <Layers size={14} aria-hidden="true" />
           Prompt layers
         </button>
+        {management && (
+          <>
+            <button
+              type="button"
+              aria-pressed={tab === "session"}
+              onClick={() => setTab("session")}
+            >
+              Session
+            </button>
+            <button
+              type="button"
+              aria-pressed={tab === "attention"}
+              onClick={() => setTab("attention")}
+            >
+              Attention
+            </button>
+          </>
+        )}
       </nav>
-      {tab === "prompts" ? (
+      {tab === "session" && management ? (
+        <AgentSessionActions entry={entry} />
+      ) : tab === "attention" && management ? (
+        <AgentAttentionSettings entry={entry} />
+      ) : tab === "prompts" ? (
         <PromptLayers entry={entry} />
       ) : (
         <>
+          {management && entry.agent && (
+            <section className="ad-section" aria-label="Agent configuration editor">
+              <h4>
+                Configuration
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={`Edit agent settings ${entry.member.alias}`}
+                  title="Edit agent configuration"
+                  onClick={() => setEditing(!editing)}
+                >
+                  <Pencil size={14} />
+                </button>
+              </h4>
+              {editing ? (
+                <EntityEditor kind="agent" entry={entry} onClose={() => setEditing(false)} />
+              ) : (
+                <dl className="ad-fields">
+                  <Field label="Name" value={entry.agent.name} />
+                  <Field label="Integration" value={entry.integration?.name ?? "Unavailable"} />
+                  <Field label="Role" value={entry.role?.name ?? "Unassigned"} />
+                </dl>
+              )}
+            </section>
+          )}
           <section className="ad-section" aria-label="Workspace configuration">
             <h4>
               <Label icon={FolderGit2}>Workspace</Label>
@@ -413,15 +529,23 @@ export function AgentDirectory({
   snapshot,
   config,
   onNavigate,
+  groupId,
 }: {
   snapshot: PortalSnapshot;
   config: NanasaConfig;
   onNavigate(path: string): void;
+  groupId?: string;
 }) {
-  const entries = agentDirectoryEntries(snapshot, config);
+  const entries = agentDirectoryEntries(snapshot, config).filter(
+    (entry) => !groupId || entry.member.groupId === groupId,
+  );
+  const management = useEntityManagement();
+  const [creating, setCreating] = useState(false);
+  const [organize, setOrganize] = useState(false);
+  const [orderError, setOrderError] = useState<PortalError>();
   const [groupBy, setGroupBy] = useState<Grouping>("team");
   const [query, setQuery] = useState("");
-  const [selection, setSelection] = useState<string | undefined>(() => entries[0]?.member.id);
+  const [selection, setSelection] = useState<string | undefined>();
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const inspectorHeading = useRef<HTMLHeadingElement>(null);
   const focusInspector = useRef(false);
@@ -467,12 +591,14 @@ export function AgentDirectory({
   }, [selected]);
 
   return (
-    <article className="route-surface agent-directory">
+    <article
+      className={`route-surface agent-directory${selected ? " entity-detail-open" : ""}${groupId ? " ad-team-members" : ""}`}
+    >
       <header className="route-heading ad-page-heading">
         <div>
           <span className="eyebrow">Repository configuration</span>
           <h2 data-route-heading tabIndex={-1}>
-            All agents
+            {groupId ? "Members" : "All agents"}
           </h2>
           <div className="ad-config-source">
             <FileCode2 size={13} aria-hidden="true" />
@@ -537,22 +663,38 @@ export function AgentDirectory({
         <span className="ad-result-count">
           {filtered.length} of {entries.length} agents
         </span>
+        {management && (
+          <>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label="Organize agents"
+              title="Organize agents"
+              aria-pressed={organize}
+              onClick={() => setOrganize(!organize)}
+            >
+              <ListFilter size={15} />
+            </button>
+            <button
+              className="primary-button"
+              type="button"
+              disabled={!snapshot.groups.length}
+              onClick={() => setCreating(true)}
+            >
+              <Plus size={14} />
+              Add agent
+            </button>
+          </>
+        )}
       </div>
+      {orderError && <ErrorNotice error={orderError} />}
       <div className={`ad-layout ${selected === undefined ? "" : "ad-has-inspector"}`}>
         <section className="ad-directory" aria-label="Configured agents">
           <div className="ad-column-head">
             <span>Agent / provider</span>
-            <span>
-              State scope{" "}
-              <Help text="Membership isolates provider homes per agent. Integration shares a home across agents." />
-            </span>
-            <span>
-              Execution{" "}
-              <Help text="Configured policy, not a statement of runtime authorization or authentication." />
-            </span>
-            <span>
-              Prompts <Help text="Ordered sources: built-in, global, team, role, agent." />
-            </span>
+            <span>Runtime</span>
+            <span>Model</span>
+            <span>Role</span>
           </div>
           {[...groups].map(([key, members]) => {
             const entry = members[0]!;
@@ -645,58 +787,100 @@ export function AgentDirectory({
                               <div>
                                 <strong>{agent.agent?.name ?? agent.member.alias}</strong>
                                 <small className="ad-member-id">
-                                  Member ID: <code>{agent.member.memberId}</code>
+                                  <code>{agent.member.memberId}</code>
                                 </small>
                                 <small>
-                                  {agent.integration?.name ?? "Integration unavailable"} /{" "}
-                                  {agent.role?.name ?? "Unassigned role"}
-                                </small>
-                                <small>
-                                  {agent.state.label} ·{" "}
-                                  {agent.state.run?.effectiveModel ?? "Model not reported"}
+                                  {agent.integration?.name ?? "Integration unavailable"}
                                 </small>
                               </div>
                             </div>
                             <div className="ad-scope-cell">
-                              <Label icon={LockKeyhole}>
-                                {setting(agent.integration?.providerState.scope, "Unavailable")}
-                              </Label>
+                              <span
+                                className="entity-state-label"
+                                data-tone={
+                                  agent.state.attentionWorthy
+                                    ? "warning"
+                                    : agent.state.key === "working"
+                                      ? "ready"
+                                      : "muted"
+                                }
+                              >
+                                {agent.state.label}
+                              </span>
                               <small>
-                                {agent.integration?.credentials.kind === "broker-profile"
-                                  ? "Broker credentials"
-                                  : agent.integration === undefined
-                                    ? "Config unavailable"
-                                    : "Provider-managed auth"}
+                                {agent.state.run
+                                  ? `Generation ${agent.state.run.generation}`
+                                  : "No run"}
                               </small>
                             </div>
                             <div className="ad-execution-cell">
-                              <span
-                                className={
-                                  agent.profile?.continuation === "autonomous" ? "ad-accent" : ""
-                                }
-                              >
-                                <Label icon={Zap}>{setting(agent.profile?.continuation)}</Label>
-                              </span>
-                              <small
-                                className={
-                                  agent.role?.permissionPolicy === "read-only" ? "ad-gold" : ""
-                                }
-                              >
-                                {agent.role?.permissionPolicy === "read-only"
-                                  ? "Read-only role"
-                                  : "Permissions inherited"}
+                              <span>{agent.state.run?.effectiveModel ?? "Not reported"}</span>
+                              <small>
+                                {agent.desiredModel
+                                  ? `Configured: ${agent.desiredModel}`
+                                  : "Provider default"}
                               </small>
                             </div>
                             <div className="ad-prompt-cell">
-                              <Label icon={Layers}>
-                                {agent.layerCount} {agent.layerCount === 1 ? "layer" : "layers"}
-                              </Label>
+                              <span>{agent.role?.name ?? "Unassigned"}</span>
                               <small>
-                                {agent.sourceCount} sources
+                                {agent.sourceCount} prompt sources
                                 <ChevronRight size={12} aria-hidden="true" />
                               </small>
                             </div>
                           </button>
+                          {organize && management && (
+                            <div className="entity-organize-actions">
+                              {[-1, 1].map((direction) => {
+                                const ordered = Object.entries(
+                                  config.groups[agent.member.groupId]?.agents ?? {},
+                                ).sort(
+                                  (left, right) => (left[1].order ?? 0) - (right[1].order ?? 0),
+                                );
+                                const index = ordered.findIndex(
+                                  ([, item]) => item.memberId === agent.member.memberId,
+                                );
+                                return (
+                                  <button
+                                    key={direction}
+                                    type="button"
+                                    className="icon-button"
+                                    aria-label={`Move ${agent.member.alias} ${direction < 0 ? "up" : "down"}`}
+                                    disabled={
+                                      index + direction < 0 || index + direction >= ordered.length
+                                    }
+                                    onClick={async () => {
+                                      const ids = ordered.map(([id]) => id);
+                                      [ids[index], ids[index + direction]] = [
+                                        ids[index + direction]!,
+                                        ids[index]!,
+                                      ];
+                                      try {
+                                        await management.client.reorderAgents(
+                                          agent.member.groupId,
+                                          {
+                                            agentIds: ids,
+                                            expectedOrderRevision: snapshot.orderRevision,
+                                          },
+                                        );
+                                        await management.refresh();
+                                      } catch (cause) {
+                                        setOrderError(
+                                          toPortalError(cause, "Unable to reorder agents"),
+                                        );
+                                      }
+                                    }}
+                                  >
+                                    {direction < 0 ? (
+                                      <ArrowUp size={14} />
+                                    ) : (
+                                      <ArrowDown size={14} />
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -738,6 +922,15 @@ export function AgentDirectory({
           />
         )}
       </div>
+      {creating && management && (
+        <EntityCreateDialog
+          kind="agent"
+          {...(groupId && snapshot.groups.find((group) => group.id === groupId)
+            ? { group: snapshot.groups.find((group) => group.id === groupId)! }
+            : {})}
+          onClose={() => setCreating(false)}
+        />
+      )}
     </article>
   );
 }

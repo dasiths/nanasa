@@ -5,8 +5,8 @@ import type {
   AttentionEventType,
   CustomLaunchConsentRequest,
   GroupMembership,
-  NanasaConfig,
   MemberAttentionSubscriptions,
+  NanasaConfig,
   RoleDefinition,
   TerminalEndpointState,
 } from "@nanasa/contracts";
@@ -15,6 +15,7 @@ import {
   BellRing,
   CheckCircle2,
   CircleAlert,
+  LayoutGrid,
   LoaderCircle,
   Maximize2,
   Minimize2,
@@ -36,7 +37,8 @@ import { useTerminalEndpoint } from "../hooks/use-terminal-endpoint.js";
 import { memberStatusView } from "../member-status.js";
 import { TerminalConsole } from "../terminal/terminal-console.js";
 import { LaunchConsentPane } from "./launch-consent-pane.js";
-import { RoleIdentity, roleColorClass } from "./role-identity.js";
+import { RoleGlyph, RoleIdentity, roleColorClass } from "./role-identity.js";
+import "./entity-workspace.css";
 
 const endpointLabels: Record<Exclude<TerminalEndpointState, "ready">, string> = {
   starting: "Terminal starting",
@@ -782,13 +784,61 @@ export function TerminalWorkspace({
           <Monitor aria-hidden="true" size={28} />
         )}
         <h2>{launchConsentsLoading ? "Loading launch requests" : "No active terminals"}</h2>
-        {launchConsentsError ?? <p>Start an agent from the tree to open its tmux terminal.</p>}
+        {launchConsentsError ?? <p>No runs are available for this team.</p>}
       </div>
     );
   }
 
   return (
     <div className="terminal-workspace">
+      <div className="terminal-session-bar">
+        <nav aria-label="Terminal sessions" className="terminal-session-strip">
+          {orderedRuns.map((run) => (
+            <button
+              type="button"
+              key={run.id}
+              aria-label={`Focus terminal ${memberAlias(run)}`}
+              aria-current={focusedRunId === run.id ? "page" : undefined}
+              onClick={() => onSetFocusedRun?.(run.id)}
+            >
+              <span
+                className={`terminal-session-glyph ${roleColorClass(memberRole(run))}`}
+                title={memberRole(run)?.name ?? "Unassigned role"}
+              >
+                <RoleGlyph role={memberRole(run)} size={16} />
+              </span>
+              <span>
+                <strong>{memberAlias(run)}</strong>
+                <small>{statusByRunId.get(run.id)?.label ?? "Unknown"}</small>
+              </span>
+              {pinnedSet.has(run.id) && <Pin size={11} aria-label="Pinned" />}
+            </button>
+          ))}
+        </nav>
+        <div className="terminal-view-switch" role="group" aria-label="Terminal view">
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Show terminal grid"
+            title="Show terminal grid"
+            aria-pressed={!focusedRunId}
+            onClick={() => onSetFocusedRun?.(undefined)}
+          >
+            <LayoutGrid size={16} />
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Focus active terminal"
+            title="Focus active terminal"
+            aria-pressed={Boolean(focusedRunId)}
+            disabled={!orderedRuns.length}
+            onClick={() => onSetFocusedRun?.(activeRunId ?? orderedRuns[0]?.id)}
+          >
+            <Maximize2 size={16} />
+          </button>
+        </div>
+      </div>
       <div
         className={`terminal-layout terminal-layout-${focusedRunId === undefined ? columns : "focused"}`}
       >

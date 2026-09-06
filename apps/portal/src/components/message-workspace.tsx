@@ -19,14 +19,24 @@ import {
   CircleArrowDown,
   MessageCircle,
   MessageSquareText,
+  Search,
   Send,
   Trash2,
   Users,
   X,
 } from "lucide-react";
-import { type FormEvent, useEffect, useId, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { api, type PortalClient } from "../api.js";
 import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
+import "./entity-workspace.css";
 
 type AudienceKind = Audience["kind"];
 
@@ -295,6 +305,38 @@ function ConfirmClearHistoryDialog({
   );
 }
 
+function MessageComposerFrame({
+  inline,
+  dialogRef,
+  onClose,
+  children,
+}: {
+  inline: boolean;
+  dialogRef: RefObject<HTMLDialogElement | null>;
+  onClose(): void;
+  children: ReactNode;
+}) {
+  if (inline)
+    return (
+      <section className="message-attached-composer" aria-label="Compose message">
+        {children}
+      </section>
+    );
+  return (
+    <dialog
+      ref={dialogRef}
+      className="message-compose-dialog"
+      aria-labelledby="new-message-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
+      {children}
+    </dialog>
+  );
+}
+
 export function MessageWorkspace({
   group,
   members,
@@ -306,6 +348,7 @@ export function MessageWorkspace({
   onSubmit,
 }: MessageWorkspaceProps) {
   const [composing, setComposing] = useState(false);
+  const [search, setSearch] = useState("");
   const [audienceKind, setAudienceKind] = useState<AudienceKind>("dm");
   const [recipientIds, setRecipientIds] = useState<string[]>(
     members[0] === undefined ? [] : [members[0].memberId],
@@ -650,7 +693,7 @@ export function MessageWorkspace({
   };
 
   return (
-    <>
+    <div className={`message-workspace-${presentation}`}>
       {presentation === "quick" && (
         <button
           ref={launcherRef}
@@ -678,6 +721,16 @@ export function MessageWorkspace({
                 </span>
               </div>
               <div className="message-toolbar-actions">
+                <label className="entity-search">
+                  <Search size={14} aria-hidden="true" />
+                  <input
+                    type="search"
+                    aria-label="Search messages"
+                    placeholder="Search messages..."
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                  />
+                </label>
                 <button
                   type="button"
                   className="icon-button"
@@ -702,14 +755,18 @@ export function MessageWorkspace({
                 </div>
               ) : (
                 <ol className="message-history-list">
-                  {groupHistory.map(({ submission }) => (
-                    <ChatMessage
-                      key={submission.message.id}
-                      message={submission.message}
-                      outcomes={submission.deliveryOutcomes}
-                      members={historyMembers}
-                    />
-                  ))}
+                  {groupHistory
+                    .filter(({ submission }) =>
+                      submission.message.body.text.toLowerCase().includes(search.toLowerCase()),
+                    )
+                    .map(({ submission }) => (
+                      <ChatMessage
+                        key={submission.message.id}
+                        message={submission.message}
+                        outcomes={submission.deliveryOutcomes}
+                        members={historyMembers}
+                      />
+                    ))}
                 </ol>
               )}
               {showJumpToLatest && (
@@ -719,55 +776,35 @@ export function MessageWorkspace({
                 </button>
               )}
             </section>
-            <div className="message-prompt">
-              <input
-                aria-label="Compose message"
-                placeholder="Type a message..."
-                readOnly
-                disabled={members.length === 0}
-                onClick={() => setComposing(true)}
-                onFocus={() => setComposing(true)}
-              />
-              <button
-                type="button"
-                className="icon-button"
-                aria-label="Open message composer"
-                title="New message"
-                disabled={members.length === 0}
-                onClick={() => setComposing(true)}
-              >
-                <Send aria-hidden="true" size={15} />
-              </button>
-            </div>
           </section>
         </section>
       )}
-      {composing && (
-        <dialog
-          ref={composerDialogRef}
-          className="message-compose-dialog"
-          aria-labelledby="new-message-title"
-          onCancel={(event) => {
-            event.preventDefault();
+      {(composing || presentation === "route") && (
+        <MessageComposerFrame
+          inline={presentation === "route"}
+          dialogRef={composerDialogRef}
+          onClose={() => {
             if (!submitting) setComposing(false);
           }}
         >
           <form className="message-composer" onSubmit={(event) => void submit(event)}>
-            <header className="message-compose-header">
-              <div>
-                <span className="eyebrow">Group message</span>
-                <h2 id="new-message-title">New message</h2>
-              </div>
-              <button
-                type="button"
-                className="icon-button"
-                aria-label="Close message composer"
-                disabled={submitting}
-                onClick={() => setComposing(false)}
-              >
-                <X aria-hidden="true" size={16} />
-              </button>
-            </header>
+            {presentation === "quick" && (
+              <header className="message-compose-header">
+                <div>
+                  <span className="eyebrow">Group message</span>
+                  <h2 id="new-message-title">New message</h2>
+                </div>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Close message composer"
+                  disabled={submitting}
+                  onClick={() => setComposing(false)}
+                >
+                  <X aria-hidden="true" size={16} />
+                </button>
+              </header>
+            )}
             <div className="message-routing-row">
               <label>
                 Audience
@@ -869,14 +906,16 @@ export function MessageWorkspace({
             )}
             <div className="composer-actions">
               {error !== undefined && <ErrorNotice error={error} className="form-error" />}
-              <button
-                type="button"
-                className="compact-button"
-                disabled={submitting}
-                onClick={() => setComposing(false)}
-              >
-                Cancel
-              </button>
+              {presentation === "quick" && (
+                <button
+                  type="button"
+                  className="compact-button"
+                  disabled={submitting}
+                  onClick={() => setComposing(false)}
+                >
+                  Cancel
+                </button>
+              )}
               <button
                 type="submit"
                 className="primary-button"
@@ -887,7 +926,7 @@ export function MessageWorkspace({
               </button>
             </div>
           </form>
-        </dialog>
+        </MessageComposerFrame>
       )}
       {confirmingClear && (
         <ConfirmClearHistoryDialog
@@ -895,6 +934,6 @@ export function MessageWorkspace({
           onConfirm={clearHistory}
         />
       )}
-    </>
+    </div>
   );
 }

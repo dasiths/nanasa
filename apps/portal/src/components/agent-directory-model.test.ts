@@ -263,6 +263,7 @@ describe("agent directory interactions", () => {
     ];
     const onNavigate = vi.fn();
     render(createElement(AgentDirectory, { snapshot, config: directoryConfig, onNavigate }));
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Builder" }));
     expect(screen.getByRole("link", { name: "Open terminal" })).toHaveAttribute(
       "href",
       "/groups/backend/terminals/live-run",
@@ -349,6 +350,7 @@ describe("agent directory interactions", () => {
     render(
       createElement(AgentDirectory, { snapshot: directorySnapshot, config, onNavigate: vi.fn() }),
     );
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Builder" }));
     const stateSection = screen.getByRole("region", { name: "Provider state and credentials" });
     expect(stateSection).toHaveTextContent("Shared by agents using this integration");
     expect(stateSection).toHaveTextContent("Broker profile: shared-pi");

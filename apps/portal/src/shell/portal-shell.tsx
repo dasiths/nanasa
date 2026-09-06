@@ -1,9 +1,12 @@
 import type { PropsWithChildren, ReactNode } from "react";
 import { LiveAnnouncer, RouteAnnouncer, SkipLink } from "../a11y/primitives.js";
 import type { AttentionToast } from "../attention-notifications.js";
+import "./portal-shell.css";
 
 export function PortalShell({
   rail,
+  header,
+  project,
   routeLabel,
   density,
   motion,
@@ -16,6 +19,8 @@ export function PortalShell({
   children,
 }: PropsWithChildren<{
   rail: ReactNode;
+  header?: ReactNode;
+  project?: ReactNode;
   routeLabel: string;
   density: "comfortable" | "compact";
   motion: "system" | "reduce" | "full";
@@ -29,12 +34,14 @@ export function PortalShell({
   return (
     <LiveAnnouncer>
       <SkipLink />
+      {header}
       <main
-        className="portal-shell"
+        className={`portal-shell${project ? " portal-shell-with-project" : ""}`}
         data-density={density}
         data-motion={motion}
         data-contrast={contrast}
       >
+        {project}
         {rail}
         <section id="portal-content" className="workspace" tabIndex={-1}>
           <RouteAnnouncer label={routeLabel} />

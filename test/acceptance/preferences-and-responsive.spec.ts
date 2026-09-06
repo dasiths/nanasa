@@ -58,7 +58,9 @@ test("theme and terminal columns persist and synchronize across tabs", async ({
       return Object.values(stored.pinnedRunIdsByGroup ?? {})[0]?.length;
     }),
   ).toBe(2);
-  await expect(secondPage.getByRole("button", { name: "All terminals" })).toBeVisible();
+  await expect(
+    secondPage.getByRole("button", { name: "All terminals", exact: true }),
+  ).toBeVisible();
 
   await secondPage.reload();
   await expect(secondPage.locator("html")).toHaveAttribute("data-theme", "dark");
@@ -70,7 +72,9 @@ test("theme and terminal columns persist and synchronize across tabs", async ({
     "aria-pressed",
     "true",
   );
-  await expect(secondPage.getByRole("button", { name: "All terminals" })).toHaveCount(0);
+  await expect(secondPage.getByRole("button", { name: "All terminals", exact: true })).toHaveCount(
+    0,
+  );
 });
 
 test("desktop and mobile layouts remain usable without horizontal overflow", async ({
@@ -90,7 +94,7 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
   expect(desktopWorkspace!.x).toBeGreaterThanOrEqual(desktopRail!.x + desktopRail!.width - 1);
   await expect(
     page
-      .getByRole("navigation", { name: "Repository operations" })
+      .getByRole("navigation", { name: "Operations" })
       .getByRole("link", { name: "Attention", exact: true }),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "Open Attention" })).toBeHidden();
@@ -109,7 +113,8 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
   const mobileWorkspace = await page.locator(".workspace").boundingBox();
   expect(mobileRail).toBeNull();
   expect(mobileWorkspace).not.toBeNull();
-  expect(mobileWorkspace!.y).toBe(0);
+  const project = await page.getByRole("region", { name: "Project context" }).boundingBox();
+  expect(mobileWorkspace!.y).toBeGreaterThanOrEqual(project!.y + project!.height);
   await expect(page.getByRole("button", { name: "Open application menu" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Open Attention" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
@@ -126,6 +131,7 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
   const mobileMenu = page.getByRole("dialog", { name: "Nanasa" });
   await expect(mobileMenu.getByRole("link", { name: "Attention", exact: true })).toBeVisible();
   await expect(mobileMenu.getByRole("link", { name: "Responsive team" })).toBeVisible();
+  await mobileMenu.getByText("More", { exact: true }).click();
   await expect(mobileMenu.getByRole("link", { name: "Preferences" })).toBeVisible();
   await mobileMenu.getByRole("button", { name: "Close menu" }).click();
 
@@ -136,63 +142,24 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
   const groupNavigation = page.getByRole("navigation", { name: "Responsive team sections" });
   await expect(groupNavigation.getByRole("link", { name: "Terminals" })).toBeVisible();
   await expect(groupNavigation.getByRole("link", { name: "Attention" })).toBeVisible();
-  await expect(groupNavigation.getByRole("link", { name: "Overview" })).toBeVisible();
+  await expect(groupNavigation.getByRole("link", { name: "Members" })).toBeVisible();
 
   await page.setViewportSize({ width: 721, height: 844 });
-  const groupRow = page.locator(".tree-group-row").filter({ hasText: "Responsive team" });
-  const groupLabelBounds = await groupRow.locator(".tree-select").boundingBox();
-  const groupActionBounds = await groupRow
-    .getByRole("button", { name: "Actions for group Responsive team" })
-    .boundingBox();
-  expect(groupLabelBounds).not.toBeNull();
-  expect(groupActionBounds).not.toBeNull();
-  expect(groupLabelBounds!.x + groupLabelBounds!.width).toBeLessThanOrEqual(groupActionBounds!.x);
-
-  const memberRow = page.locator(".member-row").filter({ hasText: "Narrow" });
-  const memberLabelBounds = await memberRow
-    .getByRole("button", { name: "Open terminal for Narrow" })
-    .boundingBox();
-  const memberInfoBounds = await memberRow
-    .getByRole("button", { name: "View details for Narrow" })
-    .boundingBox();
-  const memberActionBounds = await memberRow
-    .getByRole("button", { name: "Actions for agent Narrow" })
-    .boundingBox();
-  expect(memberLabelBounds).not.toBeNull();
-  expect(memberInfoBounds).not.toBeNull();
-  expect(memberActionBounds).not.toBeNull();
-  expect(memberLabelBounds!.x + memberLabelBounds!.width).toBeLessThanOrEqual(memberInfoBounds!.x);
-  expect(memberInfoBounds!.x + memberInfoBounds!.width).toBeLessThanOrEqual(memberActionBounds!.x);
-  expect(
-    Math.abs(
-      groupActionBounds!.x +
-        groupActionBounds!.width -
-        (memberActionBounds!.x + memberActionBounds!.width),
-    ),
-  ).toBeLessThanOrEqual(1);
-
-  await memberRow.getByRole("button", { name: "View details for Narrow" }).click();
-  const details = page.getByRole("dialog", { name: "Agent details for Narrow" });
+  await groupNavigation.getByRole("link", { name: "Members", exact: true }).click();
+  const memberRow = page.getByRole("button", { name: "Inspect Narrow", exact: true });
+  await memberRow.click();
+  const details = page.getByRole("complementary", { name: "Agent configuration" });
   await expect(details).toBeVisible();
   const detailsBounds = await details.boundingBox();
   expect(detailsBounds).not.toBeNull();
   expect(detailsBounds!.x).toBeGreaterThanOrEqual(0);
   expect(detailsBounds!.x + detailsBounds!.width).toBeLessThanOrEqual(721);
-  expect(
-    await details.evaluate((element) => ({
-      overflowY: getComputedStyle(element).overflowY,
-      pointerEvents: getComputedStyle(element).pointerEvents,
-    })),
-  ).toEqual({ overflowY: "auto", pointerEvents: "auto" });
-  await details.getByRole("button", { name: "Close details for Narrow" }).click();
-
-  await memberRow.getByRole("button", { name: "Actions for agent Narrow" }).click();
-  const memberMenu = page.getByRole("menu", { name: "Actions for agent Narrow" });
-  const memberMenuBounds = await memberMenu.boundingBox();
-  expect(memberMenuBounds).not.toBeNull();
-  expect(memberMenuBounds!.x).toBeGreaterThanOrEqual(0);
-  expect(memberMenuBounds!.x + memberMenuBounds!.width).toBeLessThanOrEqual(721);
-  await memberMenu.getByRole("menuitem", { name: "Remove agent Narrow" }).click();
+  await expect(memberRow).toBeHidden();
+  await details.getByRole("button", { name: "Back to list", exact: true }).click();
+  await expect(memberRow).toBeVisible();
+  await memberRow.click();
+  await details.getByRole("button", { name: "Session", exact: true }).click();
+  await details.getByRole("button", { name: "Remove agent", exact: true }).click();
   const memberDialog = page.getByRole("dialog", { name: "Remove Narrow?" });
   await expect(memberDialog).toBeVisible();
   await expect(memberDialog.getByRole("button", { name: "Cancel" })).toBeVisible();
@@ -205,13 +172,13 @@ test("desktop and mobile layouts remain usable without horizontal overflow", asy
   expect(memberDialogBounds!.y + memberDialogBounds!.height).toBeLessThanOrEqual(844);
   await memberDialog.getByRole("button", { name: "Cancel" }).click();
 
-  await groupRow.getByRole("button", { name: "Actions for group Responsive team" }).click();
-  const groupMenu = page.getByRole("menu", { name: "Actions for group Responsive team" });
-  const groupMenuBounds = await groupMenu.boundingBox();
-  expect(groupMenuBounds).not.toBeNull();
-  expect(groupMenuBounds!.x).toBeGreaterThanOrEqual(0);
-  expect(groupMenuBounds!.x + groupMenuBounds!.width).toBeLessThanOrEqual(721);
-  await groupMenu.getByRole("menuitem", { name: "Delete group Responsive team" }).click();
+  await page.getByRole("button", { name: "Open application menu", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "Nanasa", exact: true })
+    .getByRole("link", { name: "Teams", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Inspect team Responsive team", exact: true }).click();
+  await page.getByRole("button", { name: "Delete group", exact: true }).click();
   const groupDialog = page.getByRole("dialog", { name: "Delete Responsive team?" });
   await expect(groupDialog).toBeVisible();
   await expect(groupDialog.getByRole("button", { name: "Cancel" })).toBeVisible();
@@ -229,7 +196,8 @@ test("recovery results remain bounded and operable in portrait and landscape", a
   page,
   nanasa,
 }) => {
-  await nanasa.seedGroup("Recovery layout team", ["Layout agent"]);
+  const { group } = await nanasa.seedGroup("Recovery layout team", ["Layout agent"]);
+  await nanasa.startAll(group.id);
   await page.setViewportSize({ width: 360, height: 800 });
   await page.goto(nanasa.portalUrl);
 

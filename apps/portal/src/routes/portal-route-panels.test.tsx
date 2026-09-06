@@ -275,7 +275,7 @@ describe("notification preferences", () => {
 });
 
 describe("projected status route panels", () => {
-  it("renders the subscribed inbox with filters and exactly two actions per item", () => {
+  it("renders the subscribed inbox with filters and two inspector actions", async () => {
     const builder = membership("group-done", "Builder");
     const reviewer = membership("group-approval", "Reviewer");
     const recipient = membership("group-delivery", "Recipient");
@@ -315,25 +315,32 @@ describe("projected status route panels", () => {
     };
     const { container } = render(<PortalRoutePanel {...routeProps} />);
 
-    expect(screen.getByText(/subscribed inbox/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Attention" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Needs action 3" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
     for (const row of container.querySelectorAll(".attention-inbox-row")) {
-      expect(within(row as HTMLElement).getAllByRole("button")).toHaveLength(2);
+      expect(within(row as HTMLElement).getAllByRole("button")).toHaveLength(1);
     }
     expect(
       screen.queryByRole("button", { name: /acknowledge|approve|reply|retry|cancel/i }),
     ).toBeNull();
 
     const reviewerRow = screen.getByText("Reviewer · Needs approval").closest("li")!;
-    within(reviewerRow).getByRole("button", { name: "Open terminal" }).click();
+    fireEvent.click(
+      within(reviewerRow).getByRole("button", { name: "Inspect Reviewer · Needs approval" }),
+    );
+    const inspector = within(
+      screen.getByRole("complementary", { name: "Reviewer · Needs approval" }),
+    );
+    inspector.getByRole("button", { name: "Open terminal" }).click();
     expect(routeProps.onNavigate).toHaveBeenCalledWith(
       "/groups/group-approval/terminals/run-group-approval-reviewer",
     );
-    within(reviewerRow).getByRole("button", { name: "Dismiss Reviewer · Needs approval" }).click();
+    fireEvent.click(inspector.getByRole("button", { name: "Dismiss Reviewer · Needs approval" }));
     expect(onDismissAttentionItems).toHaveBeenCalledWith([expect.any(String)]);
+    await waitFor(() => expect(screen.queryByRole("complementary")).not.toBeInTheDocument());
 
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "delivery" } });
     expect(screen.getByText("Recipient · Delivery failed")).toBeInTheDocument();
@@ -500,7 +507,7 @@ describe("projected status route panels", () => {
       "aria-pressed",
       "true",
     );
-    expect(screen.getByText("Builder · Action created")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Builder · Action created" })).toBeVisible();
     expect(screen.queryByRole("button", { name: /allow once|cancel/i })).toBeNull();
 
     screen.getByRole("button", { name: "Retry" }).click();
@@ -579,7 +586,7 @@ describe("projected status route panels", () => {
     expect(within(diagnostic).getByText("agent_prompt_stalled")).toBeVisible();
     expect(container.querySelector("time")).toHaveAttribute("datetime", timestamp);
     const row = screen.getByText("Delivery unconfirmed").closest("li")!;
-    expect(within(row).getAllByRole("button")).toHaveLength(2);
+    expect(within(row).getAllByRole("button")).toHaveLength(1);
   });
 
   it("keeps provider-update preferences as post-dismiss cleanup, not inbox filtering", async () => {
@@ -622,6 +629,7 @@ describe("projected status route panels", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "History 1" }));
     expect(screen.getByText("Builder restarted")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Builder restarted" }));
     screen.getByRole("button", { name: "Dismiss Builder restarted" }).click();
     await waitFor(() => expect(onDismissAttentionItems).toHaveBeenCalledWith([expect.any(String)]));
     expect(onPatchPreferences).toHaveBeenCalledWith({
@@ -650,6 +658,7 @@ describe("projected status route panels", () => {
     };
 
     render(<PortalRoutePanel {...routeProps} />);
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Recipient · Delivery failed" }));
     screen.getByRole("button", { name: "Open messages" }).click();
 
     expect(routeProps.onNavigate).toHaveBeenCalledWith("/groups/group-delivery/messages");
@@ -681,13 +690,11 @@ describe("projected status route panels", () => {
 
     render(<PortalRoutePanel {...routeProps} />);
 
-    expect(
-      within(screen.getByRole("button", { name: "Inspect Alpha" })).getByText(
-        "Unknown · model-one",
-      ),
-    ).toBeInTheDocument();
-    expect(
-      within(screen.getByRole("button", { name: "Inspect Beta" })).getByText("Failed · model-two"),
-    ).toBeInTheDocument();
+    const alpha = within(screen.getByRole("button", { name: "Inspect Alpha" }));
+    expect(alpha.getByText("Unknown")).toBeInTheDocument();
+    expect(alpha.getByText("model-one")).toBeInTheDocument();
+    const beta = within(screen.getByRole("button", { name: "Inspect Beta" }));
+    expect(beta.getByText("Failed")).toBeInTheDocument();
+    expect(beta.getByText("model-two")).toBeInTheDocument();
   });
 });

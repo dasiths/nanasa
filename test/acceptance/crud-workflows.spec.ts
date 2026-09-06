@@ -32,28 +32,38 @@ test("group and agent rename and delete workflows require confirmation", async (
     await route.continue();
   });
 
-  await page.getByRole("button", { name: "Actions for group CRUD team" }).click();
-  await page.getByRole("menuitem", { name: "Rename group CRUD team" }).click();
-  const groupName = page.getByRole("textbox", { name: "group name for CRUD team" });
+  await page
+    .getByRole("navigation", { name: "Operations", exact: true })
+    .getByRole("link", { name: "Teams", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Inspect team CRUD team", exact: true }).click();
+  await page.getByRole("button", { name: "Edit group settings CRUD team", exact: true }).click();
+  const groupName = page.getByRole("textbox", { name: "Group name", exact: true });
   await groupName.fill("Renamed team");
   await groupName.press("Enter");
   await expect(page.getByRole("heading", { name: "Renamed team" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Actions for agent Original agent" }).click();
-  await page.getByRole("menuitem", { name: "Rename agent Original agent" }).click();
-  const agentName = page.getByRole("textbox", { name: "agent name for Original agent" });
+  await page.getByRole("link", { name: "All agents", exact: true }).click();
+  await page.getByRole("button", { name: "Inspect Original agent", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Edit agent settings Original agent", exact: true })
+    .click();
+  const agentName = page.getByRole("textbox", { name: "Name", exact: true });
   await agentName.fill("Renamed agent");
   await agentName.press("Enter");
-  await expect(page.getByRole("button", { name: "Actions for agent Renamed agent" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Inspect Renamed agent", exact: true }),
+  ).toBeVisible();
 
-  await page.getByRole("button", { name: "Actions for agent Renamed agent" }).click();
-  await page.getByRole("menuitem", { name: "Remove agent Renamed agent" }).click();
+  await page.getByRole("button", { name: "Session", exact: true }).click();
+  await page.getByRole("button", { name: "Remove agent", exact: true }).click();
   const agentDialog = page.getByRole("dialog", { name: "Remove Renamed agent?" });
-  await expect(agentDialog).toContainText("agent will be removed from the group");
+  await expect(agentDialog).toContainText("agent will be removed from the team");
   await agentDialog.getByRole("button", { name: "Cancel" }).click();
-  await expect(page.getByRole("button", { name: "Actions for agent Renamed agent" })).toBeVisible();
-  await page.getByRole("button", { name: "Actions for agent Renamed agent" }).click();
-  await page.getByRole("menuitem", { name: "Remove agent Renamed agent" }).click();
+  await expect(
+    page.getByRole("button", { name: "Inspect Renamed agent", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Remove agent", exact: true }).click();
   const agentRunBeforeDelete = (await nanasa.snapshot()).runs
     .filter((run) => run.memberId === agents[0]!.memberId && run.status === "running")
     .sort((left, right) => right.generation - left.generation)[0];
@@ -63,9 +73,9 @@ test("group and agent rename and delete workflows require confirmation", async (
     .getByRole("dialog", { name: "Remove Renamed agent?" })
     .getByRole("button", { name: "Remove agent" })
     .click();
-  await expect(page.getByRole("button", { name: "Actions for agent Renamed agent" })).toHaveCount(
-    0,
-  );
+  await expect(
+    page.getByRole("button", { name: "Inspect Renamed agent", exact: true }),
+  ).toHaveCount(0);
   expect(paneExpectedStopped).toBeUndefined();
 
   const afterAgentRemoval = await nanasa.snapshot();
@@ -78,14 +88,17 @@ test("group and agent rename and delete workflows require confirmation", async (
     .sort((left, right) => right.generation - left.generation)[0];
   expect(remainingRun?.terminal?.paneId).toBeDefined();
   expect(nanasa.paneExists(remainingRun!.terminal!.paneId)).toBe(true);
-  await page.getByRole("button", { name: "Actions for group Renamed team" }).click();
-  await page.getByRole("menuitem", { name: "Delete group Renamed team" }).click();
+  await page
+    .getByRole("navigation", { name: "Operations", exact: true })
+    .getByRole("link", { name: "Teams", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Inspect team Renamed team", exact: true }).click();
+  await page.getByRole("button", { name: "Delete group", exact: true }).click();
   const groupDialog = page.getByRole("dialog", { name: "Delete Renamed team?" });
   await expect(groupDialog).toContainText("runs will stop before");
   await groupDialog.getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByRole("heading", { name: "Renamed team" })).toBeVisible();
-  await page.getByRole("button", { name: "Actions for group Renamed team" }).click();
-  await page.getByRole("menuitem", { name: "Delete group Renamed team" }).click();
+  await page.getByRole("button", { name: "Delete group", exact: true }).click();
   const groupRunBeforeDelete = (await nanasa.snapshot()).runs
     .filter((run) => run.memberId === agents[1]!.memberId && run.status === "running")
     .sort((left, right) => right.generation - left.generation)[0];

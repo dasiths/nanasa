@@ -127,8 +127,11 @@ test("team workspace lifecycle remains consistent across runs and restart", asyn
   execFileSync("git", ["-C", remote, "tag", "v1.0"]);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(nanasa.portalUrl);
-  await page.getByRole("link", { name: "Team workspaces" }).click();
-  await expect(page.getByRole("heading", { level: 2, name: "Team workspaces" })).toBeVisible();
+  await page.getByRole("link", { name: "Workspaces", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 2, name: "Workspaces" })).toBeVisible();
+  await page
+    .getByRole("button", { name: "Inspect workspace feature/team-workspace", exact: true })
+    .click();
   await expect(page.getByLabel("Workspace for Workspace team")).toHaveValue(created.checkout.id);
   const fetchResponse = page.waitForResponse((response) =>
     response.url().endsWith(`/checkouts/${primary!.id}/fetch`),
@@ -136,8 +139,7 @@ test("team workspace lifecycle remains consistent across runs and restart", asyn
   await page.getByRole("button", { name: "Fetch updates" }).click();
   expect((await fetchResponse).status()).toBe(200);
   await expect(page.getByRole("button", { name: "Fetch updates" })).toBeEnabled();
-  await page.getByText("Exclusive", { exact: true }).hover();
-  await expect(page.getByText("A linked working tree reserved for this team.")).toBeVisible();
+  await expect(page.getByText(/Exclusive linked workspace/)).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("team-workspaces-desktop.png") });
   await page.getByRole("button", { name: "Add workspace" }).click();
   const addDialog = page.getByRole("dialog", { name: "Add workspace" });
@@ -163,6 +165,7 @@ test("team workspace lifecycle remains consistent across runs and restart", asyn
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByLabel("Workspace for Workspace team")).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("team-workspaces-mobile.png") });
+  await page.getByRole("button", { name: "Back to list", exact: true }).click();
   await page.getByRole("button", { name: "Add workspace" }).click();
   await expect(addDialog).toBeVisible();
   await addDialog.getByRole("button", { name: "Create new" }).click();

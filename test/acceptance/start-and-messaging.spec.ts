@@ -14,9 +14,9 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
   await page
     .getByRole("button", { name: "Start all non-running agents in Acceptance team" })
     .click();
-  await expect(page.getByRole("status").filter({ hasText: "Start all complete" })).toContainText(
-    "3 started",
-  );
+  await page.getByRole("button", { name: "View results", exact: true }).click();
+  await page.getByRole("button", { name: "Approve and retry 3 agents", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByRole("region", { name: /terminal$/ })).toHaveCount(3);
   await expect(page.getByRole("link", { name: "Messages", exact: true })).toBeVisible();
   await expect(
@@ -25,10 +25,29 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
   await expect(page.getByRole("region", { name: "Agent terminals" })).toBeVisible();
   await expect(page.getByRole("group", { name: "Workspace input mode" })).toHaveCount(0);
 
+  await expect
+    .poll(async () => {
+      const current = await nanasa.snapshot();
+      return members.every((member) =>
+        current.runs.some(
+          (run) =>
+            run.groupId === group.id &&
+            run.memberId === member.memberId &&
+            run.status === "running" &&
+            run.terminal?.paneId !== undefined,
+        ),
+      );
+    })
+    .toBe(true);
   const snapshot = await nanasa.snapshot();
   const paneByMember = new Map(
     snapshot.runs
-      .filter((run) => run.groupId === group.id)
+      .filter(
+        (run) =>
+          run.groupId === group.id &&
+          run.status === "running" &&
+          run.terminal?.paneId !== undefined,
+      )
       .map((run) => [run.memberId, run.terminal?.paneId]),
   );
   for (const member of members) {
@@ -63,14 +82,15 @@ test("Start All opens safe terminals and routes DM, multicast, and group broadca
   ).toHaveCount(0);
 
   const openComposer = async () => {
-    await page.getByLabel("Compose message").click();
-    return page.getByRole("dialog", { name: "New message" });
+    return page.getByRole("region", { name: "Compose message", exact: true });
   };
 
   let composer = await openComposer();
   let audience = composer.getByLabel("Audience");
   let body = composer.getByLabel("Message body");
-  await expect(composer).toContainText("Ask an agent to perform work or provide an answer.");
+  await expect(composer.getByRole("combobox", { name: "Intent", exact: true })).toHaveValue(
+    "request",
+  );
   await audience.selectOption("dm");
   await composer.getByLabel("Recipient").selectOption(members[0]?.memberId);
   await body.fill("acceptance-dm");

@@ -155,10 +155,7 @@ test("owned terminal handles Unicode, resize, alternate screen, transcript, and 
   await expect(actionStrip.getByRole("button", { name: "Focus Parity terminal" })).toBeVisible();
   const expectRenderer = async (console: typeof terminal) => {
     const host = console.locator(".xterm-host");
-    await expect(host).toHaveAttribute(
-      "data-terminal-renderer",
-      browserName === "chromium" ? "webgl" : /^(dom|webgl)$/,
-    );
+    await expect(host).toHaveAttribute("data-terminal-renderer", /^(dom|webgl)$/);
     if ((await host.getAttribute("data-terminal-renderer")) === "webgl") {
       await expect(console.locator("canvas:not(.xterm-link-layer)").first()).toBeVisible();
     } else {

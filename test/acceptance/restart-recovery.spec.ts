@@ -10,7 +10,9 @@ test("graceful daemon restart reconnects the portal and preserves tmux panes", a
   ]);
   await nanasa.startAll(group.id);
   await page.goto(nanasa.portalUrl);
-  await expect(page.getByTitle("Domain event connection")).toContainText("connected");
+  await expect(
+    page.getByRole("button", { name: "System connected, open System status", exact: true }),
+  ).toBeVisible();
 
   const before = await nanasa.snapshot();
   const identityBefore = new Map<
@@ -33,7 +35,9 @@ test("graceful daemon restart reconnects the portal and preserves tmux panes", a
   await nanasa.startDaemon();
   await page.goto("about:blank");
   await page.goto(nanasa.portalUrl);
-  await expect(page.getByTitle("Domain event connection")).toContainText("connected", {
+  await expect(
+    page.getByRole("button", { name: "System connected, open System status", exact: true }),
+  ).toBeVisible({
     timeout: 20_000,
   });
   await expect

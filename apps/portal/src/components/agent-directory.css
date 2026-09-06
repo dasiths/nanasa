@@ -1,6 +1,44 @@
 .agent-directory {
   container-type: inline-size;
 }
+.agent-directory .ad-page-heading h2 {
+  font-size: 30px;
+  font-weight: 500;
+}
+.agent-directory .ad-agent-row small {
+  font-size: 12px;
+}
+.agent-directory .ad-agent-row code {
+  font-size: 11px;
+}
+.agent-directory .ad-fields {
+  font-size: 12px;
+}
+.agent-directory .ad-tabs + .ad-section {
+  border-top: 0;
+}
+@container (max-width: 940px) {
+  .agent-directory.entity-detail-open .ad-directory,
+  .agent-directory.entity-detail-open .ad-toolbar,
+  .agent-directory.entity-detail-open .ad-page-heading {
+    display: none;
+  }
+  .agent-directory .ad-layout.ad-has-inspector {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .agent-directory .ad-inspector {
+    border: 0;
+    background: transparent;
+  }
+  .agent-directory .entity-detail-back {
+    display: flex;
+    gap: 7px;
+    padding: 12px 0;
+    border: 0;
+    background: transparent;
+    color: var(--green);
+  }
+}
 .agent-directory svg {
   flex-shrink: 0;
 }

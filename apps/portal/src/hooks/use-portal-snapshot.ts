@@ -10,6 +10,7 @@ export type EventConnectionStatus = "disconnected" | "connected" | "reconnecting
 export function usePortalSnapshot(client: PortalClient) {
   const [snapshot, setSnapshot] = useState<PortalSnapshot>();
   const [config, setConfig] = useState<NanasaConfig>();
+  const [receivedAt, setReceivedAt] = useState<number>();
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [error, setError] = useState<PortalError>();
   const [errorSource, setErrorSource] = useState<"snapshot" | "config">();
@@ -64,6 +65,7 @@ export function usePortalSnapshot(client: PortalClient) {
             sequence: next.sequence,
           };
           setSnapshot(next);
+          setReceivedAt(Date.now());
         }
         if (configResult.status === "rejected") {
           setStatus("error");
@@ -94,7 +96,7 @@ export function usePortalSnapshot(client: PortalClient) {
     return () => window.clearInterval(interval);
   }, [refresh]);
 
-  return { snapshot, config, status, error, errorSource, refresh };
+  return { snapshot, config, status, error, errorSource, receivedAt, refresh };
 }
 
 export function useDomainEvents(

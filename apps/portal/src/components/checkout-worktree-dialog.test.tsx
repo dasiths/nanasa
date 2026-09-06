@@ -166,6 +166,8 @@ describe("CheckoutWorkspace", () => {
     await user.click(screen.getByRole("button", { name: "Fetch updates" }));
     await waitFor(() => expect(changed).toHaveBeenCalledOnce());
     expect(portal.fetchCheckout).toHaveBeenCalledWith(checkout.id);
+    await user.click(screen.getByRole("button", { name: `Inspect workspace ${checkout.branch}` }));
+    await user.click(screen.getByRole("button", { name: "Git facts" }));
     expect(screen.getByText(/1 ahead.*2 behind/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Add workspace" }));
     await waitFor(() => expect(portal.listCheckoutReferences).toHaveBeenCalledWith(checkout.id));
@@ -254,6 +256,8 @@ describe("CheckoutWorkspace", () => {
         onChanged={vi.fn().mockResolvedValue(undefined)}
       />,
     );
+    await user.click(screen.getByRole("button", { name: "Inspect workspace feature/one" }));
+    await user.click(screen.getByRole("button", { name: "Maintenance" }));
     await user.click(screen.getByRole("button", { name: "Remove worktree feature/one" }));
     const confirmation = await screen.findByRole("button", { name: "Confirm force remove" });
     expect(removeWorktree).toHaveBeenLastCalledWith(worktree.id, {
@@ -281,13 +285,9 @@ describe("CheckoutWorkspace", () => {
       />,
     );
 
-    const primaryFact = screen.getByText("Primary").closest(".workspace-fact");
-    const tooltipId = primaryFact?.getAttribute("aria-describedby");
-    expect(tooltipId).toBeTruthy();
-    expect(document.getElementById(tooltipId!)).toHaveTextContent(
-      "The repository's main working tree. Multiple teams may use it.",
-    );
-    expect(screen.getByText("1 active agent")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: `Inspect workspace ${checkout.branch}` }));
+    expect(screen.getByText(/Shared primary workspace/)).toBeVisible();
+    expect(screen.getByText(/1 active runs/)).toBeVisible();
     await user.selectOptions(screen.getByLabelText("Workspace for Team One"), managedCheckout.id);
     const dialog = screen.getByRole("dialog", { name: "Change Team One workspace" });
     expect(dialog).toBeVisible();
