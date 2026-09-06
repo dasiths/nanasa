@@ -1,20 +1,29 @@
 ---
 title: Run the multi-coding-agents example
-description: Operate the four-provider Nanasa dogfooding team
+description: Operate Backend and Frontend teams in separate Git workspaces with one Nanasa daemon
 ---
 
-This example runs four coding-agent processes as one Nanasa-managed team. It is
-the repository's dogfooding configuration, but its configuration, commands,
-instructions, and private runtime state are isolated beneath this directory.
+This example runs six coding-agent processes in two teams under one Nanasa
+daemon. Backend uses the current checkout and branch. Frontend uses a linked
+worktree on a separate branch, assigned through the portal before starting its
+agents. Configuration, commands, instructions, and private runtime state remain
+under this example directory.
 
 ## Know what the example starts
 
-| Agent | Integration | Role | Permission policy |
-|-------|-------------|------|-------------------|
-| Project Manager | GitHub Copilot CLI | Project Manager | Inherit |
-| Engineer 1 | Pi | Implementor | Inherit |
-| Engineer 2 | Claude Code through LiteLLM | Implementor | Inherit |
-| Reviewer | OpenCode | Reviewer | Read-only |
+| Team | Agent | Integration | Role | Permission policy |
+|------|-------|-------------|------|-------------------|
+| Backend | Project Manager | GitHub Copilot CLI | Project Manager | Inherit |
+| Backend | Engineer 1 | Pi | Implementor | Inherit |
+| Backend | Engineer 2 | Claude Code through LiteLLM | Implementor | Inherit |
+| Backend | Reviewer | OpenCode | Reviewer | Read-only |
+| Frontend | Frontend Engineer | Pi | Implementor | Inherit |
+| Frontend | Frontend Reviewer | OpenCode | Reviewer | Read-only |
+
+The existing Backend IDs and provider homes are unchanged. Frontend reuses the
+Pi and OpenCode definitions with stable IDs `frontend-builder` and
+`frontend-reviewer` in `team-frontend`. It does not have a project manager;
+cross-team requirements and decisions go through the Human.
 
 The configuration also declares a direct Claude Code integration so operators
 can add or reassign an agent without rewriting the provider definition.
@@ -52,16 +61,18 @@ these checked-in files:
 | Scope | Files |
 |-------|-------|
 | Global | `.nanasa/instructions/nanasa-mcp.md`, `.nanasa/instructions/team.md` |
-| Group | `.nanasa/instructions/groups/agent-team.md` |
+| Backend group | `.nanasa/instructions/groups/agent-team.md` |
+| Frontend group | `.nanasa/instructions/groups/frontend-team.md` |
 | Project Manager role | `.nanasa/instructions/project-manager.md` |
 | Implementor role | `.nanasa/instructions/implementor.md` |
 | Reviewer role | `.nanasa/instructions/reviewer.md` |
 | Agent | None |
 
-Global guidance reaches every configured agent. Group guidance reaches the
-Backend Team. Each agent then receives the instruction file for its assigned
-role. Nanasa also injects the member ID, alias, role, MCP coordination guidance,
-and an authenticated MCP server configuration at launch.
+Global guidance reaches every configured agent. Each team receives only its own
+group guidance, then each agent receives its role instructions. Backend owns
+`apps/daemon`; Frontend owns `apps/portal`. Coordinate shared contract changes
+through the Human. Nanasa also injects the member ID, alias, role, MCP
+coordination guidance, and authenticated MCP configuration at launch.
 
 See [Configure Nanasa](../../docs/next/guides/configuration.md) for the complete
 configuration model and [Add scoped prompts](../../docs/next/guides/prompts.md)
@@ -94,6 +105,7 @@ make -C examples/multi-coding-agents auth-copilot
 make -C examples/multi-coding-agents auth-pi
 make -C examples/multi-coding-agents auth-opencode
 make -C examples/multi-coding-agents auth-litellm
+make -C examples/multi-coding-agents auth-frontend
 ```
 
 The first three targets use `nanasa auth login` with the exact configured agent
@@ -101,8 +113,14 @@ ID. This writes provider-owned credentials to that agent's membership-scoped
 home. The LiteLLM target authenticates the Docker-backed GitHub Copilot gateway
 used by Engineer 2.
 
-Use `make -C examples/multi-coding-agents auth` to run all four flows in order.
-Do not commit anything created under `.nanasa/integrations`.
+The Frontend target authenticates Pi and OpenCode for the two new agent IDs.
+Their membership-scoped homes are separate from Backend's homes even though
+they use the same integrations. Reuse a provider's supported login mechanism;
+do not copy credentials or private homes into a worktree.
+
+Use `make -C examples/multi-coding-agents auth` to run both teams' flows in order.
+If Backend is already authenticated, only `auth-frontend` is needed for the new
+agents. Do not commit anything created under `.nanasa/integrations`.
 
 The `first-run` target stops after setup and diagnostics, then prints the three
 commands required to authenticate providers, start the gateway, and start
@@ -132,6 +150,87 @@ Select **Backend Team** in the portal and start the agents. Each runtime receive
 a group-bound MCP credential and can use `nanasa.list_members` to discover its
 peers. Messages, progress, direct requests, and status remain scoped to the
 group represented by that credential.
+
+## Assign the two workspaces
+
+Use **All agents** for a read-only configuration overview before starting a team.
+Group by team or provider and select an agent to inspect its workspace, mapped
+starting folder, provider state scope, credential mode, execution profile, role
+restrictions, model policy, and ordered prompt sources. Provider MCP files are
+listed separately from prompt layers. These configured values do not certify
+that authentication or runtime policy authorization is ready.
+
+The selected agent has **Open team** and **Open terminal** actions. Open terminal
+targets that agent's latest live terminal; it is disabled when none exists.
+Open team remains available for starting agents or viewing their team.
+
+Keep one daemon running from the primary example directory. Do not start a
+second Nanasa daemon from the Frontend worktree.
+
+On a fresh daemon, both teams initially fall back to the primary checkout.
+Assign Frontend's separate worktree before starting its agents.
+
+1. Open **Team workspaces**. Confirm Backend uses the primary checkout and the
+	current branch. An existing local assignment is preserved, so review it
+	rather than assuming configuration edits reset it.
+2. Keep Frontend stopped. Click **Add workspace**, choose **Create new**, enter
+	`feature/frontend`, and use `HEAD` as the starting revision. Select
+	**Frontend Team** and check **Use for this team immediately** before creating.
+3. Alternatively, use **Attach existing** for a worktree already created from
+	this repository. It remains external and Nanasa cannot remove it as managed.
+4. Verify Frontend's row shows the new branch and linked checkout, then start
+	Frontend's agents. All members inherit the team's workspace.
+
+New worktrees contain committed files from the base revision, not uncommitted
+primary edits. Commit the sample files required by a launcher before creating a
+worktree from them. Neither team should change the other's branch or checkout.
+
+The **Start from** field accepts a branch, tag, commit ID, or Git revision such
+as `HEAD~1`. `HEAD` means the source checkout's current commit. Autocomplete
+offers up to 500 locally known branches, remote-tracking branches, and tags;
+manual entry still works if suggestions are unavailable.
+
+Use **Fetch updates** on Team workspaces to run `git fetch --all --prune` inside
+the repository, then refresh checkout statuses. This updates remote-tracking
+refs and future suggestions without merging, rebasing, or checking out files.
+Remote authentication must already work in the daemon's environment; fetch
+failures are displayed in the portal. The per-workspace refresh icon only
+refreshes local status and does not contact remotes.
+
+If agents are already active, change the workspace through the reviewed switch
+dialog; creation alone does not restart a team.
+
+Workspace assignments live in local SQLite state, not in this YAML. They survive
+daemon restarts and config reconciliation. A linked checkout belongs to one
+team; the primary checkout may be shared. Returning Frontend to primary and
+stopping its runs releases the managed worktree for removal. Branch integration
+and merging remain explicit Git operations outside Nanasa.
+
+## Understand the working directories
+
+The integrations keep `cwd: .`, relative to this nested configuration root.
+Nanasa maps that same directory into each team's selected checkout:
+
+```text
+Backend:  <primary>/examples/multi-coding-agents
+Frontend: <frontend-worktree>/examples/multi-coding-agents
+```
+
+Agents find their own checkout root with `git rev-parse --show-toplevel` and
+resolve paths such as `apps/portal` from there. They must not hardcode the
+primary path or assume the starting directory is the Git root.
+
+Managed worktrees are created beside the Git checkout in `.nanasa-worktrees`,
+not beside the nested configuration directory. In the development container,
+that is `/workspaces/.nanasa-worktrees/nanasa/<branch-slug>`, backed by the host
+sibling mount. Git administrative links are relative. Previously created
+worktrees are not moved automatically.
+
+The two checkouts can evolve independently, but MCP communication remains
+team-scoped. Use an operator-agreed API contract and relay cross-team handoffs
+through the Human. A worktree contains the whole repository and is not a sandbox.
+
+## Review changes before restarting
 
 After changing the example configuration or one of its provider MCP files, the
 portal warns that active agents may need a restart. Choose **Stop all**, confirm

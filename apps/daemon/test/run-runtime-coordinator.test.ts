@@ -145,6 +145,122 @@ describe("RunRuntimeCoordinator", () => {
     }
   });
 
+  it("validates a team checkout before stopping any run", async () => {
+    const stop = vi.fn();
+    const store = {
+      getEffectiveGroupCheckout: vi.fn(() => ({ id: "checkout-primary" })),
+      validateGroupCheckoutAssignment: vi.fn(() => {
+        throw new Error("invalid target mapping");
+      }),
+    };
+    const coordinator = new RunRuntimeCoordinator(
+      store as never,
+      { close: vi.fn(async () => undefined) } as never,
+      { stop, close: vi.fn(async () => undefined) } as never,
+      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
+      { reconcileIntervalMs: 60_000 },
+    );
+    try {
+      await expect(
+        coordinator.assignGroupCheckout("group-one", {
+          checkoutId: "checkout-target",
+          expectedCheckoutRevision: 2,
+          switchPolicy: "stop-and-switch",
+        }),
+      ).rejects.toThrow("invalid target mapping");
+      expect(stop).not.toHaveBeenCalled();
+    } finally {
+      await coordinator.close();
+    }
+  });
+
+  it("stops, assigns, and restarts only previously running team members", async () => {
+    const betaRun = { ...runningRun, id: "run-beta", memberId: "beta" };
+    const operations: string[] = [];
+    const store = {
+      getEffectiveGroupCheckout: vi.fn(() => ({ id: "checkout-primary" })),
+      validateGroupCheckoutAssignment: vi.fn(() => ({
+        group: { id: "group-one", checkoutRevision: 0 },
+        checkout: { id: "checkout-target" },
+      })),
+      listActiveMemberships: vi.fn(() => [
+        { memberId: "alpha" },
+        { memberId: "beta" },
+        { memberId: "gamma" },
+      ]),
+      listGroupRunsRequiringStop: vi.fn(() => [runningRun, betaRun]),
+      getActiveRun: vi.fn((_groupId: string, memberId: string) =>
+        memberId === "alpha" ? runningRun : betaRun,
+      ),
+      updateRunStatus: vi.fn(),
+      assignGroupCheckout: vi.fn(() => {
+        operations.push("assign");
+        return {
+          id: "group-one",
+          name: "One",
+          order: 0,
+          membershipRevision: 0,
+          checkoutId: "checkout-target",
+          checkoutRevision: 3,
+          createdAt: "2026-08-09T12:00:00.000Z",
+          updatedAt: "2026-08-09T12:01:00.000Z",
+        };
+      }),
+    };
+    const runtime = {
+      removeViewSession: vi.fn(async (runId: string) => operations.push(`remove:${runId}`)),
+      stopRun: vi.fn(async (_groupId: string, memberId: string) => {
+        operations.push(`stop:${memberId}`);
+        return memberId === "alpha" ? runningRun : betaRun;
+      }),
+      startRun: vi.fn(async (_groupId: string, memberId: string) => {
+        operations.push(`start:${memberId}`);
+        return {
+          ...(memberId === "alpha" ? runningRun : betaRun),
+          id: `new-${memberId}`,
+          checkoutId: "checkout-target",
+        };
+      }),
+      ensureViewSession: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    };
+    const supervisor = {
+      stop: vi.fn(async (runId: string) => operations.push(`gateway:${runId}`)),
+      start: vi.fn(),
+      unavailable: vi.fn(),
+      close: vi.fn(async () => undefined),
+    };
+    const coordinator = new RunRuntimeCoordinator(
+      store as never,
+      runtime as never,
+      supervisor as never,
+      { start: vi.fn(), close: vi.fn(async () => undefined) } as never,
+      { reconcileIntervalMs: 60_000 },
+    );
+    try {
+      await expect(
+        coordinator.assignGroupCheckout("group-one", {
+          checkoutId: "checkout-target",
+          expectedCheckoutRevision: 2,
+          switchPolicy: "stop-switch-restart",
+        }),
+      ).resolves.toMatchObject({
+        previousCheckoutId: "checkout-primary",
+        checkoutId: "checkout-target",
+        outcomes: [
+          { memberId: "alpha", status: "restarted", runId: "new-alpha" },
+          { memberId: "beta", status: "restarted", runId: "new-beta" },
+          { memberId: "gamma", status: "not-running" },
+        ],
+      });
+      expect(operations.indexOf("assign")).toBeGreaterThan(operations.indexOf("stop:beta"));
+      expect(operations.indexOf("start:alpha")).toBeGreaterThan(operations.indexOf("assign"));
+      expect(runtime.startRun).toHaveBeenCalledTimes(2);
+    } finally {
+      await coordinator.close();
+    }
+  });
+
   it("returns approval-required and denied outcomes from start-all without launching", async () => {
     const startRun = vi.fn();
     const store = {

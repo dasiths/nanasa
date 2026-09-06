@@ -38,6 +38,7 @@ const groups: Group[] = [
     name: "Beta",
     order: 1,
     membershipRevision: 1,
+    checkoutRevision: 0,
     createdAt: timestamp,
     updatedAt: timestamp,
   },
@@ -46,6 +47,7 @@ const groups: Group[] = [
     name: "Alpha",
     order: 0,
     membershipRevision: 1,
+    checkoutRevision: 0,
     createdAt: timestamp,
     updatedAt: timestamp,
   },
@@ -899,6 +901,7 @@ describe("attention sorting, filtering, and counts", () => {
           "provider-update-failed": true,
           "provider-update-succeeded": false,
           "unread-message": false,
+          "url-open-request": true,
         },
         members: [
           {

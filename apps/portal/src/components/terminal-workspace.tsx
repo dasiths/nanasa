@@ -50,6 +50,11 @@ const attentionSubscriptionLabels: Array<{
   detail: string;
 }> = [
   {
+    eventType: "url-open-request",
+    label: "Requests a browser",
+    detail: "A URL is waiting to be opened",
+  },
+  {
     eventType: "response-required",
     label: "Needs a response",
     detail: "Questions, permissions, and approvals",

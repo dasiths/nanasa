@@ -161,5 +161,31 @@ groups:
         roleId: reviewer
         instructions: []
         order: 3
+  team-frontend:
+    name: Frontend Team
+    order: 1
+    instructions:
+      - .nanasa/instructions/groups/frontend-team.md
+    agents:
+      frontend-builder:
+        memberId: frontend-builder
+        name: Frontend Engineer
+        integrationId: pi
+        roleId: implementor
+        instructions: []
+        attention:
+          response-required: true
+          agent-health: true
+          completion: true
+          delivery-failure: true
+          provider-update-failed: true
+        order: 0
+      frontend-reviewer:
+        memberId: frontend-reviewer
+        name: Frontend Reviewer
+        integrationId: opencode
+        roleId: reviewer
+        instructions: []
+        order: 1
 messages:
   retentionPerGroup: 1000

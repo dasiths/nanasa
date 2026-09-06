@@ -3,7 +3,66 @@ import {
   PROVIDER_UPDATE_TRANSITION_SCHEMA_SQL,
 } from "./provider-platform-schema.js";
 
-export const DATABASE_SCHEMA_VERSION = 14;
+export const DATABASE_SCHEMA_VERSION = 16;
+
+const URL_OPEN_SCHEMA_SQL = `
+  CREATE TABLE url_open_requests (
+    id TEXT PRIMARY KEY,
+    request_json TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  ) STRICT;
+`;
+
+export const DATABASE_MIGRATION_15_TO_16_SQL = `
+  ${URL_OPEN_SCHEMA_SQL}
+  ALTER TABLE attention_subscription_overrides RENAME TO attention_subscription_overrides_old;
+  DROP INDEX attention_subscription_overrides_member;
+  CREATE TABLE attention_subscription_overrides (
+    operator_id TEXT NOT NULL,
+    group_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    event_type TEXT NOT NULL CHECK (event_type IN (
+      'response-required', 'agent-health', 'completion', 'delivery-failure',
+      'action-state', 'provider-update-failed', 'provider-update-succeeded', 'unread-message',
+      'url-open-request'
+    )),
+    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (operator_id, group_id, member_id, event_type)
+  ) STRICT;
+  INSERT INTO attention_subscription_overrides SELECT * FROM attention_subscription_overrides_old;
+  DROP TABLE attention_subscription_overrides_old;
+  CREATE INDEX attention_subscription_overrides_member
+    ON attention_subscription_overrides (group_id, member_id, operator_id);
+`;
+
+export const DATABASE_MIGRATION_14_TO_15_SQL = `
+  ALTER TABLE groups ADD COLUMN checkout_id TEXT REFERENCES checkouts(id);
+  ALTER TABLE groups ADD COLUMN checkout_revision INTEGER NOT NULL DEFAULT 0
+    CHECK (checkout_revision >= 0);
+
+  UPDATE groups
+  SET checkout_id = (
+    SELECT MIN(m.checkout_id)
+    FROM memberships m
+    WHERE m.group_id = groups.id
+      AND m.state = 'active'
+      AND m.checkout_id IS NOT NULL
+  )
+  WHERE (
+    SELECT COUNT(DISTINCT m.checkout_id)
+    FROM memberships m
+    WHERE m.group_id = groups.id
+      AND m.state = 'active'
+      AND m.checkout_id IS NOT NULL
+  ) = 1
+  AND (
+    SELECT COUNT(*) = COUNT(m.checkout_id)
+    FROM memberships m
+    WHERE m.group_id = groups.id
+      AND m.state = 'active'
+  );
+`;
 
 export const DATABASE_MIGRATION_13_TO_14_SQL = `
   CREATE TABLE attention_subscription_overrides (
@@ -74,6 +133,7 @@ export const DATABASE_MIGRATION_10_TO_11_SQL = `
 `;
 
 export const DATABASE_BASELINE_SQL = `
+  ${URL_OPEN_SCHEMA_SQL}
   CREATE TABLE schema_metadata (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     schema_version INTEGER NOT NULL,
@@ -94,6 +154,8 @@ export const DATABASE_BASELINE_SQL = `
     name TEXT NOT NULL,
     order_index INTEGER NOT NULL CHECK (order_index >= 0),
     membership_revision INTEGER NOT NULL CHECK (membership_revision >= 0),
+    checkout_id TEXT REFERENCES checkouts(id),
+    checkout_revision INTEGER NOT NULL DEFAULT 0 CHECK (checkout_revision >= 0),
     message_sequence INTEGER NOT NULL DEFAULT 0 CHECK (message_sequence >= 0),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -303,7 +365,8 @@ export const DATABASE_BASELINE_SQL = `
     member_id TEXT NOT NULL,
     event_type TEXT NOT NULL CHECK (event_type IN (
       'response-required', 'agent-health', 'completion', 'delivery-failure',
-      'action-state', 'provider-update-failed', 'provider-update-succeeded', 'unread-message'
+      'action-state', 'provider-update-failed', 'provider-update-succeeded', 'unread-message',
+      'url-open-request'
     )),
     enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
     updated_at TEXT NOT NULL,

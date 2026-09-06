@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -19,6 +19,95 @@ afterEach(() => {
 });
 
 describe("NanasaStore persistence", () => {
+  it("persists one checkout per team and maps every member run into it", () => {
+    const root = mkdtempSync(join(tmpdir(), "nanasa-team-checkout-"));
+    temporaryDirectories.push(root);
+    const primaryPath = join(root, "primary");
+    const linkedPath = join(root, "linked");
+    mkdirSync(join(primaryPath, "packages", "api"), { recursive: true });
+    mkdirSync(join(linkedPath, "packages", "api"), { recursive: true });
+    const timestamp = "2026-09-05T00:00:00.000Z";
+    const store = new NanasaStore(":memory:");
+    const repository = {
+      id: "repo-one",
+      commonDirectory: join(primaryPath, ".git"),
+      displayName: "repo",
+      objectFormat: "sha1" as const,
+      refStorage: "files" as const,
+      revision: 0,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    store.saveDiscoveredCheckout(
+      repository,
+      {
+        id: "checkout-primary",
+        repositoryId: repository.id,
+        checkoutKey: "a".repeat(64),
+        path: primaryPath,
+        gitDirectory: join(primaryPath, ".git"),
+        kind: "primary",
+        dirty: false,
+        observedAt: timestamp,
+      },
+      true,
+    );
+    store.saveDiscoveredCheckout(repository, {
+      id: "checkout-linked",
+      repositoryId: repository.id,
+      checkoutKey: "b".repeat(64),
+      path: linkedPath,
+      gitDirectory: join(primaryPath, ".git", "worktrees", "linked"),
+      kind: "linked",
+      dirty: false,
+      observedAt: timestamp,
+    });
+    const config = NanasaConfigSchema.parse({
+      version: 2,
+      integrations: {
+        copilot: {
+          id: "copilot",
+          name: "Copilot",
+          kind: "copilot",
+          command: ["copilot"],
+          commandSource: "builtin",
+          cwd: join(primaryPath, "packages", "api"),
+        },
+      },
+      groups: {
+        team_one: {
+          name: "Team one",
+          agents: {
+            alpha: { memberId: "alpha", name: "Alpha", integrationId: "copilot" },
+            beta: { memberId: "beta", name: "Beta", integrationId: "copilot" },
+          },
+        },
+        team_two: { name: "Team two", agents: {} },
+      },
+    });
+    store.reconcileTopology(config);
+    expect(store.getEffectiveGroupCheckout("team_one")?.id).toBe("checkout-primary");
+
+    const assigned = store.assignGroupCheckout("team_one", "checkout-linked", 0);
+    expect(assigned).toMatchObject({ checkoutId: "checkout-linked", checkoutRevision: 1 });
+    store.reconcileTopology(config);
+    expect(store.getGroup("team_one")).toMatchObject({
+      checkoutId: "checkout-linked",
+      checkoutRevision: 1,
+    });
+
+    for (const memberId of ["alpha", "beta"]) {
+      expect(store.createRunForMembership("team_one", memberId).run).toMatchObject({
+        checkoutId: "checkout-linked",
+        resolvedWorkingDirectory: join(linkedPath, "packages", "api"),
+      });
+    }
+    expect(() => store.assignGroupCheckout("team_two", "checkout-linked", 0)).toThrowError(
+      expect.objectContaining({ code: "checkout_already_assigned" }),
+    );
+    store.close();
+  });
+
   it("persists isolated Attention subscription overrides across reopen", () => {
     const directory = mkdtempSync(join(tmpdir(), "nanasa-attention-subscriptions-"));
     temporaryDirectories.push(directory);

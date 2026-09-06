@@ -101,6 +101,8 @@ export const GroupSchema = z
     name: z.string().trim().min(1).max(100),
     order: z.number().int().nonnegative().default(0),
     membershipRevision: z.number().int().nonnegative(),
+    checkoutId: IdentifierSchema.optional(),
+    checkoutRevision: z.number().int().nonnegative().default(0),
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
   })
@@ -146,7 +148,6 @@ export const GroupMembershipSchema = z
     agentProfileId: IdentifierSchema,
     alias: z.string().trim().min(1).max(100),
     roleId: RoleIdSchema.optional(),
-    checkoutId: IdentifierSchema.optional(),
     order: z.number().int().nonnegative().default(0),
     state: MembershipStateSchema,
     joinedAt: TimestampSchema,

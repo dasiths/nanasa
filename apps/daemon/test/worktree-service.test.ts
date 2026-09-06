@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NanasaConfigSchema } from "@nanasa/contracts";
@@ -48,6 +48,76 @@ function fixture() {
 }
 
 describe("managed worktree ownership", () => {
+  it("fetches and prunes remote refs without changing the current branch or local files", async () => {
+    const context = fixture();
+    try {
+      const source = (await context.checkouts.initialize(context.repository)).checkout;
+      const remote = join(context.root, "remote.git");
+      execFileSync("git", ["clone", "--bare", "--quiet", context.repository, remote]);
+      execFileSync("git", ["-C", context.repository, "remote", "add", "origin", remote]);
+      execFileSync("git", ["-C", remote, "update-ref", "refs/heads/outdated", "HEAD"]);
+      await context.worktrees.fetch(source.id);
+      expect(await context.worktrees.listReferences(source.id)).toContainEqual({
+        name: "origin/outdated",
+        kind: "remote",
+      });
+      execFileSync("git", ["-C", remote, "update-ref", "-d", "refs/heads/outdated"]);
+      execFileSync("git", ["-C", remote, "update-ref", "refs/heads/new-feature", "HEAD"]);
+      const localFile = join(context.repository, "uncommitted.txt");
+      writeFileSync(localFile, "keep these changes\n");
+      const statuses = await context.worktrees.fetch(source.id);
+      const references = await context.worktrees.listReferences(source.id);
+      expect(references).toContainEqual({ name: "origin/new-feature", kind: "remote" });
+      expect(references).not.toContainEqual({ name: "origin/outdated", kind: "remote" });
+      expect(statuses).toContainEqual(
+        expect.objectContaining({ checkoutId: source.id, untracked: 1, branch: source.branch }),
+      );
+      expect(context.store.getCheckout(source.id).head).toBe(source.head);
+      expect(readFileSync(localFile, "utf8")).toBe("keep these changes\n");
+    } finally {
+      context.store.close();
+    }
+  });
+
+  it("lists local, remote, and tag base references without ambiguous names", async () => {
+    const context = fixture();
+    try {
+      const source = (await context.checkouts.initialize(context.repository)).checkout;
+      execFileSync("git", ["-C", context.repository, "branch", "feature/frontend"]);
+      execFileSync("git", ["-C", context.repository, "branch", "release"]);
+      execFileSync("git", ["-C", context.repository, "tag", "release"]);
+      execFileSync("git", [
+        "-C",
+        context.repository,
+        "update-ref",
+        "refs/remotes/origin/main",
+        "HEAD",
+      ]);
+      execFileSync("git", [
+        "-C",
+        context.repository,
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+      ]);
+      const references = await context.worktrees.listReferences(source.id);
+      expect(references).toEqual(
+        expect.arrayContaining([
+          { name: "feature/frontend", kind: "branch" },
+          { name: "heads/release", kind: "branch" },
+          { name: "tags/release", kind: "tag" },
+          { name: "origin/main", kind: "remote" },
+        ]),
+      );
+      expect(references.some((ref) => ref.name === "origin/HEAD")).toBe(false);
+      await expect(context.worktrees.listReferences("missing-checkout")).rejects.toMatchObject({
+        code: "checkout_not_found",
+      });
+    } finally {
+      context.store.close();
+    }
+  });
+
   it("creates once, safely reuses a concurrent branch request, and records provenance", async () => {
     const context = fixture();
     try {
@@ -56,7 +126,6 @@ describe("managed worktree ownership", () => {
         sourceCheckoutId: source.id,
         branch: "feature/safe-race",
         base: "HEAD",
-        assignAgentIds: [],
       };
       const [first, second] = await Promise.all([
         context.worktrees.create(command),
@@ -70,6 +139,9 @@ describe("managed worktree ownership", () => {
       expect(second.checkout?.id).toBe(first.checkout?.id);
       expect(context.store.listWorktrees()).toHaveLength(1);
       expect(first.checkout?.path).toContain(safeWorktreeSlug("feature/safe-race"));
+      expect(readFileSync(join(first.checkout!.path, ".git"), "utf8")).not.toContain(
+        context.repository,
+      );
     } finally {
       context.store.close();
     }
@@ -83,7 +155,6 @@ describe("managed worktree ownership", () => {
         sourceCheckoutId: source.id,
         branch: "feature/dirty",
         base: "HEAD",
-        assignAgentIds: [],
       });
       writeFileSync(join(created.checkout!.path, "dirty.txt"), "keep me\n");
       await expect(
@@ -100,6 +171,9 @@ describe("managed worktree ownership", () => {
         }),
       ).resolves.toMatchObject({ worktree: { state: "removed" } });
       expect(existsSync(created.checkout!.path)).toBe(false);
+      expect(context.store.listCheckouts()).not.toContainEqual(
+        expect.objectContaining({ id: created.checkout!.id }),
+      );
       expect(
         execFileSync(
           "git",
@@ -122,7 +196,6 @@ describe("managed worktree ownership", () => {
         sourceCheckoutId: source.id,
         branch: "feature/active",
         base: "HEAD",
-        assignAgentIds: [],
       });
       const config = NanasaConfigSchema.parse({
         version: 2,
@@ -144,7 +217,6 @@ describe("managed worktree ownership", () => {
                 memberId: "worker",
                 name: "Worker",
                 integrationId: "test",
-                checkoutId: created.checkout!.id,
                 order: 0,
               },
             },
@@ -152,6 +224,13 @@ describe("managed worktree ownership", () => {
         },
       });
       context.store.reconcileTopology(config);
+      context.store.assignGroupCheckout("team", created.checkout!.id, 0);
+      await expect(
+        context.worktrees.remove(created.worktree!.id, {
+          force: true,
+          expectedOperationGeneration: created.worktree!.operationGeneration,
+        }),
+      ).rejects.toMatchObject({ code: "worktree_has_assignments" });
       const run = context.store.createRunForMembership("team", "worker").run;
       expect(run).toMatchObject({
         checkoutId: created.checkout!.id,

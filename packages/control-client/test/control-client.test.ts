@@ -123,7 +123,6 @@ describe("NanasaControlClient", () => {
         sourceCheckoutId: "checkout-1",
         branch: "feature/typed-client",
         base: "HEAD",
-        assignAgentIds: [],
       },
       "worktree-key",
     );
@@ -135,6 +134,31 @@ describe("NanasaControlClient", () => {
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer operator-token");
     expect(new Headers(init?.headers).get("idempotency-key")).toBe("worktree-key");
     expect(JSON.parse(String(init?.body))).toMatchObject({ branch: "feature/typed-client" });
+  });
+
+  it("lists revision suggestions separately from explicitly fetching updates", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(response([{ name: "origin/main", kind: "remote" }]))
+      .mockResolvedValueOnce(response([]));
+    const resources = new NanasaControlResources(
+      new NanasaControlClient({
+        fetch,
+        baseUrl: "http://127.0.0.1:3210",
+        operatorToken: "operator-token",
+      }),
+    );
+    await expect(resources.workspace.listCheckoutReferences("checkout-1")).resolves.toEqual([
+      { name: "origin/main", kind: "remote" },
+    ]);
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      "http://127.0.0.1:3210/api/v1/checkouts/checkout-1/references",
+    );
+    await expect(resources.workspace.fetchCheckout("checkout-1")).resolves.toEqual([]);
+    expect(fetch.mock.calls[1]?.[0]).toBe(
+      "http://127.0.0.1:3210/api/v1/checkouts/checkout-1/fetch",
+    );
+    expect(fetch.mock.calls[1]?.[1]).toMatchObject({ method: "POST", body: "{}" });
   });
 
   it("lists launch consent requests through the typed operator resource", async () => {

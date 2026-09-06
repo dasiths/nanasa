@@ -10,6 +10,7 @@ export const AttentionEventTypeSchema = z.enum([
   "provider-update-failed",
   "provider-update-succeeded",
   "unread-message",
+  "url-open-request",
 ]);
 export type AttentionEventType = z.infer<typeof AttentionEventTypeSchema>;
 
@@ -24,6 +25,7 @@ export const DEFAULT_ATTENTION_SUBSCRIPTIONS = {
   "provider-update-failed": true,
   "provider-update-succeeded": false,
   "unread-message": false,
+  "url-open-request": true,
 } as const satisfies Record<AttentionEventType, boolean>;
 
 export const AttentionSubscriptionPolicySchema = z
@@ -36,6 +38,7 @@ export const AttentionSubscriptionPolicySchema = z
     "provider-update-failed": z.boolean(),
     "provider-update-succeeded": z.boolean(),
     "unread-message": z.boolean(),
+    "url-open-request": z.boolean().default(true),
   })
   .strict();
 export type AttentionSubscriptionPolicy = z.infer<typeof AttentionSubscriptionPolicySchema>;
@@ -45,7 +48,10 @@ export const AttentionSubscriptionConfigSchema = z
   .strict();
 export type AttentionSubscriptionConfig = z.infer<typeof AttentionSubscriptionConfigSchema>;
 
-export const AgentAttentionSubscriptionConfigSchema = AttentionSubscriptionPolicySchema.partial();
+export const AgentAttentionSubscriptionConfigSchema =
+  AttentionSubscriptionPolicySchema.partial().extend({
+    "url-open-request": z.boolean().optional(),
+  });
 export type AgentAttentionSubscriptionConfig = z.infer<
   typeof AgentAttentionSubscriptionConfigSchema
 >;

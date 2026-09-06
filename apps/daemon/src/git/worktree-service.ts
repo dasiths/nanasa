@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync } f
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type {
   CreateWorktreeCommand,
+  GitReference,
+  GitStatusProjection,
   OpenCheckoutCommand,
   Worktree,
   WorktreeOperationResult,
@@ -66,6 +68,48 @@ export class WorktreeService {
 
   public list(repositoryId: string): Worktree[] {
     return this.store.listWorktrees(repositoryId);
+  }
+
+  public fetch(checkoutId: string): Promise<GitStatusProjection[]> {
+    return this.#serialize(async () => {
+      const source = this.store.getCheckout(checkoutId);
+      await this.checkouts.refresh(source.id);
+      await this.git.run(["-C", source.path, "fetch", "--all", "--prune"], {
+        timeoutMs: 120_000,
+      });
+      const statuses: GitStatusProjection[] = [];
+      for (const checkout of this.checkouts.list(source.repositoryId)) {
+        if (checkout.kind !== "bare") statuses.push(await this.checkouts.refresh(checkout.id));
+      }
+      return statuses;
+    });
+  }
+
+  public async listReferences(checkoutId: string): Promise<GitReference[]> {
+    const checkout = this.store.getCheckout(checkoutId);
+    const result = await this.git.run([
+      "-C",
+      checkout.path,
+      "-c",
+      "core.warnAmbiguousRefs=true",
+      "for-each-ref",
+      "--count=500",
+      "--sort=refname",
+      "--format=%(refname)%00%(refname:short)%00%(symref)",
+      "refs/heads/",
+      "refs/remotes/",
+      "refs/tags/",
+    ]);
+    return result.stdout.split("\n").flatMap((line): GitReference[] => {
+      const [ref, name, symbolicTarget] = line.split("\0");
+      if (!ref || !name || symbolicTarget) return [];
+      const kind = ref.startsWith("refs/heads/")
+        ? "branch"
+        : ref.startsWith("refs/remotes/")
+          ? "remote"
+          : "tag";
+      return name.length > 1_024 ? [] : [{ name, kind }];
+    });
   }
 
   public create(command: CreateWorktreeCommand): Promise<WorktreeOperationResult> {
@@ -193,6 +237,16 @@ export class WorktreeService {
         409,
       );
     }
+    const worktreeHelp = await this.git.run(["-C", source.path, "worktree", "add", "-h"], {
+      allowFailure: true,
+    });
+    if (!`${worktreeHelp.stdout}\n${worktreeHelp.stderr}`.includes("relative-paths")) {
+      throw new DomainError(
+        "git_relative_worktrees_unsupported",
+        "This Git version cannot create relocatable worktrees; upgrade Git to use managed worktrees",
+        409,
+      );
+    }
     const branchCheck = await this.git.run(
       ["-C", source.path, "check-ref-format", "--branch", command.branch],
       { allowFailure: true },
@@ -273,8 +327,18 @@ export class WorktreeService {
       );
       const addArguments =
         localBranch.exitCode === 0
-          ? ["-C", source.path, "worktree", "add", targetPath, command.branch]
-          : ["-C", source.path, "worktree", "add", "-b", command.branch, targetPath, command.base];
+          ? ["-C", source.path, "worktree", "add", "--relative-paths", targetPath, command.branch]
+          : [
+              "-C",
+              source.path,
+              "worktree",
+              "add",
+              "--relative-paths",
+              "-b",
+              command.branch,
+              targetPath,
+              command.base,
+            ];
       await this.git.run(addArguments);
       gitAdded = true;
       const checkout = await this.checkouts.discover(targetPath);
@@ -338,10 +402,10 @@ export class WorktreeService {
         409,
       );
     }
-    if (this.store.listMembershipsBoundToCheckout(worktree.checkoutId).length > 0) {
+    if (this.store.listGroupsBoundToCheckout(worktree.checkoutId).length > 0) {
       throw new DomainError(
         "worktree_has_assignments",
-        "Reassign every agent from this worktree before removal",
+        "Reassign every team from this worktree before removal",
         409,
       );
     }

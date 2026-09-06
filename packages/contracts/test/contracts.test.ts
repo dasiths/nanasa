@@ -740,7 +740,23 @@ describe("Git ownership contracts", () => {
         sourceCheckoutId: "checkout_main",
         branch: "feature/one",
       }),
-    ).toMatchObject({ base: "HEAD", assignAgentIds: [] });
+    ).toMatchObject({ base: "HEAD" });
+    expect(
+      CreateWorktreeCommandSchema.parse({
+        sourceCheckoutId: "checkout_main",
+        branch: "feature/team",
+        groupId: "team_one",
+        expectedCheckoutRevision: 2,
+        switchPolicy: "stop-switch-restart",
+      }),
+    ).toMatchObject({ groupId: "team_one", expectedCheckoutRevision: 2 });
+    expect(() =>
+      CreateWorktreeCommandSchema.parse({
+        sourceCheckoutId: "checkout_main",
+        branch: "feature/incomplete",
+        groupId: "team_one",
+      }),
+    ).toThrow();
   });
 });
 
@@ -955,6 +971,7 @@ describe("configuration contracts", () => {
       "provider-update-failed": true,
       "provider-update-succeeded": false,
       "unread-message": false,
+      "url-open-request": true,
     });
     expect(parsed.integrations.copilot).toMatchObject({
       providerState: { scope: "membership" },
@@ -1047,7 +1064,8 @@ describe("configuration contracts", () => {
       attention: {},
       order: 0,
     });
-    expect(ATTENTION_EVENT_TYPES).toHaveLength(8);
+    expect(ATTENTION_EVENT_TYPES).toHaveLength(9);
+    expect(ATTENTION_EVENT_TYPES).toContain("url-open-request");
     expect(AttentionEventTypeSchema.safeParse("provider-hook-stop").success).toBe(false);
 
     const subscribed = NanasaConfigSchema.parse({

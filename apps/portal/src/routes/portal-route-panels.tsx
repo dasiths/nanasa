@@ -22,12 +22,13 @@ import {
   attentionItemsForScope,
   deriveAttentionItems,
 } from "../attention-items.js";
+import { AgentDirectory } from "../components/agent-directory.js";
 import { CheckoutWorkspace } from "../components/checkout-workspace.js";
 import { ExtensionsWorkspace } from "../components/extensions-workspace.js";
+import { UrlOpenAction } from "../components/url-open-action.js";
 import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 import { generatedOfflineHelp } from "../help/generated-offline-help.js";
 import type { PortalPreferences } from "../hooks/use-portal-preferences.js";
-import { memberStatusView } from "../member-status.js";
 import type { PortalRoute } from "../router/portal-router.js";
 import type { PortalCommand } from "../shell/command-palette.js";
 
@@ -104,6 +105,8 @@ function attentionDestination(item: AttentionItem): { label: string; path: strin
 
 function attentionStateLabel(item: AttentionItem): string {
   switch (item.kind) {
+    case "url-open-request":
+      return "Browser requested";
     case "launch-consent":
       return item.consentState === "pending" ? "Approval required" : "Denied";
     case "wait":
@@ -131,6 +134,7 @@ function attentionStateLabel(item: AttentionItem): string {
 
 function attentionItemTimestamp(item: AttentionItem): string | undefined {
   switch (item.kind) {
+    case "url-open-request":
     case "launch-consent":
       return item.request.requestedAt;
     case "wait":
@@ -155,6 +159,7 @@ function formatAttentionTime(timestamp: string | undefined): string | undefined 
 }
 
 function AttentionPanel({
+  client,
   route,
   snapshot,
   group,
@@ -168,6 +173,7 @@ function AttentionPanel({
   onPatchPreferences,
 }: Pick<
   PortalRoutePanelProps,
+  | "client"
   | "route"
   | "snapshot"
   | "group"
@@ -443,6 +449,12 @@ function AttentionPanel({
                     )}
                   </small>
                   <p>{item.summary}</p>
+                  {item.kind === "url-open-request" && (
+                    <details>
+                      <summary>Full URL</summary>
+                      <code className="attention-request-url">{item.request.url}</code>
+                    </details>
+                  )}
                   {item.kind === "action" && diagnostic !== undefined && (
                     <p
                       className="attention-diagnostic"
@@ -458,12 +470,25 @@ function AttentionPanel({
                   )}
                 </div>
                 <div className="attention-item-actions">
-                  <button type="button" onClick={() => onNavigate(destination.path)}>
-                    {destination.label}
-                  </button>
+                  {item.kind === "url-open-request" ? (
+                    <UrlOpenAction
+                      item={item}
+                      client={client}
+                      onDismiss={onDismissAttentionItems}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      className="compact-button"
+                      onClick={() => onNavigate(destination.path)}
+                    >
+                      {destination.label}
+                    </button>
+                  )}
                   <button
                     type="button"
                     aria-label={`Dismiss ${item.title}`}
+                    className="compact-button"
                     onClick={() => void dismissAttentionItems([item])}
                   >
                     <X aria-hidden="true" size={14} />
@@ -475,48 +500,6 @@ function AttentionPanel({
           })}
         </ul>
       )}
-    </RouteSurface>
-  );
-}
-
-function AgentDirectory({
-  snapshot,
-  onNavigate,
-}: Pick<PortalRoutePanelProps, "snapshot" | "onNavigate">) {
-  return (
-    <RouteSurface
-      title="All agents"
-      eyebrow="Global directory"
-      description="All configured agents, provider models, and projected status across groups."
-    >
-      <ul className="workflow-list">
-        {snapshot.memberships
-          .filter((member) => member.state === "active")
-          .map((member) => {
-            const status = memberStatusView(snapshot.agentStatuses, snapshot.runs, member);
-            const { run } = status;
-            return (
-              <li className="workflow-row" key={member.id}>
-                <div>
-                  <strong>{member.alias}</strong>
-                  <small>
-                    {status.label} · {run?.effectiveModel ?? "provider model pending"}
-                  </small>
-                </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onNavigate(
-                      `/groups/${encodeURIComponent(member.groupId)}/terminals${run === undefined ? "" : `/${encodeURIComponent(run.id)}`}`,
-                    )
-                  }
-                >
-                  Open agent
-                </button>
-              </li>
-            );
-          })}
-      </ul>
     </RouteSurface>
   );
 }
@@ -988,18 +971,23 @@ export function PortalRoutePanel(props: PortalRoutePanelProps) {
     case "attention":
       return <AttentionPanel {...props} />;
     case "agents":
-      return <AgentDirectory snapshot={props.snapshot} onNavigate={props.onNavigate} />;
+      return (
+        <AgentDirectory
+          snapshot={props.snapshot}
+          config={props.config}
+          onNavigate={props.onNavigate}
+        />
+      );
     case "checkouts":
       return (
         <RouteSurface
-          title="Checkouts"
+          title="Team workspaces"
           eyebrow="Git workspaces"
-          description="Create, open, assign, inspect, and provenance-check managed worktrees."
+          description="Select a shared working tree for each team and manage repository worktrees."
         >
           <CheckoutWorkspace
             client={props.client}
             snapshot={props.snapshot}
-            config={props.config}
             onChanged={props.onRefresh}
           />
         </RouteSurface>

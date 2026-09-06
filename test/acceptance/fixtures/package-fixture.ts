@@ -16,6 +16,8 @@ import { test as base, expect, type TestInfo } from "@playwright/test";
 interface Group {
   id: string;
   name: string;
+  checkoutId?: string;
+  checkoutRevision: number;
 }
 
 interface RuntimeAgent {
@@ -32,6 +34,9 @@ interface Run {
   memberId: string;
   generation: number;
   status: string;
+  desiredState: string;
+  checkoutId?: string;
+  resolvedWorkingDirectory?: string;
   terminal?: { paneId: string };
 }
 
@@ -39,6 +44,14 @@ interface Snapshot {
   groups: Group[];
   memberships: RuntimeAgent[];
   runs: Run[];
+  checkouts: Array<{ id: string; path: string; kind: string; branch?: string }>;
+  worktrees: Array<{
+    id: string;
+    checkoutId: string;
+    branch: string;
+    operationGeneration: number;
+    state: string;
+  }>;
 }
 
 interface McpResponse {
@@ -114,7 +127,9 @@ async function waitForExit(child: ChildProcess): Promise<void> {
 }
 
 export class PackageAcceptanceService {
+  readonly root: string;
   readonly repository: string;
+  readonly configRoot: string;
   readonly port: number;
   readonly tmuxServer: string;
   readonly baseUrl: string;
@@ -124,8 +139,16 @@ export class PackageAcceptanceService {
   #operatorToken?: string;
   #log = createWriteStream("/dev/null");
 
-  private constructor(repository: string, port: number, tmuxServer: string) {
+  private constructor(
+    root: string,
+    repository: string,
+    configRoot: string,
+    port: number,
+    tmuxServer: string,
+  ) {
+    this.root = root;
     this.repository = repository;
+    this.configRoot = configRoot;
     this.port = port;
     this.tmuxServer = tmuxServer;
     this.baseUrl = `http://127.0.0.1:${port}`;
@@ -135,17 +158,23 @@ export class PackageAcceptanceService {
     this.#log = createWriteStream(this.logPath, { flags: "a" });
   }
 
-  static async create(browserName: string): Promise<PackageAcceptanceService> {
-    const repository = mkdtempSync(join(tmpdir(), "nanasa-acceptance-"));
+  static async create(
+    browserName: string,
+    options: { configSubdirectory?: string; integrationCwd?: string } = {},
+  ): Promise<PackageAcceptanceService> {
+    const root = mkdtempSync(join(tmpdir(), "nanasa-acceptance-"));
+    const repository = join(root, "repository");
+    mkdirSync(repository);
     const port = await freePort();
     const tmuxServer = `nanasa-e2e-${browserName}-${process.pid}-${randomUUID().slice(0, 8)}`;
     const initialized = spawnSync("git", ["init", "--quiet", repository], { encoding: "utf8" });
     if (initialized.status !== 0) {
       throw new Error(initialized.stderr || "Could not initialize acceptance Git repository");
     }
-    mkdirSync(join(repository, ".nanasa"));
+    const configRoot = join(repository, options.configSubdirectory ?? "");
+    mkdirSync(join(configRoot, ".nanasa"), { recursive: true });
     writeFileSync(
-      join(repository, ".nanasa", "config.yaml"),
+      join(configRoot, ".nanasa", "config.yaml"),
       [
         "version: 2",
         "repository: { path: ., checkout: { kind: current } }",
@@ -154,7 +183,7 @@ export class PackageAcceptanceService {
         "    name: Safe Echo",
         "    kind: opencode",
         `    command: [${JSON.stringify(process.execPath)}, ${JSON.stringify(echoAgentPath)}]`,
-        "    cwd: .",
+        `    cwd: ${JSON.stringify(options.integrationCwd ?? "packages/api")}`,
         "    providerState: { scope: integration }",
         "    credentials: { kind: provider-managed }",
         "    model: { resumePolicy: preserve-session }",
@@ -162,7 +191,41 @@ export class PackageAcceptanceService {
         "",
       ].join("\n"),
     );
-    const service = new PackageAcceptanceService(repository, port, tmuxServer);
+    mkdirSync(join(configRoot, "packages", "api"), { recursive: true });
+    writeFileSync(join(configRoot, "packages", "api", "README.md"), "# API fixture\n");
+    const committed = spawnSync(
+      "git",
+      [
+        "-C",
+        repository,
+        "-c",
+        "user.name=Nanasa Test",
+        "-c",
+        "user.email=nanasa@example.invalid",
+        "add",
+        ".",
+      ],
+      { encoding: "utf8" },
+    );
+    if (committed.status !== 0) throw new Error(committed.stderr);
+    const initialCommit = spawnSync(
+      "git",
+      [
+        "-C",
+        repository,
+        "-c",
+        "user.name=Nanasa Test",
+        "-c",
+        "user.email=nanasa@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "acceptance fixture",
+      ],
+      { encoding: "utf8" },
+    );
+    if (initialCommit.status !== 0) throw new Error(initialCommit.stderr);
+    const service = new PackageAcceptanceService(root, repository, configRoot, port, tmuxServer);
     try {
       await service.startDaemon();
       return service;
@@ -180,7 +243,7 @@ export class PackageAcceptanceService {
       process.execPath,
       [cliPath, "start", "--host", "127.0.0.1", "--port", String(this.port), "--mcp"],
       {
-        cwd: this.repository,
+        cwd: this.configRoot,
         env: { ...process.env, NANASA_TMUX_SERVER: this.tmuxServer },
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -200,7 +263,7 @@ export class PackageAcceptanceService {
       return response.ok;
     });
     this.#operatorToken = readFileSync(
-      join(this.repository, ".nanasa", "runtime", "operator-secret"),
+      join(this.configRoot, ".nanasa", "runtime", "operator-secret"),
     ).toString("base64url");
     await waitFor("portal bootstrap URL", async () =>
       this.portalUrl.includes("#nanasa-bootstrap="),
@@ -350,11 +413,40 @@ export class PackageAcceptanceService {
   }
 
   async startAll(groupId: string): Promise<void> {
-    await this.request(`/api/v1/groups/${groupId}/runs/start-all`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    });
+    type StartOutcome = {
+      memberId: string;
+      status: string;
+      reason?: string;
+      error?: unknown;
+      request?: { id: string; subjectDigest: string; configRevision: string };
+    };
+    const start = () =>
+      this.request<{ outcomes: StartOutcome[] }>(`/api/v1/groups/${groupId}/runs/start-all`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+    let result = await start();
+    for (const outcome of result.outcomes) {
+      if (outcome.status !== "approval-required" || outcome.request === undefined) continue;
+      await this.request(`/api/v1/launch-consents/${outcome.request.id}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          expectedSubjectDigest: outcome.request.subjectDigest,
+          configRevision: outcome.request.configRevision,
+        }),
+      });
+    }
+    if (result.outcomes.some((outcome) => outcome.status === "approval-required")) {
+      result = await start();
+    }
+    const failures = result.outcomes.filter(
+      (outcome) => !["started", "already-running"].includes(outcome.status),
+    );
+    if (failures.length > 0) {
+      throw new Error(`Could not start echo agents: ${JSON.stringify(failures)}`);
+    }
     await waitFor("all echo agents to run", async () => {
       const snapshot = await this.snapshot();
       return (
@@ -445,7 +537,7 @@ export class PackageAcceptanceService {
       stdio: "ignore",
     });
     await new Promise<void>((resolveLog) => this.#log.end(resolveLog));
-    rmSync(this.repository, { recursive: true, force: true });
+    rmSync(this.root, { recursive: true, force: true });
   }
 }
 

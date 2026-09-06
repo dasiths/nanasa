@@ -161,6 +161,8 @@ interface GroupRow {
   name: string;
   order_index: number;
   membership_revision: number;
+  checkout_id: string | null;
+  checkout_revision: number;
   created_at: string;
   updated_at: string;
 }
@@ -721,11 +723,30 @@ export class NanasaStore {
 
   public listCheckouts(repositoryId?: string): Checkout[] {
     const rows = (repositoryId === undefined
-      ? this.#database.prepare("SELECT * FROM checkouts ORDER BY observed_at, id").all()
+      ? this.#database
+          .prepare(
+            `SELECT * FROM checkouts c
+             WHERE NOT EXISTS (
+               SELECT 1 FROM worktrees w
+               WHERE w.checkout_id = c.id AND w.state = 'removed'
+             )
+             ORDER BY observed_at, id`,
+          )
+          .all()
       : this.#database
-          .prepare("SELECT * FROM checkouts WHERE repository_id = ? ORDER BY observed_at, id")
+          .prepare(
+            `SELECT * FROM checkouts c
+             WHERE repository_id = ?
+               AND NOT EXISTS (
+                 SELECT 1 FROM worktrees w
+                 WHERE w.checkout_id = c.id AND w.state = 'removed'
+               )
+             ORDER BY observed_at, id`,
+          )
           .all(repositoryId)) as unknown as CheckoutRow[];
-    return rows.map((row) => this.#hydrateCheckout(row));
+    return rows
+      .map((row) => this.#hydrateCheckout(row))
+      .filter((checkout) => existsSync(checkout.path));
   }
 
   public getCheckout(checkoutId: string): Checkout {
@@ -1008,13 +1029,6 @@ export class NanasaStore {
         priorMembershipIdentity.set(membership.group_id, identity);
       }
       for (const identity of priorMembershipIdentity.values()) identity.sort();
-      const primaryCheckout = this.#database
-        .prepare(
-          `SELECT c.id FROM checkouts c
-           JOIN repositories r ON r.primary_checkout_id = c.id
-           ORDER BY r.created_at, r.id LIMIT 1`,
-        )
-        .get() as { id: string } | undefined;
       for (const [groupOrder, { groupId, group: configuredGroup }] of configuredGroups.entries()) {
         const existingGroup = this.#database
           .prepare("SELECT * FROM groups WHERE id = ?")
@@ -1060,18 +1074,6 @@ export class NanasaStore {
           desiredMemberships.map(([membershipId]) => membershipId),
         );
         for (const [memberOrder, [agentId, agent]] of desiredMemberships.entries()) {
-          const checkoutId = agent.checkoutId ?? primaryCheckout?.id;
-          if (
-            checkoutId !== undefined &&
-            this.#database.prepare("SELECT 1 FROM checkouts WHERE id = ?").get(checkoutId) ===
-              undefined
-          ) {
-            throw new DomainError(
-              "configured_checkout_not_found",
-              `Checkout ${checkoutId} is not available on this machine`,
-              409,
-            );
-          }
           this.#database
             .prepare(
               `INSERT INTO memberships
@@ -1096,7 +1098,7 @@ export class NanasaStore {
               agentId,
               agent.name,
               agent.roleId ?? null,
-              checkoutId ?? null,
+              null,
               memberOrder,
               timestamp,
             );
@@ -1401,12 +1403,6 @@ export class NanasaStore {
           )
           .get(groupId) as { value: number }
       ).value;
-      const checkout = this.#database
-        .prepare(
-          `SELECT c.id FROM checkouts c JOIN repositories r ON r.primary_checkout_id = c.id
-           ORDER BY r.created_at, r.id LIMIT 1`,
-        )
-        .get() as { id: string } | undefined;
       const membership = GroupMembershipSchema.parse({
         id: existing?.id ?? `membership_${randomUUID()}`,
         groupId,
@@ -1414,7 +1410,6 @@ export class NanasaStore {
         agentProfileId: input.agentProfileId,
         alias: input.alias,
         roleId: input.roleId,
-        checkoutId: checkout?.id,
         order,
         state: "active",
         joinedAt: timestamp,
@@ -1435,7 +1430,7 @@ export class NanasaStore {
             membership.agentProfileId,
             membership.alias,
             membership.roleId ?? null,
-            membership.checkoutId ?? null,
+            null,
             membership.order,
             membership.joinedAt,
           );
@@ -1717,6 +1712,117 @@ export class NanasaStore {
 
   public getGroup(groupId: string): Group {
     return this.#requireGroup(groupId);
+  }
+
+  public getEffectiveGroupCheckout(groupId: string): Checkout | undefined {
+    const group = this.#requireGroup(groupId);
+    if (group.checkoutId !== undefined) return this.getCheckout(group.checkoutId);
+    const row = this.#database
+      .prepare(
+        `SELECT c.* FROM checkouts c
+         JOIN repositories r ON r.primary_checkout_id = c.id
+         ORDER BY r.created_at, r.id LIMIT 1`,
+      )
+      .get() as unknown as CheckoutRow | undefined;
+    return row === undefined ? undefined : this.#hydrateCheckout(row);
+  }
+
+  public listGroupsBoundToCheckout(checkoutId: string): Group[] {
+    return (
+      this.#database
+        .prepare("SELECT * FROM groups WHERE checkout_id = ? ORDER BY order_index, id")
+        .all(checkoutId) as unknown as GroupRow[]
+    ).map((row) => this.#hydrateGroup(row));
+  }
+
+  public validateGroupCheckoutAssignment(
+    groupId: string,
+    checkoutId: string,
+    expectedCheckoutRevision: number,
+  ): { group: Group; checkout: Checkout } {
+    const group = this.#requireGroup(groupId);
+    if (group.checkoutRevision !== expectedCheckoutRevision) {
+      throw new DomainError(
+        "group_checkout_revision_stale",
+        "The team workspace changed; refresh and try again",
+        409,
+      );
+    }
+    const checkout = this.getCheckout(checkoutId);
+    if (checkout.kind === "bare") {
+      throw new DomainError("bare_checkout_cannot_run", "Teams cannot use a bare checkout", 409);
+    }
+    if (!existsSync(checkout.path) || !statSync(checkout.path).isDirectory()) {
+      throw new DomainError(
+        "checkout_unavailable",
+        "The checkout working directory is unavailable",
+        409,
+      );
+    }
+    const managed = this.#database
+      .prepare("SELECT state FROM worktrees WHERE checkout_id = ?")
+      .get(checkout.id) as { state: string } | undefined;
+    if (managed !== undefined && managed.state !== "ready") {
+      throw new DomainError("checkout_unavailable", "The managed worktree is not ready", 409);
+    }
+    if (checkout.kind === "linked") {
+      const owner = this.#database
+        .prepare("SELECT id, name FROM groups WHERE checkout_id = ? AND id != ? LIMIT 1")
+        .get(checkout.id, groupId) as { id: string; name: string } | undefined;
+      if (owner !== undefined) {
+        throw new DomainError(
+          "checkout_already_assigned",
+          `The checkout is already assigned to ${owner.name}`,
+          409,
+          { groupId: owner.id },
+        );
+      }
+    }
+    const memberships = this.#database
+      .prepare("SELECT * FROM memberships WHERE group_id = ? AND state = 'active'")
+      .all(groupId) as unknown as MembershipRow[];
+    for (const membership of memberships) {
+      const profile = this.#requireAgentProfile(membership.agent_profile_id);
+      this.#resolveCheckoutWorkingDirectory(checkout, profile.workingDirectory);
+    }
+    return { group, checkout };
+  }
+
+  public assignGroupCheckout(
+    groupId: string,
+    checkoutId: string,
+    expectedCheckoutRevision: number,
+  ): Group {
+    const { group: current, checkout } = this.validateGroupCheckoutAssignment(
+      groupId,
+      checkoutId,
+      expectedCheckoutRevision,
+    );
+    if (this.listGroupRunsRequiringStop(groupId).length > 0) {
+      throw new DomainError(
+        "active_run_group_checkout_change_requires_stop",
+        "Stop every agent in the team before changing its workspace",
+        409,
+      );
+    }
+    return this.#transaction(() => {
+      const timestamp = new Date().toISOString();
+      this.#database
+        .prepare(
+          `UPDATE groups
+           SET checkout_id = ?, checkout_revision = checkout_revision + 1, updated_at = ?
+           WHERE id = ? AND checkout_revision = ?`,
+        )
+        .run(checkout.id, timestamp, groupId, expectedCheckoutRevision);
+      const group = this.#requireGroup(groupId);
+      this.#appendEvent("group.checkout-assigned", "group", groupId, {
+        groupId,
+        previousCheckoutId: current.checkoutId,
+        checkoutId: checkout.id,
+        checkoutRevision: group.checkoutRevision,
+      });
+      return group;
+    });
   }
 
   public listAgentStatuses(groupId: string, operatorId?: string): AgentStatusSummary[] {
@@ -5542,6 +5648,8 @@ export class NanasaStore {
       name: row.name,
       order: row.order_index,
       membershipRevision: row.membership_revision,
+      checkoutId: row.checkout_id ?? undefined,
+      checkoutRevision: row.checkout_revision,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     });
@@ -5570,7 +5678,6 @@ export class NanasaStore {
       agentProfileId: row.agent_profile_id,
       alias: row.alias,
       roleId: row.role_id ?? undefined,
-      checkoutId: row.checkout_id ?? undefined,
       order: row.order_index,
       state: row.state,
       joinedAt: row.joined_at,
@@ -5706,12 +5813,22 @@ export class NanasaStore {
     membership: MembershipRow,
     configuredWorkingDirectory: string | undefined,
   ): { checkoutId?: string; workingDirectory?: string } {
-    if (membership.checkout_id === null) {
+    const checkout = this.getEffectiveGroupCheckout(membership.group_id);
+    if (checkout === undefined) {
       return configuredWorkingDirectory === undefined
         ? {}
         : { workingDirectory: configuredWorkingDirectory };
     }
-    const checkout = this.getCheckout(membership.checkout_id);
+    return {
+      checkoutId: checkout.id,
+      workingDirectory: this.#resolveCheckoutWorkingDirectory(checkout, configuredWorkingDirectory),
+    };
+  }
+
+  #resolveCheckoutWorkingDirectory(
+    checkout: Checkout,
+    configuredWorkingDirectory: string | undefined,
+  ): string {
     if (checkout.kind === "bare") {
       throw new DomainError(
         "bare_checkout_cannot_run",
@@ -5760,7 +5877,7 @@ export class NanasaStore {
         409,
       );
     }
-    return { checkoutId: checkout.id, workingDirectory: canonical };
+    return canonical;
   }
 
   #hydrateMessage(row: MessageRow): Message {

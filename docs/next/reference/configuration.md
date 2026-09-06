@@ -59,9 +59,10 @@ A group map key is its stable ID. A group needs `name` and may set zero-based
 
 Each agent map key must be unique across the repository. The object needs a
 `memberId`, `name`, and existing `integrationId`. Optional fields are `roleId`,
-`checkoutId`, `desiredModel`, `instructions`, and zero-based `order`.
-`memberId` must be unique within its group. The agent map key, not `memberId`, is
-used by provider login and topology commands.
+`desiredModel`, `instructions`, and zero-based `order`. `memberId` must be unique
+within its group. The agent map key, not `memberId`, is used by provider login
+and topology commands. Team checkout bindings are local runtime state and do not
+belong in this file.
 
 `model.model` sets the desired model for every agent using an integration.
 `desiredModel` overrides it for one agent. Both values are provider-specific

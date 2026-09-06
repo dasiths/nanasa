@@ -1,5 +1,7 @@
+import { existsSync, statSync } from "node:fs";
 import type { Checkout, GitStatusProjection, Repository } from "@nanasa/contracts";
 import type { NanasaStore } from "../store.js";
+import { DomainError } from "../store.js";
 import { GitStatusService } from "./git-status-service.js";
 import { RepositoryDiscoveryService } from "./repository-discovery-service.js";
 
@@ -30,13 +32,24 @@ export class CheckoutService {
 
   public async refresh(checkoutId: string): Promise<GitStatusProjection> {
     const current = this.store.getCheckout(checkoutId);
+    if (!existsSync(current.path) || !statSync(current.path).isDirectory()) {
+      throw new DomainError(
+        "checkout_unavailable",
+        "The checkout working directory is unavailable",
+        409,
+      );
+    }
     const discovered = await this.discovery.discover(current.path);
     if (
       discovered.repository.id !== current.repositoryId ||
       discovered.checkout.id !== current.id ||
       discovered.checkout.path !== current.path
     ) {
-      throw new Error("Checkout identity changed during Git status refresh");
+      throw new DomainError(
+        "checkout_identity_changed",
+        "Checkout identity changed during Git status refresh",
+        409,
+      );
     }
     const status = await this.statuses.inspect(discovered.checkout);
     this.store.saveDiscoveredCheckout(discovered.repository, {

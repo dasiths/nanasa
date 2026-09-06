@@ -66,6 +66,8 @@ function ready(runId: string): TerminalEndpointStatus {
 function client(): PortalClient {
   return {
     createConsole: vi.fn(),
+    listUrlOpenRequests: vi.fn().mockResolvedValue([]),
+    getUrlOpenRequest: vi.fn(),
     closeConsole: vi.fn(),
     loadMetadata: vi.fn(),
     loadSnapshot: vi.fn<() => Promise<PortalSnapshot>>(),
@@ -87,6 +89,9 @@ function client(): PortalClient {
     removeProviderExtension: vi.fn(),
     retainProviderState: vi.fn(),
     deleteProviderState: vi.fn(),
+    refreshCheckout: vi.fn(),
+    listCheckoutReferences: vi.fn().mockResolvedValue([]),
+    fetchCheckout: vi.fn().mockResolvedValue([]),
     createGroup: vi.fn(),
     updateGroup: vi.fn(),
     deleteGroup: vi.fn(),

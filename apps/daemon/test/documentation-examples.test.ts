@@ -223,6 +223,38 @@ describe("tested documentation examples", () => {
     expect(reviewer?.name).toBe("Reviewer");
     expect(loaded.config.roles[reviewer!.roleId!]?.permissionPolicy).toBe("read-only");
 
+    expect(Object.keys(loaded.config.groups)).toEqual([groupId, "team-frontend"]);
+    expect(Object.keys(loaded.config.groups[groupId]!.agents)).toEqual(
+      Object.keys(expectedRolePaths),
+    );
+    const frontend = loaded.config.groups["team-frontend"]!;
+    expect(frontend.name).toBe("Frontend Team");
+    expect(Object.keys(frontend.agents)).toEqual(["frontend-builder", "frontend-reviewer"]);
+    for (const [agentId, agent] of Object.entries(frontend.agents)) {
+      expect(agent).not.toHaveProperty("checkoutId");
+      expect(loaded.config.integrations[agent.integrationId]?.cwd).toBe(multiCodingAgentsRoot);
+      expect(loaded.config.integrations[agent.integrationId]?.providerState.scope).toBe(
+        "membership",
+      );
+      const prompt = resolveEffectiveAgentPrompt({
+        repoRoot: loaded.repoRoot,
+        config: loaded.config,
+        groupId: "team-frontend",
+        agentId,
+      });
+      expect(prompt.sources).toContainEqual({
+        scope: "group",
+        reference: ".nanasa/instructions/groups/frontend-team.md",
+      });
+      expect(prompt.sources).not.toContainEqual({
+        scope: "group",
+        reference: ".nanasa/instructions/groups/agent-team.md",
+      });
+    }
+    expect(
+      loaded.config.roles[frontend.agents["frontend-reviewer"]!.roleId!]?.permissionPolicy,
+    ).toBe("read-only");
+
     const trackedExampleFiles = execFileSync(
       "git",
       ["-C", productRoot, "ls-files", "--", "examples/multi-coding-agents/.nanasa"],

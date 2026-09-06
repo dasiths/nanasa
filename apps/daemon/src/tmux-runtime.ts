@@ -730,6 +730,9 @@ export class TmuxRuntime {
       ...(await this.#runtimeEnvironment(run)),
       ...provisioned?.environment,
     };
+    if (environment.NANASA_BROWSER_BIN !== undefined) {
+      environment.PATH = `${environment.NANASA_BROWSER_BIN}:${environment.PATH ?? process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"}`;
+    }
     const launchArguments =
       provisioned === undefined ? [profile.command, ...profile.args] : [...provisioned.command];
     if (provisioned !== undefined) {

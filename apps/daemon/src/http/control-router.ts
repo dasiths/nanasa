@@ -9,7 +9,8 @@ import {
   AgentStatusDetailSchema,
   AgentStatusSummarySchema,
   ApproveCustomLaunchConsentCommandSchema,
-  AssignAgentCheckoutCommandSchema,
+  AssignGroupCheckoutCommandSchema,
+  AssignGroupCheckoutResultSchema,
   AttentionDismissalListSchema,
   AttentionEventTypeSchema,
   AttentionSubscriptionsSnapshotSchema,
@@ -27,6 +28,8 @@ import {
   DismissAttentionItemsCommandSchema,
   EventServerFrameSchema,
   ExtensionLifecycleCommandSchema,
+  GitReferenceListSchema,
+  GitStatusProjectionSchema,
   InstallProviderExtensionCommandSchema,
   InterruptAgentRunCommandSchema,
   MemberAttentionSubscriptionsSchema,
@@ -101,6 +104,7 @@ import type { TerminalGateway } from "../terminal/terminal-gateway.js";
 import type { TerminalReadService } from "../terminal/terminal-read-service.js";
 import type { TopologyOrderService } from "../topology-order-service.js";
 import type { TopologyService } from "../topology-service.js";
+import type { UrlOpenService } from "../url-open-service.js";
 import { isValidationError, toPublicErrorResponse } from "./error-response.js";
 import {
   type ControlRouteDeclaration,
@@ -117,6 +121,7 @@ export interface ControlRouterServices {
   store: NanasaStore;
   repositoryIdentity: string;
   launchConsent: LaunchConsentService;
+  urlOpenService: UrlOpenService;
   auth: OperatorAuth;
   providerStates: ProviderStateRepository;
   extensions: ProviderExtensionService;
@@ -496,6 +501,16 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
       ),
     ),
   );
+  register("groups.assignCheckout", async (request) =>
+    AssignGroupCheckoutResultSchema.parse(
+      await services.coordinator.assignGroupCheckout(
+        record(request.params).groupId ?? "",
+        AssignGroupCheckoutCommandSchema.parse(
+          routeBody(controlRoute("groups.assignCheckout"), request),
+        ),
+      ),
+    ),
+  );
 
   register("agents.list", (request) =>
     services.store
@@ -551,18 +566,6 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
       ),
     ),
   );
-  register("agents.assignCheckout", async (request, reply) => {
-    const command = AssignAgentCheckoutCommandSchema.parse(
-      routeBody(controlRoute("agents.assignCheckout"), request),
-    );
-    await services.topologyOrder.assignCheckout(
-      record(request.params).groupId ?? "",
-      record(request.params).agentId ?? "",
-      command.checkoutId,
-    );
-    return reply.status(204).send();
-  });
-
   register("roles.list", () => services.config.load().config.roles);
   register("roles.get", (request) => {
     const role = services.config.load().config.roles[record(request.params).roleId ?? ""];
@@ -724,6 +727,14 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
         principal.operatorId,
       ),
     );
+  });
+  register("urlOpenRequests.list", (request) => {
+    operatorPrincipal(services, request);
+    return services.urlOpenService.list();
+  });
+  register("urlOpenRequests.get", (request) => {
+    operatorPrincipal(services, request);
+    return services.urlOpenService.get(record(request.params).requestId ?? "");
   });
   register("attentionDismissals.list", (request) => {
     const principal = operatorPrincipal(services, request);
@@ -939,13 +950,36 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
       .list(record(request.params).repositoryId)
       .map((item) => CheckoutSchema.parse(item)),
   );
-  register("checkouts.open", async (request) =>
-    WorktreeOperationResultSchema.parse(
-      await services.worktrees.open(
-        OpenCheckoutCommandSchema.parse(routeBody(controlRoute("checkouts.open"), request)),
-      ),
+  register("checkouts.refresh", async (request) =>
+    GitStatusProjectionSchema.parse(
+      await services.checkouts.refresh(record(request.params).checkoutId ?? ""),
     ),
   );
+  register("checkouts.references", async (request) =>
+    GitReferenceListSchema.parse(
+      await services.worktrees.listReferences(record(request.params).checkoutId ?? ""),
+    ),
+  );
+  register("checkouts.fetch", async (request) =>
+    GitStatusProjectionSchema.array().parse(
+      await services.worktrees.fetch(record(request.params).checkoutId ?? ""),
+    ),
+  );
+  register("checkouts.open", async (request) => {
+    const command = OpenCheckoutCommandSchema.parse(
+      routeBody(controlRoute("checkouts.open"), request),
+    );
+    const result = await services.worktrees.open(command);
+    const assignment =
+      command.groupId === undefined || result.checkout === undefined
+        ? undefined
+        : await services.coordinator.assignGroupCheckout(command.groupId, {
+            checkoutId: result.checkout.id,
+            expectedCheckoutRevision: command.expectedCheckoutRevision!,
+            switchPolicy: command.switchPolicy ?? "require-stopped",
+          });
+    return WorktreeOperationResultSchema.parse({ ...result, assignment });
+  });
   register("worktrees.list", (request) =>
     services.worktrees
       .list(record(request.params).repositoryId ?? "")
@@ -955,12 +989,16 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     const command = CreateWorktreeCommandSchema.parse(
       routeBody(controlRoute("worktrees.create"), request),
     );
-    const assignments = services.topologyOrder.assertAgentsStopped(command.assignAgentIds);
     const result = await services.worktrees.create(command);
-    if (result.checkout !== undefined && assignments.length > 0) {
-      await services.topologyOrder.assignCheckoutToAgents(assignments, result.checkout.id);
-    }
-    return reply.status(201).send(WorktreeOperationResultSchema.parse(result));
+    const assignment =
+      command.groupId === undefined || result.checkout === undefined
+        ? undefined
+        : await services.coordinator.assignGroupCheckout(command.groupId, {
+            checkoutId: result.checkout.id,
+            expectedCheckoutRevision: command.expectedCheckoutRevision!,
+            switchPolicy: command.switchPolicy ?? "require-stopped",
+          });
+    return reply.status(201).send(WorktreeOperationResultSchema.parse({ ...result, assignment }));
   });
   register("worktrees.delete", async (request) =>
     WorktreeOperationResultSchema.parse(

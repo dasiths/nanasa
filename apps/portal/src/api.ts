@@ -1,4 +1,7 @@
 import {
+  type UrlOpenRequest,
+  UrlOpenRequestListSchema,
+  UrlOpenRequestSchema,
   type AdHocConsoleSession,
   AdHocConsoleSessionSchema,
   type AgentAction,
@@ -11,8 +14,9 @@ import {
   AgentStatusDetailSchema,
   type ApproveCustomLaunchConsentCommand,
   ApproveCustomLaunchConsentCommandSchema,
-  type AssignAgentCheckoutCommand,
-  AssignAgentCheckoutCommandSchema,
+  type AssignGroupCheckoutCommand,
+  AssignGroupCheckoutCommandSchema,
+  type AssignGroupCheckoutResult,
   type AttentionDismissalList,
   AttentionDismissalListSchema,
   type AttentionEventType,
@@ -51,6 +55,8 @@ import {
   type ExtensionLifecycleCommand,
   type ExtensionTrustReceipt,
   ExtensionTrustReceiptSchema,
+  type GitReference,
+  type GitStatusProjection,
   type Group,
   type GroupMembership,
   GroupMembershipSchema,
@@ -203,9 +209,11 @@ export interface PortalClient {
   ): Promise<ReparentGroupAgentResult>;
   assignCheckout(
     groupId: string,
-    agentId: string,
-    command: AssignAgentCheckoutCommand,
-  ): Promise<void>;
+    command: AssignGroupCheckoutCommand,
+  ): Promise<AssignGroupCheckoutResult>;
+  refreshCheckout(checkoutId: string): Promise<GitStatusProjection>;
+  listCheckoutReferences(checkoutId: string): Promise<GitReference[]>;
+  fetchCheckout(checkoutId: string): Promise<GitStatusProjection[]>;
   createWorktree(command: CreateWorktreeCommand): Promise<WorktreeOperationResult>;
   openCheckout(command: OpenCheckoutCommand): Promise<WorktreeOperationResult>;
   removeWorktree(
@@ -256,6 +264,8 @@ export interface PortalClient {
   replyOpenWait(waitId: string, command: ReplyOpenWaitCommand): Promise<OpenWait>;
   acknowledgeCompletion(groupId: string, memberId: string): Promise<AgentStatusDetail>;
   listAttentionDismissals(): Promise<AttentionDismissalList>;
+  listUrlOpenRequests(): Promise<UrlOpenRequest[]>;
+  getUrlOpenRequest(requestId: string): Promise<UrlOpenRequest>;
   dismissAttentionItems(command: DismissAttentionItemsCommand): Promise<AttentionDismissalList>;
   listAttentionSubscriptions(): Promise<AttentionSubscriptionsSnapshot>;
   setAttentionSubscription(
@@ -446,12 +456,11 @@ export const api: PortalClient = {
       agentId,
       ReparentGroupAgentCommandSchema.parse(command),
     ),
-  assignCheckout: (groupId, agentId, command) =>
-    resources.workspace.assignCheckout(
-      groupId,
-      agentId,
-      AssignAgentCheckoutCommandSchema.parse(command),
-    ),
+  assignCheckout: (groupId, command) =>
+    resources.topology.assignCheckout(groupId, AssignGroupCheckoutCommandSchema.parse(command)),
+  refreshCheckout: (checkoutId) => resources.workspace.refreshCheckout(checkoutId),
+  listCheckoutReferences: (checkoutId) => resources.workspace.listCheckoutReferences(checkoutId),
+  fetchCheckout: (checkoutId) => resources.workspace.fetchCheckout(checkoutId),
   createWorktree: (command) =>
     resources.workspace.createWorktree(CreateWorktreeCommandSchema.parse(command)),
   openCheckout: (command) =>
@@ -559,6 +568,13 @@ export const api: PortalClient = {
     ),
   listAttentionDismissals: () =>
     request(`${CONTROL_API_PREFIX}/attention-dismissals`, AttentionDismissalListSchema),
+  listUrlOpenRequests: () =>
+    request(`${CONTROL_API_PREFIX}/url-open-requests`, UrlOpenRequestListSchema),
+  getUrlOpenRequest: (requestId) =>
+    request(
+      `${CONTROL_API_PREFIX}/url-open-requests/${encodeURIComponent(requestId)}`,
+      UrlOpenRequestSchema,
+    ),
   dismissAttentionItems: (command) =>
     request(
       `${CONTROL_API_PREFIX}/attention-dismissals`,

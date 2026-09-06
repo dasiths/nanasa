@@ -1,5 +1,6 @@
 import type { RoleDefinition, RolePresentationIcon } from "@nanasa/contracts";
 import {
+  Bot,
   BriefcaseBusiness,
   ClipboardList,
   Code,
@@ -25,6 +26,22 @@ export function roleColorClass(role: RoleDefinition | undefined): string {
   return `role-color-${role?.presentation?.color ?? "slate"}`;
 }
 
+export function RoleGlyph({
+  role,
+  size = 13,
+}: {
+  role: RoleDefinition | undefined;
+  size?: number;
+}) {
+  const Icon =
+    role === undefined
+      ? Bot
+      : role.presentation === undefined
+        ? BriefcaseBusiness
+        : roleIcons[role.presentation.icon];
+  return <Icon aria-hidden="true" size={size} />;
+}
+
 export function RoleIdentity({
   role,
   compact = false,
@@ -41,7 +58,6 @@ export function RoleIdentity({
   }
 
   const presentation = role.presentation;
-  const Icon = presentation === undefined ? BriefcaseBusiness : roleIcons[presentation.icon];
   const label = compact ? (presentation?.shortName ?? role.name) : role.name;
 
   return (
@@ -50,7 +66,7 @@ export function RoleIdentity({
       aria-label={`Role ${role.name}`}
       title={role.name}
     >
-      <Icon aria-hidden="true" size={13} />
+      <RoleGlyph role={role} />
       <span>{label}</span>
     </span>
   );

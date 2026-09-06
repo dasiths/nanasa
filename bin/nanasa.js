@@ -25,6 +25,7 @@ Commands:
   setup              Prepare repository-local integration configuration homes
   doctor             Validate configuration, commands, and integration homes
   docs               Print the absolute path to the packaged documentation index
+  open-url <url>     Request a browser open in the portal from a managed agent
   auth               Authenticate locally or inspect daemon auth state
   reset              Back up and destructively reset alpha config, state, and owned runtimes
 
@@ -216,6 +217,11 @@ async function start(startPath, args) {
 
 export async function main(args = process.argv.slice(2), startPath = process.cwd()) {
   const [command = "start", ...rest] = args;
+  if (command === "open-url") {
+    const { requestBrowserOpen } = await import("./nanasa-open-url.js");
+    await requestBrowserOpen(rest);
+    return;
+  }
   if (command === "-h" || command === "--help" || command === "help") {
     process.stdout.write(`${usage()}\n`);
     return;

@@ -636,11 +636,6 @@
                     "maxLength": 64,
                     "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
                   },
-                  "checkoutId": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 128
-                  },
                   "desiredModel": {
                     "type": "string",
                     "minLength": 1,
@@ -714,6 +709,9 @@
                       },
                       "unread-message": {
                         "type": "boolean"
+                      },
+                      "url-open-request": {
+                        "type": "boolean"
                       }
                     },
                     "additionalProperties": false
@@ -764,7 +762,8 @@
             "action-state": false,
             "provider-update-failed": true,
             "provider-update-succeeded": false,
-            "unread-message": false
+            "unread-message": false,
+            "url-open-request": true
           }
         },
         "type": "object",
@@ -778,7 +777,8 @@
               "action-state": false,
               "provider-update-failed": true,
               "provider-update-succeeded": false,
-              "unread-message": false
+              "unread-message": false,
+              "url-open-request": true
             },
             "type": "object",
             "properties": {
@@ -804,6 +804,10 @@
                 "type": "boolean"
               },
               "unread-message": {
+                "type": "boolean"
+              },
+              "url-open-request": {
+                "default": true,
                 "type": "boolean"
               }
             },

@@ -214,7 +214,6 @@ export const ConfiguredAgentSchema = z
     name: z.string().trim().min(1).max(100),
     integrationId: IntegrationIdSchema,
     roleId: RoleIdSchema.optional(),
-    checkoutId: IdentifierSchema.optional(),
     desiredModel: z.string().trim().min(1).max(256).optional(),
     instructions: z.array(InstructionPathSchema).max(32).default([]),
     providerFiles: ProviderFileSelectionSchema.optional(),

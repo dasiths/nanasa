@@ -1399,7 +1399,9 @@ export function GroupTree({
                     const actionKey = `${group.id}:${agentId}`;
                     const integration = config.integrations[agent.integrationId];
                     const checkout = snapshot.checkouts.find(
-                      (candidate) => candidate.id === member.checkoutId,
+                      (candidate) =>
+                        candidate.id ===
+                        (group.checkoutId ?? snapshot.repositories[0]?.primaryCheckoutId),
                     );
                     const role =
                       agent.roleId === undefined ? undefined : config.roles[agent.roleId];

@@ -1,6 +1,5 @@
 import type {
   ConfiguredGroup,
-  NanasaConfig,
   ReorderGroupAgentsCommand,
   ReorderGroupAgentsResult,
   ReorderGroupsCommand,
@@ -163,77 +162,6 @@ export class TopologyOrderService {
     };
     this.store.recordRuntimeEvent("agent.reparented", "membership", agentId, result);
     return result;
-  }
-
-  public async assignCheckout(groupId: string, agentId: string, checkoutId: string): Promise<void> {
-    await this.assignCheckoutToAgents([{ groupId, agentId }], checkoutId);
-  }
-
-  public assertAgentsStopped(
-    agentIds: readonly string[],
-  ): Array<{ groupId: string; agentId: string }> {
-    const config = this.repository.load().config;
-    return agentIds.map((agentId) => {
-      const groupId = Object.entries(config.groups).find(
-        ([, group]) => group.agents[agentId] !== undefined,
-      )?.[0];
-      if (groupId === undefined)
-        throw new DomainError("agent_not_found", `Agent ${agentId} not found`, 404);
-      this.#assertAgentStopped(groupId, agentId);
-      return { groupId, agentId };
-    });
-  }
-
-  public async assignCheckoutToAgents(
-    agents: readonly { groupId: string; agentId: string }[],
-    checkoutId: string,
-  ): Promise<void> {
-    for (const { groupId, agentId } of agents) this.#assertAgentStopped(groupId, agentId);
-    const checkout = this.store.getCheckout(checkoutId);
-    if (checkout.kind === "bare") {
-      throw new DomainError("bare_checkout_cannot_run", "Agents cannot use a bare checkout", 409);
-    }
-    const mutation = await this.repository.mutate((config: NanasaConfig) => {
-      const groups = { ...config.groups };
-      for (const { groupId, agentId } of agents) {
-        const group = groups[groupId];
-        const agent = group?.agents[agentId];
-        if (group === undefined || agent === undefined) {
-          throw new DomainError("agent_not_found", "Agent not found", 404);
-        }
-        groups[groupId] = {
-          ...group,
-          agents: { ...group.agents, [agentId]: { ...agent, checkoutId } },
-        };
-      }
-      return { config: { ...config, groups }, result: checkoutId };
-    });
-    this.store.reconcileTopology(mutation.loaded.config, mutation.loaded.status);
-    for (const { groupId, agentId } of agents) {
-      this.store.recordRuntimeEvent("membership.checkout-assigned", "membership", agentId, {
-        groupId,
-        agentId,
-        checkoutId,
-      });
-    }
-  }
-
-  #assertAgentStopped(groupId: string, agentId: string): void {
-    const membership = this.store
-      .listActiveMemberships(groupId)
-      .find((candidate) => candidate.id === agentId);
-    if (membership === undefined) throw new DomainError("agent_not_found", "Agent not found", 404);
-    const latest = this.store.getLatestRunForMembership(groupId, membership.memberId);
-    if (
-      this.store.getActiveRun(groupId, membership.memberId) !== undefined ||
-      latest?.desiredState === "running"
-    ) {
-      throw new DomainError(
-        "active_run_checkout_change_refused",
-        "Stop the agent before assigning another checkout",
-        409,
-      );
-    }
   }
 
   #assertRevision(expected: number): void {

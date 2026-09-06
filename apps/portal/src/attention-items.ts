@@ -13,10 +13,12 @@ import type {
   GroupMembership,
   OpenWait,
   PortalSnapshot,
+  UrlOpenRequest,
 } from "@nanasa/contracts";
 import { type MemberStatusView, memberStatusView } from "./member-status.js";
 
 export type AttentionReviewKind =
+  | "url-open-request"
   | "launch-consent"
   | "wait"
   | "response"
@@ -81,6 +83,14 @@ export interface LaunchConsentAttentionItem
   request: CustomLaunchConsentRequest;
   consentState: "pending" | "denied";
   providerUpdate: boolean;
+}
+
+export interface UrlOpenAttentionItem
+  extends AttentionItemBase<"url-open-request", "response", "high", true> {
+  memberId: string;
+  runId: string;
+  generation: number;
+  request: UrlOpenRequest;
 }
 
 export interface ResponseAttentionItem
@@ -150,6 +160,7 @@ export interface ProviderUpdateAttentionItem
 }
 
 export type AttentionReviewItem =
+  | UrlOpenAttentionItem
   | LaunchConsentAttentionItem
   | WaitAttentionItem
   | ResponseAttentionItem
@@ -174,6 +185,7 @@ export interface AttentionProjectionOptions {
   workspaces?: AttentionWorkspaceCollection;
   unreadCounts?: AttentionUnreadCounts;
   launchConsents?: readonly CustomLaunchConsentRequest[];
+  urlOpenRequests?: readonly UrlOpenRequest[];
 }
 
 export type AttentionScope = { kind: "repository" } | { kind: "group"; groupId: string };
@@ -200,6 +212,7 @@ const activeActionStates = new Set<AgentActionState>([
 ]);
 
 const kindSortRank = {
+  "url-open-request": 0,
   "launch-consent": 0,
   wait: 1,
   response: 2,
@@ -291,8 +304,60 @@ function isProjectionOptions(
     !(input instanceof Map) &&
     (Object.hasOwn(input, "workspaces") ||
       Object.hasOwn(input, "unreadCounts") ||
+      Object.hasOwn(input, "urlOpenRequests") ||
       Object.hasOwn(input, "launchConsents"))
   );
+}
+
+function urlOpenItems(
+  snapshot: PortalSnapshot,
+  groups: ReadonlyMap<string, Group>,
+  requests: readonly UrlOpenRequest[] = [],
+): UrlOpenAttentionItem[] {
+  return requests.flatMap((request) => {
+    const group = groups.get(request.groupId);
+    const member = snapshot.memberships.find(
+      (candidate) =>
+        candidate.groupId === request.groupId &&
+        candidate.memberId === request.memberId &&
+        candidate.state === "active",
+    );
+    const run = snapshot.runs.find((candidate) => candidate.id === request.runId);
+    if (
+      group === undefined ||
+      member === undefined ||
+      run === undefined ||
+      run.generation !== request.generation ||
+      run.desiredState !== "running" ||
+      !["starting", "running"].includes(run.status) ||
+      Date.parse(request.expiresAt) <= Date.now()
+    )
+      return [];
+    const source = sourceIdentity("url-open-request", request.id);
+    const label = memberLabel(member, request.memberId);
+    return [
+      {
+        ...commonFields(source, group, {
+          memberId: request.memberId,
+          runId: request.runId,
+          generation: request.generation,
+          label,
+          title: `${label} wants to open a URL`,
+          summary: new URL(request.url).origin,
+          targetPath: `/attention#${encodeURIComponent(request.id)}`,
+        }),
+        kind: "url-open-request" as const,
+        category: "response" as const,
+        urgency: "high" as const,
+        counted: true as const,
+        review: true as const,
+        memberId: request.memberId,
+        runId: request.runId,
+        generation: request.generation,
+        request,
+      },
+    ];
+  });
 }
 
 function launchConsentItems(
@@ -799,6 +864,7 @@ export function deriveAttentionItems(
 
   return [
     ...consents,
+    ...urlOpenItems(snapshot, groups, options.urlOpenRequests),
     ...deduplicatedStatuses,
     ...workspace.items,
     ...providerUpdateItems(snapshot, groups),
@@ -809,6 +875,8 @@ export function deriveAttentionItems(
 
 export function attentionEventType(item: AttentionItem): AttentionEventType {
   switch (item.kind) {
+    case "url-open-request":
+      return "url-open-request";
     case "launch-consent":
     case "wait":
     case "response":
