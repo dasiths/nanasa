@@ -629,75 +629,81 @@ describe("RunRuntimeCoordinator", () => {
     }
   });
 
-  it("marks exhausted missing-pane recovery failed without launching another generation", async () => {
-    const store = new NanasaStore(":memory:");
-    const group = store.createGroup({ name: "Exhausted" });
-    const profile = store.createInternalAgentProfile({
-      name: "Terminal",
-      agentType: "opencode",
-      kind: "opencode",
-      command: "opencode",
-      args: [],
-      environment: {},
-    });
-    store.addMembership(group.id, {
-      memberId: "alpha",
-      agentProfileId: profile.id,
-      alias: "Alpha",
-    });
-    const run = store.createRun({
-      id: "run_exhausted",
-      groupId: group.id,
-      memberId: "alpha",
-      agentProfileId: profile.id,
-      generation: 3,
-      status: "running",
-      recoveryAttempts: 3,
-      recoveryPhase: "reconciling",
-      startedAt: "2026-08-10T12:00:00.000Z",
-    });
-    const runtime = {
-      reconcile: vi.fn(async () => undefined),
-      observeRun: vi.fn(async () => ({ kind: "dead" })),
-      recoverRun: vi.fn(),
-      removeViewSession: vi.fn(async () => undefined),
-      stopRun: vi.fn(async () => store.updateRunStatus(run.id, "stopped")),
-      removeStaleViewSessions: vi.fn(async () => undefined),
-      close: vi.fn(async () => undefined),
-    };
-    const coordinator = new RunRuntimeCoordinator(
-      store,
-      runtime as never,
-      {
-        stop: vi.fn(async () => undefined),
-        reconcile: vi.fn(async () => undefined),
-        close: vi.fn(async () => undefined),
-      } as never,
-      {
-        start: vi.fn(),
-        close: vi.fn(async () => undefined),
-      } as never,
-      { reconcileIntervalMs: 60_000 },
-    );
-    try {
-      await coordinator.reconcile();
-      expect(store.getRun(run.id)).toMatchObject({
-        recoveryPhase: "failed",
+  it.each(["reconciling", "failed"] as const)(
+    "marks an exhausted missing pane failed from recovery phase %s without launching another generation",
+    async (recoveryPhase) => {
+      const store = new NanasaStore(":memory:");
+      const group = store.createGroup({ name: "Exhausted" });
+      const profile = store.createInternalAgentProfile({
+        name: "Terminal",
+        agentType: "opencode",
+        kind: "opencode",
+        command: "opencode",
+        args: [],
+        environment: {},
+      });
+      store.addMembership(group.id, {
+        memberId: "alpha",
+        agentProfileId: profile.id,
+        alias: "Alpha",
+      });
+      const run = store.createRun({
+        id: "run_exhausted",
+        groupId: group.id,
+        memberId: "alpha",
+        agentProfileId: profile.id,
+        generation: 3,
+        status: "running",
+        recoveryAttempts: 3,
+        recoveryPhase,
         recoveryReason: "recovery_attempts_exhausted",
+        startedAt: "2026-08-10T12:00:00.000Z",
       });
-      expect(runtime.recoverRun).not.toHaveBeenCalled();
-      await expect(coordinator.stopRun(group.id, "alpha")).resolves.toMatchObject({
-        id: run.id,
-        desiredState: "stopped",
-        recoveryPhase: "idle",
-      });
-      await coordinator.reconcile();
-      expect(runtime.recoverRun).not.toHaveBeenCalled();
-    } finally {
-      await coordinator.close();
-      store.close();
-    }
-  });
+      const runtime = {
+        reconcile: vi.fn(async () => undefined),
+        observeRun: vi.fn(async () => ({ kind: "dead" })),
+        recoverRun: vi.fn(),
+        removeViewSession: vi.fn(async () => undefined),
+        stopRun: vi.fn(async () => store.updateRunStatus(run.id, "stopped")),
+        removeStaleViewSessions: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+      };
+      const coordinator = new RunRuntimeCoordinator(
+        store,
+        runtime as never,
+        {
+          stop: vi.fn(async () => undefined),
+          reconcile: vi.fn(async () => undefined),
+          close: vi.fn(async () => undefined),
+        } as never,
+        {
+          start: vi.fn(),
+          close: vi.fn(async () => undefined),
+        } as never,
+        { reconcileIntervalMs: 60_000 },
+      );
+      try {
+        await coordinator.reconcile();
+        expect(store.getRun(run.id)).toMatchObject({
+          status: "failed",
+          desiredState: "running",
+          recoveryPhase: "failed",
+          recoveryReason: "recovery_attempts_exhausted",
+        });
+        expect(runtime.recoverRun).not.toHaveBeenCalled();
+        await expect(coordinator.stopRun(group.id, "alpha")).resolves.toMatchObject({
+          id: run.id,
+          desiredState: "stopped",
+          recoveryPhase: "idle",
+        });
+        await coordinator.reconcile();
+        expect(runtime.recoverRun).not.toHaveBeenCalled();
+      } finally {
+        await coordinator.close();
+        store.close();
+      }
+    },
+  );
 
   it("starts active members in stable order, continues failures, and replays concurrent keys", async () => {
     const memberships = [{ memberId: "alpha" }, { memberId: "beta" }, { memberId: "gamma" }];
