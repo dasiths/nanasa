@@ -208,6 +208,10 @@
     "statuses.acknowledge": [
       "membership_not_found"
     ],
+    "urlOpenRequests.list": [],
+    "urlOpenRequests.get": [
+      "url_request_expired"
+    ],
     "attentionDismissals.list": [],
     "attentionDismissals.dismiss": [],
     "attentionSubscriptions.list": [],
@@ -382,6 +386,8 @@
     "statuses.list": 65536,
     "statuses.get": 65536,
     "statuses.acknowledge": 65536,
+    "urlOpenRequests.list": 65536,
+    "urlOpenRequests.get": 65536,
     "attentionDismissals.list": 65536,
     "attentionDismissals.dismiss": 65536,
     "attentionSubscriptions.list": 65536,

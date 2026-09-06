@@ -17,3 +17,4 @@ export * from "./provider-update-state.js";
 export * from "./release.js";
 export * from "./status.js";
 export * from "./terminal.js";
+export * from "./url-open.js";

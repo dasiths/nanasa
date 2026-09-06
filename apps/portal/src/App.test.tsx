@@ -127,6 +127,7 @@ const config: NanasaConfig = {
       "provider-update-failed": true,
       "provider-update-succeeded": false,
       "unread-message": false,
+      "url-open-request": true,
     },
   },
   integrations: {
@@ -302,6 +303,8 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
       .fn()
       .mockResolvedValue({ id: "console-one", runId: "console-one", generation: 1 }),
     closeConsole: vi.fn().mockResolvedValue(undefined),
+    listUrlOpenRequests: vi.fn().mockResolvedValue([]),
+    getUrlOpenRequest: vi.fn(),
     loadMetadata: vi.fn().mockResolvedValue({
       apiVersion: 1,
       eventProtocolVersion: 1,
@@ -996,6 +999,91 @@ describe("portal application", () => {
       title: "Auditor · Completion ready",
       options: { body: "Review · Completion revision 2 is ready for review.", silent: true },
     });
+  });
+
+  it("delivers browser requests to Attention from another screen and persists dismissal", async () => {
+    window.history.replaceState({}, "", "/agents");
+    const client = createClient();
+    const run = activeRun(memberships[0]!);
+    const request = {
+      id: "url-open-test",
+      groupId: run.groupId,
+      memberId: run.memberId,
+      runId: run.id,
+      generation: run.generation,
+      url: "https://example.com/login?code=private",
+      requestedAt: timestamp,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+    vi.mocked(client.loadSnapshot)
+      .mockResolvedValueOnce({ ...snapshot, runs: [run] })
+      .mockResolvedValue({ ...snapshot, sequence: snapshot.sequence + 1, runs: [run] });
+    vi.mocked(client.listUrlOpenRequests).mockResolvedValueOnce([]).mockResolvedValue([request]);
+    vi.mocked(client.dismissAttentionItems).mockImplementation(async ({ itemIds }) => ({
+      dismissals: itemIds.map((itemId) => ({ itemId, dismissedAt: timestamp })),
+    }));
+    render(<App client={client} />);
+    await screen.findByRole("heading", { name: "All agents", level: 1 });
+    await waitFor(() => expect(client.listUrlOpenRequests).toHaveBeenCalledOnce());
+    const socket = vi.mocked(client.createEventsSocket).mock.results.at(-1)?.value;
+    await waitFor(() => expect(socket?.onmessage).toEqual(expect.any(Function)));
+    await act(async () =>
+      socket!.onmessage!(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "domain.event",
+            event: {
+              sequence: snapshot.sequence + 1,
+              id: "browser-event",
+              type: "url-open.requested",
+              aggregateType: "run",
+              aggregateId: run.id,
+              occurredAt: timestamp,
+              payload: { requestId: request.id },
+            },
+          }),
+        }),
+      ),
+    );
+    const notices = await screen.findByRole("complementary", { name: "Attention notifications" });
+    expect(within(notices).getByText("Builder wants to open a URL")).toBeInTheDocument();
+    expect(notices).toHaveTextContent("https://example.com");
+    expect(notices).not.toHaveTextContent("private");
+    fireEvent.click(within(notices).getByRole("button", { name: "Open" }));
+    expect(window.location.pathname).toBe("/attention");
+    expect(window.location.hash).toBe("#url-open-test");
+    await screen.findByRole("button", { name: "Open URL" });
+    expect(screen.queryByRole("complementary", { name: "Attention notifications" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss Builder wants to open a URL" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Open URL" })).toBeNull());
+    expect(client.dismissAttentionItems).toHaveBeenCalledWith({
+      itemIds: [expect.stringContaining("url-open-test")],
+    });
+  });
+
+  it("restores pending browser requests without replaying a toast on initial load", async () => {
+    window.history.replaceState({}, "", "/attention");
+    const client = createClient();
+    const run = activeRun(memberships[0]!);
+    vi.mocked(client.loadSnapshot).mockResolvedValue({ ...snapshot, runs: [run] });
+    vi.mocked(client.listUrlOpenRequests).mockResolvedValue([
+      {
+        id: "url-open-restored",
+        groupId: run.groupId,
+        memberId: run.memberId,
+        runId: run.id,
+        generation: run.generation,
+        url: "https://example.com",
+        requestedAt: timestamp,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    ]);
+    render(<App client={client} />);
+    await screen.findByRole("button", { name: "Open URL" });
+    expect(screen.queryByRole("complementary", { name: "Attention notifications" })).toBeNull();
+    expect(
+      screen.getByRole("link", { name: "Open Attention, 1 review item across all groups" }),
+    ).toBeInTheDocument();
   });
 
   it("shows enabled in-app notices on unrelated visible routes and opens their exact target", async () => {

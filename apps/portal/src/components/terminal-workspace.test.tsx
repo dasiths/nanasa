@@ -66,6 +66,8 @@ function ready(runId: string): TerminalEndpointStatus {
 function client(): PortalClient {
   return {
     createConsole: vi.fn(),
+    listUrlOpenRequests: vi.fn().mockResolvedValue([]),
+    getUrlOpenRequest: vi.fn(),
     closeConsole: vi.fn(),
     loadMetadata: vi.fn(),
     loadSnapshot: vi.fn<() => Promise<PortalSnapshot>>(),

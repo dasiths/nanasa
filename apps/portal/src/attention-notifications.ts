@@ -40,6 +40,7 @@ const TOAST_LIFETIME_MS = 5_000;
 
 export function attentionNotificationTier(item: AttentionItem): AttentionNotificationTier {
   switch (item.kind) {
+    case "url-open-request":
     case "launch-consent":
     case "wait":
     case "response":
@@ -80,6 +81,8 @@ export function routeOwnsAttentionItem(
   if (route.kind === "global") return route.destination === "attention";
   if (route.kind !== "group" || route.groupId !== item.groupId) return false;
   switch (item.kind) {
+    case "url-open-request":
+      return false;
     case "launch-consent":
       return route.section === "terminals";
     case "wait":

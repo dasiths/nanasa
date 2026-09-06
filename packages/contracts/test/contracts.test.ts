@@ -971,6 +971,7 @@ describe("configuration contracts", () => {
       "provider-update-failed": true,
       "provider-update-succeeded": false,
       "unread-message": false,
+      "url-open-request": true,
     });
     expect(parsed.integrations.copilot).toMatchObject({
       providerState: { scope: "membership" },
@@ -1063,7 +1064,8 @@ describe("configuration contracts", () => {
       attention: {},
       order: 0,
     });
-    expect(ATTENTION_EVENT_TYPES).toHaveLength(8);
+    expect(ATTENTION_EVENT_TYPES).toHaveLength(9);
+    expect(ATTENTION_EVENT_TYPES).toContain("url-open-request");
     expect(AttentionEventTypeSchema.safeParse("provider-hook-stop").success).toBe(false);
 
     const subscribed = NanasaConfigSchema.parse({

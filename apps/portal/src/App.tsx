@@ -53,6 +53,7 @@ import { TeamRecoveryResults } from "./components/team-recovery-results.js";
 import { ErrorNotice, type PortalError, toPortalError } from "./errors.js";
 import { useAttentionWorkspaces } from "./hooks/use-attention-workspaces.js";
 import { useLaunchConsents } from "./hooks/use-launch-consents.js";
+import { useUrlOpenRequests } from "./hooks/use-url-open-requests.js";
 import { useMessageReadCursors } from "./hooks/use-message-read-cursors.js";
 import {
   type TerminalColumnsPreference,
@@ -354,6 +355,11 @@ export function App({ client = api }: AppProps) {
     snapshot === undefined ? undefined : `${snapshot.instanceId}:${snapshot.daemonEpoch}`,
     snapshot?.sequence,
   );
+  const urlRequests = useUrlOpenRequests(
+    client,
+    snapshot === undefined ? undefined : `${snapshot.instanceId}:${snapshot.daemonEpoch}`,
+    snapshot?.sequence,
+  );
   useEffect(() => {
     let active = true;
     setAttentionDismissalsReady(false);
@@ -404,6 +410,7 @@ export function App({ client = api }: AppProps) {
       workspaces: attentionWorkspaces.workspaces,
       unreadCounts,
       launchConsents: launchConsents.latestRequests,
+      urlOpenRequests: urlRequests.requests,
     });
     return filterAttentionItemsBySubscriptions(candidates, attentionSubscriptions).filter(
       (item) => !dismissedAttentionItemIds.has(item.id),
@@ -414,6 +421,7 @@ export function App({ client = api }: AppProps) {
     attentionSubscriptions,
     dismissedAttentionItemIds,
     launchConsents.latestRequests,
+    urlRequests.requests,
     snapshot,
     unreadCounts,
   ]);
@@ -454,7 +462,9 @@ export function App({ client = api }: AppProps) {
       attentionWorkspaces.ready &&
       attentionWorkspaces.errors.size === 0 &&
       !launchConsents.loading &&
-      launchConsents.error === undefined,
+      launchConsents.error === undefined &&
+      urlRequests.ready &&
+      urlRequests.error === undefined,
     hydrationKey:
       snapshot === undefined ? undefined : `${snapshot.instanceId}:${snapshot.daemonEpoch}`,
     route,
@@ -1111,6 +1121,7 @@ export function App({ client = api }: AppProps) {
           </button>
         </div>
       </header>
+      {urlRequests.error !== undefined && <ErrorNotice error={urlRequests.error} />}
       {actionError !== undefined && (
         <ErrorNotice
           className="action-banner"

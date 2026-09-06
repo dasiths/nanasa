@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { NanasaConfigSchema } from "@nanasa/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { DATABASE_SCHEMA_VERSION, openNanasaDatabase } from "../src/persistence/database.js";
+import { DATABASE_MIGRATION_13_TO_14_SQL } from "../src/persistence/schema.js";
 import { resetFromAlpha } from "../src/persistence/reset-service.js";
 import { NanasaStore } from "../src/store.js";
 
@@ -267,6 +268,7 @@ describe("database baseline", () => {
       ) STRICT;
       INSERT INTO schema_metadata VALUES (1, 14, '2026-09-05T00:00:00.000Z');
       ${legacyCheckoutTables}
+      ${DATABASE_MIGRATION_13_TO_14_SQL}
       INSERT INTO repositories VALUES ('repo-one', 'checkout-feature');
       INSERT INTO checkouts VALUES ('checkout-feature', 'repo-one');
       INSERT INTO groups VALUES (

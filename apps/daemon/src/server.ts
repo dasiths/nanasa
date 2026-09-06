@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
@@ -14,6 +15,7 @@ import { AgentStatusQueryService } from "./agent-status-query-service.js";
 import { registerAgentStatusRoutes } from "./agent-status-routes.js";
 import { AgentStatusService } from "./agent-status-service.js";
 import { AuthorityPolicy } from "./authority-policy.js";
+import { browserOpenerEnvironment } from "./browser-opener.js";
 import { discoverAndLoadNanasaConfig, type LoadedNanasaConfig } from "./config-loader.js";
 import { ConfigRepository } from "./config-repository.js";
 import { DaemonInstanceGuard } from "./daemon-instance-guard.js";
@@ -92,6 +94,8 @@ import { TmuxRuntime } from "./tmux-runtime.js";
 import { TopologyOrderService } from "./topology-order-service.js";
 import { TopologyService } from "./topology-service.js";
 import { UserCredentialBroker } from "./user-credential-broker.js";
+import { registerUrlOpenRoutes } from "./url-open-routes.js";
+import { UrlOpenService } from "./url-open-service.js";
 
 export interface DaemonOptions {
   dataPath?: string;
@@ -408,6 +412,14 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       authority: runtimeProvisioner,
     });
     const statusService = new AgentStatusService(store, reporterRegistry);
+    const urlOpenService = new UrlOpenService(store);
+    const browserEnvironment = browserOpenerEnvironment(
+      runtimePath,
+      options.packageRoot ??
+        process.env.NANASA_PACKAGE_ROOT ??
+        fileURLToPath(new URL("../../../", import.meta.url)),
+      new URL("/api/v1/agent-url-requests", statusEndpoint).toString(),
+    );
     const runtime = new TmuxRuntime(store, {
       serverName: tmuxServerName,
       ...(options.tmuxPath === undefined ? {} : { tmuxPath: options.tmuxPath }),
@@ -422,6 +434,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         "alert-bell": tmuxEvents.hookCommand(tmuxInvalidationUrl.toString(), "bell"),
       },
       runtimeEnvironment: async (run) => ({
+        ...browserEnvironment,
         ...(options.mcp?.enabled === true ? { NANASA_MCP_URL: mcpEndpointUrl } : {}),
         NANASA_MCP_TOKEN: mcpCredentials.issueAgent(run),
         NANASA_STATUS_URL: statusEndpointUrl,
@@ -594,6 +607,11 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         return reply.status(204).send();
       },
     );
+    registerUrlOpenRoutes(app, {
+      allowedHostnames: [statusEndpoint.hostname],
+      credentials: mcpCredentials,
+      service: urlOpenService,
+    });
     registerAgentStatusRoutes(app, {
       path: "/api/v1/agent-status/events",
       allowedHostnames: [statusEndpoint.hostname],
@@ -628,6 +646,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       store,
       repositoryIdentity,
       launchConsent: launchConsentService,
+      urlOpenService,
       auth: operatorAuth,
       providerStates,
       extensions,

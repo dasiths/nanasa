@@ -25,6 +25,7 @@ describe("Attention subscription policy", () => {
           "provider-update-failed": true,
           "provider-update-succeeded": false,
           "unread-message": false,
+          "url-open-request": false,
         },
       },
       groups: {
@@ -57,6 +58,7 @@ describe("Attention subscription policy", () => {
     ).toEqual(
       expect.arrayContaining([
         { eventType: "response-required", enabled: true, source: "repository-default" },
+        { eventType: "url-open-request", enabled: false, source: "repository-default" },
         { eventType: "completion", enabled: false, source: "operator-override" },
       ]),
     );

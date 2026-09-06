@@ -90,6 +90,8 @@ import {
   WaitForAgentActionCommandSchema,
   WorktreeOperationResultSchema,
   WorktreeSchema,
+  UrlOpenRequestListSchema,
+  UrlOpenRequestSchema,
 } from "@nanasa/contracts";
 import { z } from "zod";
 
@@ -947,6 +949,24 @@ export const CONTROL_ROUTE_REGISTRY = Object.freeze([
     idempotency: "optional",
     errors: ["membership_not_found"],
     summary: "Acknowledge the latest completion",
+  }),
+  route({
+    id: "urlOpenRequests.list",
+    family: "status",
+    method: "GET",
+    path: "/api/v1/url-open-requests",
+    response: UrlOpenRequestListSchema,
+    summary: "List pending agent browser requests",
+  }),
+  route({
+    id: "urlOpenRequests.get",
+    family: "status",
+    method: "GET",
+    path: "/api/v1/url-open-requests/:requestId",
+    params: IdParamsSchema,
+    response: UrlOpenRequestSchema,
+    errors: ["url_request_expired"],
+    summary: "Read an active agent browser request",
   }),
   route({
     id: "attentionDismissals.list",

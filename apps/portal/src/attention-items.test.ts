@@ -901,6 +901,7 @@ describe("attention sorting, filtering, and counts", () => {
           "provider-update-failed": true,
           "provider-update-succeeded": false,
           "unread-message": false,
+          "url-open-request": true,
         },
         members: [
           {

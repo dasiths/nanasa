@@ -104,6 +104,7 @@ import type { TerminalGateway } from "../terminal/terminal-gateway.js";
 import type { TerminalReadService } from "../terminal/terminal-read-service.js";
 import type { TopologyOrderService } from "../topology-order-service.js";
 import type { TopologyService } from "../topology-service.js";
+import type { UrlOpenService } from "../url-open-service.js";
 import { isValidationError, toPublicErrorResponse } from "./error-response.js";
 import {
   type ControlRouteDeclaration,
@@ -120,6 +121,7 @@ export interface ControlRouterServices {
   store: NanasaStore;
   repositoryIdentity: string;
   launchConsent: LaunchConsentService;
+  urlOpenService: UrlOpenService;
   auth: OperatorAuth;
   providerStates: ProviderStateRepository;
   extensions: ProviderExtensionService;
@@ -725,6 +727,14 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
         principal.operatorId,
       ),
     );
+  });
+  register("urlOpenRequests.list", (request) => {
+    operatorPrincipal(services, request);
+    return services.urlOpenService.list();
+  });
+  register("urlOpenRequests.get", (request) => {
+    operatorPrincipal(services, request);
+    return services.urlOpenService.get(record(request.params).requestId ?? "");
   });
   register("attentionDismissals.list", (request) => {
     const principal = operatorPrincipal(services, request);

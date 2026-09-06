@@ -3,7 +3,38 @@ import {
   PROVIDER_UPDATE_TRANSITION_SCHEMA_SQL,
 } from "./provider-platform-schema.js";
 
-export const DATABASE_SCHEMA_VERSION = 15;
+export const DATABASE_SCHEMA_VERSION = 16;
+
+const URL_OPEN_SCHEMA_SQL = `
+  CREATE TABLE url_open_requests (
+    id TEXT PRIMARY KEY,
+    request_json TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  ) STRICT;
+`;
+
+export const DATABASE_MIGRATION_15_TO_16_SQL = `
+  ${URL_OPEN_SCHEMA_SQL}
+  ALTER TABLE attention_subscription_overrides RENAME TO attention_subscription_overrides_old;
+  DROP INDEX attention_subscription_overrides_member;
+  CREATE TABLE attention_subscription_overrides (
+    operator_id TEXT NOT NULL,
+    group_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    event_type TEXT NOT NULL CHECK (event_type IN (
+      'response-required', 'agent-health', 'completion', 'delivery-failure',
+      'action-state', 'provider-update-failed', 'provider-update-succeeded', 'unread-message',
+      'url-open-request'
+    )),
+    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (operator_id, group_id, member_id, event_type)
+  ) STRICT;
+  INSERT INTO attention_subscription_overrides SELECT * FROM attention_subscription_overrides_old;
+  DROP TABLE attention_subscription_overrides_old;
+  CREATE INDEX attention_subscription_overrides_member
+    ON attention_subscription_overrides (group_id, member_id, operator_id);
+`;
 
 export const DATABASE_MIGRATION_14_TO_15_SQL = `
   ALTER TABLE groups ADD COLUMN checkout_id TEXT REFERENCES checkouts(id);
@@ -102,6 +133,7 @@ export const DATABASE_MIGRATION_10_TO_11_SQL = `
 `;
 
 export const DATABASE_BASELINE_SQL = `
+  ${URL_OPEN_SCHEMA_SQL}
   CREATE TABLE schema_metadata (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     schema_version INTEGER NOT NULL,
@@ -333,7 +365,8 @@ export const DATABASE_BASELINE_SQL = `
     member_id TEXT NOT NULL,
     event_type TEXT NOT NULL CHECK (event_type IN (
       'response-required', 'agent-health', 'completion', 'delivery-failure',
-      'action-state', 'provider-update-failed', 'provider-update-succeeded', 'unread-message'
+      'action-state', 'provider-update-failed', 'provider-update-succeeded', 'unread-message',
+      'url-open-request'
     )),
     enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
     updated_at TEXT NOT NULL,

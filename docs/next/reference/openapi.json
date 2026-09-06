@@ -1581,6 +1581,52 @@
         ]
       }
     },
+    "/api/v1/url-open-requests": {
+      "get": {
+        "operationId": "urlOpenRequests.list",
+        "summary": "List pending agent browser requests",
+        "tags": [
+          "status"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/url-open-requests/:requestId": {
+      "get": {
+        "operationId": "urlOpenRequests.get",
+        "summary": "Read an active agent browser request",
+        "tags": [
+          "status"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "url_request_expired"
+        ]
+      }
+    },
     "/api/v1/attention-dismissals": {
       "get": {
         "operationId": "attentionDismissals.list",

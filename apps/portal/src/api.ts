@@ -1,4 +1,7 @@
 import {
+  type UrlOpenRequest,
+  UrlOpenRequestListSchema,
+  UrlOpenRequestSchema,
   type AdHocConsoleSession,
   AdHocConsoleSessionSchema,
   type AgentAction,
@@ -261,6 +264,8 @@ export interface PortalClient {
   replyOpenWait(waitId: string, command: ReplyOpenWaitCommand): Promise<OpenWait>;
   acknowledgeCompletion(groupId: string, memberId: string): Promise<AgentStatusDetail>;
   listAttentionDismissals(): Promise<AttentionDismissalList>;
+  listUrlOpenRequests(): Promise<UrlOpenRequest[]>;
+  getUrlOpenRequest(requestId: string): Promise<UrlOpenRequest>;
   dismissAttentionItems(command: DismissAttentionItemsCommand): Promise<AttentionDismissalList>;
   listAttentionSubscriptions(): Promise<AttentionSubscriptionsSnapshot>;
   setAttentionSubscription(
@@ -563,6 +568,13 @@ export const api: PortalClient = {
     ),
   listAttentionDismissals: () =>
     request(`${CONTROL_API_PREFIX}/attention-dismissals`, AttentionDismissalListSchema),
+  listUrlOpenRequests: () =>
+    request(`${CONTROL_API_PREFIX}/url-open-requests`, UrlOpenRequestListSchema),
+  getUrlOpenRequest: (requestId) =>
+    request(
+      `${CONTROL_API_PREFIX}/url-open-requests/${encodeURIComponent(requestId)}`,
+      UrlOpenRequestSchema,
+    ),
   dismissAttentionItems: (command) =>
     request(
       `${CONTROL_API_PREFIX}/attention-dismissals`,

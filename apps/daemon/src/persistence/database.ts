@@ -8,6 +8,7 @@ import {
   DATABASE_MIGRATION_12_TO_13_SQL,
   DATABASE_MIGRATION_13_TO_14_SQL,
   DATABASE_MIGRATION_14_TO_15_SQL,
+  DATABASE_MIGRATION_15_TO_16_SQL,
   DATABASE_SCHEMA_VERSION,
 } from "./schema.js";
 
@@ -106,6 +107,10 @@ function migrateDatabase(database: DatabaseSync, version: number): void {
       );
     }
     applyMigration(database, currentVersion, DATABASE_MIGRATION_14_TO_15_SQL);
+    currentVersion = 15;
+  }
+  if (currentVersion === 15) {
+    applyMigration(database, currentVersion, DATABASE_MIGRATION_15_TO_16_SQL);
   }
 }
 
