@@ -9,7 +9,7 @@ agent. The example uses GitHub Copilot CLI. Replace the integration with another
 Install the exact preview and create the Nanasa configuration:
 
 ```bash
-npm install --save-dev nanasa@next
+npm install --save-dev @dasiths/nanasa@next
 npx nanasa init
 ```
 

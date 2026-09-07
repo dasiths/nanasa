@@ -16,7 +16,7 @@ registry before publishing user instructions.
 ## Publish a tagged release
 
 Push a version tag that matches `package.json`, such as
-`v0.1.0-next.11.0`. The tagged commit must belong to `main`.
+`v0.1.0-next.12.0`. The tagged commit must belong to `main`.
 
 The Release workflow runs required CI, builds the package with the commit time,
 and runs the release gate. It creates these files:

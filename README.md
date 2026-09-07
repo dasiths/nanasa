@@ -29,7 +29,7 @@ Native macOS and Windows hosts are not supported. WSL2 support is in preview.
 Install the current preview in the Git repository where the agents will work:
 
 ```bash
-npm install --save-dev nanasa@next
+npm install --save-dev @dasiths/nanasa@next
 ```
 
 Then follow this short path:

@@ -25,19 +25,19 @@ Preview releases use the npm `next` distribution tag. Stable releases use the
 `latest` tag. Check which version a registry provides before installing:
 
 ```bash
-npm view nanasa@next version
+npm view @dasiths/nanasa@next version
 ```
 
 Install the preview and commit your package lockfile. The lockfile records the
 exact version used by your repository:
 
 ```bash
-npm install --save-dev nanasa@next
+npm install --save-dev @dasiths/nanasa@next
 ```
 
 If your repository already uses another package manager, the equivalent forms
-are `pnpm add --save-dev nanasa@next` and
-`yarn add --dev nanasa@next`. The rest of this documentation uses
+are `pnpm add --save-dev @dasiths/nanasa@next` and
+`yarn add --dev @dasiths/nanasa@next`. The rest of this documentation uses
 `npx nanasa` to call the repository-local binary. Use your package manager's
 local-executable command if it has a different convention.
 
@@ -97,7 +97,7 @@ Do not put provider tokens or private keys in `.nanasa/config.yaml`.
 Stop Nanasa before changing the package:
 
 ```bash
-npm install --save-dev nanasa@next
+npm install --save-dev @dasiths/nanasa@next
 ```
 
 For a systemd user service, use the verified upgrade and rollback flow in

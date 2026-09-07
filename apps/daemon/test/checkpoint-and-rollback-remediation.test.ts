@@ -35,7 +35,7 @@ async function freePort(): Promise<number> {
 
 function build(commit: string, version: string) {
   return {
-    packageName: "nanasa",
+    packageName: "@dasiths/nanasa",
     packageVersion: version,
     channel: "next",
     commit,

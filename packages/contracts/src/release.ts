@@ -10,7 +10,7 @@ const AbsolutePathSchema = z
 export const ReleaseChannelSchema = z.enum(["next", "latest"]);
 export const BuildIdentitySchema = z
   .object({
-    packageName: z.literal("nanasa"),
+    packageName: z.literal("@dasiths/nanasa"),
     packageVersion: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/),
     channel: ReleaseChannelSchema,
     commit: z.string().regex(/^[a-f0-9]{40}$/),

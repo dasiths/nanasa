@@ -29,7 +29,7 @@ function fixtureDirectory(name: string): string {
 
 function build(commit = "a".repeat(40)): BuildIdentity {
   return {
-    packageName: "nanasa",
+    packageName: "@dasiths/nanasa",
     packageVersion: "0.1.0-next.11.0",
     channel: "next",
     commit,

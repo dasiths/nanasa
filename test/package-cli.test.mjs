@@ -260,6 +260,7 @@ test("package build contains one fenced daemon entry and release metadata", () =
   assert.equal(existsSync(join(root, "dist", "cli", "control.js")), true);
   const metadata = JSON.parse(readFileSync(join(root, "dist", "meta", "build.json"), "utf8"));
   const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  assert.equal(metadata.packageName, packageJson.name);
   assert.equal(metadata.packageVersion, packageJson.version);
   assert.equal(metadata.channel, "next");
   assert.deepEqual(metadata.hosts, ["linux-x64", "linux-arm64"]);
@@ -354,6 +355,7 @@ test("packed package installs cleanly and initializes config version 2", () => {
   const installedHelpIndex = join(
     installDirectory,
     "node_modules",
+    "@dasiths",
     "nanasa",
     "dist",
     "help",

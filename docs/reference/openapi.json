@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Nanasa control API",
-    "version": "0.1.0-next.11.0"
+    "version": "0.1.0-next.12.0"
   },
   "x-generator-version": 1,
   "paths": {

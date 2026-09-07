@@ -97,7 +97,7 @@ const builtAt = new Date(
     : Number(process.env.SOURCE_DATE_EPOCH) * 1_000,
 ).toISOString();
 const metadata = {
-  packageName: "nanasa",
+  packageName: packageJson.name,
   packageVersion: packageJson.version,
   channel: packageJson.version.includes("-") ? "next" : "latest",
   commit,
@@ -153,13 +153,13 @@ const sbom = {
   spdxVersion: "SPDX-2.3",
   dataLicense: "CC0-1.0",
   SPDXID: "SPDXRef-DOCUMENT",
-  name: `nanasa-${packageJson.version}`,
+  name: `${packageJson.name}-${packageJson.version}`,
   documentNamespace: `https://github.com/dasiths/nanasa/sbom/${commit}`,
   creationInfo: { created: builtAt, creators: ["Tool: nanasa-build-package"] },
   documentDescribes: ["SPDXRef-Package-nanasa"],
   packages: [
     {
-      name: "nanasa",
+      name: packageJson.name,
       SPDXID: "SPDXRef-Package-nanasa",
       versionInfo: packageJson.version,
       downloadLocation: "NOASSERTION",

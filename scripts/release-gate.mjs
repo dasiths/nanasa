@@ -181,6 +181,7 @@ function provenance() {
   }).stdout.trim();
   if (metadata.commit !== commit)
     throw new Error(`Build commit ${metadata.commit} does not match HEAD ${commit}`);
+  if (metadata.packageName !== packageJson.name) throw new Error("Build and package names differ");
   if (metadata.packageVersion !== packageJson.version)
     throw new Error("Build and package versions differ");
   if (metadata.channel !== (packageJson.version.includes("-") ? "next" : "latest"))
@@ -194,12 +195,20 @@ function sbom() {
   const path = join(root, "dist", "meta", "sbom.spdx.json");
   if (!existsSync(path)) throw new Error("SPDX SBOM is missing");
   const document = JSON.parse(readFileSync(path, "utf8"));
+  const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   if (document.spdxVersion !== "SPDX-2.3" || document.dataLicense !== "CC0-1.0") {
     throw new Error("SBOM identity is invalid");
   }
   const packages = document.packages ?? [];
   const names = new Set(packages.map((item) => item.name));
-  for (const required of ["nanasa", "fastify", "node-pty", "@xterm/xterm", "react", "zod"]) {
+  for (const required of [
+    packageJson.name,
+    "fastify",
+    "node-pty",
+    "@xterm/xterm",
+    "react",
+    "zod",
+  ]) {
     if (!names.has(required)) throw new Error(`SBOM is missing ${required}`);
   }
   const ids = packages.map((item) => item.SPDXID);
