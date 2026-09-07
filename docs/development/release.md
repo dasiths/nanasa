@@ -13,6 +13,29 @@ documentation, and release evidence must identify the same commit.
 Verify that the selected distribution tag and exact version exist in the target
 registry before publishing user instructions.
 
+## Publish a tagged release
+
+Push a version tag that matches `package.json`, such as
+`v0.1.0-next.11.0`. The tagged commit must belong to `main`.
+
+The Release workflow runs required CI, builds the package with the commit time,
+and runs the release gate. It creates these files:
+
+* npm package tarball
+* Build metadata
+* SPDX software bill of materials
+* SHA-256 checksums
+* GitHub build provenance
+
+The workflow publishes the files in a GitHub Release through the `release`
+environment. Configure protection rules for that environment before the first
+release. The workflow does not use provider keys.
+
+Set the repository variable `NANASA_PUBLISH_NPM` to `true` to also publish the
+tarball to npm. npm trusted publishing must allow this repository and workflow.
+Publication uses GitHub OIDC and does not need a stored npm token. Leave the
+variable unset when GitHub Releases are the only publication target.
+
 ## Build the release transaction
 
 Resolve and verify the candidate before stopping the daemon. The active and
@@ -38,5 +61,4 @@ package allowlists, support metadata, size budgets, provenance, SPDX
 relationships, documentation, exact-schema activation and rollback, fixtures,
 fuzzing, and orphan cleanup without publishing.
 
-Follow the repository release tooling rather than reproducing its commands from
-an old document. Keep candidate evidence with the exact commit it verifies.
+Keep candidate evidence with the exact commit it verifies.

@@ -1,78 +1,134 @@
-name: Release verification
+name: Release
 
 on:
-  workflow_dispatch:
   push:
     tags: ["v*"]
 
 permissions:
   contents: read
 
-env:
-  NANASA_CANDIDATE_SHA: ${{ github.sha }}
-  NANASA_ALLOW_PUBLIC_REGISTRY_FALLBACK: "true"
-
 jobs:
-  exact-commit-release:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  package:
+    needs: ci
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      NANASA_ALLOW_PUBLIC_REGISTRY_FALLBACK: "true"
+    outputs:
+      channel: ${{ steps.identity.outputs.channel }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ env.NANASA_CANDIDATE_SHA }}
+          ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Verify exact candidate checkout
-        run: test "$(git rev-parse HEAD)" = "$NANASA_CANDIDATE_SHA"
+      - name: Verify release identity
+        id: identity
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          package_version="$(node -p "require('./package.json').version")"
+          test "$GITHUB_REF_NAME" = "v${package_version}"
+          if [[ "$package_version" == *-* ]]; then
+            echo "channel=next" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=latest" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - name: Configure registry and pinned pnpm
-        shell: bash
         run: bash scripts/setup-pnpm.sh
       - uses: actions/cache@v4
         with:
           path: ~/.local/share/pnpm/store
           key: pnpm-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Pin reproducible build time
-        run: echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
       - name: Install frozen dependencies
-        shell: bash
         run: |
           source scripts/ci-registry-env.sh
-          source scripts/ci-registry-env.sh; pnpm install --frozen-lockfile
-      - name: Install runtime and browser prerequisites
+          pnpm install --frozen-lockfile
+      - name: Build immutable package
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y tmux
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
           source scripts/ci-registry-env.sh
-          source scripts/ci-registry-env.sh; pnpm exec playwright install --with-deps chromium
-      - name: Verify exact candidate
-        shell: bash
-        run: |
-          source scripts/ci-registry-env.sh
-          source scripts/ci-registry-env.sh; pnpm check:static
-          source scripts/ci-registry-env.sh; pnpm test
-          source scripts/ci-registry-env.sh; pnpm acceptance
-          source scripts/ci-registry-env.sh; pnpm docs:check
-          source scripts/ci-registry-env.sh; pnpm release:dry-run
-      - name: Pack immutable candidate
-        shell: bash
-        run: |
+          pnpm package:build
+          node scripts/release-gate.mjs release
           mkdir -p release-artifacts
-          source scripts/ci-registry-env.sh
           source scripts/ci-registry-env.sh; pnpm pack --pack-destination release-artifacts
+          cp dist/meta/build.json dist/meta/sbom.spdx.json release-artifacts/
+          cd release-artifacts
+          sha256sum -- ./*.tgz build.json sbom.spdx.json > SHA256SUMS
+      - name: Attest package provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release-artifacts/*.tgz
       - uses: actions/upload-artifact@v4
         with:
           name: nanasa-${{ github.sha }}
-          path: |
-            release-artifacts/*.tgz
-            dist/meta/build.json
-            dist/meta/sbom.spdx.json
+          path: release-artifacts/
+          if-no-files-found: error
 
-  publication-boundary:
-    needs: exact-commit-release
+  github-release:
+    needs: package
     runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
     steps:
-      - run: echo "Verification produces immutable artifacts; trusted npm publication remains environment-owned."
+      - uses: actions/download-artifact@v4
+        with:
+          name: nanasa-${{ github.sha }}
+          path: release-artifacts
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release-artifacts/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME"
+
+  npm-publish:
+    if: vars.NANASA_PUBLISH_NPM == 'true'
+    needs: [package, github-release]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NANASA_ALLOW_PUBLIC_REGISTRY_FALLBACK: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: nanasa-${{ github.sha }}
+          path: release-artifacts
+      - name: Install npm trusted publishing client
+        run: |
+          source scripts/ci-registry-env.sh
+          npm install --global npm@11.6.2
+      - name: Publish with npm trusted publishing
+        run: |
+          source scripts/ci-registry-env.sh
+          npm publish release-artifacts/*.tgz \
+            --access public \
+            --tag "${{ needs.package.outputs.channel }}" \
+            --provenance
