@@ -54,6 +54,43 @@ interface ParsedOptions {
   timeoutMs: number;
   agentId?: string;
   remoteRepo?: string;
+  host?: string;
+  port?: number;
+  mcpEnabled?: boolean;
+}
+
+export interface ServiceStartupOptions {
+  readonly host?: string;
+  readonly port?: number;
+  readonly mcpEnabled?: boolean;
+}
+
+function configuredPort(name: string, value: string | undefined): number {
+  const port = value === undefined ? 3210 : Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new CliUsageError(`${name} must be an integer between 1 and 65535`);
+  }
+  return port;
+}
+
+function configuredBoolean(name: string, value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  if (value === "true" || value === "1") return true;
+  if (value === "false" || value === "0") return false;
+  throw new CliUsageError(`${name} must be true, false, 1, or 0`);
+}
+
+export function resolveServiceStartup(
+  options: ServiceStartupOptions,
+  environment: NodeJS.ProcessEnv = process.env,
+): Required<ServiceStartupOptions> {
+  return {
+    host: options.host ?? environment.NANASA_HOST ?? "127.0.0.1",
+    port: options.port ?? configuredPort("NANASA_PORT", environment.NANASA_PORT),
+    mcpEnabled:
+      options.mcpEnabled ??
+      configuredBoolean("NANASA_MCP_ENABLED", environment.NANASA_MCP_ENABLED, true),
+  };
 }
 
 function optionValue(args: readonly string[], index: number, option: string): string {
@@ -80,6 +117,14 @@ function parseOptions(args: readonly string[]): ParsedOptions {
     }
     if (argument === "--json") {
       options.forceJson = true;
+      continue;
+    }
+    if (argument === "--mcp" || argument === "--no-mcp") {
+      const enabled = argument === "--mcp";
+      if (options.mcpEnabled !== undefined && options.mcpEnabled !== enabled) {
+        throw new CliUsageError("--mcp and --no-mcp cannot be used together");
+      }
+      options.mcpEnabled = enabled;
       continue;
     }
     const value = optionValue(args, index, argument);
@@ -111,6 +156,8 @@ function parseOptions(args: readonly string[]): ParsedOptions {
       }
     } else if (argument === "--agent") options.agentId = value;
     else if (argument === "--repo") options.remoteRepo = value;
+    else if (argument === "--host") options.host = value;
+    else if (argument === "--port") options.port = configuredPort("--port", value);
     else throw new CliUsageError(`Unknown option: ${argument}`);
   }
   return options;
@@ -138,6 +185,14 @@ function selectCommand(args: readonly string[]): {
 }
 
 function assertArguments(declaration: CliCommandDeclaration, options: ParsedOptions): void {
+  if (
+    declaration.id !== "service.install" &&
+    (options.host !== undefined || options.port !== undefined || options.mcpEnabled !== undefined)
+  ) {
+    throw new CliUsageError(
+      "--host, --port, --mcp, and --no-mcp are only valid for service install",
+    );
+  }
   const required = declaration.positionals.filter((name) => !name.endsWith("?")).length;
   if (
     options.positionals.length < required ||
@@ -158,19 +213,94 @@ function assertArguments(declaration: CliCommandDeclaration, options: ParsedOpti
   }
 }
 
-function completion(shell: string): string {
-  const words = [...new Set(CLI_COMMAND_REGISTRY.map((entry) => entry.family))].join(" ");
-  if (shell === "bash") return `complete -W '${words}' nanasa\n`;
-  if (shell === "zsh") return `#compdef nanasa\n_arguments '1:command:(${words})'\n`;
-  if (shell === "fish")
-    return (
-      words
-        .split(" ")
-        .map((word) => `complete -c nanasa -f -a '${word}'`)
-        .join("\n") + "\n"
+function completionInventory(): ReadonlyMap<string, readonly string[]> {
+  const inventory = new Map<string, string[]>();
+  for (const entry of CLI_COMMAND_REGISTRY) {
+    const commands = inventory.get(entry.family) ?? [];
+    commands.push(entry.command);
+    inventory.set(entry.family, commands);
+  }
+  inventory.set("doctor", []);
+  inventory.set("completion", ["bash", "fish", "powershell", "zsh"]);
+  return new Map(
+    [...inventory.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([family, commands]) => [family, [...new Set(commands)].sort()]),
+  );
+}
+
+export function completion(shell: string): string {
+  const inventory = completionInventory();
+  const families = [...inventory.keys()].join(" ");
+  const populated = [...inventory.entries()].filter(([, commands]) => commands.length > 0);
+  if (shell === "bash") {
+    const cases = populated
+      .map(
+        ([family, commands]) =>
+          `      ${family}) COMPREPLY=( $(compgen -W '${commands.join(" ")}' -- "$current") ) ;;`,
+      )
+      .join("\n");
+    return `_nanasa_completion() {
+  local current="${"${COMP_WORDS[COMP_CWORD]}"}"
+  if (( COMP_CWORD == 1 )); then
+    COMPREPLY=( $(compgen -W '${families}' -- "$current") )
+    return
+  fi
+  if (( COMP_CWORD == 2 )); then
+    case "${"${COMP_WORDS[1]}"}" in
+${cases}
+    esac
+  fi
+}
+complete -F _nanasa_completion nanasa
+`;
+  }
+  if (shell === "zsh") {
+    const cases = populated
+      .map(([family, commands]) => `    ${family}) _values 'command' ${commands.join(" ")} ;;`)
+      .join("\n");
+    return `#compdef nanasa
+_arguments '1:family:(${families})' '2:command:->command'
+case "$words[2]" in
+${cases}
+esac
+`;
+  }
+  if (shell === "fish") {
+    const commands = populated.map(
+      ([family, entries]) =>
+        `complete -c nanasa -f -n '__fish_seen_subcommand_from ${family}' -a '${entries.join(" ")}'`,
     );
-  if (shell === "powershell")
-    return `Register-ArgumentCompleter -CommandName nanasa -ScriptBlock { '${words}' -split ' ' }\n`;
+    return [
+      `complete -c nanasa -f -n '__fish_use_subcommand' -a '${families}'`,
+      ...commands,
+      "",
+    ].join("\n");
+  }
+  if (shell === "powershell") {
+    const entries = [...inventory.entries()]
+      .map(
+        ([family, commands]) =>
+          `    '${family}' = @(${commands.map((command) => `'${command}'`).join(", ")})`,
+      )
+      .join("\n");
+    return `Register-ArgumentCompleter -Native -CommandName nanasa -ScriptBlock {
+  param($wordToComplete, $commandAst)
+  $commands = @{
+${entries}
+  }
+  $elements = @($commandAst.CommandElements)
+  $candidates = if ($elements.Count -le 2) {
+    $commands.Keys
+  } else {
+    $commands[[string]$elements[1]]
+  }
+  $candidates | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+    [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+  }
+}
+`;
+  }
   throw new CliUsageError("completion shell must be bash, zsh, fish, or powershell");
 }
 
@@ -317,7 +447,11 @@ export async function runControlCli(
       return 0;
     }
     const packageRoot = publicPackageRoot(import.meta.dirname);
-    const service = new SystemdUserService({ repositoryRoot, packageRoot });
+    const service = new SystemdUserService({
+      repositoryRoot,
+      packageRoot,
+      ...(declaration.id === "service.install" ? resolveServiceStartup(options) : {}),
+    });
     if (declaration.family === "service") {
       let value: unknown;
       if (declaration.command === "install") value = service.install();

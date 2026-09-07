@@ -171,10 +171,10 @@ will use. Do not replace the configured agent key with the member ID.
 
 ## Start authenticated coordination
 
-Start Nanasa with MCP enabled:
+Start Nanasa. Authenticated coordination MCP is enabled by default:
 
 ```bash
-npx nanasa start --mcp
+npx nanasa start
 ```
 
 At launch, Nanasa writes a private provider-specific prompt overlay, registers

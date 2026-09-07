@@ -1,4 +1,4 @@
-# Send messages and enable MCP
+# Send messages and use MCP
 
 Package users can send tasks from the portal and let active agents coordinate
 through the Model Context Protocol (MCP).
@@ -37,18 +37,23 @@ Agents should report progress when work starts or changes stage, report a clear
 blocker when input is needed, and publish a final outcome when work ends. A
 recipient can reply in the same conversation or report progress independently.
 
-## Enable MCP
+## Use the default MCP endpoint
 
-Start the installed package with MCP enabled:
+Start the installed package:
 
 ```bash
-npx nanasa start --mcp
+npx nanasa start
 ```
 
-Nanasa registers its MCP endpoint in each supported provider home and injects
+Authenticated loopback MCP is enabled by default because managed teams use it to
+coordinate. Nanasa registers its MCP endpoint in each supported provider home and injects
 short-lived `NANASA_MCP_URL` and `NANASA_MCP_TOKEN` values into each run. It also
 injects `NANASA_STATUS_URL` for lifecycle reporting. Generated provider files
 refer to the token by environment variable and do not contain the capability.
+
+Use `npx nanasa start --no-mcp` only for a deliberate diagnostic or single-agent
+session that does not need Nanasa coordination tools. The equivalent automation setting
+is `NANASA_MCP_ENABLED=false`.
 
 This Nanasa-owned server is separate from consumer MCP files selected through
 `providerFiles.mcp`. Consumer files use the provider's native JSON format and

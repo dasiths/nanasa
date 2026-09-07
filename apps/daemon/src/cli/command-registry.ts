@@ -772,7 +772,7 @@ export const CLI_COMMAND_REGISTRY = Object.freeze([
       a[0] === undefined
         ? "/api/v1/statuses"
         : `/api/v1/statuses?groupId=${encodeURIComponent(a[0])}`,
-    positionals: [],
+    positionals: ["group-id?"],
     response: AgentStatusSummarySchema.array(),
     summary: "List status",
   }),
@@ -906,7 +906,7 @@ export const CLI_COMMAND_REGISTRY = Object.freeze([
     method: "GET",
     path: (a) =>
       `/api/v1/open-waits?groupId=${encodeURIComponent(a[0] ?? "")}${a[1] === undefined ? "" : `&memberId=${encodeURIComponent(a[1])}`}`,
-    positionals: ["group-id"],
+    positionals: ["group-id", "member-id?"],
     response: OpenWaitSchema.array(),
     summary: "List open waits",
   }),

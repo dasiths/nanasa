@@ -23,6 +23,20 @@ Every failure writes one compact JSON object to standard error with `message`,
 stable machine-readable identifier, and details contain optional diagnostics.
 Usage failures use the same shape and retain exit code 2.
 
+Shared control options include:
+
+* `--body <json>` for request payloads on commands that accept or require a body
+* `--api-url <url>` or `NANASA_API_URL` for an explicit loopback control endpoint
+* `--operator-token-file <path>` for an alternate owner-only operator credential
+* `--idempotency-key <key>` for mutating routes that permit idempotency
+* `--request-id <id>` for request correlation
+* `--output json|text` and the `--json` shorthand for output selection
+* `--timeout <milliseconds>` for a value from 1 through 300000
+
+`auth login` additionally accepts `--agent <agent-map-key>`. Remote operations use
+`--repo <absolute-path>`. Commands reject unknown options, bodies on body-free routes,
+and idempotency keys on routes that forbid them.
+
 ## Bootstrap and local lifecycle
 
 ```text
@@ -32,7 +46,8 @@ npx nanasa doctor
 npx nanasa auth login <integration-key> [--agent <agent-map-key>]
 npx nanasa auth portal
 npx nanasa docs
-npx nanasa start [--host <host>] [--port <port>] [--mcp]
+npx nanasa start [--host <host>] [--port <port>] [--mcp | --no-mcp]
+npx nanasa service install [--host <host>] [--port <port>] [--mcp | --no-mcp]
 npx nanasa reset --from-alpha --confirm <repository-root>
 ```
 
@@ -42,7 +57,13 @@ before the daemon. Portal login requires a running daemon. `docs` prints the
 absolute path to the packaged help index and works outside a repository.
 
 Running `npx nanasa` with no command is the same as `start`. The default address
-is `127.0.0.1:3210`. MCP requires a loopback listener.
+is `127.0.0.1:3210`. Authenticated MCP is enabled by default because managed teams
+use it for coordination, and it requires a loopback listener. Use `--no-mcp` only
+for a deliberate diagnostic or single-agent session without coordination tools.
+
+For startup settings, command-line options override their `NANASA_*` environment
+equivalents, which override product defaults. `service install` persists the resolved
+host, port, and MCP state in the owner-only service environment file.
 
 The alpha reset is destructive. It creates a verified backup, reports a redacted
 inventory, removes owned runtime state, and initializes the current schema. Use
@@ -55,7 +76,7 @@ The CLI covers these families:
 * Metadata, API, configuration, authentication, state, and trust
 * Extensions, groups, roles, agents, checkouts, and worktrees
 * Runs, status, messages, actions, waits, terminals, and consoles
-* Events, daemon diagnostics, services, migrations, remote access, and completion
+* Events, daemon diagnostics, services, remote access, and completion
 
 Examples:
 
@@ -66,6 +87,8 @@ npx nanasa checkout assign group_product --body <json>
 npx nanasa checkout refresh <checkout-id>
 npx nanasa run start group_product agent_builder
 npx nanasa status list
+npx nanasa status list group_product
+npx nanasa wait list group_product copilot.builder
 npx nanasa message list group_product
 npx nanasa terminal status <run-id>
 npx nanasa events watch
@@ -105,7 +128,8 @@ Hard failures take precedence over approval when a group has mixed outcomes.
 
 Service commands are `install`, `status`, `start`, `stop`, `restart`, `remove`,
 `logs`, `wait-ready`, `upgrade`, and `rollback`. They operate on the exact
-repository-local systemd user unit.
+repository-local systemd user unit. `service install` accepts `--host`, `--port`,
+`--mcp`, and `--no-mcp`; the other service commands reject startup options.
 
 Remote commands describe identity, start or restart the remote service, and open
 an OpenSSH loopback tunnel. OpenSSH remains the authentication authority.
@@ -113,10 +137,13 @@ an OpenSSH loopback tunnel. OpenSSH remains the authentication authority.
 ## Shell completion
 
 Generate completion for a supported shell with the completion family, for
-example:
+example. Generated scripts complete both command families and their subcommands:
 
 ```bash
 npx nanasa completion bash
+npx nanasa completion zsh
+npx nanasa completion fish
+npx nanasa completion powershell
 ```
 
 The [generated command inventory](cli.json) comes from the declarations used for
@@ -128,17 +155,20 @@ version.
 The installed command sets repository and package paths automatically. Advanced
 service or integration environments can use:
 
-* `NANASA_HOST`, default `127.0.0.1`; MCP requires loopback
+* `NANASA_HOST`, default `127.0.0.1`; the control plane requires loopback
 * `NANASA_PORT`, default `3210`
+* `NANASA_API_URL`, otherwise derived from `NANASA_HOST` and `NANASA_PORT`
 * `NANASA_REPO_ROOT`, otherwise discovered from the current directory
 * `NANASA_DATA_PATH`, default `.nanasa/state/nanasa.sqlite`
 * `NANASA_RUNTIME_PATH`, default `.nanasa/runtime`
 * `NANASA_TMUX_SERVER`, default `nanasa`
 * `NANASA_SERVE_PORTAL` and `NANASA_PORTAL_PATH` for portal asset serving
-* `NANASA_MCP_ENABLED`, default `false`, and `NANASA_MCP_PATH`, default `/mcp`
+* `NANASA_MCP_ENABLED`, default `true`, and `NANASA_MCP_PATH`, default `/mcp`
 * `NANASA_MCP_URL`, derived from the listener unless set to an external HTTPS URL
 * `NANASA_MCP_OPERATOR_TOKEN`, required for operator or external MCP access and
-	at least 32 characters
+  at least 32 characters
+* `NANASA_ALLOW_AUTONOMOUS`, default `false`, authorizes expanded execution profiles
+* `NANASA_ALLOW_PROVIDER_FILES`, default `false`, authorizes repository provider files
 
 Do not bind the daemon to a non-loopback host when MCP is enabled. Do not store
 operator or provider credentials in repository configuration.

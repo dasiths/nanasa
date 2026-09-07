@@ -16,8 +16,8 @@ function usage() {
        nanasa docs
        nanasa auth login <integration> [--agent <agent-id>]
        nanasa auth portal
-         nanasa reset --from-alpha --confirm <repository-root>
-         nanasa <family> <command> [arguments] [--body <json>]
+       nanasa reset --from-alpha --confirm <repository-root>
+       nanasa <family> <command> [arguments] [--body <json>]
 
 Commands:
   start              Start the daemon and portal (default)
@@ -31,12 +31,19 @@ Commands:
 
 Operational families:
   metadata config auth state trust consent extension group role run status message agent action
-  wait terminal console checkout worktree events api daemon service migration remote completion
+  wait terminal console checkout worktree events api daemon service remote completion
 
-Options:
+Start and service install options:
   --host <host>       Listen host; MCP requires loopback (default: 127.0.0.1)
-  --port <port>       Listen port (default: NANASA_PORT or 3210)
-  --mcp               Enable authenticated MCP (default path: /mcp)
+  --port <port>       Listen port (default: 3210; env: NANASA_PORT)
+  --mcp               Enable authenticated MCP (default)
+  --no-mcp            Disable authenticated MCP
+
+Shared control options:
+  --body <json>        Send a JSON request body
+  --api-url <url>      Override the loopback control API URL
+  --output <mode>      Select json or text output
+  --timeout <ms>       Set a timeout from 1 to 300000 milliseconds
   -h, --help          Show this help
   -v, --version       Show the installed version`;
 }
@@ -140,6 +147,7 @@ function optionValue(args, index, option) {
 
 function parseStartOptions(args) {
   const environment = {};
+  let mcpOption;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--host") {
@@ -149,7 +157,17 @@ function parseStartOptions(args) {
       environment.NANASA_PORT = optionValue(args, index, argument);
       index += 1;
     } else if (argument === "--mcp") {
+      if (mcpOption === false) {
+        throw new UsageError("--mcp and --no-mcp cannot be used together");
+      }
+      mcpOption = true;
       environment.NANASA_MCP_ENABLED = "true";
+    } else if (argument === "--no-mcp") {
+      if (mcpOption === true) {
+        throw new UsageError("--mcp and --no-mcp cannot be used together");
+      }
+      mcpOption = false;
+      environment.NANASA_MCP_ENABLED = "false";
     } else {
       throw new UsageError(`Unknown option: ${argument}`);
     }

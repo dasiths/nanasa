@@ -115,11 +115,12 @@ test("start rejects retired terminal-provider options", () => {
   assert.equal(existsSync(join(nested, ".nanasa")), false);
 });
 
-test("help documents authenticated MCP enablement", () => {
+test("help documents default authenticated MCP and its explicit opt-out", () => {
   const result = runCli(temporaryRepository(), ["--help"]);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /--host <host>\s+Listen host; MCP requires loopback/);
-  assert.match(result.stdout, /--mcp\s+Enable authenticated MCP \(default path: \/mcp\)/);
+  assert.match(result.stdout, /--mcp\s+Enable authenticated MCP \(default\)/);
+  assert.match(result.stdout, /--no-mcp\s+Disable authenticated MCP/);
   assert.match(result.stdout, /nanasa auth login <integration> \[--agent <agent-id>\]/);
   assert.match(result.stdout, /nanasa auth portal/);
   assert.match(result.stdout, /setup\s+Prepare repository-local integration configuration homes/);
@@ -127,6 +128,15 @@ test("help documents authenticated MCP enablement", () => {
   assert.match(result.stdout, /trust consent extension/);
   assert.match(result.stdout, /doctor\s+Validate configuration, commands, and integration homes/);
   assert.match(result.stdout, /docs\s+Print the absolute path to the packaged documentation index/);
+});
+
+test("start rejects conflicting MCP switches", () => {
+  const repository = temporaryRepository();
+  assert.equal(runCli(repository, ["init"]).status, 0);
+
+  const result = runCli(repository, ["start", "--mcp", "--no-mcp"]);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /cannot be used together/);
 });
 
 test("docs locates packaged help without a repository or daemon", () => {
@@ -265,7 +275,8 @@ test("completion is daemon-free and grammar failures use exit 2", () => {
   const repository = temporaryRepository();
   const completion = runCli(repository, ["completion", "bash"]);
   assert.equal(completion.status, 0, completion.stderr);
-  assert.match(completion.stdout, /complete -W/);
+  assert.match(completion.stdout, /complete -F _nanasa_completion nanasa/);
+  assert.match(completion.stdout, /group\) COMPREPLY=.*create delete get list reorder update/);
 
   const invalid = runCli(repository, ["group", "unknown"]);
   assert.equal(invalid.status, 1);

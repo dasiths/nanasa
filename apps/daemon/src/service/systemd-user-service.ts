@@ -16,6 +16,7 @@ import {
   type ServiceDescriptor,
   ServiceDescriptorSchema,
 } from "@nanasa/contracts";
+import { assertLoopbackControlHost } from "../authority-policy.js";
 import { repositoryIdentity } from "../protocol-metadata.js";
 
 export type ServiceOperation =
@@ -63,6 +64,30 @@ function environmentValue(path: string): string {
   return path.replaceAll("\\", "\\\\").replaceAll(" ", "\\x20");
 }
 
+function hostForUrl(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
+function persistedServiceEnvironment(path: string): Record<string, string> {
+  if (!existsSync(path)) return {};
+  return Object.fromEntries(
+    readFileSync(path, "utf8")
+      .split(/\r?\n/)
+      .filter((line) => line.length > 0 && line.includes("="))
+      .map((line) => {
+        const separator = line.indexOf("=");
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
+}
+
+function persistedBoolean(name: string, value: string | undefined): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (value === "true" || value === "1") return true;
+  if (value === "false" || value === "0") return false;
+  throw new Error(`${name} must be true, false, 1, or 0`);
+}
+
 function commandFailure(result: SpawnSyncReturns<string>, operation: string): Error {
   const detail =
     result.error?.message ?? result.stderr.trim() ?? result.stdout.trim() ?? "unknown failure";
@@ -77,7 +102,9 @@ export class SystemdUserService {
   readonly #templatePath: string;
   readonly #runner: ServiceCommandRunner;
   readonly #home: string;
+  readonly #host: string;
   readonly #port: number;
+  readonly #mcpEnabled: boolean;
 
   public constructor(options: {
     repositoryRoot: string;
@@ -86,7 +113,9 @@ export class SystemdUserService {
     cliPath?: string;
     templatePath?: string;
     home?: string;
+    host?: string;
     port?: number;
+    mcpEnabled?: boolean;
     runner?: ServiceCommandRunner;
   }) {
     this.#repositoryRoot = resolve(options.repositoryRoot);
@@ -98,7 +127,22 @@ export class SystemdUserService {
     );
     this.#runner = options.runner ?? defaultRunner;
     this.#home = resolve(options.home ?? homedir());
-    this.#port = options.port ?? 3210;
+    const persisted = persistedServiceEnvironment(
+      join(this.#repositoryRoot, ".nanasa", "runtime", "service.env"),
+    );
+    this.#host = options.host ?? persisted.NANASA_HOST ?? "127.0.0.1";
+    this.#port = options.port ?? Number(persisted.NANASA_PORT ?? 3210);
+    this.#mcpEnabled =
+      options.mcpEnabled ??
+      persistedBoolean("NANASA_MCP_ENABLED", persisted.NANASA_MCP_ENABLED) ??
+      true;
+    if (this.#host.length === 0 || /[\0\r\n]/.test(this.#host)) {
+      throw new Error("NANASA_HOST must be a non-empty single-line host");
+    }
+    assertLoopbackControlHost(this.#host);
+    if (!Number.isInteger(this.#port) || this.#port < 1 || this.#port > 65_535) {
+      throw new Error("NANASA_PORT must be an integer between 1 and 65535");
+    }
     [
       this.#repositoryRoot,
       this.#packageRoot,
@@ -161,7 +205,7 @@ export class SystemdUserService {
     mkdirSync(dirname(this.environmentPath), { recursive: true, mode: 0o700 });
     writeFileSync(
       this.environmentPath,
-      `NANASA_REPO_ROOT=${environmentValue(this.#repositoryRoot)}\nNANASA_PORT=${this.#port}\n`,
+      `NANASA_REPO_ROOT=${environmentValue(this.#repositoryRoot)}\nNANASA_HOST=${this.#host}\nNANASA_PORT=${this.#port}\nNANASA_MCP_ENABLED=${this.#mcpEnabled}\n`,
       { mode: 0o600 },
     );
     chmodSync(this.environmentPath, 0o600);
@@ -265,7 +309,7 @@ export class SystemdUserService {
 
   public async waitReady(timeoutMs = 30_000): Promise<ServiceDescriptor> {
     const started = Date.now();
-    const url = `http://127.0.0.1:${this.#port}/api/v1/meta`;
+    const url = `http://${hostForUrl(this.#host)}:${this.#port}/api/v1/meta`;
     const buildPath = join(this.#packageRoot, "dist", "meta", "build.json");
     const expectedBuild = existsSync(buildPath)
       ? (JSON.parse(readFileSync(buildPath, "utf8")) as {
@@ -333,7 +377,7 @@ export class SystemdUserService {
       packageRoot: this.#packageRoot,
       nodePath: this.#nodePath,
       cliPath: this.#cliPath,
-      portalUrl: `http://127.0.0.1:${this.#port}`,
+      portalUrl: `http://${hostForUrl(this.#host)}:${this.#port}`,
       state,
       detail: resolvedDetail,
       killMode: "process",

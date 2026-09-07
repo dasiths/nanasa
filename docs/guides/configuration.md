@@ -225,7 +225,7 @@ Autonomous behavior expands provider authority. Enable it outside repository
 configuration before starting Nanasa:
 
 ```bash
-NANASA_ALLOW_AUTONOMOUS=true npx nanasa start --mcp
+NANASA_ALLOW_AUTONOMOUS=true npx nanasa start
 ```
 
 Without that daemon-owned authorization, an integration requesting expanded
@@ -278,7 +278,7 @@ and rejects files that define the reserved `nanasa` server.
 Authorize repository provider files outside repository configuration:
 
 ```bash
-NANASA_ALLOW_PROVIDER_FILES=true npx nanasa start --mcp
+NANASA_ALLOW_PROVIDER_FILES=true npx nanasa start
 ```
 
 The first custom launch pauses for operator consent before Nanasa creates a run,

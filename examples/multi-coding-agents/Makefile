@@ -94,7 +94,7 @@ doctor: package
 	$(NANASA) doctor
 
 start: package
-	$(NANASA) start --mcp
+	$(NANASA) start
 
 run: start
 
@@ -111,7 +111,7 @@ first-run:
 		'  make start'
 
 dev:
-	@$(call run_with_registry_env,cd "$(PRODUCT_ROOT)" && NANASA_REPO_ROOT="$(EXAMPLE_ROOT)" NANASA_MCP_ENABLED=true pnpm dev)
+	@$(call run_with_registry_env,cd "$(PRODUCT_ROOT)" && NANASA_REPO_ROOT="$(EXAMPLE_ROOT)" pnpm dev)
 
 .PHONY: portal portal-auth portal-dev
 
