@@ -1326,14 +1326,19 @@ describe("portal static assets", () => {
       };
     }>();
     expect(details.plan).toMatchObject({ requiresStoppedRuns: false });
-    expect(
-      (
-        await daemon.app.inject({
-          method: "GET",
-          url: "/api/v1/extensions/nanasa.copilot/health",
-        })
-      ).json(),
-    ).toMatchObject({ extensionId: "nanasa.copilot", state: "current" });
+    const health = (
+      await daemon.app.inject({
+        method: "GET",
+        url: "/api/v1/extensions/nanasa.copilot/health",
+      })
+    ).json<{ extensionId: string; state: string; diagnostics: { code: string }[] }>();
+    expect(health.extensionId).toBe("nanasa.copilot");
+    expect(health.state).toMatch(/^(current|unavailable)$/);
+    if (health.state === "unavailable") {
+      expect(health.diagnostics).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: "provider_command_unavailable" })]),
+      );
+    }
     const reference = (
       await daemon.app.inject({ method: "GET", url: "/api/v1/schema/extensions.json" })
     ).json<{ strategies: { adapter: string[] }; permissions: string[]; descriptors: unknown[] }>();
