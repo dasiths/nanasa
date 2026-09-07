@@ -657,6 +657,9 @@ export class RunRuntimeCoordinator {
 
   async #recoverMissingRun(run: AgentRun, forceFresh = false): Promise<AgentRun | undefined> {
     if (run.recoveryAttempts >= this.#recoveryMaxAttempts) {
+      if (!forceFresh && ["running", "starting"].includes(run.status)) {
+        this.#store.updateRunStatus(run.id, "failed", { reason: "recovery_attempts_exhausted" });
+      }
       if (run.recoveryPhase !== "failed") {
         this.#store.transitionRunRecovery(run.id, run.generation, "failed", {
           reason: "recovery_attempts_exhausted",

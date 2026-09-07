@@ -1,7 +1,4 @@
----
-title: Agent browser URL requests
-description: Request browser opens from managed agents and handle them through portal Attention
----
+# Agent browser URL requests
 
 ## Open an agent request
 
@@ -78,4 +75,4 @@ installed so they receive the managed environment.
 
 A stopped run or changed generation invalidates its requests. Ask the current
 agent to retry. A helper exit status of zero only means Nanasa accepted the
-request. See the [portal guide](next/guides/portal.md) for general Attention use.
+request. See the [portal guide](guides/portal.md) for general Attention use.

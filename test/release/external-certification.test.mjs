@@ -10,10 +10,10 @@ import { validateCertificationDispatch } from "../../scripts/certification-dispa
 const root = resolve(import.meta.dirname, "../..");
 const script = resolve(root, "scripts", "certify-external.mjs");
 
-test("external certification uses executable capability profiles and real environment lifecycles", () => {
+test("manual compatibility is credential-free and external certification stays explicit", () => {
   const source = readFileSync(script, "utf8");
   const workflow = parseYaml(
-    readFileSync(resolve(root, ".github", "workflows", "certification.yml"), "utf8"),
+    readFileSync(resolve(root, ".github", "workflows", "compatibility.yml"), "utf8"),
   );
   const runtime = readFileSync(
     resolve(root, "scripts", "external-certification-runtime.ts"),
@@ -26,34 +26,28 @@ test("external certification uses executable capability profiles and real enviro
     "utf8",
   );
 
-  assert.deepEqual(workflow.on.workflow_dispatch.inputs.provider_id.options, [
-    "copilot",
-    "claude-code",
-    "opencode",
-    "pi",
+  assert.deepEqual(Object.keys(workflow.on), ["workflow_dispatch"]);
+  assert.equal(workflow.on.workflow_dispatch.inputs.candidate_sha.required, true);
+  assert.deepEqual(Object.keys(workflow.jobs), [
+    "node",
+    "ubuntu",
+    "browser",
+    "arm64",
+    "performance",
+    "dependency-audit",
   ]);
-  assert.equal(workflow.jobs.provider.needs, "validate-dispatch");
-  assert.match(String(workflow.jobs.provider.strategy.matrix.provider_id), /fromJSON/);
-  const dispatchSteps = workflow.jobs["validate-dispatch"].steps;
-  assert.deepEqual(dispatchSteps[0], {
-    uses: "actions/checkout@v4",
-    with: { ref: "${{ inputs.candidate_sha }}", "persist-credentials": false },
-  });
-  assert.equal(dispatchSteps[2].run, "node scripts/certification-dispatch.mjs");
+  assert.doesNotMatch(JSON.stringify(workflow), /self-hosted|secrets\.|COPILOT|ANTHROPIC|OPENAI/);
   for (const job of Object.values(workflow.jobs)) {
-    if (!Array.isArray(job.steps)) continue;
     const checkoutIndex = job.steps.findIndex((item) => item.uses === "actions/checkout@v4");
-    assert.ok(checkoutIndex >= 0, "every certification job must checkout the requested candidate");
+    assert.ok(checkoutIndex >= 0, "every compatibility job must checkout the requested candidate");
     const checkout = job.steps[checkoutIndex];
-    assert.equal(checkout.with.ref, "${{ inputs.candidate_sha }}");
+    assert.equal(checkout.with.ref, "${{ env.NANASA_CANDIDATE_SHA }}");
     assert.equal(checkout.with["persist-credentials"], false);
     const verify = job.steps[checkoutIndex + 1];
     assert.equal(verify?.name, "Verify exact candidate checkout");
-    assert.match(String(verify?.run), /NANASA_CERT_CANDIDATE_SHA/);
+    assert.match(String(verify?.run), /NANASA_CANDIDATE_SHA/);
     assert.match(String(verify?.run), /git rev-parse HEAD/);
   }
-  assert.equal(dispatchSteps[1].name, "Verify exact candidate checkout");
-  assert.equal(dispatchSteps[2].name, "Validate closed certification dispatch");
   assert.deepEqual(validateCertificationDispatch("provider", "copilot"), {
     mode: "provider",
     providerId: "copilot",
@@ -94,15 +88,17 @@ test("external certification uses executable capability profiles and real enviro
   assert.match(runtime, /Remote continuity identity changed across reconnect/);
 });
 
-test("workflows preserve registry authority and release installs runtime prerequisites", () => {
+test("workflows preserve registry authority and release through exact tagged artifacts", () => {
   const registryScript = resolve(root, "scripts", "ci-registry-env.sh");
   const setupScript = resolve(root, "scripts", "setup-pnpm.sh");
   const registry = readFileSync(registryScript, "utf8");
   const setup = readFileSync(setupScript, "utf8");
-  const workflowSources = ["ci.yml", "certification.yml", "release.yml"].map((name) =>
+  const workflowSources = ["ci.yml", "compatibility.yml", "release.yml"].map((name) =>
     readFileSync(resolve(root, ".github", "workflows", name), "utf8"),
   );
   const workflows = workflowSources.map((value) => parseYaml(value));
+  const ci = workflows[0];
+  const compatibility = workflows[1];
   const release = workflows[2];
   assert.match(registry, /elif \[\[ -n "\$\{NPM_CONFIG_REGISTRY:-\}"/);
   assert.match(registry, /NANASA_ALLOW_PUBLIC_REGISTRY_FALLBACK/);
@@ -112,20 +108,27 @@ test("workflows preserve registry authority and release installs runtime prerequ
   assert.match(setup, /--ignore-scripts/);
   assert.doesNotMatch(workflowSources.join("\n"), /source \.devcontainer\/\.env\.example/);
   assert.doesNotMatch(workflowSources.join("\n"), /corepack prepare/);
-  const releaseSteps = release.jobs["exact-commit-release"].steps;
-  assert.ok(
-    releaseSteps.some((step) => String(step.run ?? "").includes("apt-get install -y tmux")),
-  );
-  assert.ok(
-    releaseSteps.some((step) =>
-      String(step.run ?? "").includes("playwright install --with-deps chromium"),
-    ),
-  );
+  assert.deepEqual(Object.keys(compatibility.on), ["workflow_dispatch"]);
+  assert.equal(ci.jobs.required.needs.length, 5);
+  assert.match(workflowSources[0], /pnpm acceptance:ci/);
+  assert.doesNotMatch(workflowSources[0], /secrets\.|COPILOT|ANTHROPIC|OPENAI/);
+  assert.equal(release.jobs.ci.uses, "./.github/workflows/ci.yml");
+  assert.equal(release.jobs["github-release"].environment, "release");
+  assert.equal(release.jobs["npm-publish"].environment, "release");
+  assert.match(release.jobs["npm-publish"].if, /NANASA_PUBLISH_NPM/);
+  assert.equal(release.jobs["npm-publish"].permissions["id-token"], "write");
+  const releaseSource = workflowSources[2];
+  assert.match(releaseSource, /git merge-base --is-ancestor/);
+  assert.match(releaseSource, /GITHUB_REF_NAME.*package_version/);
+  assert.match(releaseSource, /actions\/attest-build-provenance@v2/);
+  assert.match(releaseSource, /gh release create/);
+  assert.match(releaseSource, /npm publish/);
+  assert.match(releaseSource, /--provenance/);
   for (const workflow of workflows) {
     for (const job of Object.values(workflow.jobs)) {
       if (
         !Array.isArray(job.steps) ||
-        !job.steps.some((step) => step.uses === "actions/setup-node@v4")
+        !job.steps.some((step) => String(step.run ?? "").includes("bash scripts/setup-pnpm.sh"))
       ) {
         continue;
       }

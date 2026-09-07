@@ -45,6 +45,10 @@ function configuredBoolean(name: string, value: string | undefined, fallback: bo
   throw new Error(`${name} must be true, false, 1, or 0`);
 }
 
+export function configuredMcpEnabled(value: string | undefined): boolean {
+  return configuredBoolean("NANASA_MCP_ENABLED", value, true);
+}
+
 function configuredPath(name: string, value: string | undefined): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -111,7 +115,7 @@ async function start(): Promise<void> {
     configuredPath("NANASA_RUNTIME_PATH", process.env.NANASA_RUNTIME_PATH) ??
     loadedConfig.runtimeDirectory;
   const tmuxServerName = process.env.NANASA_TMUX_SERVER ?? "nanasa";
-  const mcpEnabled = configuredBoolean("NANASA_MCP_ENABLED", process.env.NANASA_MCP_ENABLED, false);
+  const mcpEnabled = configuredMcpEnabled(process.env.NANASA_MCP_ENABLED);
   const allowAutonomous = configuredBoolean(
     "NANASA_ALLOW_AUTONOMOUS",
     process.env.NANASA_ALLOW_AUTONOMOUS,

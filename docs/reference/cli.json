@@ -604,7 +604,12 @@
       "family": "status",
       "command": "list",
       "mode": "control",
-      "positionals": [],
+      "positionals": [
+        "group-id"
+      ],
+      "optionalPositionals": [
+        "group-id"
+      ],
       "summary": "List status"
     },
     {
@@ -723,7 +728,11 @@
       "command": "list",
       "mode": "control",
       "positionals": [
-        "group-id"
+        "group-id",
+        "member-id"
+      ],
+      "optionalPositionals": [
+        "member-id"
       ],
       "summary": "List open waits"
     },

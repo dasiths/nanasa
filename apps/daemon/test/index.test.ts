@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { validateMcpStartupConfiguration } from "../src/index.js";
 import { assertLoopbackControlHost } from "../src/authority-policy.js";
+import { configuredMcpEnabled, validateMcpStartupConfiguration } from "../src/index.js";
 
 const operatorToken = "configured-remote-operator-token-1234567890";
 
 describe("MCP startup configuration", () => {
+  it("enables MCP by default and honors an explicit environment opt-out", () => {
+    expect(configuredMcpEnabled(undefined)).toBe(true);
+    expect(configuredMcpEnabled("true")).toBe(true);
+    expect(configuredMcpEnabled("false")).toBe(false);
+    expect(() => configuredMcpEnabled("sometimes")).toThrow(/NANASA_MCP_ENABLED/);
+  });
+
   it("rejects non-loopback control-plane listeners in every mode", () => {
     expect(() => assertLoopbackControlHost("0.0.0.0")).toThrow("must remain loopback");
     expect(() => assertLoopbackControlHost("::")).toThrow("must remain loopback");

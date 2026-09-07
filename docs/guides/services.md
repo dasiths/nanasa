@@ -17,6 +17,20 @@ The installed unit is tied to this repository and package location. Readiness
 requires the expected repository identity and a ready daemon lifecycle. Agents
 continue to belong to the private tmux server rather than the browser.
 
+The service uses the same complete startup defaults as `npx nanasa start`: loopback
+host `127.0.0.1`, port `3210`, and authenticated MCP enabled. Set persistent startup
+values when installing the service:
+
+```bash
+npx nanasa service install --host ::1 --port 4210
+npx nanasa service install --no-mcp
+```
+
+The equivalent `NANASA_HOST`, `NANASA_PORT`, and `NANASA_MCP_ENABLED` environment
+variables are useful for automation. Installation flags take precedence over environment
+variables, which take precedence over product defaults. Nanasa writes the resolved values
+to the owner-only `.nanasa/runtime/service.env` file.
+
 ## Inspect and stop it
 
 ```bash

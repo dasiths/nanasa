@@ -1248,6 +1248,19 @@ describe("portal application", () => {
     await waitFor(() => expect(client.loadSnapshot).toHaveBeenCalledTimes(3));
   });
 
+  it("uses the supplied logo in the rail without removing heading actions", async () => {
+    render(<App client={createClient()} />);
+    const rail = await screen.findByRole("complementary", { name: "Groups and agents" });
+    const logo = within(rail).getByRole("img", { name: "Nanasa" });
+    expect(logo).toHaveAttribute("src", expect.stringContaining("logo"));
+    const heading = logo.closest(".rail-heading") as HTMLElement;
+    expect(within(heading).queryByText("Operations")).not.toBeInTheDocument();
+    expect(
+      within(heading).getByRole("button", { name: "Open command palette" }),
+    ).toBeInTheDocument();
+    expect(within(heading).getByRole("button", { name: "Create group" })).toBeInTheDocument();
+  });
+
   it("replaces the rail Add agent shortcut with Console", async () => {
     const user = userEvent.setup();
     const client = createClient();
@@ -2187,6 +2200,9 @@ describe("portal application", () => {
     ["restarting", "stopped", "Starting", "Stop Builder"],
     ["recovered", "running", "Working", "Stop Builder"],
     ["failed", "failed", "Failed", "Retry Builder"],
+    ["failed", "running", "Failed", "Stop Builder"],
+    ["failed", "starting", "Failed", "Stop Builder"],
+    ["failed", "stopping", "Failed", "Stop Builder"],
   ] as const)(
     "projects %s recovery while preserving the correct action",
     async (recoveryPhase, runStatus, statusLabel, actionName) => {

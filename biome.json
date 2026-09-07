@@ -14,7 +14,7 @@
       "examples/multi-coding-agents/bin/**",
       "scripts/**",
       "docs/**",
-      "!!docs/next/reference/**",
+      "!!docs/reference/**",
       "test/**",
       "templates/**",
       "apps/**",

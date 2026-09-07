@@ -3,6 +3,7 @@
   background: #e9eeeb;
   font-family: "IBM Plex Sans Condensed", sans-serif;
   font-synthesis: none;
+  --portal-header-min-height: 70px;
   --canvas: #eef1ef;
   --surface: #ffffff;
   --surface-muted: #f2f5f3;
@@ -236,13 +237,27 @@ h2 {
 }
 
 .rail-heading {
-  min-height: 70px;
+  min-height: var(--portal-header-min-height);
+  gap: 10px;
   padding: 12px 13px 10px 16px;
   border-bottom: 1px solid var(--line);
 }
 
+.rail-brand {
+  flex: 1;
+  min-width: 0;
+}
+
+.rail-brand img {
+  display: block;
+  width: 100%;
+  max-width: 180px;
+  height: auto;
+}
+
 .rail-heading-actions {
   display: flex;
+  flex-shrink: 0;
   gap: 5px;
 }
 
@@ -1791,7 +1806,7 @@ textarea {
 }
 
 .workspace-header {
-  min-height: 70px;
+  min-height: var(--portal-header-min-height);
   gap: 18px;
   border-bottom: 1px solid var(--line);
   background: var(--header-surface);
@@ -1799,7 +1814,6 @@ textarea {
 }
 
 .workspace-header-group {
-  min-height: 58px;
   gap: 12px;
   padding-block: 5px;
 }

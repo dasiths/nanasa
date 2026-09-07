@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
-const docsRoot = join(root, "docs", "next");
+const docsRoot = join(root, "docs");
 const required = [
   join(root, "README.md"),
   join(root, "apps", "portal", "README.md"),

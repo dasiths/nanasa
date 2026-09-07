@@ -23,7 +23,7 @@ import { resolveProviderStateHome } from "../src/provider-state-home.js";
 import { ProviderStateRepository } from "../src/provider-state-repository.js";
 import { UserCredentialBroker } from "../src/user-credential-broker.js";
 
-const examplesRoot = fileURLToPath(new URL("../../../docs/next/examples/", import.meta.url));
+const examplesRoot = fileURLToPath(new URL("../../../docs/examples/", import.meta.url));
 const productRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const multiCodingAgentsRoot = join(productRoot, "examples", "multi-coding-agents");
 const temporaryDirectories: string[] = [];

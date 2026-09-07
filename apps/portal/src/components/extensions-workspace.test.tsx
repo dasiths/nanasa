@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { PortalClient } from "../api.js";
@@ -110,6 +110,101 @@ function client(): PortalClient {
 }
 
 describe("ExtensionsWorkspace", () => {
+  const alternate = {
+    ...catalog,
+    descriptor: {
+      ...descriptor,
+      metadata: { ...descriptor.metadata, id: "nanasa.alternate", name: "Alternate Provider" },
+    },
+  };
+  const alternateInspect = {
+    ...inspect,
+    catalog: alternate,
+    plan: { ...inspect.plan, extensionId: "nanasa.alternate", planDigest: "e".repeat(64) },
+  };
+
+  it.each(["resolve", "reject"] as const)(
+    "ignores an older inspection that later %ss",
+    async (outcome) => {
+      const portal = client();
+      const user = userEvent.setup();
+      let resolveOld!: (value: typeof inspect) => void;
+      let rejectOld!: (reason: Error) => void;
+      const older = new Promise<typeof inspect>((resolve, reject) => {
+        resolveOld = resolve;
+        rejectOld = reject;
+      });
+      vi.mocked(portal.listProviderExtensions).mockResolvedValue([catalog, alternate]);
+      vi.mocked(portal.inspectProviderExtension).mockImplementation((id) =>
+        id === "nanasa.copilot" ? older : Promise.resolve(alternateInspect),
+      );
+      render(<ExtensionsWorkspace client={portal} revision={1} onChanged={vi.fn()} />);
+      await waitFor(() =>
+        expect(portal.inspectProviderExtension).toHaveBeenCalledWith("nanasa.copilot"),
+      );
+      await user.click(screen.getByRole("button", { name: /Alternate Provider/ }));
+      await screen.findByRole("heading", { name: "Alternate Provider" });
+      await act(async () => {
+        if (outcome === "resolve") resolveOld(inspect);
+        else rejectOld(new Error("stale inspection failure"));
+      });
+      expect(screen.getByRole("heading", { name: "Alternate Provider" })).toBeVisible();
+      expect(screen.queryByText("stale inspection failure")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Approve exact plan" }));
+      expect(portal.trustProviderExtension).toHaveBeenCalledWith("nanasa.alternate", {
+        planDigest: alternateInspect.plan.planDigest,
+        configRevision: alternateInspect.plan.configRevision,
+      });
+    },
+  );
+
+  it("removes the old actionable plan while the next inspection fails", async () => {
+    const portal = client();
+    const user = userEvent.setup();
+    let rejectNext!: (reason: Error) => void;
+    vi.mocked(portal.listProviderExtensions).mockResolvedValue([catalog, alternate]);
+    vi.mocked(portal.inspectProviderExtension).mockImplementation((id) =>
+      id === "nanasa.copilot"
+        ? Promise.resolve(inspect)
+        : new Promise((resolve, reject) => {
+            rejectNext = reject;
+          }),
+    );
+    render(<ExtensionsWorkspace client={portal} revision={1} onChanged={vi.fn()} />);
+    await screen.findByRole("heading", { name: "GitHub Copilot" });
+    await user.click(screen.getByRole("button", { name: /Alternate Provider/ }));
+    expect(screen.queryByRole("button", { name: "Approve exact plan" })).not.toBeInTheDocument();
+    await act(async () => rejectNext(new Error("inspection unavailable")));
+    expect(await screen.findByRole("alert")).toHaveTextContent("inspection unavailable");
+    expect(screen.queryByRole("button", { name: "Approve exact plan" })).not.toBeInTheDocument();
+    expect(portal.trustProviderExtension).not.toHaveBeenCalled();
+  });
+
+  it("does not replace a newer selection when an older catalog refresh completes", async () => {
+    const portal = client();
+    const user = userEvent.setup();
+    let resolveRefresh!: (items: (typeof catalog)[]) => void;
+    vi.mocked(portal.listProviderExtensions)
+      .mockResolvedValueOnce([catalog, alternate])
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRefresh = resolve;
+          }),
+      );
+    vi.mocked(portal.inspectProviderExtension).mockImplementation(async (id) =>
+      id === "nanasa.copilot" ? inspect : alternateInspect,
+    );
+    const view = render(<ExtensionsWorkspace client={portal} revision={1} onChanged={vi.fn()} />);
+    await screen.findByRole("heading", { name: "GitHub Copilot" });
+    view.rerender(<ExtensionsWorkspace client={portal} revision={2} onChanged={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: /Alternate Provider/ }));
+    await screen.findByRole("heading", { name: "Alternate Provider" });
+    await act(async () => resolveRefresh([catalog]));
+    expect(screen.getByRole("heading", { name: "Alternate Provider" })).toBeVisible();
+    expect(portal.inspectProviderExtension).toHaveBeenCalledTimes(2);
+  });
+
   it("previews permissions and drift and exposes trust, repair, rollback, and confirmed removal", async () => {
     const portal = client();
     const user = userEvent.setup();

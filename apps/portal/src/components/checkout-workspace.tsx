@@ -88,6 +88,7 @@ export function CheckoutWorkspace({
   const [activateOpened, setActivateOpened] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<PortalError>();
+  const [errorTarget, setErrorTarget] = useState<"create" | "attach" | "switch">();
   const [addWorkspaceOpen, setAddWorkspaceOpen] = useState(false);
   const [addWorkspaceMode, setAddWorkspaceMode] = useState<AddWorkspaceMode>("create");
   const [forceWorktreeId, setForceWorktreeId] = useState<string>();
@@ -121,9 +122,13 @@ export function CheckoutWorkspace({
     };
   }, [client, sourceCheckoutId, addWorkspaceOpen, addWorkspaceMode, referenceRefresh]);
 
-  const execute = async (operation: () => Promise<unknown>) => {
+  const execute = async (
+    operation: () => Promise<unknown>,
+    target?: "create" | "attach" | "switch",
+  ) => {
     setBusy(true);
     setError(undefined);
+    setErrorTarget(target);
     try {
       await operation();
       await onChanged();
@@ -158,13 +163,15 @@ export function CheckoutWorkspace({
   const create = async (event: FormEvent) => {
     event.preventDefault();
     if (sourceCheckout === undefined) return;
-    await execute(() =>
-      client.createWorktree({
-        sourceCheckoutId: sourceCheckout.id,
-        branch,
-        base,
-        ...(activateCreated ? activation(createGroupId) : {}),
-      }),
+    await execute(
+      () =>
+        client.createWorktree({
+          sourceCheckoutId: sourceCheckout.id,
+          branch,
+          base,
+          ...(activateCreated ? activation(createGroupId) : {}),
+        }),
+      "create",
     );
     setBranch("");
     setAddWorkspaceOpen(false);
@@ -173,12 +180,14 @@ export function CheckoutWorkspace({
   const open = async (event: FormEvent) => {
     event.preventDefault();
     if (sourceCheckout === undefined) return;
-    await execute(() =>
-      client.openCheckout({
-        sourceCheckoutId: sourceCheckout.id,
-        path: openPath,
-        ...(activateOpened ? activation(openGroupId) : {}),
-      }),
+    await execute(
+      () =>
+        client.openCheckout({
+          sourceCheckoutId: sourceCheckout.id,
+          path: openPath,
+          ...(activateOpened ? activation(openGroupId) : {}),
+        }),
+      "attach",
     );
     setOpenPath("");
     setAddWorkspaceOpen(false);
@@ -188,12 +197,14 @@ export function CheckoutWorkspace({
     if (pendingSwitch === undefined) return;
     const group = snapshot.groups.find((candidate) => candidate.id === pendingSwitch.groupId);
     if (group === undefined) return;
-    await execute(() =>
-      client.assignCheckout(group.id, {
-        checkoutId: pendingSwitch.checkoutId,
-        expectedCheckoutRevision: group.checkoutRevision,
-        switchPolicy: policy,
-      }),
+    await execute(
+      () =>
+        client.assignCheckout(group.id, {
+          checkoutId: pendingSwitch.checkoutId,
+          expectedCheckoutRevision: group.checkoutRevision,
+          switchPolicy: policy,
+        }),
+      "switch",
     );
     setPendingSwitch(undefined);
   };
@@ -201,6 +212,7 @@ export function CheckoutWorkspace({
   const refresh = async (checkoutId: string) => {
     setBusy(true);
     setError(undefined);
+    setErrorTarget(undefined);
     try {
       const status = await client.refreshCheckout(checkoutId);
       setStatuses((current) => ({ ...current, [checkoutId]: status }));
@@ -265,7 +277,10 @@ export function CheckoutWorkspace({
               className="primary-button"
               disabled={busy || sourceCheckout === undefined}
               title={sourceCheckout === undefined ? "A primary checkout is required" : undefined}
-              onClick={() => setAddWorkspaceOpen(true)}
+              onClick={() => {
+                setError(undefined);
+                setAddWorkspaceOpen(true);
+              }}
             >
               <Plus aria-hidden="true" size={15} />
               Add workspace
@@ -342,9 +357,10 @@ export function CheckoutWorkspace({
                     aria-label={`Workspace for ${group.name}`}
                     value={checkout?.id ?? ""}
                     disabled={busy || selectableCheckouts.length === 0}
-                    onChange={(event) =>
-                      setPendingSwitch({ groupId: group.id, checkoutId: event.target.value })
-                    }
+                    onChange={(event) => {
+                      setError(undefined);
+                      setPendingSwitch({ groupId: group.id, checkoutId: event.target.value });
+                    }}
                   >
                     {selectableCheckouts.map((candidate) => (
                       <option key={candidate.id} value={candidate.id}>
@@ -486,7 +502,11 @@ export function CheckoutWorkspace({
               <button
                 type="button"
                 aria-pressed={addWorkspaceMode === "create"}
-                onClick={() => setAddWorkspaceMode("create")}
+                disabled={busy}
+                onClick={() => {
+                  setError(undefined);
+                  setAddWorkspaceMode("create");
+                }}
               >
                 <GitBranch aria-hidden="true" size={14} />
                 Create new
@@ -494,12 +514,19 @@ export function CheckoutWorkspace({
               <button
                 type="button"
                 aria-pressed={addWorkspaceMode === "attach"}
-                onClick={() => setAddWorkspaceMode("attach")}
+                disabled={busy}
+                onClick={() => {
+                  setError(undefined);
+                  setAddWorkspaceMode("attach");
+                }}
               >
                 <FolderGit2 aria-hidden="true" size={14} />
                 Attach existing
               </button>
             </div>
+            {error !== undefined && errorTarget === addWorkspaceMode && (
+              <ErrorNotice error={error} className="form-error" />
+            )}
             {addWorkspaceMode === "create" ? (
               <form
                 className="workspace-add-form"
@@ -666,6 +693,7 @@ export function CheckoutWorkspace({
                   type="button"
                   className="icon-button"
                   aria-label="Cancel workspace change"
+                  disabled={busy}
                   onClick={() => setPendingSwitch(undefined)}
                 >
                   <X aria-hidden="true" size={16} />
@@ -687,10 +715,14 @@ export function CheckoutWorkspace({
                   </dd>
                 </div>
               </dl>
+              {error !== undefined && errorTarget === "switch" && (
+                <ErrorNotice error={error} className="form-error" />
+              )}
               <footer>
                 <button
                   type="button"
                   className="compact-button"
+                  disabled={busy}
                   onClick={() => setPendingSwitch(undefined)}
                 >
                   Cancel
@@ -737,7 +769,9 @@ export function CheckoutWorkspace({
           progress
         </p>
       )}
-      {error !== undefined && <ErrorNotice error={error} className="form-error" />}
+      {error !== undefined && errorTarget === undefined && (
+        <ErrorNotice error={error} className="form-error" />
+      )}
     </div>
   );
 }

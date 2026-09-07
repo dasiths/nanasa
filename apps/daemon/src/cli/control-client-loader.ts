@@ -10,6 +10,19 @@ export interface LoadedControlClient {
   readonly operatorToken: string;
 }
 
+function hostForUrl(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
+export function defaultControlApiUrl(environment: NodeJS.ProcessEnv): string {
+  const host = environment.NANASA_HOST ?? "127.0.0.1";
+  const port = Number(environment.NANASA_PORT ?? "3210");
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("NANASA_PORT must be an integer between 1 and 65535");
+  }
+  return `http://${hostForUrl(host)}:${port}`;
+}
+
 function readOwnerCredential(path: string): string {
   const resolved = resolve(path);
   const metadata = lstatSync(resolved);
@@ -42,10 +55,11 @@ export function loadControlClient(
   options: { apiUrl?: string; operatorTokenFile?: string } = {},
 ): LoadedControlClient {
   const loaded = loadNanasaConfig(repositoryRoot);
-  const apiUrl = (options.apiUrl ?? process.env.NANASA_API_URL ?? "http://127.0.0.1:3210").replace(
-    /\/$/,
-    "",
-  );
+  const apiUrl = (
+    options.apiUrl ??
+    process.env.NANASA_API_URL ??
+    defaultControlApiUrl(process.env)
+  ).replace(/\/$/, "");
   const parsed = new URL(apiUrl);
   if (
     parsed.protocol !== "http:" ||

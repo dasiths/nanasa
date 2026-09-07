@@ -135,6 +135,39 @@ const directorySnapshot = PortalSnapshotSchema.parse({
 });
 
 describe("agent directory configuration projection", () => {
+  it("resolves distinct membership, member, and configured-agent IDs without losing configuration", () => {
+    const config = structuredClone(directoryConfig);
+    config.groups.frontend!.agents = {
+      "configured-reviewer": {
+        ...config.groups.frontend!.agents.reviewer!,
+        memberId: "stable-reviewer",
+      },
+    };
+    const snapshot = structuredClone(directorySnapshot);
+    snapshot.memberships[1] = {
+      ...snapshot.memberships[1]!,
+      id: "membership-record",
+      memberId: "stable-reviewer",
+      agentProfileId: "profile-record",
+    };
+    const entry = agentDirectoryEntries(snapshot, config)[1]!;
+    expect(entry.agent?.name).toBe("Reviewer");
+    expect(entry.integration?.name).toBe("Pi");
+    expect(entry.role?.name).toBe("Reviewer");
+    expect(entry.layers.map((layer) => layer.files)).toEqual([
+      ["builtin:nanasa-coordination-v1", "builtin:nanasa-assignment-v1"],
+      ["global.md"],
+      ["frontend.md"],
+      ["reviewer.md"],
+      ["agent.md"],
+    ]);
+    expect(entry.providerHome).toBe(".nanasa/integrations/state/members/configured-reviewer/pi");
+    expect(entry.startingDirectory).toBe("/worktrees/frontend/project");
+    snapshot.memberships[1]!.agentProfileId = "configured-reviewer";
+    snapshot.memberships[1]!.memberId = "legacy-member";
+    expect(agentDirectoryEntries(snapshot, config)[1]?.agent).toEqual(entry.agent);
+  });
+
   it("uses team checkout paths, composed prompt sources and agent model precedence", () => {
     const [backend, frontend] = agentDirectoryEntries(directorySnapshot, directoryConfig);
     expect(backend?.startingDirectory).toBe("/repo/project");

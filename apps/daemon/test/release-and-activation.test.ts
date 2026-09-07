@@ -407,18 +407,33 @@ describe("systemd and OpenSSH plans", () => {
       repositoryRoot: repository,
       packageRoot,
       home,
+      host: "::1",
+      port: 4210,
+      mcpEnabled: false,
       runner,
     });
     installedUnitPath = service.unitPath;
-    expect(service.install().killMode).toBe("process");
+    const installed = service.install();
+    expect(installed.killMode).toBe("process");
+    expect(installed.portalUrl).toBe("http://[::1]:4210");
     expect(readFileSync(service.unitPath, "utf8")).toContain("KillMode=process");
+    expect(readFileSync(service.environmentPath, "utf8")).toBe(
+      `NANASA_REPO_ROOT=${repository}\nNANASA_HOST=::1\nNANASA_PORT=4210\nNANASA_MCP_ENABLED=false\n`,
+    );
+    const reloadedService = new SystemdUserService({
+      repositoryRoot: repository,
+      packageRoot,
+      home,
+      runner,
+    });
+    expect(reloadedService.status().portalUrl).toBe("http://[::1]:4210");
     expect(service.start().state).toBe("ready");
     expect(service.restart().state).toBe("ready");
     expect(service.stop().state).toBe("inactive");
     expect(service.remove().state).toBe("not-installed");
     expect(calls.some((call) => call.includes("daemon-reload"))).toBe(true);
     expect(calls.filter((call) => call.includes("is-enabled"))).toHaveLength(4);
-    expect(calls.filter((call) => call.includes("is-active"))).toHaveLength(8);
+    expect(calls.filter((call) => call.includes("is-active"))).toHaveLength(9);
     expect(calls.filter((call) => call.includes("is-failed"))).toHaveLength(4);
   });
 

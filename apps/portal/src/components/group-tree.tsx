@@ -54,6 +54,8 @@ import { ErrorNotice, type PortalError, portalErrorFromCode, toPortalError } fro
 import { memberStatusView } from "../member-status.js";
 import { RoleIdentity } from "./role-identity.js";
 
+const portalLogoUrl = new URL("../../../../logo.png", import.meta.url).href;
+
 export interface AddAgentInput {
   groupId: string;
   name: string;
@@ -457,6 +459,7 @@ function runAction(run: AgentRun | undefined): "start" | "stop" | "retry" | "non
   if (run.desiredState === "stopped") {
     return run.status === "stopped" || run.status === "failed" ? "start" : "stop";
   }
+  if (["running", "starting", "stopping"].includes(run.status)) return "stop";
   if (activeRecoveryPhases.has(run.recoveryPhase)) return "stop";
   if (
     run.recoveryPhase === "failed" ||
@@ -464,9 +467,7 @@ function runAction(run: AgentRun | undefined): "start" | "stop" | "retry" | "non
   ) {
     return "retry";
   }
-  return run.status === "running" || run.status === "starting" || run.status === "stopping"
-    ? "stop"
-    : "none";
+  return "none";
 }
 
 function CreateGroupForm({
@@ -1167,9 +1168,8 @@ export function GroupTree({
   return (
     <>
       <div className="rail-heading">
-        <div>
-          <span className="eyebrow">Operations</span>
-          <strong className="brand">Nanasa</strong>
+        <div className="rail-brand">
+          <img src={portalLogoUrl} alt="Nanasa" width={1391} height={374} />
         </div>
         <div className="rail-heading-actions">
           {onOpenCommandPalette !== undefined && (

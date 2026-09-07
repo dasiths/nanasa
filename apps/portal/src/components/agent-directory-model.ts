@@ -33,7 +33,11 @@ export function agentDirectoryEntries(snapshot: PortalSnapshot, config: NanasaCo
     .map((member) => {
       const group = snapshot.groups.find((candidate) => candidate.id === member.groupId);
       const configuredGroup = config.groups?.[member.groupId];
-      const agent = configuredGroup?.agents[member.id];
+      const configuredAgents = Object.entries(configuredGroup?.agents ?? {});
+      const configuredEntry =
+        configuredAgents.find(([, candidate]) => candidate.memberId === member.memberId) ??
+        configuredAgents.find(([agentId]) => agentId === member.agentProfileId);
+      const agent = configuredEntry?.[1];
       const integration =
         agent === undefined ? undefined : config.integrations?.[agent.integrationId];
       const role = agent?.roleId === undefined ? undefined : config.roles?.[agent.roleId];
@@ -78,7 +82,9 @@ export function agentDirectoryEntries(snapshot: PortalSnapshot, config: NanasaCo
             ? undefined
             : mappedDirectory(checkout, primary, integration.cwd),
         providerHome:
-          integration === undefined ? undefined : configuredProviderHome(integration, member.id),
+          integration === undefined
+            ? undefined
+            : configuredProviderHome(integration, configuredEntry![0]),
         desiredModel: agent?.desiredModel ?? integration?.model.model,
         modelSource:
           agent?.desiredModel !== undefined
