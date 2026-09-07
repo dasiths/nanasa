@@ -1,0 +1,794 @@
+{
+  "capturedAt": "2026-09-07T08:21:07.692Z",
+  "viewport": {
+    "width": 1920,
+    "height": 1080
+  },
+  "deviceScaleFactor": 1,
+  "versions": [
+    {
+      "version": "old",
+      "commit": "add9ccfd48889fb8b05876dffd2b447a2da15514",
+      "teams": 3,
+      "agents": 9
+    },
+    {
+      "version": "new",
+      "commit": "0b194f76f4252a69bf52508ee6f658f6356d5099",
+      "teams": 3,
+      "agents": 9
+    }
+  ],
+  "captures": [
+    {
+      "version": "old",
+      "state": "agents",
+      "theme": "dark",
+      "file": "old-agents-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "agent-configuration",
+      "theme": "dark",
+      "file": "old-agent-configuration-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "agent-prompts",
+      "theme": "dark",
+      "file": "old-agent-prompts-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "terminal-grid",
+      "theme": "dark",
+      "file": "old-terminal-grid-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "terminal-focused",
+      "theme": "dark",
+      "file": "old-terminal-focused-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "messages",
+      "theme": "dark",
+      "file": "old-messages-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "attention",
+      "theme": "dark",
+      "file": "old-attention-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "workspaces",
+      "theme": "dark",
+      "file": "old-workspaces-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "provider-overview",
+      "theme": "dark",
+      "file": "old-provider-overview-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "settings",
+      "theme": "dark",
+      "file": "old-settings-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "diagnostics",
+      "theme": "dark",
+      "file": "old-diagnostics-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "diagnostics-checkpoints",
+      "theme": "dark",
+      "file": "old-diagnostics-checkpoints-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "service",
+      "theme": "dark",
+      "file": "old-service-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "remote",
+      "theme": "dark",
+      "file": "old-remote-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "help",
+      "theme": "dark",
+      "file": "old-help-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "release",
+      "theme": "dark",
+      "file": "old-release-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "team-members",
+      "theme": "dark",
+      "file": "old-team-members-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "team-edit",
+      "theme": "dark",
+      "file": "old-team-edit-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "team-create",
+      "theme": "dark",
+      "file": "old-team-create-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "team-delete",
+      "theme": "dark",
+      "file": "old-team-delete-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "agent-create",
+      "theme": "dark",
+      "file": "old-agent-create-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "agent-edit",
+      "theme": "dark",
+      "file": "old-agent-edit-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "agent-edit-actions",
+      "theme": "dark",
+      "file": "old-agent-edit-actions-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "agent-organize",
+      "theme": "dark",
+      "file": "old-agent-organize-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "agent-remove",
+      "theme": "dark",
+      "file": "old-agent-remove-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "message-compose",
+      "theme": "dark",
+      "file": "old-message-compose-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "message-delivery",
+      "theme": "dark",
+      "file": "old-message-delivery-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "message-clear",
+      "theme": "dark",
+      "file": "old-message-clear-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "attention-url",
+      "theme": "dark",
+      "file": "old-attention-url-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "attention-selected",
+      "theme": "dark",
+      "file": "old-attention-selected-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "workspace-assignment",
+      "theme": "dark",
+      "file": "old-workspace-assignment-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "workspace-create",
+      "theme": "dark",
+      "file": "old-workspace-create-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "workspace-error",
+      "theme": "dark",
+      "file": "old-workspace-error-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "workspace-maintenance",
+      "theme": "dark",
+      "file": "old-workspace-maintenance-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "workspace-attach",
+      "theme": "dark",
+      "file": "old-workspace-attach-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "workspace-switch",
+      "theme": "dark",
+      "file": "old-workspace-switch-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "provider-plan",
+      "theme": "dark",
+      "file": "old-provider-plan-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "provider-plan-approval",
+      "theme": "dark",
+      "file": "old-provider-plan-approval-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "provider-lifecycle",
+      "theme": "dark",
+      "file": "old-provider-lifecycle-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "provider-removal",
+      "theme": "dark",
+      "file": "old-provider-removal-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "roles",
+      "theme": "dark",
+      "file": "old-roles-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "more",
+      "theme": "dark",
+      "file": "old-more-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "commands",
+      "theme": "dark",
+      "file": "old-commands-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "system-status",
+      "theme": "dark",
+      "file": "old-system-status-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "terminal-subscriptions",
+      "theme": "dark",
+      "file": "old-terminal-subscriptions-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "terminal-search",
+      "theme": "dark",
+      "file": "old-terminal-search-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "terminal-transcript",
+      "theme": "dark",
+      "file": "old-terminal-transcript-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "terminal-tools",
+      "theme": "dark",
+      "file": "old-terminal-tools-dark.png"
+    },
+    {
+      "version": "old",
+      "state": "agents",
+      "theme": "light",
+      "file": "old-agents-light.png"
+    },
+    {
+      "version": "old",
+      "state": "agent-configuration",
+      "theme": "light",
+      "file": "old-agent-configuration-light.png"
+    },
+    {
+      "version": "old",
+      "state": "terminal-grid",
+      "theme": "light",
+      "file": "old-terminal-grid-light.png"
+    },
+    {
+      "version": "old",
+      "state": "terminal-focused",
+      "theme": "light",
+      "file": "old-terminal-focused-light.png"
+    },
+    {
+      "version": "old",
+      "state": "messages",
+      "theme": "light",
+      "file": "old-messages-light.png"
+    },
+    {
+      "version": "old",
+      "state": "attention",
+      "theme": "light",
+      "file": "old-attention-light.png"
+    },
+    {
+      "version": "old",
+      "state": "workspaces",
+      "theme": "light",
+      "file": "old-workspaces-light.png"
+    },
+    {
+      "version": "old",
+      "state": "provider-overview",
+      "theme": "light",
+      "file": "old-provider-overview-light.png"
+    },
+    {
+      "version": "old",
+      "state": "settings",
+      "theme": "light",
+      "file": "old-settings-light.png"
+    },
+    {
+      "version": "old",
+      "state": "diagnostics",
+      "theme": "light",
+      "file": "old-diagnostics-light.png"
+    },
+    {
+      "version": "old",
+      "state": "diagnostics-checkpoints",
+      "theme": "light",
+      "file": "old-diagnostics-checkpoints-light.png"
+    },
+    {
+      "version": "old",
+      "state": "service",
+      "theme": "light",
+      "file": "old-service-light.png"
+    },
+    {
+      "version": "old",
+      "state": "remote",
+      "theme": "light",
+      "file": "old-remote-light.png"
+    },
+    {
+      "version": "old",
+      "state": "help",
+      "theme": "light",
+      "file": "old-help-light.png"
+    },
+    {
+      "version": "old",
+      "state": "release",
+      "theme": "light",
+      "file": "old-release-light.png"
+    },
+    {
+      "version": "new",
+      "state": "agents",
+      "theme": "dark",
+      "file": "new-agents-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "agent-configuration",
+      "theme": "dark",
+      "file": "new-agent-configuration-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "agent-prompts",
+      "theme": "dark",
+      "file": "new-agent-prompts-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "teams-directory",
+      "theme": "dark",
+      "file": "new-teams-directory-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "terminal-grid",
+      "theme": "dark",
+      "file": "new-terminal-grid-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "terminal-focused",
+      "theme": "dark",
+      "file": "new-terminal-focused-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "messages",
+      "theme": "dark",
+      "file": "new-messages-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "attention",
+      "theme": "dark",
+      "file": "new-attention-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "workspaces",
+      "theme": "dark",
+      "file": "new-workspaces-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "provider-overview",
+      "theme": "dark",
+      "file": "new-provider-overview-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "settings",
+      "theme": "dark",
+      "file": "new-settings-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "diagnostics",
+      "theme": "dark",
+      "file": "new-diagnostics-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "diagnostics-checkpoints",
+      "theme": "dark",
+      "file": "new-diagnostics-checkpoints-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "service",
+      "theme": "dark",
+      "file": "new-service-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "remote",
+      "theme": "dark",
+      "file": "new-remote-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "help",
+      "theme": "dark",
+      "file": "new-help-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "release",
+      "theme": "dark",
+      "file": "new-release-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "team-members",
+      "theme": "dark",
+      "file": "new-team-members-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "team-edit",
+      "theme": "dark",
+      "file": "new-team-edit-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "team-create",
+      "theme": "dark",
+      "file": "new-team-create-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "team-delete",
+      "theme": "dark",
+      "file": "new-team-delete-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "agent-create",
+      "theme": "dark",
+      "file": "new-agent-create-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "agent-edit",
+      "theme": "dark",
+      "file": "new-agent-edit-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "agent-edit-actions",
+      "theme": "dark",
+      "file": "new-agent-edit-actions-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "agent-organize",
+      "theme": "dark",
+      "file": "new-agent-organize-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "agent-remove",
+      "theme": "dark",
+      "file": "new-agent-remove-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "message-compose",
+      "theme": "dark",
+      "file": "new-message-compose-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "message-delivery",
+      "theme": "dark",
+      "file": "new-message-delivery-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "message-clear",
+      "theme": "dark",
+      "file": "new-message-clear-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "attention-url",
+      "theme": "dark",
+      "file": "new-attention-url-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "attention-selected",
+      "theme": "dark",
+      "file": "new-attention-selected-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "workspace-assignment",
+      "theme": "dark",
+      "file": "new-workspace-assignment-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "workspace-create",
+      "theme": "dark",
+      "file": "new-workspace-create-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "workspace-error",
+      "theme": "dark",
+      "file": "new-workspace-error-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "workspace-maintenance",
+      "theme": "dark",
+      "file": "new-workspace-maintenance-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "workspace-attach",
+      "theme": "dark",
+      "file": "new-workspace-attach-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "workspace-switch",
+      "theme": "dark",
+      "file": "new-workspace-switch-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "provider-plan",
+      "theme": "dark",
+      "file": "new-provider-plan-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "provider-plan-approval",
+      "theme": "dark",
+      "file": "new-provider-plan-approval-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "provider-lifecycle",
+      "theme": "dark",
+      "file": "new-provider-lifecycle-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "provider-removal",
+      "theme": "dark",
+      "file": "new-provider-removal-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "roles",
+      "theme": "dark",
+      "file": "new-roles-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "more",
+      "theme": "dark",
+      "file": "new-more-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "commands",
+      "theme": "dark",
+      "file": "new-commands-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "system-status",
+      "theme": "dark",
+      "file": "new-system-status-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "terminal-subscriptions",
+      "theme": "dark",
+      "file": "new-terminal-subscriptions-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "terminal-search",
+      "theme": "dark",
+      "file": "new-terminal-search-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "terminal-transcript",
+      "theme": "dark",
+      "file": "new-terminal-transcript-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "terminal-tools",
+      "theme": "dark",
+      "file": "new-terminal-tools-dark.png"
+    },
+    {
+      "version": "new",
+      "state": "agents",
+      "theme": "light",
+      "file": "new-agents-light.png"
+    },
+    {
+      "version": "new",
+      "state": "agent-configuration",
+      "theme": "light",
+      "file": "new-agent-configuration-light.png"
+    },
+    {
+      "version": "new",
+      "state": "teams-directory",
+      "theme": "light",
+      "file": "new-teams-directory-light.png"
+    },
+    {
+      "version": "new",
+      "state": "terminal-grid",
+      "theme": "light",
+      "file": "new-terminal-grid-light.png"
+    },
+    {
+      "version": "new",
+      "state": "terminal-focused",
+      "theme": "light",
+      "file": "new-terminal-focused-light.png"
+    },
+    {
+      "version": "new",
+      "state": "messages",
+      "theme": "light",
+      "file": "new-messages-light.png"
+    },
+    {
+      "version": "new",
+      "state": "attention",
+      "theme": "light",
+      "file": "new-attention-light.png"
+    },
+    {
+      "version": "new",
+      "state": "workspaces",
+      "theme": "light",
+      "file": "new-workspaces-light.png"
+    },
+    {
+      "version": "new",
+      "state": "provider-overview",
+      "theme": "light",
+      "file": "new-provider-overview-light.png"
+    },
+    {
+      "version": "new",
+      "state": "settings",
+      "theme": "light",
+      "file": "new-settings-light.png"
+    },
+    {
+      "version": "new",
+      "state": "diagnostics",
+      "theme": "light",
+      "file": "new-diagnostics-light.png"
+    },
+    {
+      "version": "new",
+      "state": "diagnostics-checkpoints",
+      "theme": "light",
+      "file": "new-diagnostics-checkpoints-light.png"
+    },
+    {
+      "version": "new",
+      "state": "service",
+      "theme": "light",
+      "file": "new-service-light.png"
+    },
+    {
+      "version": "new",
+      "state": "remote",
+      "theme": "light",
+      "file": "new-remote-light.png"
+    },
+    {
+      "version": "new",
+      "state": "help",
+      "theme": "light",
+      "file": "new-help-light.png"
+    },
+    {
+      "version": "new",
+      "state": "release",
+      "theme": "light",
+      "file": "new-release-light.png"
+    }
+  ],
+  "browserErrors": [],
+  "gaps": []
+}

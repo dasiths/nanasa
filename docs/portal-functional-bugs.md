@@ -167,6 +167,24 @@ distinguished. Do not describe this as an authentication failure or delete
 session files based on this evidence. BUG-002 and BUG-003 fix status and operator
 recovery access, not native-session lookup. No operator agent was restarted.
 
+## OPEN-002 Workspace validation feedback appears behind the dialog
+
+Status: observed in both pinned old (`add9ccf`) and new (`0b194f7`) portals during
+the Full HD comparison. Not fixed as part of the screenshot task.
+
+Reproduction: open Workspaces, Add workspace, enter `invalid branch name`, and
+submit Create workspace. The actual API returns `invalid_worktree_branch`; the
+error notice is outside the still-open dialog and dimmed by its backdrop. This
+can make it unclear why submission failed, even though the draft is preserved.
+
+Evidence: [old capture](assets/portal-comparison/old-workspace-error-dark.png) and
+[new capture](assets/portal-comparison/new-workspace-error-dark.png).
+The owning component is
+[checkout-workspace.tsx](../apps/portal/src/components/checkout-workspace.tsx).
+A prospective fix should put operation-specific errors inside the active dialog
+without changing workspace validation or dropping error codes. Add a regression
+that checks the error is visible within the dialog and the entered values remain.
+
 ## Fresh-branch application checklist
 
 1. Choose the desired base and verify which defects remain reproducible there.
