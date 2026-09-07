@@ -32,6 +32,9 @@ Install the current preview in the Git repository where the agents will work:
 npm install --save-dev @dasiths/nanasa@next
 ```
 
+The npm package is scoped, but it installs the `nanasa` command. Use
+`npx nanasa` to run the repository-local version.
+
 Then follow this short path:
 
 ```bash

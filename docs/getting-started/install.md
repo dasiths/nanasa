@@ -41,6 +41,17 @@ are `pnpm add --save-dev @dasiths/nanasa@next` and
 `npx nanasa` to call the repository-local binary. Use your package manager's
 local-executable command if it has a different convention.
 
+The npm package is scoped, but its command remains `nanasa`. You can check the
+current preview without changing a project:
+
+```bash
+npx --yes @dasiths/nanasa@next --version
+```
+
+Use this one-shot form only for version and help checks. Install Nanasa in the
+repository before running `init`, `start`, or service commands. A local install
+keeps the package path and lockfile stable for upgrades and systemd services.
+
 ## Initialize the repository
 
 Run this command from the Git repository:
