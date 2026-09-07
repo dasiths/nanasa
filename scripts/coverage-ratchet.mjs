@@ -11,7 +11,13 @@ const testFiles = readdirSync(join(root, "test", "release"))
   .map((name) => join("test", "release", name));
 const result = spawnSync(
   process.execPath,
-  ["--experimental-test-coverage", "--test", ...testFiles],
+  [
+    "--experimental-test-coverage",
+    "--test-coverage-exclude=apps/**/dist/**",
+    "--test-coverage-exclude=packages/**/dist/**",
+    "--test",
+    ...testFiles,
+  ],
   { cwd: root, encoding: "utf8" },
 );
 process.stdout.write(result.stdout);
