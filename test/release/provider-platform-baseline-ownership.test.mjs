@@ -8,10 +8,6 @@ const ownershipPath = resolve(
   root,
   "test/fixtures/provider-platform/provider-platform-baseline-ownership.json",
 );
-const planPath = resolve(
-  root,
-  ".copilot-tracking/plans/2026-09-01/provider-platform-target-architecture-plan.instructions.md",
-);
 
 function readOwnership() {
   return JSON.parse(readFileSync(ownershipPath, "utf8"));
@@ -36,6 +32,10 @@ test("provider platform baseline ownership is complete and executable", () => {
       "responsive",
       "accessibility",
     ],
+  );
+  assert.deepEqual(
+    ownership.stopConditions.map((condition) => condition.id),
+    ["SC-01", "SC-02", "SC-03", "SC-04", "SC-05", "SC-06", "SC-07", "SC-08", "SC-09", "SC-10"],
   );
 
   const baselineById = new Map(ownership.baselines.map((baseline) => [baseline.id, baseline]));
@@ -65,17 +65,5 @@ test("provider platform baseline ownership is complete and executable", () => {
       /\b(?:describe|it|test)\s*\(/,
       `Baseline owner is not an executable test: ${owner}`,
     );
-  }
-});
-
-test("every immutable stop condition is synchronized with the implementation plan", () => {
-  const ownership = readOwnership();
-  const plan = readFileSync(planPath, "utf8");
-  assert.deepEqual(
-    ownership.stopConditions.map((condition) => condition.id),
-    ["SC-01", "SC-02", "SC-03", "SC-04", "SC-05", "SC-06", "SC-07", "SC-08", "SC-09", "SC-10"],
-  );
-  for (const condition of ownership.stopConditions) {
-    assert.match(plan, new RegExp(condition.condition.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
 });

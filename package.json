@@ -64,7 +64,7 @@
     "smoke": "pnpm --filter @nanasa/daemon smoke",
     "docs:generate": "pnpm build && node --import tsx scripts/generate-references.mjs --write",
     "docs:check": "pnpm build && node --import tsx scripts/generate-references.mjs --check && node scripts/validate-docs.mjs",
-    "test:release": "node --test test/release/*.test.mjs test/security/*.test.mjs",
+    "test:release": "pnpm --filter @nanasa/contracts build && pnpm --filter @nanasa/daemon build && node --test test/release/*.test.mjs test/security/*.test.mjs",
     "test:coverage": "pnpm build && node scripts/coverage-ratchet.mjs",
     "coverage:ratchet": "node scripts/coverage-ratchet.mjs",
     "check:static": "pnpm format:check && pnpm lint && pnpm typecheck",
