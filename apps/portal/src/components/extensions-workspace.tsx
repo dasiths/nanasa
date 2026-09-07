@@ -1,6 +1,6 @@
 import type { ProviderCatalogItem, ProviderExtensionInspect } from "@nanasa/contracts";
 import { PackageCheck, RefreshCw, ShieldCheck, Wrench } from "lucide-react";
-import { type ReactNode, useEffect, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import type { PortalClient } from "../api.js";
 import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 
@@ -60,38 +60,62 @@ export function ExtensionsWorkspace({
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<PortalError>();
   const [removeConfirmation, setRemoveConfirmation] = useState("");
+  const requestVersion = useRef(0);
+  const operationPending = useRef(false);
 
   const load = async (preferredId = selectedId) => {
-    const items = await client.listProviderExtensions();
-    setCatalog(items);
-    const extensionId =
-      preferredId !== undefined && items.some((item) => item.descriptor.metadata.id === preferredId)
-        ? preferredId
-        : items[0]?.descriptor.metadata.id;
-    setSelectedId(extensionId);
-    setInspect(
-      extensionId === undefined ? undefined : await client.inspectProviderExtension(extensionId),
-    );
-    setError(undefined);
+    const version = ++requestVersion.current;
+    setInspect(undefined);
+    setRemoveConfirmation("");
+    try {
+      const items = await client.listProviderExtensions();
+      if (version !== requestVersion.current) return;
+      setCatalog(items);
+      const extensionId =
+        preferredId !== undefined &&
+        items.some((item) => item.descriptor.metadata.id === preferredId)
+          ? preferredId
+          : items[0]?.descriptor.metadata.id;
+      setSelectedId(extensionId);
+      const result =
+        extensionId === undefined ? undefined : await client.inspectProviderExtension(extensionId);
+      if (version !== requestVersion.current) return;
+      setInspect(result);
+      setError(undefined);
+    } catch (cause) {
+      if (version === requestVersion.current)
+        setError(toPortalError(cause, "Unable to load provider extensions"));
+    }
   };
 
   useEffect(() => {
-    void load().catch((cause: unknown) =>
-      setError(toPortalError(cause, "Unable to load provider extensions")),
-    );
+    void load();
+    return () => {
+      requestVersion.current++;
+    };
   }, [client, revision]);
 
   const select = (extensionId: string) => {
+    if (operationPending.current) return;
+    const version = ++requestVersion.current;
     setSelectedId(extensionId);
+    setInspect(undefined);
+    setError(undefined);
     setRemoveConfirmation("");
-    void client
-      .inspectProviderExtension(extensionId)
-      .then(setInspect, (cause: unknown) =>
-        setError(toPortalError(cause, "Unable to inspect provider extension")),
-      );
+    void client.inspectProviderExtension(extensionId).then(
+      (result) => {
+        if (version === requestVersion.current) setInspect(result);
+      },
+      (cause: unknown) => {
+        if (version === requestVersion.current)
+          setError(toPortalError(cause, "Unable to inspect provider extension"));
+      },
+    );
   };
 
   const perform = async (name: string, operation: () => Promise<unknown>) => {
+    if (operationPending.current) return;
+    operationPending.current = true;
     setBusy(name);
     setError(undefined);
     try {
@@ -101,6 +125,7 @@ export function ExtensionsWorkspace({
     } catch (cause) {
       setError(toPortalError(cause, "Extension operation failed"));
     } finally {
+      operationPending.current = false;
       setBusy(undefined);
     }
   };
@@ -132,6 +157,7 @@ export function ExtensionsWorkspace({
               <li key={item.descriptor.metadata.id}>
                 <button
                   type="button"
+                  disabled={busy !== undefined}
                   aria-pressed={item.descriptor.metadata.id === selectedId}
                   onClick={() => select(item.descriptor.metadata.id)}
                 >
@@ -150,237 +176,242 @@ export function ExtensionsWorkspace({
           </ul>
         </section>
 
-        {inspect !== undefined && selected !== undefined && (
-          <section
-            className="workflow-card extension-detail"
-            aria-labelledby="extension-detail-title"
-          >
-            <header>
-              <div>
-                <span className="eyebrow">{selected.descriptor.metadata.publisher}</span>
-                <h3 id="extension-detail-title">{selected.descriptor.metadata.name}</h3>
-                <p>{selected.descriptor.metadata.description}</p>
-              </div>
-              <span className={`extension-health health-${selected.health.state}`}>
-                {selected.health.state}
-              </span>
-            </header>
-
-            <dl className="extension-facts">
-              <div>
-                <dt>Package</dt>
-                <dd>
-                  {selected.descriptor.metadata.id}@{selected.descriptor.metadata.version}
-                </dd>
-              </div>
-              <div>
-                <dt>Source</dt>
-                <dd>
-                  {selected.source.kind === "builtin" ? "Built into Nanasa" : selected.source.label}
-                </dd>
-              </div>
-              <div>
-                <dt>Signature</dt>
-                <dd>{selected.signatureState}</dd>
-              </div>
-              <div>
-                <dt>Digest</dt>
-                <dd>
-                  <code>{selected.packageDigest}</code>
-                </dd>
-              </div>
-              <div>
-                <dt>Reporter protocol</dt>
-                <dd>{selected.descriptor.compatibility.reporterProtocol}</dd>
-              </div>
-              <div>
-                <dt>Lock revision</dt>
-                <dd>{inspect.plan.lockRevision}</dd>
-              </div>
-            </dl>
-
-            {selected.health.diagnostics.length > 0 && (
-              <section
-                className="extension-diagnostics"
-                aria-labelledby="extension-diagnostics-title"
-              >
-                <h4 id="extension-diagnostics-title">Health and drift</h4>
-                <ul>
-                  {selected.health.diagnostics.map((diagnostic, index) => (
-                    <li key={`${diagnostic.code}:${index}`}>
-                      <strong>{diagnostic.code}</strong> {diagnostic.message}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-
-            <div className="extension-preview-grid">
-              <section>
-                <h4>
-                  <ShieldCheck aria-hidden="true" size={16} /> Permission preview
-                </h4>
-                <ul>
-                  {inspect.plan.permissions.map((permission) => (
-                    <li key={permission}>{permission}</li>
-                  ))}
-                </ul>
-              </section>
-              <section>
-                <h4>
-                  <PackageCheck aria-hidden="true" size={16} /> Owned mutations
-                </h4>
-                <ul>
-                  {inspect.plan.mutations.map((mutation) => (
-                    <li key={mutation.ownershipKey}>
-                      <strong>{mutation.kind}</strong> {mutation.target}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            </div>
-
+        {inspect !== undefined &&
+          selected !== undefined &&
+          inspect.plan.extensionId === selectedId && (
             <section
-              className="extension-command-preview"
-              aria-labelledby="extension-command-title"
+              className="workflow-card extension-detail"
+              aria-labelledby="extension-detail-title"
             >
-              <h4 id="extension-command-title">Provider command preview</h4>
-              {inspect.plan.commands.length === 0 ? (
-                <p>No configured integrations are impacted.</p>
-              ) : (
-                <ul>
-                  {inspect.plan.commands.map((command) => (
-                    <li key={command.integrationId}>
-                      <strong>{command.integrationId}</strong>
-                      <code>{[command.executable, ...command.argv].join(" ")}</code>
-                      <small>
-                        cwd {command.cwd} · environment names {command.environmentNames.join(", ")}
-                      </small>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
+              <header>
+                <div>
+                  <span className="eyebrow">{selected.descriptor.metadata.publisher}</span>
+                  <h3 id="extension-detail-title">{selected.descriptor.metadata.name}</h3>
+                  <p>{selected.descriptor.metadata.description}</p>
+                </div>
+                <span className={`extension-health health-${selected.health.state}`}>
+                  {selected.health.state}
+                </span>
+              </header>
 
-            <div className="extension-actions" aria-label="Extension lifecycle actions">
-              <ExtensionActionButton
-                label="Approve exact plan"
-                description="Approve the displayed package, permissions, commands, and managed changes. A changed plan requires new approval."
-                disabled={busy !== undefined}
-                icon={<ShieldCheck aria-hidden="true" size={15} />}
-                onClick={() =>
-                  void perform("trust", () =>
-                    client.trustProviderExtension(selected.descriptor.metadata.id, {
-                      planDigest: inspect.plan.planDigest,
-                      configRevision: inspect.plan.configRevision,
-                    }),
-                  )
-                }
-              />
-              {!selected.installed ? (
+              <dl className="extension-facts">
+                <div>
+                  <dt>Package</dt>
+                  <dd>
+                    {selected.descriptor.metadata.id}@{selected.descriptor.metadata.version}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Source</dt>
+                  <dd>
+                    {selected.source.kind === "builtin"
+                      ? "Built into Nanasa"
+                      : selected.source.label}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Signature</dt>
+                  <dd>{selected.signatureState}</dd>
+                </div>
+                <div>
+                  <dt>Digest</dt>
+                  <dd>
+                    <code>{selected.packageDigest}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Reporter protocol</dt>
+                  <dd>{selected.descriptor.compatibility.reporterProtocol}</dd>
+                </div>
+                <div>
+                  <dt>Lock revision</dt>
+                  <dd>{inspect.plan.lockRevision}</dd>
+                </div>
+              </dl>
+
+              {selected.health.diagnostics.length > 0 && (
+                <section
+                  className="extension-diagnostics"
+                  aria-labelledby="extension-diagnostics-title"
+                >
+                  <h4 id="extension-diagnostics-title">Health and drift</h4>
+                  <ul>
+                    {selected.health.diagnostics.map((diagnostic, index) => (
+                      <li key={`${diagnostic.code}:${index}`}>
+                        <strong>{diagnostic.code}</strong> {diagnostic.message}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              <div className="extension-preview-grid">
+                <section>
+                  <h4>
+                    <ShieldCheck aria-hidden="true" size={16} /> Permission preview
+                  </h4>
+                  <ul>
+                    {inspect.plan.permissions.map((permission) => (
+                      <li key={permission}>{permission}</li>
+                    ))}
+                  </ul>
+                </section>
+                <section>
+                  <h4>
+                    <PackageCheck aria-hidden="true" size={16} /> Owned mutations
+                  </h4>
+                  <ul>
+                    {inspect.plan.mutations.map((mutation) => (
+                      <li key={mutation.ownershipKey}>
+                        <strong>{mutation.kind}</strong> {mutation.target}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              </div>
+
+              <section
+                className="extension-command-preview"
+                aria-labelledby="extension-command-title"
+              >
+                <h4 id="extension-command-title">Provider command preview</h4>
+                {inspect.plan.commands.length === 0 ? (
+                  <p>No configured integrations are impacted.</p>
+                ) : (
+                  <ul>
+                    {inspect.plan.commands.map((command) => (
+                      <li key={command.integrationId}>
+                        <strong>{command.integrationId}</strong>
+                        <code>{[command.executable, ...command.argv].join(" ")}</code>
+                        <small>
+                          cwd {command.cwd} · environment names{" "}
+                          {command.environmentNames.join(", ")}
+                        </small>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+
+              <div className="extension-actions" aria-label="Extension lifecycle actions">
                 <ExtensionActionButton
-                  label="Install"
-                  description="Install this approved provider extension and apply its Nanasa-owned configuration."
-                  className="primary-button"
-                  disabled={busy !== undefined || planCommand === undefined}
-                  icon={<PackageCheck aria-hidden="true" size={15} />}
+                  label="Approve exact plan"
+                  description="Approve the displayed package, permissions, commands, and managed changes. A changed plan requires new approval."
+                  disabled={busy !== undefined}
+                  icon={<ShieldCheck aria-hidden="true" size={15} />}
                   onClick={() =>
-                    void perform("install", () =>
-                      client.installProviderExtension(
-                        selected.descriptor.metadata.id,
-                        planCommand!,
-                      ),
+                    void perform("trust", () =>
+                      client.trustProviderExtension(selected.descriptor.metadata.id, {
+                        planDigest: inspect.plan.planDigest,
+                        configRevision: inspect.plan.configRevision,
+                      }),
                     )
                   }
                 />
-              ) : (
-                <>
+                {!selected.installed ? (
                   <ExtensionActionButton
-                    label="Repair owned state"
-                    description="Restore Nanasa-owned provider files and settings without changing authentication, sessions, or unrelated configuration."
+                    label="Install"
+                    description="Install this approved provider extension and apply its Nanasa-owned configuration."
+                    className="primary-button"
                     disabled={busy !== undefined || planCommand === undefined}
-                    icon={<Wrench aria-hidden="true" size={15} />}
+                    icon={<PackageCheck aria-hidden="true" size={15} />}
                     onClick={() =>
-                      void perform("repair", () =>
-                        client.repairProviderExtension(
+                      void perform("install", () =>
+                        client.installProviderExtension(
                           selected.descriptor.metadata.id,
                           planCommand!,
                         ),
                       )
                     }
                   />
-                  <ExtensionActionButton
-                    label="Disable"
-                    description="Prevent this provider extension from being used for new runs. Provider state is retained."
-                    disabled={busy !== undefined}
-                    onClick={() =>
-                      void perform("disable", () =>
-                        client.disableProviderExtension(selected.descriptor.metadata.id, {
-                          expectedLockRevision: inspect.plan.lockRevision,
-                        }),
-                      )
-                    }
-                  />
-                  <ExtensionActionButton
-                    label="Rollback"
-                    description="Restore the previous verified extension generation."
-                    {...(selected.health.rollbackAvailable
-                      ? {}
-                      : { disabledReason: "No previous verified generation is available." })}
-                    disabled={busy !== undefined || !selected.health.rollbackAvailable}
-                    onClick={() =>
-                      void perform("rollback", () =>
-                        client.rollbackProviderExtension(selected.descriptor.metadata.id, {
-                          expectedLockRevision: inspect.plan.lockRevision,
-                        }),
-                      )
-                    }
-                  />
-                </>
-              )}
-              <ExtensionActionButton
-                label="Refresh health"
-                description="Check command availability, package integrity, compatibility, approval, and configuration drift again."
-                disabled={busy !== undefined}
-                icon={<RefreshCw aria-hidden="true" size={15} />}
-                onClick={() => void load(selectedId)}
-              />
-            </div>
-
-            {selected.installed && (
-              <fieldset className="extension-remove">
-                <legend>Conservative removal</legend>
-                <p>
-                  Provider state, authentication, sessions, and changed files are retained.
-                  Referenced extensions cannot be removed.
-                </p>
-                <label>
-                  Type {selected.descriptor.metadata.id} to confirm
-                  <input
-                    value={removeConfirmation}
-                    onChange={(event) => setRemoveConfirmation(event.target.value)}
-                  />
-                </label>
+                ) : (
+                  <>
+                    <ExtensionActionButton
+                      label="Repair owned state"
+                      description="Restore Nanasa-owned provider files and settings without changing authentication, sessions, or unrelated configuration."
+                      disabled={busy !== undefined || planCommand === undefined}
+                      icon={<Wrench aria-hidden="true" size={15} />}
+                      onClick={() =>
+                        void perform("repair", () =>
+                          client.repairProviderExtension(
+                            selected.descriptor.metadata.id,
+                            planCommand!,
+                          ),
+                        )
+                      }
+                    />
+                    <ExtensionActionButton
+                      label="Disable"
+                      description="Prevent this provider extension from being used for new runs. Provider state is retained."
+                      disabled={busy !== undefined}
+                      onClick={() =>
+                        void perform("disable", () =>
+                          client.disableProviderExtension(selected.descriptor.metadata.id, {
+                            expectedLockRevision: inspect.plan.lockRevision,
+                          }),
+                        )
+                      }
+                    />
+                    <ExtensionActionButton
+                      label="Rollback"
+                      description="Restore the previous verified extension generation."
+                      {...(selected.health.rollbackAvailable
+                        ? {}
+                        : { disabledReason: "No previous verified generation is available." })}
+                      disabled={busy !== undefined || !selected.health.rollbackAvailable}
+                      onClick={() =>
+                        void perform("rollback", () =>
+                          client.rollbackProviderExtension(selected.descriptor.metadata.id, {
+                            expectedLockRevision: inspect.plan.lockRevision,
+                          }),
+                        )
+                      }
+                    />
+                  </>
+                )}
                 <ExtensionActionButton
-                  label="Remove from Nanasa"
-                  description="Remove this extension from Nanasa while retaining provider state, authentication, sessions, and changed files."
-                  disabledReason={`Type ${selected.descriptor.metadata.id} above to enable removal.`}
-                  className="danger-button"
-                  disabled={
-                    busy !== undefined || removeConfirmation !== selected.descriptor.metadata.id
-                  }
-                  onClick={() =>
-                    void perform("remove", () =>
-                      client.removeProviderExtension(selected.descriptor.metadata.id, {
-                        expectedLockRevision: inspect.plan.lockRevision,
-                      }),
-                    )
-                  }
+                  label="Refresh health"
+                  description="Check command availability, package integrity, compatibility, approval, and configuration drift again."
+                  disabled={busy !== undefined}
+                  icon={<RefreshCw aria-hidden="true" size={15} />}
+                  onClick={() => void load(selectedId)}
                 />
-              </fieldset>
-            )}
-          </section>
-        )}
+              </div>
+
+              {selected.installed && (
+                <fieldset className="extension-remove">
+                  <legend>Conservative removal</legend>
+                  <p>
+                    Provider state, authentication, sessions, and changed files are retained.
+                    Referenced extensions cannot be removed.
+                  </p>
+                  <label>
+                    Type {selected.descriptor.metadata.id} to confirm
+                    <input
+                      value={removeConfirmation}
+                      onChange={(event) => setRemoveConfirmation(event.target.value)}
+                    />
+                  </label>
+                  <ExtensionActionButton
+                    label="Remove from Nanasa"
+                    description="Remove this extension from Nanasa while retaining provider state, authentication, sessions, and changed files."
+                    disabledReason={`Type ${selected.descriptor.metadata.id} above to enable removal.`}
+                    className="danger-button"
+                    disabled={
+                      busy !== undefined || removeConfirmation !== selected.descriptor.metadata.id
+                    }
+                    onClick={() =>
+                      void perform("remove", () =>
+                        client.removeProviderExtension(selected.descriptor.metadata.id, {
+                          expectedLockRevision: inspect.plan.lockRevision,
+                        }),
+                      )
+                    }
+                  />
+                </fieldset>
+              )}
+            </section>
+          )}
       </div>
     </div>
   );

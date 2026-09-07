@@ -1,5 +1,5 @@
 import { PortalSnapshotSchema } from "@nanasa/contracts";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, type PortalClient } from "../api.js";
@@ -136,6 +136,66 @@ function client(overrides: Partial<PortalClient> = {}): PortalClient {
 }
 
 describe("CheckoutWorkspace", () => {
+  it.each(["create", "attach"] as const)(
+    "keeps %s errors inside the open dialog and preserves the draft",
+    async (mode) => {
+      const user = userEvent.setup();
+      const failure = new ApiError("Workspace input is invalid", 400, "invalid_workspace_input");
+      const portal = client({
+        createWorktree: vi.fn().mockRejectedValue(failure),
+        openCheckout: vi.fn().mockRejectedValue(failure),
+      });
+      const changed = vi.fn();
+      render(<CheckoutWorkspace client={portal} snapshot={snapshot} onChanged={changed} />);
+      await user.click(screen.getByRole("button", { name: "Add workspace" }));
+      const dialog = screen.getByRole("dialog", { name: "Add workspace" });
+      if (mode === "attach")
+        await user.click(within(dialog).getByRole("button", { name: "Attach existing" }));
+      const input = within(dialog).getByLabelText(
+        mode === "create" ? "New branch" : "Existing worktree path",
+      );
+      const draft = mode === "create" ? "invalid branch name" : "/missing/worktree";
+      await user.type(input, draft);
+      await user.click(
+        within(dialog).getByRole("button", {
+          name: mode === "create" ? "Create workspace" : "Attach workspace",
+        }),
+      );
+      const alert = await within(dialog).findByRole("alert");
+      expect(alert).toHaveTextContent("Workspace input is invalid");
+      expect(alert).toHaveTextContent("invalid_workspace_input");
+      expect(screen.getAllByRole("alert")).toHaveLength(1);
+      expect(input).toHaveValue(draft);
+      expect(changed).not.toHaveBeenCalled();
+      await user.click(
+        within(dialog).getByRole("button", {
+          name: mode === "create" ? "Attach existing" : "Create new",
+        }),
+      );
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps a failed switch inside its impact dialog with the target intact", async () => {
+    const user = userEvent.setup();
+    const portal = client({
+      assignCheckout: vi
+        .fn()
+        .mockRejectedValue(
+          new ApiError("Checkout revision changed", 409, "checkout_revision_conflict"),
+        ),
+    });
+    render(<CheckoutWorkspace client={portal} snapshot={teamSnapshot} onChanged={vi.fn()} />);
+    await user.selectOptions(screen.getByLabelText("Workspace for Team One"), managedCheckout.id);
+    const dialog = screen.getByRole("dialog", { name: "Change Team One workspace" });
+    await user.click(within(dialog).getByRole("button", { name: "Stop, switch, and restart" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "checkout_revision_conflict",
+    );
+    expect(dialog).toHaveTextContent("feature/one");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+  });
+
   it("fetches explicitly and loads refreshed base suggestions without fetching on dialog open", async () => {
     const user = userEvent.setup();
     const portal = client({

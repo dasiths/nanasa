@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { openNanasaDatabase } from "../src/persistence/database.js";
+import { NanasaStore } from "../src/store.js";
 
 const directories: string[] = [];
 const digest = (character: string): string => character.repeat(64);
@@ -268,6 +269,70 @@ afterEach(() => {
 });
 
 describe("immutable provider snapshot persistence", () => {
+  it("deletes a group while retaining stopped run anchors and immutable provider evidence", () => {
+    const { path, database } = fixture();
+    seedTargetGraph(database);
+    database
+      .prepare(
+        "UPDATE runs SET status = 'stopped', desired_state = 'stopped', stopped_at = ? WHERE id = ?",
+      )
+      .run(now, "run_1");
+    database
+      .prepare(`INSERT INTO runs
+      (id,group_id,member_id,agent_profile_id,generation,status,desired_state,recovery_phase,started_at,stopped_at)
+      VALUES ('run_2','group_1','member_1','profile_1',2,'stopped','stopped','recovered',?,?)`)
+      .run(now, now);
+    database
+      .prepare(`INSERT INTO provider_update_transitions
+      (id,run_id,generation,member_id,provider_id,previous_snapshot_digest,current_snapshot_digest,state,outcome,replacement_run_id,detected_at,updated_at,completed_at)
+      VALUES ('transition_1','run_1',1,'member_1','acme.agent',?,?,'completed','restarted','run_2',?,?,?)`)
+      .run(digest("c"), digest("d"), now, now, now);
+    database.close();
+    const store = new NanasaStore(path);
+    try {
+      store.addMembership("group_1", {
+        memberId: "member_1",
+        agentProfileId: "profile_1",
+        alias: "Agent",
+      });
+      expect(store.getSnapshot().runs).toHaveLength(2);
+      const result = store.deleteGroup("group_1", "delete-provider-group");
+      expect(result).toMatchObject({ groupId: "group_1", deletedMemberships: 1, deletedRuns: 0 });
+      expect(store.deleteGroup("group_1", "delete-provider-group")).toEqual(result);
+      expect(store.getSnapshot()).toMatchObject({ groups: [], runs: [] });
+      expect(store.listEvents().some((event) => event.type === "group.deleted")).toBe(true);
+    } finally {
+      store.close();
+    }
+    const retained = openNanasaDatabase(path);
+    try {
+      expect(
+        retained.prepare("SELECT status, desired_state FROM runs WHERE id = 'run_1'").get(),
+      ).toEqual({ status: "stopped", desired_state: "stopped" });
+      expect(retained.prepare("SELECT id FROM runs ORDER BY id").all()).toEqual([
+        { id: "run_1" },
+        { id: "run_2" },
+      ]);
+      for (const table of [
+        "run_provider_bindings",
+        "provider_operation_audits",
+        "provider_authority_fences",
+        "status_source_claims",
+        "provider_update_transitions",
+      ]) {
+        expect(retained.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({
+          count: 1,
+        });
+      }
+      expect(retained.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(() =>
+        retained.prepare("DELETE FROM run_provider_bindings WHERE id = 'binding_1'").run(),
+      ).toThrow(/immutable/);
+    } finally {
+      retained.close();
+    }
+  });
+
   it("persists the complete inert target graph and reopens idempotently", () => {
     const { path, database } = fixture();
     seedTargetGraph(database);

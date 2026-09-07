@@ -457,6 +457,7 @@ function runAction(run: AgentRun | undefined): "start" | "stop" | "retry" | "non
   if (run.desiredState === "stopped") {
     return run.status === "stopped" || run.status === "failed" ? "start" : "stop";
   }
+  if (["running", "starting", "stopping"].includes(run.status)) return "stop";
   if (activeRecoveryPhases.has(run.recoveryPhase)) return "stop";
   if (
     run.recoveryPhase === "failed" ||
@@ -464,9 +465,7 @@ function runAction(run: AgentRun | undefined): "start" | "stop" | "retry" | "non
   ) {
     return "retry";
   }
-  return run.status === "running" || run.status === "starting" || run.status === "stopping"
-    ? "stop"
-    : "none";
+  return "none";
 }
 
 function CreateGroupForm({

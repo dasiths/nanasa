@@ -2187,6 +2187,9 @@ describe("portal application", () => {
     ["restarting", "stopped", "Starting", "Stop Builder"],
     ["recovered", "running", "Working", "Stop Builder"],
     ["failed", "failed", "Failed", "Retry Builder"],
+    ["failed", "running", "Failed", "Stop Builder"],
+    ["failed", "starting", "Failed", "Stop Builder"],
+    ["failed", "stopping", "Failed", "Stop Builder"],
   ] as const)(
     "projects %s recovery while preserving the correct action",
     async (recoveryPhase, runStatus, statusLabel, actionName) => {

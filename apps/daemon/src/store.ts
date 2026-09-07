@@ -1298,7 +1298,14 @@ export class NanasaStore {
           )
           .run(groupId);
         const deletedRuns = this.#database
-          .prepare("DELETE FROM runs WHERE group_id = ?")
+          .prepare(
+            `DELETE FROM runs WHERE group_id = ?
+               AND NOT EXISTS (SELECT 1 FROM run_provider_bindings WHERE run_id = runs.id)
+               AND NOT EXISTS (
+                 SELECT 1 FROM provider_update_transitions
+                 WHERE run_id = runs.id OR replacement_run_id = runs.id
+               )`,
+          )
           .run(groupId);
         const deletedMemberships = this.#database
           .prepare("DELETE FROM memberships WHERE group_id = ?")
