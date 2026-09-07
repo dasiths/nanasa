@@ -43,7 +43,7 @@ coordination MCP configuration.
 ## Install the prerequisites
 
 Use the repository development container or install the host requirements from
-the main [installation guide](../../docs/next/getting-started/install.md). This
+the main [installation guide](../../docs/getting-started/install.md). This
 example expects GitHub Copilot CLI, Pi, OpenCode, Claude Code, tmux, Docker, and
 the repository's Node.js and pnpm toolchain.
 
@@ -74,8 +74,8 @@ group guidance, then each agent receives its role instructions. Backend owns
 through the Human. Nanasa also injects the member ID, alias, role, MCP
 coordination guidance, and authenticated MCP configuration at launch.
 
-See [Configure Nanasa](../../docs/next/guides/configuration.md) for the complete
-configuration model and [Add scoped prompts](../../docs/next/guides/prompts.md)
+See [Configure Nanasa](../../docs/guides/configuration.md) for the complete
+configuration model and [Add scoped prompts](../../docs/guides/prompts.md)
 for composition rules and limits.
 
 ## Prepare private state

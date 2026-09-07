@@ -181,4 +181,4 @@ writeFileSync(
   join(outputDirectory, "meta", "sbom.spdx.json"),
   `${JSON.stringify(sbom, null, 2)}\n`,
 );
-cpSync(join(root, "docs", "next"), join(outputDirectory, "help"), { recursive: true });
+cpSync(join(root, "docs"), join(outputDirectory, "help"), { recursive: true });

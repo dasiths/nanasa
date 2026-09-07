@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 
 const root = resolve(import.meta.dirname, "..");
-const output = join(root, "docs", "next", "reference");
+const output = join(root, "docs", "reference");
 const mode = process.argv[2] ?? "--check";
 if (!["--check", "--write"].includes(mode)) throw new Error("Use --check or --write");
 

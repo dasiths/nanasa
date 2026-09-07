@@ -39,7 +39,7 @@ action before implementation detail. Define a Nanasa term on first use and
 expand acronyms. Give a working example and expected result before linking to a
 reference.
 
-Each public page under `docs/next` starts with one H1 and has no YAML
+Each public page under `docs` starts with one H1 and has no YAML
 frontmatter. Keep user workflows separate from contributor, protocol, and
 release details. Use `npx nanasa` for package-user commands.
 

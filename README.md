@@ -44,7 +44,7 @@ npx nanasa start
 
 Before `setup`, edit `.nanasa/config.yaml`. Keep only integrations whose agent
 CLIs are installed, and add the `agent_builder` agent shown in the
-[quickstart](docs/next/getting-started/quickstart.md).
+[quickstart](docs/getting-started/quickstart.md).
 `doctor` checks every configured integration, including unused defaults.
 
 `auth login` signs the provider CLI into Nanasa's private home for the configured
@@ -62,12 +62,12 @@ another terminal, run `npx nanasa auth portal` and open the URL it prints.
 Run `npx nanasa docs` to print the packaged documentation index, even before
 initializing a repository.
 
-* [Install Nanasa](docs/next/getting-started/install.md)
-* [Complete the quickstart](docs/next/getting-started/quickstart.md)
-* [Configure teams and providers](docs/next/guides/configuration.md)
-* [Coordinate multiple coding-agent providers](docs/next/examples/multi-coding-agents.md)
-* [Solve common problems](docs/next/troubleshooting/index.md)
-* [Contribute to Nanasa](docs/next/development/contributing.md)
+* [Install Nanasa](docs/getting-started/install.md)
+* [Complete the quickstart](docs/getting-started/quickstart.md)
+* [Configure teams and providers](docs/guides/configuration.md)
+* [Coordinate multiple coding-agent providers](docs/examples/multi-coding-agents.md)
+* [Solve common problems](docs/troubleshooting/index.md)
+* [Contribute to Nanasa](docs/development/contributing.md)
 
 ## License
 
