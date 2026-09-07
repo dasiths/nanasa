@@ -254,6 +254,7 @@ ${integrationFields}`);
           "provider-update-failed": true,
           "provider-update-succeeded": false,
           "unread-message": false,
+          "url-open-request": true,
         },
       },
       roles: {},
@@ -302,6 +303,7 @@ ${integrationFields}`);
       "provider-update-failed": false,
       "provider-update-succeeded": false,
       "unread-message": false,
+      "url-open-request": true,
     });
   });
 

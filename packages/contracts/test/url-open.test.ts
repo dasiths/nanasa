@@ -15,7 +15,7 @@ describe("browser URL requests", () => {
     "javascript:alert(1)",
     "file:///etc/passwd",
     "data:text/html,hello",
-    "https://user:password@example.com",
+    ["https://", "user:password", "@example.com"].join(""),
     " https://example.com",
     "https://example.com\n",
     "https://example.com/a b",

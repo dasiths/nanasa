@@ -72,7 +72,7 @@ jobs:
           pnpm install --frozen-lockfile
       - name: Run unit, release, migration, and coverage tests
         run: |
-          source scripts/ci-registry-env.sh; pnpm -r --if-present test
+          source scripts/ci-registry-env.sh; pnpm test:unit
           source scripts/ci-registry-env.sh; pnpm test:release
           source scripts/ci-registry-env.sh; pnpm check:migration
           source scripts/ci-registry-env.sh; pnpm test:coverage

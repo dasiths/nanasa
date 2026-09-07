@@ -229,7 +229,7 @@ describe("typed control facade registries", () => {
         stderr: completionErr.stream as NodeJS.WritableStream,
       }),
     ).resolves.toBe(0);
-    expect(completionOut.value()).toContain("complete -W");
+    expect(completionOut.value()).toContain("complete -F _nanasa_completion nanasa");
     expect(completionErr.value()).toBe("");
 
     const usageOut = capture();
