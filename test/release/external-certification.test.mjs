@@ -122,6 +122,7 @@ test("workflows preserve registry authority and release through exact tagged art
   assert.match(releaseSource, /GITHUB_REF_NAME.*package_version/);
   assert.match(releaseSource, /actions\/attest-build-provenance@v2/);
   assert.match(releaseSource, /gh release create/);
+  assert.match(releaseSource, /--prerelease/);
   assert.match(releaseSource, /npm publish/);
   assert.match(releaseSource, /--provenance/);
   for (const workflow of workflows) {

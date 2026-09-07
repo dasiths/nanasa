@@ -93,11 +93,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          release_flags=()
+          if [[ "${{ needs.package.outputs.channel }}" == "next" ]]; then
+            release_flags+=(--prerelease)
+          fi
           gh release create "$GITHUB_REF_NAME" release-artifacts/* \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --generate-notes \
-            --title "$GITHUB_REF_NAME"
+            --title "$GITHUB_REF_NAME" \
+            "${release_flags[@]}"
 
   npm-publish:
     if: vars.NANASA_PUBLISH_NPM == 'true'
