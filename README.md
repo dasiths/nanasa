@@ -1,5 +1,7 @@
 # Nanasa
 
+![Logo](logo.png)
+
 Nanasa (නැනස) is a local-first orchestrator for running and observing multiple
 coding-agent terminals. The name means "wisdom" or "intellect" in Sinhala.
 

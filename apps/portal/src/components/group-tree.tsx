@@ -54,6 +54,8 @@ import { ErrorNotice, type PortalError, portalErrorFromCode, toPortalError } fro
 import { memberStatusView } from "../member-status.js";
 import { RoleIdentity } from "./role-identity.js";
 
+const portalLogoUrl = new URL("../../../../logo.png", import.meta.url).href;
+
 export interface AddAgentInput {
   groupId: string;
   name: string;
@@ -1166,9 +1168,8 @@ export function GroupTree({
   return (
     <>
       <div className="rail-heading">
-        <div>
-          <span className="eyebrow">Operations</span>
-          <strong className="brand">Nanasa</strong>
+        <div className="rail-brand">
+          <img src={portalLogoUrl} alt="Nanasa" width={1391} height={374} />
         </div>
         <div className="rail-heading-actions">
           {onOpenCommandPalette !== undefined && (
