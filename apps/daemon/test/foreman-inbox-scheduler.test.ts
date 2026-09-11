@@ -131,6 +131,25 @@ function fixture() {
 }
 
 describe("Foreman durable input dispatch", () => {
+  it("accepts lease-only reporter heartbeats during paste without weakening the target fence", async () => {
+    const context = fixture();
+    context.ready();
+    vi.mocked(context.runtime.pasteToRun).mockImplementation(async (_run, _text, assertCurrent) => {
+      assertCurrent?.();
+      context.store.ingestForemanStatusEvent(context.identity, {
+        ...context.event,
+        eventId: "heartbeat-during-paste",
+        event: "heartbeat",
+        sourceSequence: 2,
+      });
+      assertCurrent?.();
+    });
+    await context.scheduler.tick();
+    expect(context.state()).toBe("submitted");
+    expect(context.runtime.pasteToRun).toHaveBeenCalledOnce();
+    await context.scheduler.close();
+  });
+
   it("uses verified reporter readiness and human control, then submits exactly once", async () => {
     const context = fixture();
     expect(() => context.store.ingestForemanStatusEvent(context.identity, context.event)).toThrow(

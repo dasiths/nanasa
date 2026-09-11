@@ -121,6 +121,8 @@ export class ForemanInboxScheduler {
         generation: run.generation,
         reporterEpoch: initial.reporterEpoch,
         statusRevision: initial.statusRevision,
+        stateChangedAt: initial.stateChangedAt,
+        completionRevision: initial.completionRevision,
         processFingerprint: initial.processFingerprint,
         authorityRevision: actor.authorityRevision,
       };
@@ -145,7 +147,8 @@ export class ForemanInboxScheduler {
             view.actor?.authorityRevision !== target.authorityRevision ||
             !this.#ready(run) ||
             state.reporterEpoch !== target.reporterEpoch ||
-            state.statusRevision !== target.statusRevision ||
+            state.stateChangedAt !== target.stateChangedAt ||
+            state.completionRevision !== target.completionRevision ||
             state.processFingerprint !== target.processFingerprint
           ) {
             throw new DomainError("foreman_input_fenced", "Foreman input target changed", 409);
