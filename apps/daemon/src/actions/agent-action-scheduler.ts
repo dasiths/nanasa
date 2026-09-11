@@ -6,7 +6,11 @@ import type { TerminalInputArbiter } from "../terminal/terminal-input-arbiter.js
 
 interface ActionRuntime {
   observeRun(run: Parameters<NanasaStore["createRun"]>[0]): Promise<RuntimeObservation>;
-  pasteToRun(run: Parameters<NanasaStore["createRun"]>[0], text: string): Promise<void>;
+  pasteToRun(
+    run: Parameters<NanasaStore["createRun"]>[0],
+    text: string,
+    assertCurrent?: () => void,
+  ): Promise<void>;
 }
 
 export type ActionReadinessDecision =
@@ -81,6 +85,7 @@ export class AgentActionScheduler {
     private readonly arbiter: TerminalInputArbiter,
     private readonly now: () => Date = () => new Date(),
     private readonly pollIntervalMs = 1_000,
+    private readonly authorizeMissionAction?: (action: AgentAction) => void,
   ) {}
 
   public start(): void {
@@ -152,6 +157,26 @@ export class AgentActionScheduler {
   }
 
   async #consider(action: AgentAction, now: Date): Promise<void> {
+    if (action.principal.kind === "foreman") {
+      try {
+        if (this.authorizeMissionAction === undefined)
+          throw new DomainError(
+            "mission_dispatch_forbidden",
+            "Mission authorization is unavailable",
+            403,
+          );
+        this.authorizeMissionAction(action);
+      } catch (error) {
+        this.store.transitionAgentAction(action.id, [action.state], "cancelled", {
+          error: {
+            code: error instanceof DomainError ? error.code : "mission_dispatch_forbidden",
+            message: "Mission no longer authorizes this action",
+            retryable: false,
+          },
+        });
+        return;
+      }
+    }
     if (Date.parse(action.queueDeadlineAt) <= now.getTime()) {
       this.store.transitionAgentAction(action.id, [action.state], "expired", {
         error: {
@@ -299,7 +324,14 @@ export class AgentActionScheduler {
             409,
           );
         }
-        await this.runtime.pasteToRun(run, actionPrompt(action));
+        if (action.principal.kind === "foreman") {
+          this.authorizeMissionAction!(action);
+          await this.runtime.pasteToRun(run, actionPrompt(action), () =>
+            this.authorizeMissionAction!(action),
+          );
+        } else {
+          await this.runtime.pasteToRun(run, actionPrompt(action));
+        }
       });
       writeCompleted = true;
       this.store.markAgentActionSubmitted(action.id, attempt.id, this.#owner);

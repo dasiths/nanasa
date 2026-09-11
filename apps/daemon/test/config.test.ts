@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { ConfiguredGroupSchema } from "@nanasa/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -53,6 +54,19 @@ afterEach(() => {
 });
 
 describe("Nanasa configuration", () => {
+  it("composes runtime teams for readers without writing them to authored YAML", async () => {
+    const repository = temporaryRepository(minimalConfig());
+    const group = ConfiguredGroupSchema.parse({ name: "Mission team", agents: {} });
+    const configs = new ConfigRepository(repository, () => ({ mission_team: group }));
+    expect(configs.load().config.groups.mission_team).toEqual(group);
+    await configs.mutate((config) => {
+      expect(config.groups.mission_team).toBeUndefined();
+      return { config: { ...config, messages: { retentionPerGroup: 200 } }, result: undefined };
+    });
+    expect(configs.load().config.groups.mission_team).toEqual(group);
+    expect(readFileSync(configs.load().configPath, "utf8")).not.toContain("mission_team");
+  });
+
   it("requires the exact revision for config mutation and preserves comments", async () => {
     const source = `# Keep this repository comment\n${minimalConfig()}`;
     const repository = temporaryRepository(source);

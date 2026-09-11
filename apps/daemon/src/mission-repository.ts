@@ -498,6 +498,11 @@ export class MissionRepository {
     return MissionTaskSchema.parse({
       id: row.id,
       missionId: row.mission_id,
+      actionId: row.action_id ?? undefined,
+      groupId: row.group_id ?? undefined,
+      memberId: row.member_id ?? undefined,
+      runId: row.run_id ?? undefined,
+      generation: row.generation ?? undefined,
       title: row.title,
       instructions: row.instructions,
       roleId: row.role_id,
@@ -518,14 +523,6 @@ export class MissionRepository {
       .run(id, kind, principal, revision, this.now().toISOString());
   }
   #transaction<Result>(operation: () => Result): Result {
-    this.#database.exec("BEGIN IMMEDIATE");
-    try {
-      const result = operation();
-      this.#database.exec("COMMIT");
-      return result;
-    } catch (error) {
-      this.#database.exec("ROLLBACK");
-      throw error;
-    }
+    return this.store.atomic(operation);
   }
 }

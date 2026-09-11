@@ -86,6 +86,11 @@ export const MissionTaskSchema = CreateMissionTaskCommandSchema.omit({
   .extend({
     id: IdentifierSchema,
     missionId: IdentifierSchema,
+    actionId: IdentifierSchema.optional(),
+    groupId: IdentifierSchema.optional(),
+    memberId: IdentifierSchema.optional(),
+    runId: IdentifierSchema.optional(),
+    generation: z.number().int().positive().optional(),
     state: MissionTaskStateSchema,
     revision: z.number().int().nonnegative(),
     createdAt: TimestampSchema,
@@ -98,3 +103,33 @@ export const MissionWorkspaceSchema = z
   .object({ mission: MissionSchema, tasks: z.array(MissionTaskSchema).max(256) })
   .strict();
 export type MissionWorkspace = z.infer<typeof MissionWorkspaceSchema>;
+
+export const ProvisionMissionTeamCommandSchema = z
+  .object({
+    requestId: IdentifierSchema,
+    expectedGrantRevision: z.number().int().positive(),
+    expectedConfigRevision: z.string().min(1).max(128),
+    templateId: IdentifierSchema,
+    sourceCheckoutId: IdentifierSchema,
+    baseCommit: z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/),
+  })
+  .strict();
+export type ProvisionMissionTeamCommand = z.infer<typeof ProvisionMissionTeamCommandSchema>;
+export const MissionTeamAllocationSchema = z
+  .object({
+    id: IdentifierSchema,
+    missionId: IdentifierSchema,
+    groupId: IdentifierSchema,
+    templateId: IdentifierSchema,
+    templateDigest: z.string().regex(/^[a-f0-9]{64}$/),
+    sourceCheckoutId: IdentifierSchema,
+    baseCommit: z.string().min(40).max(64),
+    branch: z.string().min(1),
+    checkoutId: IdentifierSchema.optional(),
+    worktreeId: IdentifierSchema.optional(),
+    state: z.enum(["prepared", "creating", "ready", "blocked"]),
+    createdAt: TimestampSchema,
+    updatedAt: TimestampSchema,
+  })
+  .strict();
+export type MissionTeamAllocation = z.infer<typeof MissionTeamAllocationSchema>;

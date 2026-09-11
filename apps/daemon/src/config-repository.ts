@@ -10,7 +10,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
-import type { NanasaConfig } from "@nanasa/contracts";
+import {
+  type ConfiguredGroup,
+  ConfiguredGroupSchema,
+  canonicalJson,
+  type NanasaConfig,
+} from "@nanasa/contracts";
 import { parseDocument } from "yaml";
 import {
   type LoadedNanasaConfig,
@@ -28,12 +33,22 @@ export class ConfigRepository {
   readonly #repositoryRoot: string;
   #queue: Promise<void> = Promise.resolve();
 
-  public constructor(repositoryRoot: string) {
+  public constructor(
+    repositoryRoot: string,
+    private readonly runtimeGroups: () => Readonly<Record<string, ConfiguredGroup>> = () => ({}),
+  ) {
     this.#repositoryRoot = repositoryRoot;
   }
 
   public load(): LoadedNanasaConfig {
-    return loadNanasaConfig(this.#repositoryRoot);
+    const loaded = loadNanasaConfig(this.#repositoryRoot);
+    const groups = { ...loaded.config.groups };
+    for (const [id, definition] of Object.entries(this.runtimeGroups())) {
+      if (groups[id] !== undefined && canonicalJson(groups[id]) !== canonicalJson(definition))
+        throw new Error(`Runtime team conflicts with authored configuration: ${id}`);
+      groups[id] = ConfiguredGroupSchema.parse(definition);
+    }
+    return { ...loaded, config: { ...loaded.config, groups } };
   }
 
   public mutate<T>(
@@ -48,7 +63,7 @@ export class ConfigRepository {
     });
     this.#queue = this.#queue
       .then(() => {
-        const current = this.load();
+        const current = loadNanasaConfig(this.#repositoryRoot);
         if (expectedRevision !== undefined && expectedRevision !== current.status.revision) {
           throw new Error("Configuration revision changed; prepare the operation again");
         }

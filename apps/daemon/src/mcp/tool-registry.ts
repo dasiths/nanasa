@@ -3,6 +3,7 @@ import {
   AgentProgressReportCommandSchema,
   CreateMissionTaskCommandSchema,
   ForemanChannelQuerySchema,
+  ProvisionMissionTeamCommandSchema,
   SendForemanMessageCommandSchema,
 } from "@nanasa/contracts";
 import { z } from "zod";
@@ -15,6 +16,9 @@ export const McpMissionReferenceSchema = z
   .object({ missionId: McpIdentifierSchema, expectedGrantRevision: z.number().int().positive() })
   .strict();
 export const McpMissionTaskSchema = CreateMissionTaskCommandSchema.extend({
+  missionId: McpIdentifierSchema,
+}).strict();
+export const McpMissionProvisionSchema = ProvisionMissionTeamCommandSchema.extend({
   missionId: McpIdentifierSchema,
 }).strict();
 export const McpMessageFieldsSchema = z
@@ -92,6 +96,15 @@ function tool(input: McpToolDeclaration): McpToolDeclaration {
 }
 
 export const MCP_TOOL_REGISTRY = Object.freeze([
+  tool({
+    name: "nanasa.foreman_provision_team",
+    description:
+      "Create a new mission-owned team and managed worktree from an approved template and pinned commit",
+    inputSchema: McpMissionProvisionSchema,
+    principals: ["foreman"],
+    scope: "foreman:teams:provision",
+    authority: "self-write",
+  }),
   tool({
     name: "nanasa.foreman_finish_review",
     description: "Settle the exact current mission review without claiming mission completion",

@@ -31,6 +31,7 @@ import {
   MCP_TOOL_REGISTRY,
   McpDeliverySchema,
   McpForemanBootstrapSchema,
+  McpMissionProvisionSchema,
   McpMissionReferenceSchema,
   McpMissionTaskSchema,
   McpOwnWaitsSchema,
@@ -45,6 +46,7 @@ import { McpCredentialIssuer, type McpPrincipal } from "./mcp-auth.js";
 import { MessageCommandService } from "./message-command-service.js";
 import { MessageRepository } from "./message-repository.js";
 import type { MissionRepository } from "./mission-repository.js";
+import type { MissionTeamService } from "./mission-team-service.js";
 import { DomainError, NanasaStore } from "./store.js";
 
 export interface McpRouteOptions {
@@ -61,6 +63,7 @@ export interface McpRouteOptions {
   openWaits: AgentOpenWaitService;
   foremanConfig?: () => NanasaConfig;
   missions: MissionRepository;
+  missionTeams: MissionTeamService;
 }
 
 class McpRateLimiter {
@@ -341,6 +344,12 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
               ),
             })),
             teams: snapshot.groups.map((group) => ({ id: group.id, name: group.name })),
+            sourceCheckouts: snapshot.checkouts.map((checkout) => ({
+              id: checkout.id,
+              repositoryId: checkout.repositoryId,
+              kind: checkout.kind,
+              head: checkout.head,
+            })),
             capabilities: MCP_TOOL_REGISTRY.filter((tool) =>
               tool.principals.includes("foreman"),
             ).map((tool) => tool.name),
@@ -383,7 +392,10 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
       async (input) =>
         actionToolResult(() => {
           options.missions.assertForeman(principal, input.missionId, input.expectedGrantRevision);
-          return options.missions.workspace(input.missionId);
+          return {
+            ...options.missions.workspace(input.missionId),
+            teams: options.missionTeams.list(input.missionId),
+          };
         }),
     );
     server.registerTool(
@@ -405,6 +417,36 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
         actionToolResult(() =>
           options.missions.finishReview(principal, input.missionId, input.expectedGrantRevision),
         ),
+    );
+    server.registerTool(
+      "nanasa.foreman_provision_team",
+      {
+        description: mcpTool("nanasa.foreman_provision_team").description,
+        inputSchema: McpMissionProvisionSchema,
+      },
+      async ({ missionId, ...input }) => {
+        try {
+          return {
+            content: [{ type: "text" as const, text: "Mission team allocation returned." }],
+            structuredContent: {
+              result: await options.missionTeams.provision(principal, missionId, input),
+            },
+          };
+        } catch (error) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  error instanceof DomainError
+                    ? error.message
+                    : "Mission provisioning failed; inspect retained allocation state",
+              },
+            ],
+          };
+        }
+      },
     );
     return server;
   }

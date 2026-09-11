@@ -575,6 +575,10 @@ export class NanasaStore {
     return this.#database;
   }
 
+  public atomic<Result>(operation: () => Result): Result {
+    return this.#transaction(operation);
+  }
+
   public close(): void {
     this.#database.close();
   }

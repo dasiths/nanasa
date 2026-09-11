@@ -318,12 +318,20 @@ export const DATABASE_BASELINE_SQL = `
     template_id TEXT NOT NULL,
     dependencies_json TEXT NOT NULL,
     acceptance_indexes_json TEXT NOT NULL,
+    action_id TEXT UNIQUE REFERENCES actions(id),
+    group_id TEXT,
+    member_id TEXT,
+    run_id TEXT REFERENCES runs(id),
+    generation INTEGER,
     state TEXT NOT NULL CHECK (state IN ('queued', 'assigned', 'running', 'blocked', 'verifying', 'accepted', 'failed', 'cancelled')),
     revision INTEGER NOT NULL CHECK (revision >= 0),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(mission_id, request_id)
   ) STRICT;
+
+  CREATE UNIQUE INDEX mission_tasks_worker_capacity ON mission_tasks(group_id, member_id)
+    WHERE state IN ('assigned', 'running', 'blocked', 'verifying');
 
   CREATE TABLE mission_audits (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -332,6 +340,26 @@ export const DATABASE_BASELINE_SQL = `
     principal_id TEXT NOT NULL,
     revision INTEGER NOT NULL,
     occurred_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE mission_team_allocations (
+    id TEXT PRIMARY KEY,
+    mission_id TEXT NOT NULL REFERENCES missions(id),
+    request_id TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    group_id TEXT NOT NULL UNIQUE,
+    template_id TEXT NOT NULL,
+    template_digest TEXT NOT NULL,
+    group_json TEXT NOT NULL,
+    source_checkout_id TEXT NOT NULL REFERENCES checkouts(id),
+    base_commit TEXT NOT NULL,
+    branch TEXT NOT NULL UNIQUE,
+    checkout_id TEXT UNIQUE REFERENCES checkouts(id),
+    worktree_id TEXT UNIQUE REFERENCES worktrees(id),
+    state TEXT NOT NULL CHECK (state IN ('prepared', 'creating', 'ready', 'blocked')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(mission_id, request_id)
   ) STRICT;
 
   CREATE TABLE foreman_inbox (

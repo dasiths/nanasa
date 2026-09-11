@@ -4,11 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NanasaConfigSchema } from "@nanasa/contracts";
 import { afterEach, describe, expect, it } from "vitest";
+import { AgentActionService } from "../src/actions/agent-action-service.js";
+import { PeerCapabilityPolicy } from "../src/actions/peer-capability-policy.js";
+import { ConfigRepository } from "../src/config-repository.js";
 import { CheckoutService } from "../src/git/checkout-service.js";
 import { GitCommandAdapter } from "../src/git/git-command-adapter.js";
 import { GitStatusService } from "../src/git/git-status-service.js";
 import { RepositoryDiscoveryService } from "../src/git/repository-discovery-service.js";
 import { safeWorktreeSlug, WorktreeService } from "../src/git/worktree-service.js";
+import { MissionRepository } from "../src/mission-repository.js";
+import { MissionTaskScheduler } from "../src/mission-task-scheduler.js";
+import { MissionTeamService, runtimeMissionGroups } from "../src/mission-team-service.js";
+import { buildTrustedBuiltinCopilotPackage } from "../src/providers/builtin-provider-packages.js";
 import { NanasaStore } from "../src/store.js";
 
 const directories: string[] = [];
@@ -48,6 +55,235 @@ function fixture() {
 }
 
 describe("managed worktree ownership", () => {
+  it("provisions an owned mission team without rewriting authored groups and preserves it on reload", async () => {
+    const context = fixture();
+    try {
+      const source = (await context.checkouts.initialize(context.repository)).checkout;
+      mkdirSync(join(context.repository, ".nanasa"));
+      const path = join(context.repository, ".nanasa", "config.yaml");
+      const authored = `version: 2
+integrations:
+  copilot:
+    name: Copilot
+    kind: copilot
+roles:
+  engineer:
+    name: Engineer
+teamTemplates:
+  build:
+    members:
+      engineer:
+        integrationId: copilot
+        roleId: engineer
+foreman:
+  integrationId: copilot
+  enabled: true
+  autonomy:
+    mode: bounded
+    permittedTeamTemplates: [build]
+groups: {}
+`;
+      writeFileSync(path, authored);
+      const config = new ConfigRepository(context.repository, () =>
+        runtimeMissionGroups(context.store),
+      );
+      const missions = new MissionRepository(context.store, () => config.load().config);
+      const mission = missions.create("human", {
+        requestId: "mission",
+        title: "Build",
+        objective: "Build a tested feature",
+        acceptance: ["Tests pass"],
+        grant: config.load().config.foreman!.autonomy,
+      });
+      const running = missions.control("human", mission.id, {
+        expectedRevision: 0,
+        action: "start",
+      });
+      const profile = context.store.createInternalAgentProfile({
+        name: "Foreman",
+        agentType: "copilot",
+        kind: "copilot",
+        command: "copilot",
+        args: [],
+        environment: {},
+      });
+      context.store.upsertForeman({
+        id: "repository-foreman",
+        agentProfileId: profile.id,
+        enabled: true,
+      });
+      const run = context.store.createRunForForeman("repository-foreman").run;
+      const principal = {
+        kind: "foreman" as const,
+        foremanId: run.foremanId,
+        runId: run.id,
+        generation: run.generation,
+        authorityRevision: 0,
+      };
+      const snapshot = (await buildTrustedBuiltinCopilotPackage()).snapshot;
+      const teams = new MissionTeamService(
+        context.store,
+        missions,
+        config,
+        context.worktrees,
+        context.git,
+        {
+          assignGroupCheckout: async (groupId, command) => ({
+            group: context.store.assignGroupCheckout(
+              groupId,
+              command.checkoutId,
+              command.expectedCheckoutRevision,
+            ),
+            checkoutId: command.checkoutId,
+            outcomes: [],
+          }),
+        },
+        { resolveActiveSnapshot: async () => snapshot },
+      );
+      const command = {
+        requestId: "team",
+        expectedGrantRevision: running.grantRevision,
+        expectedConfigRevision: config.load().status.revision!,
+        templateId: "build",
+        sourceCheckoutId: source.id,
+        baseCommit: source.head!,
+      };
+      const allocation = await teams.provision(principal, mission.id, command);
+      expect(allocation.state).toBe("ready");
+      expect(context.store.getGroup(allocation.groupId).checkoutId).toBe(allocation.checkoutId);
+      const members = context.store.listActiveMemberships(allocation.groupId);
+      expect(members).toHaveLength(1);
+      expect(members[0]?.roleId).toBe("engineer");
+      expect(readFileSync(path, "utf8")).toBe(authored);
+      expect(await teams.provision(principal, mission.id, command)).toEqual(allocation);
+      expect(context.store.listWorktrees()).toHaveLength(1);
+      context.store.reconcileTopology(config.load().config);
+      expect(context.store.getGroup(allocation.groupId).checkoutId).toBe(allocation.checkoutId);
+      const checkout = context.store.getCheckout(allocation.checkoutId!);
+      writeFileSync(join(checkout.path, "dirty.txt"), "preserve mission work\n");
+      teams.recoverInterrupted();
+      expect(readFileSync(join(checkout.path, "dirty.txt"), "utf8")).toBe(
+        "preserve mission work\n",
+      );
+      const worker = context.store.createRunForMembership(
+        allocation.groupId,
+        members[0]!.memberId,
+      ).run;
+      expect(worker.resolvedWorkingDirectory).toBe(checkout.path);
+      expect(worker.checkoutId).toBe(allocation.checkoutId);
+      context.store.updateRunStatus(worker.id, "running");
+      const timestamp = new Date().toISOString();
+      context.store.registerReporterSession({
+        id: "mission-reporter",
+        runId: worker.id,
+        generation: worker.generation,
+        providerId: "copilot",
+        adapterId: "copilot",
+        reporterId: "copilot-hooks",
+        source: "copilot",
+        protocolVersion: 2,
+        reporterVersion: "2",
+        reporterEpoch: "mission-epoch",
+        readinessCoverage: "full",
+        sourceSequence: 0,
+        openedAt: timestamp,
+        leaseExpiresAt: "2099-01-01T00:00:00Z",
+      });
+      context.store.bindReporterProcess(worker.id, worker.generation, "a".repeat(64));
+      context.store.recordProcessStatus(worker.id, {
+        event: "process.alive",
+        eventId: "mission-alive",
+        observedAt: timestamp,
+        process: {
+          foregroundPgid: 1,
+          leaderPid: 1,
+          pidStartIdentity: "1:1",
+          executableFingerprint: "b".repeat(64),
+          argvFingerprint: "c".repeat(64),
+          processFingerprint: "a".repeat(64),
+          expectedProviderMatch: "match",
+          wrapperChain: ["copilot"],
+        },
+      });
+      context.store.ingestAgentStatusEvent(
+        {
+          groupId: allocation.groupId,
+          memberId: worker.memberId,
+          runId: worker.id,
+          generation: worker.generation,
+        },
+        {
+          version: 2,
+          eventId: "mission-ready",
+          providerId: "copilot",
+          adapterId: "copilot",
+          reporterId: "copilot-hooks",
+          source: "copilot",
+          protocolVersion: 2,
+          reporterVersion: "2",
+          reporterEpoch: "mission-epoch",
+          runId: worker.id,
+          generation: worker.generation,
+          sourceSequence: 1,
+          event: "session.ready",
+          data: {},
+        },
+      );
+      const task = missions.createTask(principal, mission.id, {
+        requestId: "task",
+        expectedGrantRevision: running.grantRevision,
+        title: "Implementation",
+        instructions: "Implement bounded work",
+        templateId: "build",
+        roleId: "engineer",
+        dependencies: [],
+        acceptanceIndexes: [0],
+      });
+      const actions = new AgentActionService(
+        context.store,
+        1,
+        new PeerCapabilityPolicy((caller, command) => scheduler.authorize(caller, command)),
+      );
+      const scheduler = new MissionTaskScheduler(
+        context.store,
+        missions,
+        teams,
+        actions,
+        {
+          startRun: async () => {
+            throw new Error("Worker already running");
+          },
+        },
+        () => false,
+      );
+      await scheduler.tick();
+      await scheduler.tick();
+      const assigned = missions.workspace(mission.id).tasks.find((item) => item.id === task.id)!;
+      expect(assigned).toMatchObject({
+        state: "assigned",
+        runId: worker.id,
+        generation: worker.generation,
+        groupId: allocation.groupId,
+      });
+      expect(context.store.listAgentActions()).toHaveLength(1);
+      const action = context.store.getAgentAction(assigned.actionId!);
+      expect(action.principal).toMatchObject({
+        kind: "foreman",
+        missionId: mission.id,
+        taskId: task.id,
+      });
+      scheduler.authorizeAction(action);
+      missions.control("human", mission.id, {
+        expectedRevision: running.revision,
+        action: "pause",
+      });
+      expect(() => scheduler.authorizeAction(action)).toThrow("grant changed");
+      await scheduler.close();
+    } finally {
+      context.store.close();
+    }
+  });
+
   it("fetches and prunes remote refs without changing the current branch or local files", async () => {
     const context = fixture();
     try {
