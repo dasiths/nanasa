@@ -29,6 +29,7 @@ import {
   DismissAttentionItemsCommandSchema,
   EventServerFrameSchema,
   ExtensionLifecycleCommandSchema,
+  ForemanChannelQuerySchema,
   ForemanRunSchema,
   ForemanWorkspaceSchema,
   GitReferenceListSchema,
@@ -57,6 +58,7 @@ import {
   RepositorySchema,
   RevokeCustomLaunchConsentCommandSchema,
   RoleDefinitionSchema,
+  SendForemanMessageCommandSchema,
   type ServiceDescriptor,
   SetAttentionSubscriptionCommandSchema,
   StartAgentRunCommandSchema,
@@ -335,6 +337,21 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
   });
   register("config.get", () => services.config.load().config);
   register("foreman.get", () => ForemanWorkspaceSchema.parse(services.foreman.status()));
+  register("foreman.channel", (request) => {
+    const query = record(request.query);
+    return services.store.readForemanChannel(
+      ForemanChannelQuerySchema.parse({
+        after: query.after === undefined ? 0 : Number(query.after),
+        limit: query.limit === undefined ? 50 : Number(query.limit),
+      }),
+    );
+  });
+  register("foreman.send", (request) =>
+    services.store.sendForemanMessage(
+      { kind: "operator", operatorId: operatorPrincipal(services, request).operatorId },
+      SendForemanMessageCommandSchema.parse(routeBody(controlRoute("foreman.send"), request)),
+    ),
+  );
   register("foreman.configure", async (request) => {
     const command = ConfigureForemanCommandSchema.parse(
       routeBody(controlRoute("foreman.configure"), request),

@@ -31,6 +31,7 @@ import { groupRoute, type PortalRoute } from "../router/portal-router.js";
 export type PortalLinkHandler = (path: string) => (event: MouseEvent<HTMLAnchorElement>) => void;
 
 const destinationIcons: Record<GlobalDestination, ReactNode> = {
+  foreman: <Bot aria-hidden="true" size={15} />,
   attention: <Bell aria-hidden="true" size={15} />,
   agents: <Bot aria-hidden="true" size={15} />,
   checkouts: <GitBranch aria-hidden="true" size={15} />,
@@ -103,6 +104,20 @@ export function RepositoryNavigation({
   const operations = globalDestinationDefinitions.filter(({ group }) => group === "operations");
   return (
     <section className="repository-navigation" aria-labelledby="repository-navigation-title">
+      <span className="rail-section-label">Coordination</span>
+      <nav className="portal-navigation-list" aria-label="Coordination">
+        {globalDestinationDefinitions
+          .filter(({ group }) => group === "coordination")
+          .map((destination) => (
+            <DestinationLink
+              key={destination.id}
+              destination={destination}
+              currentDestination={currentDestination}
+              attentionCount={0}
+              onLink={onLink}
+            />
+          ))}
+      </nav>
       <span id="repository-navigation-title" className="rail-section-label">
         Operations
       </span>
@@ -315,6 +330,22 @@ export function MobileNavigationDialog({
           </div>
         </header>
         <div className="mobile-navigation-scroll">
+          <section aria-label="Coordination">
+            <span className="rail-section-label">Coordination</span>
+            <nav className="portal-navigation-list" aria-label="Coordination">
+              {globalDestinationDefinitions
+                .filter(({ group }) => group === "coordination")
+                .map((destination) => (
+                  <DestinationLink
+                    key={destination.id}
+                    destination={destination}
+                    currentDestination={currentDestination}
+                    attentionCount={0}
+                    onLink={closeAfterLink}
+                  />
+                ))}
+            </nav>
+          </section>
           <section aria-labelledby="mobile-operations-title">
             <span id="mobile-operations-title" className="rail-section-label">
               Operations

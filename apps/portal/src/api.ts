@@ -1,7 +1,4 @@
 import {
-  type UrlOpenRequest,
-  UrlOpenRequestListSchema,
-  UrlOpenRequestSchema,
   type AdHocConsoleSession,
   AdHocConsoleSessionSchema,
   type AgentAction,
@@ -30,6 +27,7 @@ import {
   ClearMessageHistoryResultSchema,
   type ConfigStatus,
   ConfigStatusSchema,
+  type ConfigureForemanCommand,
   type ControlMetadata,
   type CreateAgentActionCommand,
   CreateAgentActionCommandSchema,
@@ -55,6 +53,14 @@ import {
   type ExtensionLifecycleCommand,
   type ExtensionTrustReceipt,
   ExtensionTrustReceiptSchema,
+  type ForemanChannelMessage,
+  ForemanChannelMessageSchema,
+  type ForemanChannelPage,
+  ForemanChannelPageSchema,
+  type ForemanRun,
+  ForemanRunSchema,
+  type ForemanWorkspace,
+  ForemanWorkspaceSchema,
   type GitReference,
   type GitStatusProjection,
   type Group,
@@ -110,13 +116,16 @@ import {
   RevokeCustomLaunchConsentCommandSchema,
   type RoleDefinition,
   RoleDefinitionSchema,
+  type SendForemanMessageCommand,
   type ServiceDescriptor,
   ServiceDescriptorSchema,
   type SetAttentionSubscriptionCommand,
   type StartAgentRunResult,
   StartAgentRunResultSchema,
+  type StartForemanCommand,
   type StartGroupRunsResult,
   StartGroupRunsResultSchema,
+  type StopForemanCommand,
   type SubmitMessageCommand,
   SubmitMessageCommandSchema,
   type TerminalCheckpoint,
@@ -134,6 +143,9 @@ import {
   UpdateGroupCommandSchema,
   type UpdateRolePresentationCommand,
   UpdateRolePresentationCommandSchema,
+  type UrlOpenRequest,
+  UrlOpenRequestListSchema,
+  UrlOpenRequestSchema,
   type WorktreeOperationResult,
 } from "@nanasa/contracts";
 import {
@@ -147,6 +159,12 @@ import {
 export { ControlClientError as ApiError };
 
 export interface PortalClient {
+  loadForeman(): Promise<ForemanWorkspace>;
+  configureForeman(command: ConfigureForemanCommand): Promise<ForemanWorkspace>;
+  startForeman(command: StartForemanCommand): Promise<ForemanRun>;
+  stopForeman(command: StopForemanCommand): Promise<ForemanWorkspace>;
+  loadForemanChannel(after?: number): Promise<ForemanChannelPage>;
+  sendForemanMessage(command: SendForemanMessageCommand): Promise<ForemanChannelMessage>;
   createConsole(): Promise<AdHocConsoleSession>;
   closeConsole(consoleId: string): Promise<void>;
   loadMetadata(): Promise<ControlMetadata>;
@@ -324,6 +342,36 @@ function commandInit(
 }
 
 export const api: PortalClient = {
+  loadForeman: () => request(`${CONTROL_API_PREFIX}/foreman`, ForemanWorkspaceSchema),
+  configureForeman: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/configuration`,
+      ForemanWorkspaceSchema,
+      commandInit("PUT", command),
+    ),
+  startForeman: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/run/start`,
+      ForemanRunSchema,
+      commandInit("POST", command),
+    ),
+  stopForeman: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/run/stop`,
+      ForemanWorkspaceSchema,
+      commandInit("POST", command),
+    ),
+  loadForemanChannel: (after = 0) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/channel?after=${after}&limit=100`,
+      ForemanChannelPageSchema,
+    ),
+  sendForemanMessage: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/channel`,
+      ForemanChannelMessageSchema,
+      commandInit("POST", command),
+    ),
   createConsole: () =>
     request(`${CONTROL_API_PREFIX}/consoles`, AdHocConsoleSessionSchema, commandInit("POST", {})),
   closeConsole: (consoleId) =>

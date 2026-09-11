@@ -19,6 +19,70 @@ afterEach(() => {
 });
 
 describe("NanasaStore persistence", () => {
+  it("persists an isolated retry-safe Foreman channel with scoped replies", () => {
+    const root = mkdtempSync(join(tmpdir(), "nanasa-channel-"));
+    temporaryDirectories.push(root);
+    const path = join(root, "state.sqlite");
+    let store = new NanasaStore(path);
+    try {
+      const team = store.createGroup({ name: "Team" });
+      const operator = { kind: "operator" as const, operatorId: "operator-one" };
+      const input = { requestId: "request-one", text: "Coordinate this work", teamId: team.id };
+      const message = store.sendForemanMessage(operator, input);
+      expect(store.sendForemanMessage(operator, input)).toEqual(message);
+      expect(() => store.sendForemanMessage(operator, { ...input, text: "changed" })).toThrow(
+        "different content",
+      );
+      expect(() =>
+        store.sendForemanMessage(operator, { ...input, requestId: "bad-team", teamId: "unknown" }),
+      ).toThrow();
+      expect(store.getSnapshot().messages).toEqual([]);
+      const profile = store.createInternalAgentProfile({
+        name: "Foreman",
+        agentType: "copilot",
+        kind: "copilot",
+        command: "copilot",
+        args: [],
+        environment: {},
+      });
+      store.upsertForeman({ id: "foreman", agentProfileId: profile.id, enabled: true });
+      const run = store.createRunForForeman("foreman").run;
+      const sender = {
+        kind: "foreman" as const,
+        foremanId: "foreman",
+        runId: run.id,
+        generation: run.generation,
+        authorityRevision: 0,
+      };
+      const reply = {
+        requestId: "reply-one",
+        text: "Plan received",
+        replyTo: message.id,
+        teamId: team.id,
+      };
+      expect(() => store.sendForemanMessage(sender, { ...reply, teamId: undefined })).toThrow(
+        "original team context",
+      );
+      const response = store.sendForemanMessage(sender, reply);
+      expect(response.sequence).toBe(message.sequence + 1);
+      store.updateRuntimeRunStatus(run.id, "failed");
+      expect(() => store.sendForemanMessage(sender, { ...reply, requestId: "revoked" })).toThrow(
+        "no longer active",
+      );
+      store.close();
+      store = new NanasaStore(path);
+      const first = store.readForemanChannel({ after: 0, limit: 1 });
+      expect(first).toEqual({ messages: [message], nextAfter: message.sequence, hasMore: true });
+      expect(store.readForemanChannel({ after: first.nextAfter, limit: 100 })).toEqual({
+        messages: [response],
+        nextAfter: response.sequence,
+        hasMore: false,
+      });
+    } finally {
+      store.close();
+    }
+  });
+
   it("owns Foreman runs outside teams with durable monotonically increasing generations", () => {
     const root = mkdtempSync(join(tmpdir(), "nanasa-foreman-store-"));
     temporaryDirectories.push(root);

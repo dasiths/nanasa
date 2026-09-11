@@ -1,4 +1,9 @@
-import { AgentActionStateSchema, AgentProgressReportCommandSchema } from "@nanasa/contracts";
+import {
+  AgentActionStateSchema,
+  AgentProgressReportCommandSchema,
+  ForemanChannelQuerySchema,
+  SendForemanMessageCommandSchema,
+} from "@nanasa/contracts";
 import { z } from "zod";
 import type { McpPrincipal } from "../mcp-auth.js";
 import { DomainError } from "../store.js";
@@ -80,6 +85,24 @@ function tool(input: McpToolDeclaration): McpToolDeclaration {
 }
 
 export const MCP_TOOL_REGISTRY = Object.freeze([
+  tool({
+    name: "nanasa.foreman_read_channel",
+    description:
+      "Read bounded operator instructions and Foreman replies from the repository channel",
+    inputSchema: ForemanChannelQuerySchema,
+    principals: ["foreman"],
+    scope: "foreman:channel:read",
+    authority: "read",
+  }),
+  tool({
+    name: "nanasa.foreman_reply",
+    description:
+      "Reply to an operator channel message with preserved context and a retry-safe request ID",
+    inputSchema: SendForemanMessageCommandSchema,
+    principals: ["foreman"],
+    scope: "foreman:channel:reply",
+    authority: "self-write",
+  }),
   tool({
     name: "nanasa.foreman_bootstrap",
     description:

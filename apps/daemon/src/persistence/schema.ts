@@ -269,6 +269,20 @@ export const DATABASE_BASELINE_SQL = `
 
   CREATE UNIQUE INDEX foremen_one_enabled ON foremen(enabled) WHERE enabled = 1;
 
+  CREATE TABLE foreman_messages (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    sender_key TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    sender_json TEXT NOT NULL,
+    text TEXT NOT NULL,
+    team_id TEXT,
+    reply_to TEXT REFERENCES foreman_messages(id),
+    created_at TEXT NOT NULL,
+    UNIQUE(sender_key, request_id)
+  ) STRICT;
+
   CREATE TABLE runs (
     id TEXT PRIMARY KEY,
     group_id TEXT,

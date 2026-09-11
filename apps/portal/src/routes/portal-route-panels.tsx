@@ -25,6 +25,7 @@ import {
 import { AgentDirectory } from "../components/agent-directory.js";
 import { CheckoutWorkspace } from "../components/checkout-workspace.js";
 import { ExtensionsWorkspace } from "../components/extensions-workspace.js";
+import { ForemanWorkspace } from "../components/foreman-workspace.js";
 import { UrlOpenAction } from "../components/url-open-action.js";
 import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 import { generatedOfflineHelp } from "../help/generated-offline-help.js";
@@ -968,6 +969,18 @@ export function PortalRoutePanel(props: PortalRoutePanelProps) {
   }
   if (route.kind !== "global") return null;
   switch (route.destination) {
+    case "foreman":
+      return (
+        <ForemanWorkspace
+          key={window.location.search}
+          client={props.client}
+          config={props.config}
+          groups={props.snapshot.groups}
+          themePreference={props.preferences.theme}
+          initialTeamId={new URLSearchParams(window.location.search).get("team") ?? ""}
+          onNavigate={props.onNavigate}
+        />
+      );
     case "attention":
       return <AttentionPanel {...props} />;
     case "agents":

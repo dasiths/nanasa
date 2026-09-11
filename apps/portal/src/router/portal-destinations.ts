@@ -32,10 +32,11 @@ export const groupDestinations = [
   },
 ] as const satisfies readonly GroupDestinationDefinition[];
 
-export type GlobalDestinationGroup = "operations" | "system" | "utilities";
+export type GlobalDestinationGroup = "coordination" | "operations" | "system" | "utilities";
 
 export interface GlobalDestinationDefinition {
   id:
+    | "foreman"
     | "attention"
     | "agents"
     | "checkouts"
@@ -56,6 +57,15 @@ export interface GlobalDestinationDefinition {
 }
 
 export const globalDestinationDefinitions = [
+  {
+    id: "foreman",
+    label: "Foreman",
+    heading: "Foreman",
+    group: "coordination",
+    commandLabel: "Open Foreman",
+    commandDescription: "Open repository coordination and the Foreman terminal",
+    keywords: ["coordination", "mission", "channel"],
+  },
   {
     id: "attention",
     label: "Attention",

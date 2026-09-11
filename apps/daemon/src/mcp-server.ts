@@ -3,9 +3,11 @@ import { type AuthInfo, createMcpHandler, McpServer } from "@modelcontextprotoco
 import {
   AgentProgressReportCommandSchema,
   CreateAgentActionCommandSchema,
+  ForemanChannelQuerySchema,
   MAX_MESSAGE_REQUEST_BYTES,
   type MessageSubmissionResult,
   type NanasaConfig,
+  SendForemanMessageCommandSchema,
   SubmitMessageCommandSchema,
   WaitForAgentActionCommandSchema,
 } from "@nanasa/contracts";
@@ -340,6 +342,22 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
             ).map((tool) => tool.name),
           };
         }),
+    );
+    server.registerTool(
+      "nanasa.foreman_read_channel",
+      {
+        description: mcpTool("nanasa.foreman_read_channel").description,
+        inputSchema: ForemanChannelQuerySchema,
+      },
+      async (input) => actionToolResult(() => options.store.readForemanChannel(input)),
+    );
+    server.registerTool(
+      "nanasa.foreman_reply",
+      {
+        description: mcpTool("nanasa.foreman_reply").description,
+        inputSchema: SendForemanMessageCommandSchema,
+      },
+      async (input) => actionToolResult(() => options.store.sendForemanMessage(principal, input)),
     );
     return server;
   }

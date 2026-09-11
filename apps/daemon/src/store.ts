@@ -40,6 +40,7 @@ import {
   CreateGroupCommandSchema,
   type CustomLaunchConsentRequest,
   CustomLaunchConsentRequestSchema,
+  canonicalJson,
   DEFAULT_MESSAGE_PAGE_SIZE,
   type DeleteGroupResult,
   DeleteGroupResultSchema,
@@ -52,6 +53,13 @@ import {
   DurableNativeSessionSchema,
   type ForemanActor,
   ForemanActorSchema,
+  type ForemanChannelMessage,
+  ForemanChannelMessageSchema,
+  type ForemanChannelPage,
+  type ForemanChannelQuery,
+  ForemanChannelQuerySchema,
+  type ForemanChannelSender,
+  ForemanChannelSenderSchema,
   type ForemanRun,
   ForemanRunSchema,
   type GitOperation,
@@ -96,6 +104,8 @@ import {
   RuntimeRunSchema,
   type ScreenObservation,
   ScreenObservationSchema,
+  type SendForemanMessageCommand,
+  SendForemanMessageCommandSchema,
   type StartGroupRunsResult,
   StartGroupRunsResultSchema,
   type SubmitMessageCommand,
@@ -1824,6 +1834,141 @@ export class NanasaStore {
         id: string;
       }[]
     ).map(({ id }) => this.getForeman(id));
+  }
+
+  public sendForemanMessage(
+    sender: ForemanChannelSender,
+    command: SendForemanMessageCommand,
+  ): ForemanChannelMessage {
+    const principal = ForemanChannelSenderSchema.parse(sender);
+    const input = SendForemanMessageCommandSchema.parse(command);
+    return this.#transaction(() => {
+      if (principal.kind === "foreman") {
+        const actor = this.getForeman(principal.foremanId);
+        const run = this.getActiveForemanRun(actor.id);
+        if (
+          !actor.enabled ||
+          actor.authorityRevision !== principal.authorityRevision ||
+          run?.id !== principal.runId ||
+          run.generation !== principal.generation ||
+          run.desiredState !== "running" ||
+          !["starting", "running"].includes(run.status)
+        ) {
+          throw new DomainError(
+            "foreman_authority_revoked",
+            "Foreman channel authority is no longer active",
+            403,
+          );
+        }
+        if (input.replyTo === undefined)
+          throw new DomainError(
+            "foreman_reply_required",
+            "Foreman replies must reference an operator message",
+            400,
+          );
+      }
+      const senderKey =
+        principal.kind === "operator"
+          ? `operator:${principal.operatorId}`
+          : `foreman:${principal.foremanId}`;
+      const digest = createHash("sha256")
+        .update(
+          canonicalJson({
+            requestId: input.requestId,
+            text: input.text,
+            ...(input.teamId === undefined ? {} : { teamId: input.teamId }),
+            ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
+          }),
+        )
+        .digest("hex");
+      const existing = this.#database
+        .prepare("SELECT * FROM foreman_messages WHERE sender_key = ? AND request_id = ?")
+        .get(senderKey, input.requestId);
+      if (existing !== undefined) {
+        if (existing.request_digest !== digest)
+          throw new DomainError(
+            "foreman_message_conflict",
+            "Request ID was already used for different content",
+            409,
+          );
+        return this.#hydrateForemanMessage(existing);
+      }
+      if (input.teamId !== undefined) this.#requireGroup(input.teamId);
+      if (input.replyTo !== undefined) {
+        const parent = this.#database
+          .prepare("SELECT * FROM foreman_messages WHERE id = ?")
+          .get(input.replyTo);
+        if (parent === undefined)
+          throw new DomainError(
+            "foreman_reply_not_found",
+            "Channel reply target does not exist",
+            404,
+          );
+        const message = this.#hydrateForemanMessage(parent);
+        if (message.teamId !== input.teamId)
+          throw new DomainError(
+            "foreman_reply_context_conflict",
+            "Replies must retain their original team context",
+            409,
+          );
+        if (principal.kind === "foreman" && message.sender.kind !== "operator")
+          throw new DomainError(
+            "foreman_reply_required",
+            "Foreman must reply to an operator message",
+            400,
+          );
+      }
+      const id = `fm_${randomUUID()}`;
+      const createdAt = new Date().toISOString();
+      this.#database
+        .prepare(`INSERT INTO foreman_messages
+        (id, sender_key, request_id, request_digest, sender_json, text, team_id, reply_to, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(
+          id,
+          senderKey,
+          input.requestId,
+          digest,
+          JSON.stringify(principal),
+          input.text,
+          input.teamId ?? null,
+          input.replyTo ?? null,
+          createdAt,
+        );
+      const message = this.#hydrateForemanMessage(
+        this.#database.prepare("SELECT * FROM foreman_messages WHERE id = ?").get(id)!,
+      );
+      this.#appendEvent("foreman.message-created", "foreman", "repository", {
+        messageId: message.id,
+        channelSequence: message.sequence,
+      });
+      return message;
+    });
+  }
+
+  public readForemanChannel(query: ForemanChannelQuery): ForemanChannelPage {
+    const input = ForemanChannelQuerySchema.parse(query);
+    const rows = this.#database
+      .prepare("SELECT * FROM foreman_messages WHERE sequence > ? ORDER BY sequence LIMIT ?")
+      .all(input.after, input.limit + 1);
+    const messages = rows.slice(0, input.limit).map((row) => this.#hydrateForemanMessage(row));
+    return {
+      messages,
+      nextAfter: messages.at(-1)?.sequence ?? input.after,
+      hasMore: rows.length > input.limit,
+    };
+  }
+
+  #hydrateForemanMessage(row: Record<string, unknown>): ForemanChannelMessage {
+    return ForemanChannelMessageSchema.parse({
+      id: row.id,
+      sequence: row.sequence,
+      sender: JSON.parse(String(row.sender_json)),
+      text: row.text,
+      teamId: row.team_id ?? undefined,
+      replyTo: row.reply_to ?? undefined,
+      createdAt: row.created_at,
+    });
   }
 
   public getLatestForemanRun(foremanId: string): ForemanRun | undefined {

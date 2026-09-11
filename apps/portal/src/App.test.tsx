@@ -299,6 +299,12 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     stoppedAt: timestamp,
   };
   return {
+    loadForeman: vi.fn().mockResolvedValue({ configRevision: "revision-one" }),
+    configureForeman: vi.fn(),
+    startForeman: vi.fn(),
+    stopForeman: vi.fn(),
+    loadForemanChannel: vi.fn().mockResolvedValue({ messages: [], nextAfter: 0, hasMore: false }),
+    sendForemanMessage: vi.fn(),
     createConsole: vi
       .fn()
       .mockResolvedValue({ id: "console-one", runId: "console-one", generation: 1 }),
@@ -692,6 +698,45 @@ describe("portal application", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("opens Foreman separately and preserves channel retry identity after failure", async () => {
+    window.history.replaceState({}, "", "/foreman");
+    const client = createClient();
+    vi.mocked(client.sendForemanMessage)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({
+        id: "message-one",
+        sequence: 1,
+        text: "A long-running mission",
+        createdAt: timestamp,
+        sender: { kind: "operator", operatorId: "human" },
+      });
+    render(<App client={client} />);
+    const user = userEvent.setup();
+    const field = await screen.findByRole("textbox", { name: "Message Foreman" });
+    expect(screen.getByRole("navigation", { name: "Coordination" })).toBeTruthy();
+    await user.type(field, "A long-running mission");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("Foreman operation failed");
+    expect(field).toHaveValue("A long-running mission");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(field).toHaveValue(""));
+    const calls = vi.mocked(client.sendForemanMessage).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.[0]).toEqual(calls[0]?.[0]);
+    await user.click(screen.getByRole("tab", { name: "Terminal" }));
+    expect(screen.getByText("Foreman is not running")).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "Message Foreman" })).toBeNull();
+  });
+
+  it("keeps invalid Foreman context unavailable instead of silently changing scope", async () => {
+    window.history.replaceState({}, "", "/foreman?team=deleted-team");
+    render(<App client={createClient()} />);
+    const field = await screen.findByRole("textbox", { name: "Message Foreman" });
+    fireEvent.change(field, { target: { value: "Mission" } });
+    expect(screen.getByText("The selected team is unavailable.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 
   it("refreshes the snapshot when a typed domain event arrives", async () => {

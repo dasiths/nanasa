@@ -32,6 +32,8 @@ import {
   DismissAttentionItemsCommandSchema,
   ExtensionLifecycleCommandSchema,
   ExtensionTrustReceiptSchema,
+  ForemanChannelMessageSchema,
+  ForemanChannelPageSchema,
   ForemanRunSchema,
   ForemanWorkspaceSchema,
   GitReferenceListSchema,
@@ -73,6 +75,7 @@ import {
   RepositorySchema,
   RevokeCustomLaunchConsentCommandSchema,
   RoleDefinitionSchema,
+  SendForemanMessageCommandSchema,
   ServiceDescriptorSchema,
   SetAttentionSubscriptionCommandSchema,
   StartAgentRunCommandSchema,
@@ -195,6 +198,32 @@ function route(input: RouteInput): ControlRouteDeclaration {
 }
 
 export const CONTROL_ROUTE_REGISTRY = Object.freeze([
+  route({
+    id: "foreman.channel",
+    family: "foreman",
+    method: "GET",
+    path: "/api/v1/foreman/channel",
+    query: StringQuerySchema,
+    response: ForemanChannelPageSchema,
+    summary: "Read bounded repository Foreman channel history",
+  }),
+  route({
+    id: "foreman.send",
+    family: "foreman",
+    method: "POST",
+    path: "/api/v1/foreman/channel",
+    idempotency: "forbidden",
+    body: SendForemanMessageCommandSchema,
+    response: ForemanChannelMessageSchema,
+    summary:
+      "Store an operator instruction in the repository channel using a retry-safe request ID",
+    errors: [
+      "foreman_message_conflict",
+      "foreman_reply_context_conflict",
+      "foreman_reply_not_found",
+      "group_not_found",
+    ],
+  }),
   route({
     id: "foreman.get",
     family: "foreman",

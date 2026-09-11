@@ -150,7 +150,29 @@ describe("Streamable HTTP MCP", () => {
       const listed = await mcpRequest(daemon, token, "tools/list", {});
       expect(listed.json().result.tools.map((tool: { name: string }) => tool.name)).toEqual([
         "nanasa.foreman_bootstrap",
+        "nanasa.foreman_read_channel",
+        "nanasa.foreman_reply",
       ]);
+      const message = daemon.store.sendForemanMessage(
+        { kind: "operator", operatorId: "human" },
+        {
+          requestId: "human-one",
+          text: "Plan the changes",
+          teamId: group.id,
+        },
+      );
+      const channel = await callTool(daemon, token, "nanasa.foreman_read_channel", {});
+      expect(channel.json().result.structuredContent.result.messages).toEqual([message]);
+      const reply = {
+        requestId: "reply-one",
+        text: "Plan ready",
+        teamId: group.id,
+        replyTo: message.id,
+      };
+      const firstReply = await callTool(daemon, token, "nanasa.foreman_reply", reply);
+      const secondReply = await callTool(daemon, token, "nanasa.foreman_reply", reply);
+      expect(secondReply.json().result).toEqual(firstReply.json().result);
+      expect(daemon.store.readForemanChannel({ after: 0, limit: 100 }).messages).toHaveLength(2);
       const bootstrap = await callTool(daemon, token, "nanasa.foreman_bootstrap", {});
       expect(bootstrap.json().result.structuredContent.result).toMatchObject({
         principal: { kind: "foreman", foremanId: "foreman", runId: run.id },
