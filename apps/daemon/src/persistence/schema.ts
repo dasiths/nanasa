@@ -262,6 +262,7 @@ export const DATABASE_BASELINE_SQL = `
     id TEXT PRIMARY KEY,
     agent_profile_id TEXT NOT NULL REFERENCES agent_profiles(id),
     enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    authority_revision INTEGER NOT NULL DEFAULT 0 CHECK (authority_revision >= 0),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   ) STRICT;

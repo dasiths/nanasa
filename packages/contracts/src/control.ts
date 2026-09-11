@@ -216,6 +216,7 @@ export const ForemanActorSchema = z
     id: IdentifierSchema,
     agentProfileId: IdentifierSchema,
     enabled: z.boolean(),
+    authorityRevision: z.number().int().nonnegative().default(0),
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
   })

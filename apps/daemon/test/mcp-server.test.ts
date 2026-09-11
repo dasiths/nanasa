@@ -77,7 +77,7 @@ async function createFixture() {
   }
   const run = daemon.store.createRunForMembership(group.id, "sender").run;
   const agentToken = new McpCredentialIssuer(daemon.store, { secretPath }).issueAgent(run);
-  return { daemon, group, run, agentToken };
+  return { daemon, group, run, agentToken, secretPath };
 }
 
 async function mcpRequest(
@@ -128,6 +128,44 @@ async function callTool(
 }
 
 describe("Streamable HTTP MCP", () => {
+  it("advertises a separate Foreman scope and denies direct cross-principal tool calls", async () => {
+    const { daemon, agentToken, secretPath, group } = await createFixture();
+    try {
+      const profile = daemon.store.createInternalAgentProfile({
+        name: "Foreman",
+        agentType: "fixture",
+        kind: "opencode",
+        command: "node",
+        args: [],
+        environment: {},
+      });
+      daemon.store.upsertForeman({ id: "foreman", agentProfileId: profile.id, enabled: true });
+      const { run } = daemon.store.createRunForForeman("foreman");
+      const token = new McpCredentialIssuer(daemon.store, { secretPath }).issueForeman(run);
+      const listed = await mcpRequest(daemon, token, "tools/list", {});
+      expect(listed.json().result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+        "nanasa.foreman_bootstrap",
+      ]);
+      const bootstrap = await callTool(daemon, token, "nanasa.foreman_bootstrap", {});
+      expect(bootstrap.json().result.structuredContent.result).toMatchObject({
+        principal: { kind: "foreman", foremanId: "foreman", runId: run.id },
+        teams: expect.arrayContaining([{ id: group.id, name: group.name }]),
+      });
+      const forbidden = await callTool(daemon, token, "nanasa.broadcast_group", {
+        groupId: group.id,
+        text: "Must not send",
+      });
+      expect(forbidden.json()).toHaveProperty("error");
+      const forbiddenAgent = await callTool(daemon, agentToken, "nanasa.foreman_bootstrap", {});
+      expect(forbiddenAgent.json()).toHaveProperty("error");
+      expect(daemon.store.getSnapshot().messages).toEqual([]);
+      daemon.store.updateRuntimeRunStatus(run.id, "stopping");
+      expect((await mcpRequest(daemon, token, "tools/list", {})).statusCode).toBe(401);
+    } finally {
+      await daemon.app.close();
+    }
+  });
+
   it("returns repository-path guidance when a tool message exceeds the UTF-8 limit", async () => {
     const { daemon, agentToken } = await createFixture();
     const response = await callTool(daemon, agentToken, "nanasa.send_dm", {

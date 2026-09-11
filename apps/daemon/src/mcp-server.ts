@@ -10,32 +10,36 @@ import {
 } from "@nanasa/contracts";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { nanasaMcpServerInstructions } from "./coordination-instructions.js";
 import type { AgentActionService } from "./actions/agent-action-service.js";
 import type { AgentOpenWaitService } from "./actions/agent-open-wait-service.js";
 import type { AgentWaitService } from "./actions/agent-wait-service.js";
-import { McpCredentialIssuer, type McpPrincipal } from "./mcp-auth.js";
-import { MessageCommandService } from "./message-command-service.js";
-import { MessageRepository } from "./message-repository.js";
-import { DeliveryRepository } from "./delivery-repository.js";
-import { DomainError, NanasaStore } from "./store.js";
 import {
-  MCP_TOOL_REGISTRY,
+  NANASA_FOREMAN_INSTRUCTIONS,
+  nanasaMcpServerInstructions,
+} from "./coordination-instructions.js";
+import { DeliveryRepository } from "./delivery-repository.js";
+import {
   McpActionReferenceSchema as ActionReferenceSchema,
-  McpDeliverySchema,
+  assertMcpToolPrincipal,
   McpDirectMessageSchema as DirectMessageSchema,
   McpGetAgentStatusSchema as GetAgentStatusSchema,
   McpListAgentStatusesSchema as ListAgentStatusesSchema,
   McpListMembersSchema as ListMembersSchema,
+  MCP_TOOL_REGISTRY,
+  McpDeliverySchema,
+  McpForemanBootstrapSchema,
+  McpOwnWaitsSchema,
+  McpVisibleHistorySchema,
   McpMessageFieldsSchema as MessageFieldsSchema,
   McpMulticastMessageSchema as MulticastMessageSchema,
-  McpOwnWaitsSchema,
-  McpPromptPeerSchema as PromptPeerSchema,
-  McpVisibleHistorySchema,
-  McpWaitActionSchema as WaitActionSchema,
-  assertMcpToolPrincipal,
   mcpTool,
+  McpPromptPeerSchema as PromptPeerSchema,
+  McpWaitActionSchema as WaitActionSchema,
 } from "./mcp/tool-registry.js";
+import { McpCredentialIssuer, type McpPrincipal } from "./mcp-auth.js";
+import { MessageCommandService } from "./message-command-service.js";
+import { MessageRepository } from "./message-repository.js";
+import { DomainError, NanasaStore } from "./store.js";
 
 export interface McpRouteOptions {
   path: string;
@@ -57,9 +61,9 @@ class McpRateLimiter {
   public check(principal: McpPrincipal): void {
     const now = Date.now();
     const key =
-      principal.kind === "agent"
-        ? `agent:${principal.runId}:${principal.generation}`
-        : `operator:${principal.operatorId}`;
+      principal.kind === "operator"
+        ? `operator:${principal.operatorId}`
+        : `${principal.kind}:${principal.runId}:${principal.generation}`;
     const recent = (this.#calls.get(key) ?? []).filter((timestamp) => now - timestamp < 60_000);
     if (recent.length >= 30) {
       throw new DomainError("mcp_rate_limited", "MCP request rate limit exceeded", 429);
@@ -69,7 +73,9 @@ class McpRateLimiter {
   }
 }
 
-function targetGroup(principal: McpPrincipal, requestedGroupId: string | undefined): string {
+type TeamMcpPrincipal = Exclude<McpPrincipal, { kind: "foreman" }>;
+
+function targetGroup(principal: TeamMcpPrincipal, requestedGroupId: string | undefined): string {
   if (principal.kind === "agent") {
     if (requestedGroupId !== undefined && requestedGroupId !== principal.groupId) {
       throw new DomainError(
@@ -107,7 +113,7 @@ function toolResult(operation: () => MessageSubmissionResult) {
   }
 }
 
-function commandBase(principal: McpPrincipal, input: z.infer<typeof MessageFieldsSchema>) {
+function commandBase(principal: TeamMcpPrincipal, input: z.infer<typeof MessageFieldsSchema>) {
   return {
     conversationId: input.conversationId,
     intent: input.intent,
@@ -121,7 +127,7 @@ function commandBase(principal: McpPrincipal, input: z.infer<typeof MessageField
   };
 }
 
-function actionPrincipal(principal: McpPrincipal) {
+function actionPrincipal(principal: TeamMcpPrincipal) {
   return principal.kind === "agent"
     ? {
         kind: "agent" as const,
@@ -154,7 +160,7 @@ function actionToolResult(operation: () => unknown) {
 }
 
 function messageVisibleTo(
-  principal: McpPrincipal,
+  principal: TeamMcpPrincipal,
   message: ReturnType<NanasaStore["getMessage"]>,
 ): boolean {
   if (principal.kind === "operator") return true;
@@ -167,7 +173,7 @@ function messageVisibleTo(
 }
 
 function visibleDeliveries(
-  principal: McpPrincipal,
+  principal: TeamMcpPrincipal,
   options: McpRouteOptions,
   messageId: string,
   recipientMemberId?: string,
@@ -197,7 +203,7 @@ function visibleDeliveries(
 }
 
 function listMembersResult(
-  principal: McpPrincipal,
+  principal: TeamMcpPrincipal,
   options: McpRouteOptions,
   input: z.infer<typeof ListMembersSchema>,
 ) {
@@ -250,7 +256,7 @@ function listMembersResult(
 }
 
 function listAgentStatusesResult(
-  principal: McpPrincipal,
+  principal: TeamMcpPrincipal,
   options: McpRouteOptions,
   input: z.infer<typeof ListAgentStatusesSchema>,
 ) {
@@ -278,7 +284,7 @@ function listAgentStatusesResult(
 }
 
 function getAgentStatusResult(
-  principal: McpPrincipal,
+  principal: TeamMcpPrincipal,
   options: McpRouteOptions,
   input: z.infer<typeof GetAgentStatusSchema>,
 ) {
@@ -296,6 +302,44 @@ function getAgentStatusResult(
 }
 
 function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): McpServer {
+  if (principal.kind === "foreman") {
+    const server = new McpServer(
+      { name: "nanasa", version: "0.0.0" },
+      { instructions: NANASA_FOREMAN_INSTRUCTIONS },
+    );
+    server.registerTool(
+      "nanasa.foreman_bootstrap",
+      {
+        description: mcpTool("nanasa.foreman_bootstrap").description,
+        inputSchema: McpForemanBootstrapSchema,
+      },
+      async () =>
+        actionToolResult(() => {
+          assertMcpToolPrincipal("nanasa.foreman_bootstrap", principal);
+          const snapshot = options.store.getSnapshot();
+          const foreman = snapshot.config?.foreman;
+          return {
+            principal,
+            policyCeilings: foreman?.autonomy,
+            templates: (foreman?.autonomy.permittedTeamTemplates ?? []).map((id) => ({
+              id,
+              members: Object.entries(snapshot.config?.teamTemplates?.[id]?.members ?? {}).map(
+                ([slot, member]) => ({
+                  slot,
+                  roleId: member.roleId,
+                  integrationId: member.integrationId,
+                }),
+              ),
+            })),
+            teams: snapshot.groups.map((group) => ({ id: group.id, name: group.name })),
+            capabilities: MCP_TOOL_REGISTRY.filter((tool) =>
+              tool.principals.includes("foreman"),
+            ).map((tool) => tool.name),
+          };
+        }),
+    );
+    return server;
+  }
   const server = new McpServer(
     { name: "nanasa", version: "0.0.0" },
     { instructions: nanasaMcpServerInstructions() },

@@ -1761,6 +1761,7 @@ export class NanasaStore {
       id: row.id,
       agentProfileId: row.agent_profile_id,
       enabled: row.enabled === 1,
+      authorityRevision: row.authority_revision,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     });
@@ -1801,6 +1802,8 @@ export class NanasaStore {
       this.#database
         .prepare(`INSERT INTO foremen (id, agent_profile_id, enabled, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET
+        authority_revision = foremen.authority_revision + CASE
+          WHEN foremen.agent_profile_id <> excluded.agent_profile_id OR foremen.enabled <> excluded.enabled THEN 1 ELSE 0 END,
         agent_profile_id = excluded.agent_profile_id, enabled = excluded.enabled, updated_at = excluded.updated_at`)
         .run(actor.id, actor.agentProfileId, actor.enabled ? 1 : 0, now, now);
       return this.getForeman(actor.id);

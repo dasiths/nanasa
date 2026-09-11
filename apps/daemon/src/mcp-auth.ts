@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { AgentRun } from "@nanasa/contracts";
+import type { AgentRun, ForemanRun } from "@nanasa/contracts";
 import { z } from "zod";
 
 import { DomainError, NanasaStore } from "./store.js";
@@ -36,6 +36,27 @@ interface McpCredentialIssuerOptions {
   expectedUid?: number;
 }
 
+const ForemanCapabilitySchema = z
+  .object({
+    version: z.literal(1),
+    kind: z.literal("foreman"),
+    foremanId: z.string().min(1).max(128),
+    runId: z.string().min(1).max(128),
+    generation: z.number().int().positive(),
+    authorityRevision: z.number().int().nonnegative(),
+    issuedAt: z.number().int().nonnegative(),
+    nonce: z.string().min(16),
+  })
+  .strict();
+
+export interface McpForemanPrincipal {
+  kind: "foreman";
+  foremanId: string;
+  runId: string;
+  generation: number;
+  authorityRevision: number;
+}
+
 export interface McpAgentPrincipal {
   kind: "agent";
   groupId: string;
@@ -49,7 +70,7 @@ export interface McpOperatorPrincipal {
   operatorId: "remote-operator";
 }
 
-export type McpPrincipal = McpAgentPrincipal | McpOperatorPrincipal;
+export type McpPrincipal = McpAgentPrincipal | McpOperatorPrincipal | McpForemanPrincipal;
 
 function ensureSecretDirectory(path: string, expectedUid: number | undefined): void {
   const directory = resolve(dirname(path));
@@ -180,10 +201,61 @@ export class McpCredentialIssuer {
     if (this.#operatorToken !== undefined && tokenEquals(token, this.#operatorToken)) {
       return { kind: "operator", operatorId: "remote-operator" };
     }
-    return this.#authenticateAgent(token);
+    return this.#authenticateCapability(token);
   }
 
-  #authenticateAgent(token: string): McpAgentPrincipal {
+  public issueForeman(run: ForemanRun): string {
+    const actor = this.#store.getForeman(run.foremanId);
+    const capability = ForemanCapabilitySchema.parse({
+      version: 1,
+      kind: "foreman",
+      foremanId: run.foremanId,
+      runId: run.id,
+      generation: run.generation,
+      authorityRevision: actor.authorityRevision,
+      issuedAt: Date.now(),
+      nonce: randomBytes(16).toString("base64url"),
+    });
+    this.#authenticateForeman(capability);
+    const payload = Buffer.from(JSON.stringify(capability)).toString("base64url");
+    return `${payload}.${this.#sign(payload)}`;
+  }
+
+  #authenticateForeman(capability: z.infer<typeof ForemanCapabilitySchema>): McpForemanPrincipal {
+    try {
+      const actor = this.#store.getForeman(capability.foremanId);
+      const run = this.#store.getActiveForemanRun(actor.id);
+      if (
+        actor.enabled &&
+        actor.authorityRevision === capability.authorityRevision &&
+        run?.id === capability.runId &&
+        run.generation === capability.generation &&
+        run.desiredState === "running" &&
+        ["starting", "running"].includes(run.status)
+      ) {
+        return {
+          kind: "foreman",
+          foremanId: actor.id,
+          runId: run.id,
+          generation: run.generation,
+          authorityRevision: actor.authorityRevision,
+        };
+      }
+    } catch {
+      throw new DomainError(
+        "mcp_credential_revoked",
+        "The Foreman credential is no longer active",
+        401,
+      );
+    }
+    throw new DomainError(
+      "mcp_credential_revoked",
+      "The Foreman credential is no longer active",
+      401,
+    );
+  }
+
+  #authenticateCapability(token: string): McpAgentPrincipal | McpForemanPrincipal {
     const segments = token.split(".");
     if (segments.length !== 2) {
       throw new DomainError("mcp_unauthorized", "The bearer credential is invalid", 401);
@@ -193,14 +265,15 @@ export class McpCredentialIssuer {
       throw new DomainError("mcp_unauthorized", "The bearer credential is invalid", 401);
     }
 
-    let capability: z.infer<typeof AgentCapabilitySchema>;
+    let capability: z.infer<typeof AgentCapabilitySchema> | z.infer<typeof ForemanCapabilitySchema>;
     try {
-      capability = AgentCapabilitySchema.parse(
-        JSON.parse(Buffer.from(payload, "base64url").toString()),
-      );
+      capability = z
+        .union([AgentCapabilitySchema, ForemanCapabilitySchema])
+        .parse(JSON.parse(Buffer.from(payload, "base64url").toString()));
     } catch {
       throw new DomainError("mcp_unauthorized", "The bearer credential is invalid", 401);
     }
+    if ("kind" in capability) return this.#authenticateForeman(capability);
 
     let run: AgentRun;
     try {

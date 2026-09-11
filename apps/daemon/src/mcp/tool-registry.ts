@@ -1,9 +1,10 @@
-import { AgentProgressReportCommandSchema, AgentActionStateSchema } from "@nanasa/contracts";
+import { AgentActionStateSchema, AgentProgressReportCommandSchema } from "@nanasa/contracts";
 import { z } from "zod";
 import type { McpPrincipal } from "../mcp-auth.js";
 import { DomainError } from "../store.js";
 
 export const McpIdentifierSchema = z.string().trim().min(1).max(128);
+export const McpForemanBootstrapSchema = z.object({}).strict();
 export const McpMessageFieldsSchema = z
   .object({
     groupId: McpIdentifierSchema.optional(),
@@ -79,6 +80,15 @@ function tool(input: McpToolDeclaration): McpToolDeclaration {
 }
 
 export const MCP_TOOL_REGISTRY = Object.freeze([
+  tool({
+    name: "nanasa.foreman_bootstrap",
+    description:
+      "Read repository Foreman identity, policy ceilings, approved templates, and team metadata",
+    inputSchema: McpForemanBootstrapSchema,
+    principals: ["foreman"],
+    scope: "foreman:bootstrap",
+    authority: "read",
+  }),
   tool({
     name: "nanasa.list_members",
     description: "List active members visible in the caller's group",
