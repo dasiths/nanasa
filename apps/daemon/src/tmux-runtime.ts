@@ -450,8 +450,12 @@ export class TmuxRuntime {
   }
 
   public async removeStaleViewSessions(activeRunIds: ReadonlySet<string>): Promise<void> {
+    const foremanRunIds = this.#store.listForemen().flatMap((actor) => {
+      const run = this.#store.getActiveForemanRun(actor.id);
+      return run === undefined ? [] : [run.id];
+    });
     const desired = new Set(
-      [...activeRunIds, ...this.#detachedRunIds].map(terminalViewSessionName),
+      [...activeRunIds, ...this.#detachedRunIds, ...foremanRunIds].map(terminalViewSessionName),
     );
     const result = await this.#tmux(["list-sessions", "-F", "#{session_name}"], true);
     if (result.exitCode !== 0) {
@@ -854,7 +858,12 @@ export class TmuxRuntime {
       if (workingDirectory !== undefined) {
         args.push("-c", workingDirectory);
       }
-      args.push(...environmentArguments, `stty -ixon 2>/dev/null; exec ${launchCommand}`);
+      const searchPath =
+        environment.PATH === undefined ? "" : `export PATH=${shellQuote(environment.PATH)}; `;
+      args.push(
+        ...environmentArguments,
+        `${searchPath}stty -ixon 2>/dev/null; exec ${launchCommand}`,
+      );
       binding = parseBinding(this.serverName, (await this.#tmux(args)).stdout);
       await this.#tmux(["set-option", "-p", "-t", binding.paneId, "@nanasa-run-id", run.id]);
       await this.#tmux([

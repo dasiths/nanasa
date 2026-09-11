@@ -5,6 +5,7 @@ export * from "./config.js";
 export * from "./control.js";
 export * from "./events.js";
 export * from "./extensions.js";
+export * from "./foreman.js";
 export * from "./git.js";
 export * from "./launch-consent.js";
 export * from "./provider.js";

@@ -5,6 +5,7 @@ import {
   CreateAgentActionCommandSchema,
   MAX_MESSAGE_REQUEST_BYTES,
   type MessageSubmissionResult,
+  type NanasaConfig,
   SubmitMessageCommandSchema,
   WaitForAgentActionCommandSchema,
 } from "@nanasa/contracts";
@@ -53,6 +54,7 @@ export interface McpRouteOptions {
   actions: AgentActionService;
   actionWaits: AgentWaitService;
   openWaits: AgentOpenWaitService;
+  foremanConfig?: () => NanasaConfig;
 }
 
 class McpRateLimiter {
@@ -317,13 +319,14 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
         actionToolResult(() => {
           assertMcpToolPrincipal("nanasa.foreman_bootstrap", principal);
           const snapshot = options.store.getSnapshot();
-          const foreman = snapshot.config?.foreman;
+          const config = options.foremanConfig?.() ?? snapshot.config;
+          const foreman = config?.foreman;
           return {
             principal,
             policyCeilings: foreman?.autonomy,
             templates: (foreman?.autonomy.permittedTeamTemplates ?? []).map((id) => ({
               id,
-              members: Object.entries(snapshot.config?.teamTemplates?.[id]?.members ?? {}).map(
+              members: Object.entries(config?.teamTemplates?.[id]?.members ?? {}).map(
                 ([slot, member]) => ({
                   slot,
                   roleId: member.roleId,

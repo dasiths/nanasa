@@ -5,6 +5,7 @@ import type { AgentProfile, GroupMembership, NanasaConfig } from "@nanasa/contra
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ProviderPolicyError,
+  resolveEffectiveForemanProviderPolicy,
   resolveEffectiveProviderPolicy,
 } from "../src/provider-policy-resolver.js";
 
@@ -66,6 +67,40 @@ afterEach(() => {
 });
 
 describe("effective provider policy", () => {
+  it("isolates Foreman provider files and enforces the daemon authorization switches", () => {
+    const context = fixture();
+    const config = {
+      ...context.config,
+      foreman: {
+        integrationId: "copilot",
+        providerFiles: { mcp: { mode: "disabled", paths: [] } },
+      },
+    } as NanasaConfig;
+    const input = {
+      repoRoot: context.root,
+      config,
+      allowAutonomous: true,
+      allowProviderFiles: true,
+    };
+    expect(resolveEffectiveForemanProviderPolicy(input).providerFiles).toEqual([]);
+    expect(() =>
+      resolveEffectiveForemanProviderPolicy({ ...input, allowAutonomous: false }),
+    ).toThrowError(expect.objectContaining({ code: "execution_profile_not_authorized" }));
+    const inherited = { ...config, foreman: { ...config.foreman!, providerFiles: {} } };
+    expect(
+      resolveEffectiveForemanProviderPolicy({ ...input, config: inherited }).providerFiles.map(
+        (file) => file.sourcePath,
+      ),
+    ).toEqual([".nanasa/providers/copilot/base.json"]);
+    expect(() =>
+      resolveEffectiveForemanProviderPolicy({
+        ...input,
+        config: inherited,
+        allowProviderFiles: false,
+      }),
+    ).toThrowError(expect.objectContaining({ code: "provider_file_not_authorized" }));
+  });
+
   it("resolves autonomous profiles and ordered integration plus agent files", () => {
     const context = fixture();
     const policy = resolveEffectiveProviderPolicy({

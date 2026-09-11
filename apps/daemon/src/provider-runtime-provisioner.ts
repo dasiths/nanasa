@@ -67,6 +67,7 @@ export type ProviderRuntimeOwner =
 export interface AgentRuntimeProvisionerOptions {
   integrationsDirectory: string;
   integrations: Readonly<Record<string, ProviderIntegrationPolicy>>;
+  integrationPolicyResolver?: (integrationId: string) => ProviderIntegrationPolicy | undefined;
   statusEndpointUrl: string;
   mcpEndpointUrl?: string;
   repositoryIdentity: string;
@@ -128,7 +129,10 @@ export class AgentRuntimeProvisioner {
     profile: AgentProfile,
     nativeSession?: NativeSessionReference,
   ): Promise<AgentRuntimeConfiguration> {
-    const policy = this.#options.integrations[profile.agentType];
+    const policy =
+      this.#options.integrationPolicyResolver === undefined
+        ? this.#options.integrations[profile.agentType]
+        : this.#options.integrationPolicyResolver(profile.agentType);
     if (policy === undefined)
       throw new Error(`Provider integration policy is missing for ${profile.agentType}`);
     this.#options.assertProviderExtension?.(profile.kind);

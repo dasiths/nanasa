@@ -30,6 +30,7 @@ import { ProviderCatalogService } from "./extensions/provider-catalog-service.js
 import { ProviderExtensionPlanner } from "./extensions/provider-extension-planner.js";
 import { ProviderExtensionService } from "./extensions/provider-extension-service.js";
 import { ProviderHealthService } from "./extensions/provider-health-service.js";
+import { ForemanRuntimeService } from "./foreman-runtime-service.js";
 import { GeneratedOverlayTransaction } from "./generated-overlay-transaction.js";
 import { CheckoutService } from "./git/checkout-service.js";
 import { GitCommandAdapter } from "./git/git-command-adapter.js";
@@ -93,9 +94,9 @@ import { TmuxEventObserver, type TmuxInvalidationKind } from "./tmux-event-obser
 import { TmuxRuntime } from "./tmux-runtime.js";
 import { TopologyOrderService } from "./topology-order-service.js";
 import { TopologyService } from "./topology-service.js";
-import { UserCredentialBroker } from "./user-credential-broker.js";
 import { registerUrlOpenRoutes } from "./url-open-routes.js";
 import { UrlOpenService } from "./url-open-service.js";
+import { UserCredentialBroker } from "./user-credential-broker.js";
 
 export interface DaemonOptions {
   dataPath?: string;
@@ -150,6 +151,7 @@ export interface DaemonContext {
   checkouts: CheckoutService;
   worktrees: WorktreeService;
   loadedConfig: LoadedNanasaConfig;
+  foreman: ForemanRuntimeService;
   runtimePath: string;
   guard: DaemonInstanceGuard;
   lifecycle: DaemonLifecycle;
@@ -355,6 +357,19 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     });
     const runtimeProvisioner = new AgentRuntimeProvisioner({
       integrationsDirectory: loadedConfig.integrationsDirectory,
+      integrationPolicyResolver: (integrationId) => {
+        const integration = configRepository.load().config.integrations[integrationId];
+        if (integration === undefined) return undefined;
+        return {
+          providerState: integration.providerState,
+          credentials: integration.credentials,
+          model: integration.model,
+          nativeRecovery: integration.nativeRecovery,
+          ...(integration.launcher?.providerArguments === undefined
+            ? {}
+            : { providerArgumentStrategy: integration.launcher.providerArguments }),
+        };
+      },
       integrations: Object.fromEntries(
         Object.entries(loadedConfig.config.integrations).map(([key, integration]) => [
           key,
@@ -440,6 +455,10 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         NANASA_STATUS_URL: statusEndpointUrl,
         ...(await reporterRegistry.environment(run)),
       }),
+      foremanRuntimeEnvironment: async (run) => ({
+        ...(options.mcp?.enabled === true ? { NANASA_MCP_URL: mcpEndpointUrl } : {}),
+        NANASA_MCP_TOKEN: mcpCredentials.issueForeman(run),
+      }),
     });
     const terminalControl = new TerminalControlService(store);
     const terminalInput = new TerminalInputArbiter(terminalControl);
@@ -457,6 +476,17 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       terminalInput,
     );
     const artifactPreviews = new ArtifactPreviewService(loadedConfig.repoRoot);
+    const foreman = new ForemanRuntimeService({
+      store,
+      config: configRepository,
+      runtime,
+      bindings: providerBindings,
+      mcpEnabled: options.mcp?.enabled === true,
+      allowAutonomous: options.providerPolicy?.allowAutonomous === true,
+      allowProviderFiles: options.providerPolicy?.allowProviderFiles === true,
+      onRunAvailable: (run) => terminalGateway.start(run),
+      onRunUnavailable: (runId) => terminalControl.unregister(runId),
+    });
     const terminalDelivery = new TmuxTerminalDelivery(runtime, terminalInput);
     const consoles = new AdHocConsoleManager(runtime, terminalGateway, loadedConfig.repoRoot);
     const deliveries = new DeliveryRepository(store);
@@ -507,6 +537,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     await coordinator.reconcile(true);
     coordinator.start();
     actionScheduler.start();
+    foreman.startMonitoring();
 
     app.addHook("onRequest", async (request, reply) => {
       const path = requestPath(request.url);
@@ -550,6 +581,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       for (const session of eventSessions) session.plannedRestart();
       await consoles.close();
       await actionScheduler.close();
+      await foreman.close();
       await coordinator.close();
     });
 
@@ -635,6 +667,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         actions,
         actionWaits,
         openWaits,
+        foremanConfig: () => configRepository.load().config,
       });
     }
     registerControlRouter(app, {
@@ -642,6 +675,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       remote: () => createRemoteDescriptorFromMetadata(metadata(), systemdService.status()),
       metadata,
       config: configRepository,
+      foreman,
       snapshot: snapshotReadModel,
       store,
       repositoryIdentity,
@@ -720,6 +754,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       checkouts,
       worktrees,
       loadedConfig,
+      foreman,
       runtimePath,
       guard,
       lifecycle,

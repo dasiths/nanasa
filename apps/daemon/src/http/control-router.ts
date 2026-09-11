@@ -17,6 +17,7 @@ import {
   BrowserRestartFrameSchema,
   CancelCustomLaunchConsentCommandSchema,
   CheckoutSchema,
+  ConfigureForemanCommandSchema,
   type ControlMetadata,
   CreateAgentActionCommandSchema,
   CreateGroupAgentCommandSchema,
@@ -28,6 +29,8 @@ import {
   DismissAttentionItemsCommandSchema,
   EventServerFrameSchema,
   ExtensionLifecycleCommandSchema,
+  ForemanRunSchema,
+  ForemanWorkspaceSchema,
   GitReferenceListSchema,
   GitStatusProjectionSchema,
   InstallProviderExtensionCommandSchema,
@@ -57,9 +60,11 @@ import {
   type ServiceDescriptor,
   SetAttentionSubscriptionCommandSchema,
   StartAgentRunCommandSchema,
+  StartForemanCommandSchema,
   StartGroupRunsCommandSchema,
   StartGroupRunsResultSchema,
   StopAgentRunCommandSchema,
+  StopForemanCommandSchema,
   SubmitMessageCommandSchema,
   TerminalCheckpointCaptureSchema,
   TerminalCheckpointContentSchema,
@@ -89,6 +94,7 @@ import type { EventLog } from "../event-log.js";
 import { EventStreamSession } from "../event-stream-session.js";
 import type { ProviderExtensionService } from "../extensions/provider-extension-service.js";
 import type { ProviderHealthService } from "../extensions/provider-health-service.js";
+import type { ForemanRuntimeService } from "../foreman-runtime-service.js";
 import type { CheckoutService } from "../git/checkout-service.js";
 import type { WorktreeService } from "../git/worktree-service.js";
 import type { LaunchConsentService } from "../launch-consent-service.js";
@@ -117,6 +123,7 @@ export interface ControlRouterServices {
   service(): ServiceDescriptor;
   remote(): RemoteDescriptor;
   config: ConfigRepository;
+  foreman: ForemanRuntimeService;
   snapshot: SnapshotReadModel;
   store: NanasaStore;
   repositoryIdentity: string;
@@ -327,6 +334,35 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     return reply.status(204).send();
   });
   register("config.get", () => services.config.load().config);
+  register("foreman.get", () => ForemanWorkspaceSchema.parse(services.foreman.status()));
+  register("foreman.configure", async (request) => {
+    const command = ConfigureForemanCommandSchema.parse(
+      routeBody(controlRoute("foreman.configure"), request),
+    );
+    const state = await services.foreman.configure(
+      command.configuration,
+      command.expectedConfigRevision,
+    );
+    await services.topology.reconcile();
+    return ForemanWorkspaceSchema.parse(state);
+  });
+  register("foreman.start", async (request) => {
+    const command = StartForemanCommandSchema.parse(
+      routeBody(controlRoute("foreman.start"), request),
+    );
+    return ForemanRunSchema.parse(
+      await services.foreman.start(command.expectedConfigRevision, {
+        cols: command.cols,
+        rows: command.rows,
+      }),
+    );
+  });
+  register("foreman.stop", async (request) => {
+    await services.foreman.stop(
+      StopForemanCommandSchema.parse(routeBody(controlRoute("foreman.stop"), request)),
+    );
+    return ForemanWorkspaceSchema.parse(services.foreman.status());
+  });
   register("config.status", () => services.config.load().status);
   register("snapshot.get", (request) => ({
     ...services.snapshot.read(operatorPrincipal(services, request).operatorId),

@@ -1,5 +1,5 @@
 import {
-  type AgentRun,
+  type RuntimeRun,
   TERMINAL_PROTOCOL,
   type TerminalClientFrame,
   TerminalClientFrameSchema,
@@ -111,19 +111,19 @@ export class TerminalGateway {
     this.#arbiter = arbiter ?? new TerminalInputArbiter(control);
   }
 
-  public start(run: AgentRun): void {
+  public start(run: RuntimeRun): void {
     this.#control.register(run);
   }
 
-  public startDetached(run: AgentRun): void {
+  public startDetached(run: RuntimeRun): void {
     this.start(run);
   }
 
-  public async reconcile(runs: AgentRun[]): Promise<void> {
+  public async reconcile(runs: RuntimeRun[]): Promise<void> {
     for (const run of runs) this.start(run);
   }
 
-  public unavailable(run: AgentRun): void {
+  public unavailable(run: RuntimeRun): void {
     this.#control.unregister(run.id, "terminal_unavailable");
   }
 
@@ -184,7 +184,7 @@ export class TerminalGateway {
     let pendingResize: Extract<TerminalClientFrame, { type: "resize" }> | undefined;
     let attachmentSize = { cols: 120, rows: 40 };
     const effects = new TerminalEffectPolicy();
-    let connectedRun: AgentRun | undefined;
+    let connectedRun: RuntimeRun | undefined;
 
     const close = (code: number, reason: string) => {
       if (closed) return;
@@ -212,7 +212,12 @@ export class TerminalGateway {
       return true;
     };
 
-    const attach = (run: AgentRun, role: "controller" | "observer", cols: number, rows: number) => {
+    const attach = (
+      run: RuntimeRun,
+      role: "controller" | "observer",
+      cols: number,
+      rows: number,
+    ) => {
       dataSubscription?.dispose();
       exitSubscription?.dispose();
       pty?.close();
@@ -365,13 +370,18 @@ export class TerminalGateway {
             viewer.streamId,
             frame.expectedLeaseId,
           );
-          attach(connectedRun as AgentRun, "controller", attachmentSize.cols, attachmentSize.rows);
+          attach(
+            connectedRun as RuntimeRun,
+            "controller",
+            attachmentSize.cols,
+            attachmentSize.rows,
+          );
           send({ type: "lease", role: "controller", lease, reason: "taken-over" });
           return;
         }
         if (frame.type === "release") {
           this.#control.release(request.params.runId, viewer.streamId, frame.leaseId);
-          attach(connectedRun as AgentRun, "observer", attachmentSize.cols, attachmentSize.rows);
+          attach(connectedRun as RuntimeRun, "observer", attachmentSize.cols, attachmentSize.rows);
           send({ type: "lease", role: "observer", reason: "released" });
           return;
         }

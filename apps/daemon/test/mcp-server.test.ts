@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ForemanConfigSchema } from "@nanasa/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadNanasaConfig } from "../src/config-loader.js";
@@ -131,6 +132,10 @@ describe("Streamable HTTP MCP", () => {
   it("advertises a separate Foreman scope and denies direct cross-principal tool calls", async () => {
     const { daemon, agentToken, secretPath, group } = await createFixture();
     try {
+      await daemon.foreman.configure(
+        ForemanConfigSchema.parse({ id: "foreman", integrationId: "fixture", enabled: true }),
+        daemon.foreman.status().configRevision!,
+      );
       const profile = daemon.store.createInternalAgentProfile({
         name: "Foreman",
         agentType: "fixture",

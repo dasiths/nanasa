@@ -41,7 +41,7 @@ export class TerminalReadService {
 
   public read(input: TerminalReadRequest): Promise<TerminalReadResult> {
     const request = TerminalReadRequestSchema.parse(input);
-    const run = this.store.getRun(request.runId);
+    const run = this.store.getRuntimeRun(request.runId);
     if (run.generation !== request.generation || run.terminal === undefined) {
       throw new DomainError(
         "terminal_read_generation_mismatch",

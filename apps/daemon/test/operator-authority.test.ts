@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,133 @@ afterEach(() => {
 });
 
 describe("operator authority", () => {
+  it("protects repository Foreman lifecycle routes and exposes its native terminal", async () => {
+    const repository = mkdtempSync(join(tmpdir(), "nanasa-foreman-http-"));
+    temporaryDirectories.push(repository);
+    execFileSync("git", ["init", "--quiet", repository]);
+    mkdirSync(join(repository, ".nanasa"));
+    const bin = join(repository, "bin");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "copilot"),
+      "#!/bin/sh\nprintf 'foreman-ready\\n'\nwhile IFS= read -r line; do printf 'response:%s\\n' \"$line\"; done\n",
+      { mode: 0o700 },
+    );
+    writeFileSync(
+      join(repository, ".nanasa", "config.yaml"),
+      `version: 2
+integrations:
+  copilot:
+    name: Copilot
+    kind: copilot
+    environment:
+      PATH: ${JSON.stringify(`${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`)}
+groups: {}
+`,
+    );
+    const daemon = await createDaemon({
+      dataPath: ":memory:",
+      loadedConfig: loadNanasaConfig(repository),
+      mcp: {
+        enabled: true,
+        endpointUrl: "http://127.0.0.1:3210/mcp",
+        allowedHostnames: ["127.0.0.1"],
+      },
+    });
+    try {
+      for (const [method, url] of [
+        ["GET", "/api/v1/foreman"],
+        ["PUT", "/api/v1/foreman/configuration"],
+        ["POST", "/api/v1/foreman/run/start"],
+        ["POST", "/api/v1/foreman/run/stop"],
+      ] as const) {
+        expect(
+          (await daemon.app.inject({ method, url, ...(method === "GET" ? {} : { payload: {} }) }))
+            .statusCode,
+        ).toBe(401);
+      }
+      const headers = {
+        authorization: `Bearer ${readFileSync(join(daemon.runtimePath, "operator-secret")).toString("base64url")}`,
+      };
+      const state = await daemon.app.inject({ method: "GET", url: "/api/v1/foreman", headers });
+      expect(state.statusCode).toBe(200);
+      expect(state.json()).not.toHaveProperty("configuration");
+      const configured = await daemon.app.inject({
+        method: "PUT",
+        url: "/api/v1/foreman/configuration",
+        headers,
+        payload: {
+          configuration: { integrationId: "copilot", enabled: true },
+          expectedConfigRevision: state.json().configRevision,
+        },
+      });
+      expect(configured.statusCode).toBe(200);
+      const started = await daemon.app.inject({
+        method: "POST",
+        url: "/api/v1/foreman/run/start",
+        headers,
+        payload: { expectedConfigRevision: configured.json().configRevision, cols: 80, rows: 24 },
+      });
+      expect(started.statusCode).toBe(200);
+      const run = daemon.store.getRuntimeRun(started.json().id);
+      expect(run).toMatchObject({
+        foremanId: "repository-foreman",
+        status: "running",
+        generation: 1,
+      });
+      expect(daemon.store.listActiveRuns()).toEqual([]);
+      expect(daemon.store.getSnapshot().memberships).toEqual([]);
+      await expect
+        .poll(
+          async () =>
+            (
+              await daemon.terminalReads.read({
+                runId: run.id,
+                generation: run.generation,
+                source: "history",
+                maxLines: 100,
+                maxBytes: 4096,
+              })
+            ).text,
+        )
+        .toContain("foreman-ready");
+      await daemon.runtime.pasteToRun(run, "operator-native-input");
+      await expect
+        .poll(
+          async () =>
+            (
+              await daemon.terminalReads.read({
+                runId: run.id,
+                generation: run.generation,
+                source: "history",
+                maxLines: 100,
+                maxBytes: 4096,
+              })
+            ).text,
+        )
+        .toContain("response:operator-native-input");
+      const staleStop = await daemon.app.inject({
+        method: "POST",
+        url: "/api/v1/foreman/run/stop",
+        headers,
+        payload: { runId: run.id, generation: 2 },
+      });
+      expect(staleStop.statusCode).toBe(409);
+      expect(daemon.store.getRuntimeRun(run.id).status).toBe("running");
+      const stopped = await daemon.app.inject({
+        method: "POST",
+        url: "/api/v1/foreman/run/stop",
+        headers,
+        payload: { runId: run.id, generation: 1 },
+      });
+      expect(stopped.statusCode).toBe(200);
+      expect(stopped.json().run).toMatchObject({ status: "stopped", desiredState: "stopped" });
+    } finally {
+      await daemon.app.close();
+      spawnSync("tmux", ["-L", daemon.runtime.serverName, "kill-server"]);
+    }
+  });
+
   it("bounds abandoned one-use portal grants", () => {
     const repository = mkdtempSync(join(tmpdir(), "nanasa-portal-grants-"));
     temporaryDirectories.push(repository);

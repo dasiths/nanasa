@@ -1818,6 +1818,21 @@ export class NanasaStore {
     return row === undefined ? undefined : ForemanRunSchema.parse(this.#hydrateRuntimeRun(row));
   }
 
+  public listForemen(): ForemanActor[] {
+    return (
+      this.#database.prepare("SELECT id FROM foremen ORDER BY created_at, id").all() as {
+        id: string;
+      }[]
+    ).map(({ id }) => this.getForeman(id));
+  }
+
+  public getLatestForemanRun(foremanId: string): ForemanRun | undefined {
+    const row = this.#database
+      .prepare("SELECT * FROM runs WHERE foreman_id = ? ORDER BY generation DESC LIMIT 1")
+      .get(foremanId) as unknown as RunRow | undefined;
+    return row === undefined ? undefined : ForemanRunSchema.parse(this.#hydrateRuntimeRun(row));
+  }
+
   public createRunForForeman(foremanId: string): { run: ForemanRun; profile: AgentProfile } {
     return this.#transaction(() => {
       const actor = this.getForeman(foremanId);

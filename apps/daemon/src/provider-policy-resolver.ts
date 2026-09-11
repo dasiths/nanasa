@@ -161,13 +161,28 @@ function selectedPaths(
 export function resolveEffectiveProviderPolicy(
   input: ResolveEffectiveProviderPolicyInput,
 ): EffectiveProviderPolicy {
-  const integration = input.config.integrations[input.profile.agentType];
-  if (integration === undefined) {
-    throw new Error(`Provider integration policy is missing for ${input.profile.agentType}`);
-  }
   const agent = input.config.groups[input.membership.groupId]?.agents[input.membership.id];
   if (agent === undefined)
     throw new Error(`Configured agent is missing for ${input.membership.id}`);
+  return resolvePolicy(input, input.profile.agentType, agent.providerFiles ?? {});
+}
+
+export function resolveEffectiveForemanProviderPolicy(
+  input: Omit<ResolveEffectiveProviderPolicyInput, "membership" | "profile">,
+): EffectiveProviderPolicy {
+  const foreman = input.config.foreman;
+  if (foreman === undefined) throw new Error("Foreman is not configured");
+  return resolvePolicy(input, foreman.integrationId, foreman.providerFiles ?? {});
+}
+
+function resolvePolicy(
+  input: Omit<ResolveEffectiveProviderPolicyInput, "membership" | "profile">,
+  integrationId: string,
+  ownerFiles: ProviderFileSelection,
+): EffectiveProviderPolicy {
+  const integration = input.config.integrations[integrationId];
+  if (integration === undefined)
+    throw new Error(`Provider integration policy is missing for ${integrationId}`);
   const executionProfileId = integration.executionProfile;
   const executionProfile =
     executionProfileId === undefined
@@ -189,7 +204,7 @@ export function resolveEffectiveProviderPolicy(
     );
   }
 
-  const paths = selectedPaths(integration.providerFiles ?? {}, agent.providerFiles ?? {});
+  const paths = selectedPaths(integration.providerFiles ?? {}, ownerFiles);
   if (paths.length > 0 && !input.allowProviderFiles) {
     throw new ProviderPolicyError(
       "provider_file_not_authorized",
