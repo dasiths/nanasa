@@ -86,6 +86,13 @@ The browser stores a per-repository, per-group read cursor. Opening Messages
 marks retained messages as read. Clearing history deletes that group's stored
 messages and delivery outcomes for all portal sessions.
 
+## Coordinate repository missions
+
+Choose **Coordination > Foreman** for the repository-owned channel, native
+terminal, mission controls, and settings. Foreman is outside team broadcasts.
+See [Foreman and missions](foreman.md) for private authentication, immutable
+grants, supervised approvals, recovery limits, and verified candidate acceptance.
+
 ## Adjust the interface
 
 Choose light, dark, or system theme. Layout, terminal pinning, grid splits,

@@ -776,6 +776,7 @@
                 "type": "string",
                 "enum": [
                   "membership",
+                  "foreman",
                   "integration",
                   "provider-default"
                 ]
@@ -1085,6 +1086,7 @@
                 "type": "string",
                 "enum": [
                   "membership",
+                  "foreman",
                   "integration",
                   "provider-default"
                 ]

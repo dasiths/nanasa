@@ -3,6 +3,108 @@
   "packageVersion": "0.1.0-next.12.0",
   "commands": [
     {
+      "id": "foreman.status",
+      "family": "foreman",
+      "command": "status",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Read repository Foreman configuration, input, and runtime state"
+    },
+    {
+      "id": "foreman.configure",
+      "family": "foreman",
+      "command": "configure",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Configure stopped Foreman at an exact configuration revision"
+    },
+    {
+      "id": "foreman.start",
+      "family": "foreman",
+      "command": "start",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Start Foreman at an exact configuration revision"
+    },
+    {
+      "id": "foreman.stop",
+      "family": "foreman",
+      "command": "stop",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Stop the exact Foreman run generation"
+    },
+    {
+      "id": "foreman.history",
+      "family": "foreman",
+      "command": "history",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Read bounded Foreman channel history"
+    },
+    {
+      "id": "foreman.send",
+      "family": "foreman",
+      "command": "send",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Send a retry-safe repository channel message"
+    },
+    {
+      "id": "foreman.resolve-input",
+      "family": "foreman",
+      "command": "resolve-input",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Resolve inspected input without replay"
+    },
+    {
+      "id": "missions.list",
+      "family": "missions",
+      "command": "list",
+      "mode": "control",
+      "positionals": [],
+      "summary": "List durable repository missions"
+    },
+    {
+      "id": "missions.create",
+      "family": "missions",
+      "command": "create",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Create immutable mission acceptance, recipes, and grant"
+    },
+    {
+      "id": "missions.get",
+      "family": "missions",
+      "command": "get",
+      "mode": "control",
+      "positionals": [
+        "missionId"
+      ],
+      "summary": "Read mission tasks, approvals, evidence, and candidate"
+    },
+    {
+      "id": "missions.control",
+      "family": "missions",
+      "command": "control",
+      "mode": "control",
+      "positionals": [
+        "missionId"
+      ],
+      "summary": "Control an exact mission revision"
+    },
+    {
+      "id": "missions.decide",
+      "family": "missions",
+      "command": "decide",
+      "mode": "control",
+      "positionals": [
+        "approvalId"
+      ],
+      "summary": "Approve or deny an exact supervised operation"
+    },
+    {
       "id": "daemon.status",
       "family": "daemon",
       "command": "status",

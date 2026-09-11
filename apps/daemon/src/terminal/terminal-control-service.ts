@@ -26,7 +26,11 @@ export class TerminalControlService {
   readonly #runs = new Map<string, RunControl>();
   readonly #expiry: NodeJS.Timeout;
 
-  public constructor(store: NanasaStore, now: () => Date = () => new Date()) {
+  public constructor(
+    store: NanasaStore,
+    now: () => Date = () => new Date(),
+    private readonly onTakeover?: (run: RuntimeRun) => void,
+  ) {
     this.#store = store;
     this.#now = now;
     this.#expiry = setInterval(() => this.expire(), TERMINAL_LIMITS.heartbeatMs);
@@ -223,6 +227,7 @@ export class TerminalControlService {
   }
 
   #grant(control: RunControl, viewer: Viewer, takeover: boolean): void {
+    if (takeover) this.onTakeover?.(control.run);
     const previous =
       control.controllerStreamId === undefined
         ? undefined

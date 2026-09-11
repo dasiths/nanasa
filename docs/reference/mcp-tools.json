@@ -3,6 +3,632 @@
   "packageVersion": "0.1.0-next.12.0",
   "tools": [
     {
+      "name": "nanasa.foreman_integrate_mission",
+      "description": "Merge verified task commits into a new owned candidate checkout and run approved integration checks",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:missions:integrate",
+      "authority": "self-write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "missionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedGrantRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "missionId",
+          "requestId",
+          "expectedGrantRevision"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_reply_wait",
+      "description": "Answer one exact routine worker wait under an explicit grant and fresh observation; privileged approvals remain forbidden",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:tasks:reply-wait",
+      "authority": "self-write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "missionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedGrantRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "observationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "waitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "reply": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "answer"
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  }
+                },
+                "required": [
+                  "kind",
+                  "text"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "allow-once"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "deny"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "approve-plan"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "reject-plan"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "select"
+                  },
+                  "option": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "kind",
+                  "option"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "missionId",
+          "taskId",
+          "expectedGrantRevision",
+          "requestId",
+          "observationId",
+          "waitId",
+          "reply"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_observe_task",
+      "description": "Read bounded untrusted terminal evidence from the exact mission-owned task runtime",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:tasks:observe",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "missionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedGrantRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "maxLines": {
+            "default": 200,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000
+          }
+        },
+        "required": [
+          "missionId",
+          "taskId",
+          "expectedGrantRevision",
+          "maxLines"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_prompt_idle",
+      "description": "Submit one budgeted idle prompt using a fresh exact task observation; never approve privileged waits",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:tasks:intervene",
+      "authority": "self-write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "missionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedGrantRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "observationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "missionId",
+          "taskId",
+          "expectedGrantRevision",
+          "requestId",
+          "observationId",
+          "prompt"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_verify_task",
+      "description": "Run immutable operator-approved verification recipes at an exact clean candidate commit",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:tasks:verify",
+      "authority": "self-write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "missionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedGrantRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "candidateCommit": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$"
+          }
+        },
+        "required": [
+          "missionId",
+          "taskId",
+          "expectedGrantRevision",
+          "candidateCommit"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_provision_team",
+      "description": "Create a new mission-owned team and managed worktree from an approved template and pinned commit",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:teams:provision",
+      "authority": "self-write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedGrantRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "expectedConfigRevision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "templateId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "sourceCheckoutId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "baseCommit": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$"
+          },
+          "missionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "requestId",
+          "expectedGrantRevision",
+          "expectedConfigRevision",
+          "templateId",
+          "sourceCheckoutId",
+          "baseCommit",
+          "missionId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_finish_review",
+      "description": "Settle the exact current mission review without claiming mission completion",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:reviews:finish",
+      "authority": "self-write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "missionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedGrantRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "missionId",
+          "expectedGrantRevision"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_list_missions",
+      "description": "List missions owned by this repository Foreman",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:missions:read",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_get_mission",
+      "description": "Read current mission acceptance, grant, and tasks",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:missions:read",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "missionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedGrantRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "missionId",
+          "expectedGrantRevision"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_create_task",
+      "description": "Plan a bounded task under an existing operator-issued mission grant",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:tasks:plan",
+      "authority": "self-write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedGrantRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "instructions": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "roleId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "templateId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "dependencies": {
+            "default": [],
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "acceptanceIndexes": {
+            "minItems": 1,
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "missionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "requestId",
+          "expectedGrantRevision",
+          "title",
+          "instructions",
+          "roleId",
+          "templateId",
+          "dependencies",
+          "acceptanceIndexes",
+          "missionId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_read_channel",
+      "description": "Read bounded operator instructions and Foreman replies from the repository channel",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:channel:read",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "after": {
+            "default": 0,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "limit": {
+            "default": 50,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "after",
+          "limit"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_reply",
+      "description": "Reply to an operator channel message with preserved context and a retry-safe request ID",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:channel:reply",
+      "authority": "self-write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32768
+          },
+          "teamId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "replyTo": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "requestId",
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_bootstrap",
+      "description": "Read repository Foreman identity, policy ceilings, approved templates, and team metadata",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:bootstrap",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "nanasa.list_members",
       "description": "List active members visible in the caller's group",
       "principals": [

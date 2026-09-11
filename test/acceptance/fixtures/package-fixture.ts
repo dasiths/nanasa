@@ -160,7 +160,7 @@ export class PackageAcceptanceService {
 
   static async create(
     browserName: string,
-    options: { configSubdirectory?: string; integrationCwd?: string } = {},
+    options: { configSubdirectory?: string; integrationCwd?: string; foreman?: boolean } = {},
   ): Promise<PackageAcceptanceService> {
     const root = mkdtempSync(join(tmpdir(), "nanasa-acceptance-"));
     const repository = join(root, "repository");
@@ -192,6 +192,32 @@ export class PackageAcceptanceService {
       ].join("\n"),
     );
     mkdirSync(join(configRoot, "packages", "api"), { recursive: true });
+    if (options.foreman === true) {
+      const bin = join(root, "fixture-bin");
+      mkdirSync(bin);
+      writeFileSync(
+        join(bin, "copilot"),
+        `#!${process.execPath}\n${readFileSync(join(import.meta.dirname, "safe-foreman-agent.mjs"), "utf8")}`,
+        { mode: 0o700 },
+      );
+      writeFileSync(
+        join(configRoot, ".nanasa", "config.yaml"),
+        [
+          "version: 2",
+          "integrations:",
+          "  copilot:",
+          "    name: Foreman fixture",
+          "    kind: copilot",
+          "    environment:",
+          `      PATH: ${JSON.stringify(`${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`)}`,
+          "foreman:",
+          "  integrationId: copilot",
+          "  enabled: true",
+          "groups: {}",
+          "",
+        ].join("\n"),
+      );
+    }
     writeFileSync(join(configRoot, "packages", "api", "README.md"), "# API fixture\n");
     const committed = spawnSync(
       "git",

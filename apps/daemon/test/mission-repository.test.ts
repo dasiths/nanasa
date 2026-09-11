@@ -96,6 +96,38 @@ function fixture() {
 }
 
 describe("durable mission authority", () => {
+  it("durably pauses mission authority on explicit Foreman terminal takeover", () => {
+    const context = fixture();
+    const mission = context.repository.create("human", context.command);
+    const running = context.repository.control("human", mission.id, {
+      expectedRevision: 0,
+      action: "start",
+    });
+    context.repository.pauseForTakeover(context.principal.runId);
+    expect(context.repository.get(mission.id)).toMatchObject({
+      state: "paused",
+      grantRevision: running.grantRevision + 1,
+    });
+    expect(() =>
+      context.repository.createTask(context.principal, mission.id, {
+        ...context.task,
+        expectedGrantRevision: running.grantRevision,
+      }),
+    ).toThrow("grant changed");
+  });
+
+  it("blocks an existing mission when approved template content changes", () => {
+    const context = fixture();
+    const mission = context.repository.create("human", context.command);
+    context.config.teamTemplates!.build!.instructions = ["changed.md"];
+    expect(() =>
+      context.repository.createTask(context.principal, mission.id, context.task),
+    ).toThrow("template changed");
+    expect(() =>
+      context.repository.control("human", mission.id, { expectedRevision: 0, action: "start" }),
+    ).toThrow("template changed");
+  });
+
   it("requires exact operator decisions in supervised mode and fences approved work on pause", () => {
     const context = fixture();
     const mission = context.repository.create("human", {

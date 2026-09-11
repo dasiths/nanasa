@@ -54,6 +54,7 @@ import { validateMcpEndpointConfiguration } from "./mcp-config.js";
 import { registerMcpRoutes } from "./mcp-server.js";
 import { MessageCommandService } from "./message-command-service.js";
 import { MessageRepository } from "./message-repository.js";
+import { MissionCandidateService } from "./mission-candidate-service.js";
 import { MissionObservationService } from "./mission-observation-service.js";
 import { MissionRecoveryPolicy } from "./mission-recovery-policy.js";
 import { MissionRepository } from "./mission-repository.js";
@@ -476,7 +477,13 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         ...(await reporterRegistry.environment(run)),
       }),
     });
-    const terminalControl = new TerminalControlService(store);
+    const terminalControl = new TerminalControlService(
+      store,
+      () => new Date(),
+      (run) => {
+        if (run.agentProfileId !== "console") missions.pauseForTakeover(run.id);
+      },
+    );
     missionRecoveryReference.current = new MissionRecoveryPolicy(
       store,
       missions,
@@ -613,6 +620,15 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     missionTeams.recoverInterrupted();
     const missionVerification = new MissionVerificationService(store, missions, missionTeams, git);
     missionVerification.recoverInterrupted();
+    const missionCandidates = new MissionCandidateService(
+      store,
+      missions,
+      missionTeams,
+      missionVerification,
+      worktrees,
+      git,
+    );
+    missionCandidates.recoverInterrupted();
     const missionObservations = new MissionObservationService(
       store,
       missions,
@@ -688,6 +704,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       await foremanInbox.close();
       await missionTeams.close();
       await missionVerification.close();
+      await missionCandidates.close();
       await foreman.close();
       await coordinator.close();
     });
@@ -779,6 +796,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         missions,
         missionTeams,
         missionVerification,
+        missionCandidates,
         missionObservations,
       });
     }
@@ -792,6 +810,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       missions,
       missionTeams,
       missionVerification,
+      missionCandidates,
       store,
       repositoryIdentity,
       launchConsent: launchConsentService,

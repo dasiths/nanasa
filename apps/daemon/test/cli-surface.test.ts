@@ -1,10 +1,52 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { findCliCommand } from "../src/cli/command-registry.js";
-import { defaultControlApiUrl } from "../src/cli/control-client-loader.js";
 import { completion, resolveServiceStartup } from "../src/cli/control.js";
+import { defaultControlApiUrl } from "../src/cli/control-client-loader.js";
+import { authenticateAgent, setupIntegrations } from "../src/cli-admin.js";
 import { SystemdUserService } from "../src/service/systemd-user-service.js";
 
 describe("CLI surface defaults", () => {
+  it("declares Foreman and mission control without translating them into team commands", () => {
+    expect(findCliCommand("foreman", "start")).toMatchObject({ body: "required", mutating: true });
+    expect(findCliCommand("foreman", "status")?.path?.([])).toBe("/api/v1/foreman");
+    expect(findCliCommand("missions", "get")?.path?.(["mission one"])).toBe(
+      "/api/v1/missions/mission%20one",
+    );
+    expect(findCliCommand("missions", "decide")?.path?.(["approval-one"])).toBe(
+      "/api/v1/mission-approvals/approval-one",
+    );
+    expect(completion("bash")).toContain("foreman)");
+  });
+
+  it("authenticates Foreman in a private home rather than the integration-shared home", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nanasa-foreman-auth-"));
+    try {
+      mkdirSync(join(root, ".git"));
+      mkdirSync(join(root, ".nanasa"));
+      const output = join(root, "auth-home.txt");
+      const script = `require('node:fs').writeFileSync(${JSON.stringify(output)}, process.env.COPILOT_HOME)`;
+      writeFileSync(
+        join(root, ".nanasa", "config.yaml"),
+        `version: 2\nintegrations:\n  copilot:\n    name: Fixture\n    kind: copilot\n    command: ${JSON.stringify([process.execPath, "-e", script])}\n    providerState: { scope: integration }\nforeman:\n  integrationId: copilot\n`,
+      );
+      setupIntegrations(root);
+      await authenticateAgent(root, "copilot", undefined, true);
+      const foremanHome = readFileSync(output, "utf8");
+      expect(foremanHome).toContain("/state/foremen/");
+      expect(statSync(foremanHome).mode & 0o777).toBe(0o700);
+      await expect(authenticateAgent(root, "copilot", "agent-one", true)).rejects.toThrow(
+        "cannot be combined",
+      );
+      await authenticateAgent(root, "copilot");
+      expect(readFileSync(output, "utf8")).toContain("/state/integrations/copilot");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("derives the control API URL from the daemon host and port environment", () => {
     expect(defaultControlApiUrl({})).toBe("http://127.0.0.1:3210");
     expect(defaultControlApiUrl({ NANASA_PORT: "4210" })).toBe("http://127.0.0.1:4210");

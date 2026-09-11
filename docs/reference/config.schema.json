@@ -10,6 +10,405 @@
         "type": "number",
         "const": 2
       },
+      "foreman": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "default": "repository-foreman",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "name": {
+            "default": "Foreman",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "enabled": {
+            "default": false,
+            "type": "boolean"
+          },
+          "integrationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          },
+          "desiredModel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "instructions": {
+            "default": [],
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          },
+          "providerFiles": {
+            "type": "object",
+            "properties": {
+              "mcp": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "default": "append",
+                    "type": "string",
+                    "enum": [
+                      "append",
+                      "replace",
+                      "disabled"
+                    ]
+                  },
+                  "paths": {
+                    "default": [],
+                    "maxItems": 16,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4096
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "supervision": {
+            "default": {},
+            "type": "object",
+            "properties": {
+              "reconcileIntervalSeconds": {
+                "default": 30,
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 3600
+              },
+              "reviewIntervalSeconds": {
+                "default": 300,
+                "type": "integer",
+                "minimum": 30,
+                "maximum": 86400
+              },
+              "maxRecoveryAttempts": {
+                "default": 3,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 5
+              },
+              "recoveryCooldownSeconds": {
+                "default": 120,
+                "type": "integer",
+                "minimum": 30,
+                "maximum": 3600
+              },
+              "staleProgressSeconds": {
+                "default": 900,
+                "type": "integer",
+                "minimum": 60,
+                "maximum": 86400
+              }
+            },
+            "additionalProperties": false
+          },
+          "autonomy": {
+            "default": {},
+            "type": "object",
+            "properties": {
+              "mode": {
+                "default": "supervised",
+                "type": "string",
+                "enum": [
+                  "supervised",
+                  "bounded"
+                ]
+              },
+              "permittedTeamTemplates": {
+                "default": [],
+                "maxItems": 32,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                }
+              },
+              "workspacePolicy": {
+                "default": "managed-only",
+                "type": "string",
+                "const": "managed-only"
+              },
+              "maxActiveMissions": {
+                "default": 1,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16
+              },
+              "maxTeamsPerMission": {
+                "default": 3,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16
+              },
+              "maxConcurrentTasks": {
+                "default": 4,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 32
+              },
+              "maxMissionHours": {
+                "default": 24,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 168
+              },
+              "maxForemanTurns": {
+                "default": 200,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              },
+              "transcript": {
+                "default": {},
+                "type": "object",
+                "properties": {
+                  "access": {
+                    "default": "mission-owned",
+                    "type": "string",
+                    "const": "mission-owned"
+                  },
+                  "maxLines": {
+                    "default": 200,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5000
+                  },
+                  "maxBytes": {
+                    "default": 65536,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65536
+                  }
+                },
+                "additionalProperties": false
+              },
+              "intervention": {
+                "default": {},
+                "type": "object",
+                "properties": {
+                  "idlePrompt": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "routineWaitReply": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "nativeInput": {
+                    "default": "disabled",
+                    "type": "string",
+                    "enum": [
+                      "disabled",
+                      "approved-adapter-only"
+                    ]
+                  },
+                  "maxPerIncident": {
+                    "default": 2,
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 5
+                  }
+                },
+                "additionalProperties": false
+              },
+              "recovery": {
+                "default": {},
+                "type": "object",
+                "properties": {
+                  "restartMissionOwnedAgents": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "maxAttemptsPerIncident": {
+                    "default": 2,
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 5
+                  },
+                  "maxAttemptsPerMission": {
+                    "default": 6,
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 30
+                  },
+                  "cooldownSeconds": {
+                    "default": 120,
+                    "type": "integer",
+                    "minimum": 30,
+                    "maximum": 86400
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "integrationId"
+        ],
+        "additionalProperties": false
+      },
+      "teamTemplates": {
+        "type": "object",
+        "propertyNames": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "instructions": {
+              "default": [],
+              "maxItems": 32,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "members": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+              },
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "integrationId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                  },
+                  "roleId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                  },
+                  "desiredModel": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "instructions": {
+                    "default": [],
+                    "maxItems": 32,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4096
+                    }
+                  },
+                  "providerFiles": {
+                    "type": "object",
+                    "properties": {
+                      "mcp": {
+                        "type": "object",
+                        "properties": {
+                          "mode": {
+                            "default": "append",
+                            "type": "string",
+                            "enum": [
+                              "append",
+                              "replace",
+                              "disabled"
+                            ]
+                          },
+                          "paths": {
+                            "default": [],
+                            "maxItems": 16,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 4096
+                            }
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "attention": {
+                    "default": {},
+                    "type": "object",
+                    "properties": {
+                      "response-required": {
+                        "type": "boolean"
+                      },
+                      "agent-health": {
+                        "type": "boolean"
+                      },
+                      "completion": {
+                        "type": "boolean"
+                      },
+                      "delivery-failure": {
+                        "type": "boolean"
+                      },
+                      "action-state": {
+                        "type": "boolean"
+                      },
+                      "provider-update-failed": {
+                        "type": "boolean"
+                      },
+                      "provider-update-succeeded": {
+                        "type": "boolean"
+                      },
+                      "unread-message": {
+                        "type": "boolean"
+                      },
+                      "url-open-request": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "integrationId",
+                  "roleId"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "members"
+          ],
+          "additionalProperties": false
+        }
+      },
       "repository": {
         "default": {
           "path": ".",

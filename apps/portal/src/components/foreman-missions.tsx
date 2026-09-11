@@ -342,6 +342,18 @@ export function ForemanMissions({
             ))}
           </ol>
           <h4>Decisions</h4>
+          {workspace.candidate !== undefined && (
+            <section aria-label="Integrated candidate">
+              <h4>Integrated candidate</h4>
+              <p>{workspace.candidate.state}</p>
+              <code>{workspace.candidate.commit ?? workspace.candidate.branch}</code>
+              {workspace.candidate.checkoutId !== undefined && (
+                <button className="compact-button" onClick={() => onNavigate("/checkouts")}>
+                  Open candidate workspace
+                </button>
+              )}
+            </section>
+          )}
           {(workspace.approvals ?? []).filter((approval) => approval.state === "pending").length ===
           0 ? (
             <p>No decisions pending</p>

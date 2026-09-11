@@ -708,6 +708,7 @@ describe("portal application", () => {
   });
 
   it("opens Foreman separately and preserves channel retry identity after failure", async () => {
+    await import("./routes/portal-route-panels.js");
     window.history.replaceState({}, "", "/foreman");
     const client = createClient();
     vi.mocked(client.sendForemanMessage)
@@ -763,6 +764,7 @@ describe("portal application", () => {
       objective: "Verify the release",
       acceptance: ["Tests pass"],
       verification: [],
+      templateDigests: {},
       grant: configuration.autonomy,
       grantRevision: 1,
       revision: 0,

@@ -55,6 +55,7 @@ export const MissionSchema = z
     objective: z.string().min(1).max(16384),
     acceptance: z.array(z.string().min(1).max(2000)).min(1).max(32),
     grant: MissionGrantSchema,
+    templateDigests: z.record(IdentifierSchema, z.string().regex(/^[a-f0-9]{64}$/)),
     verification: z.array(MissionVerificationRecipeSchema).max(16),
     grantRevision: z.number().int().positive(),
     revision: z.number().int().nonnegative(),
@@ -128,6 +129,7 @@ export const MissionWorkspaceSchema = z.lazy(() =>
       teams: z.array(MissionTeamAllocationSchema).max(16).optional(),
       evidence: z.array(MissionEvidenceSchema).max(4096).optional(),
       approvals: z.array(MissionApprovalSchema).max(256).optional(),
+      candidate: MissionCandidateSchema.optional(),
     })
     .strict(),
 );
@@ -246,3 +248,38 @@ export const DecideMissionApprovalCommandSchema = z
   })
   .strict();
 export type DecideMissionApprovalCommand = z.infer<typeof DecideMissionApprovalCommandSchema>;
+
+export const IntegrateMissionCommandSchema = z
+  .object({
+    missionId: IdentifierSchema,
+    requestId: IdentifierSchema,
+    expectedGrantRevision: z.number().int().positive(),
+  })
+  .strict();
+export type IntegrateMissionCommand = z.infer<typeof IntegrateMissionCommandSchema>;
+export const MissionCandidateSchema = z
+  .object({
+    id: IdentifierSchema,
+    missionId: IdentifierSchema,
+    checkoutId: IdentifierSchema.optional(),
+    worktreeId: IdentifierSchema.optional(),
+    commit: z.string().min(40).max(64).optional(),
+    branch: z.string().min(1),
+    state: z.enum(["creating", "verifying", "passed", "blocked"]),
+    taskCommits: z.array(z.string().min(40).max(64)).max(256),
+    checks: z
+      .array(
+        z
+          .object({
+            recipeId: IdentifierSchema,
+            exitCode: z.number().int(),
+            outputDigest: z.string().regex(/^[a-f0-9]{64}$/),
+          })
+          .strict(),
+      )
+      .max(16),
+    createdAt: TimestampSchema,
+    updatedAt: TimestampSchema,
+  })
+  .strict();
+export type MissionCandidate = z.infer<typeof MissionCandidateSchema>;

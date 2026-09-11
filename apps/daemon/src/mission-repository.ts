@@ -130,9 +130,9 @@ export class MissionRepository {
       const id = `mission_${randomUUID()}`;
       this.#database
         .prepare(`INSERT INTO missions
-        (id, foreman_id, operator_id, request_id, request_digest, title, objective, acceptance_json, grant_json, verification_json,
+        (id, foreman_id, operator_id, request_id, request_digest, title, objective, acceptance_json, grant_json, template_digests_json, verification_json,
          grant_revision, revision, state, next_review_at, expires_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 'planning', ?, ?, ?, ?)`)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 'planning', ?, ?, ?, ?)`)
         .run(
           id,
           foreman.id,
@@ -143,6 +143,14 @@ export class MissionRepository {
           input.objective,
           JSON.stringify(input.acceptance),
           JSON.stringify(input.grant),
+          JSON.stringify(
+            Object.fromEntries(
+              input.grant.permittedTeamTemplates.map((id) => [
+                id,
+                createHash("sha256").update(canonicalJson(config.teamTemplates![id])).digest("hex"),
+              ]),
+            ),
+          ),
           JSON.stringify(input.verification),
           timestamp,
           new Date(now.getTime() + input.grant.maxMissionHours * 3600000).toISOString(),
@@ -351,7 +359,10 @@ export class MissionRepository {
         row.grant_revision !== mission.grantRevision ||
         row.state !== "pending" ||
         (mission.state !== "running" &&
-          !(mission.state === "awaiting-acceptance" && row.operation === "verification"))
+          !(
+            ["verifying", "awaiting-acceptance"].includes(mission.state) &&
+            row.operation === "verification"
+          ))
       )
         throw new DomainError(
           "mission_approval_stale",
@@ -446,6 +457,31 @@ export class MissionRepository {
         )
         .run(id);
       return this.get(id);
+    });
+  }
+
+  public pauseForTakeover(runId: string): void {
+    this.#transaction(() => {
+      const run = this.store.getRuntimeRun(runId);
+      const missionIds =
+        "foremanId" in run
+          ? this.#database
+              .prepare(
+                "SELECT id FROM missions WHERE foreman_id = ? AND state IN ('running', 'verifying')",
+              )
+              .all(run.foremanId)
+              .map((row) => String(row.id))
+          : this.#database
+              .prepare(
+                "SELECT m.id FROM missions m JOIN mission_team_allocations a ON a.mission_id = m.id WHERE a.group_id = ? AND m.state IN ('running', 'verifying')",
+              )
+              .all(run.groupId)
+              .map((row) => String(row.id));
+      for (const id of missionIds)
+        this.control("operator-terminal", id, {
+          expectedRevision: this.get(id).revision,
+          action: "pause",
+        });
     });
   }
 
@@ -581,7 +617,8 @@ export class MissionRepository {
   }
 
   #assertPolicy(mission: Mission, allowSpentTurn = false): void {
-    const foreman = this.config().foreman;
+    const config = this.config();
+    const foreman = config.foreman;
     if (foreman?.enabled !== true || foreman.id !== mission.foremanId)
       throw new DomainError(
         "mission_foreman_disabled",
@@ -589,6 +626,18 @@ export class MissionRepository {
         403,
       );
     assertMissionGrantWithin(mission.grant, foreman.autonomy);
+    for (const [id, digest] of Object.entries(mission.templateDigests)) {
+      const template = config.teamTemplates?.[id];
+      if (
+        template === undefined ||
+        createHash("sha256").update(canonicalJson(template)).digest("hex") !== digest
+      )
+        throw new DomainError(
+          "mission_template_changed",
+          "An approved team template changed; the existing mission grant is blocked",
+          409,
+        );
+    }
     if (Date.parse(mission.expiresAt) <= this.now().getTime())
       throw new DomainError("mission_expired", "Mission time budget has expired", 409);
     if (!allowSpentTurn && mission.turnsUsed >= mission.grant.maxForemanTurns)
@@ -604,6 +653,7 @@ export class MissionRepository {
       objective: row.objective,
       acceptance: JSON.parse(String(row.acceptance_json)),
       grant: JSON.parse(String(row.grant_json)),
+      templateDigests: JSON.parse(String(row.template_digests_json)),
       verification: JSON.parse(String(row.verification_json)),
       grantRevision: row.grant_revision,
       revision: row.revision,

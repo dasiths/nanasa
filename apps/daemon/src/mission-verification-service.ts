@@ -313,7 +313,7 @@ export class MissionVerificationService {
       ) {
         this.store.database
           .prepare(
-            "UPDATE missions SET state = 'awaiting-acceptance', revision = revision + 1, grant_revision = grant_revision + 1, updated_at = ? WHERE id = ?",
+            "UPDATE missions SET state = 'verifying', revision = revision + 1, grant_revision = grant_revision + 1, updated_at = ? WHERE id = ?",
           )
           .run(new Date().toISOString(), mission.id);
         this.store.database

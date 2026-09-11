@@ -6,6 +6,282 @@
   },
   "x-generator-version": 1,
   "paths": {
+    "/api/v1/mission-approvals/:approvalId": {
+      "post": {
+        "operationId": "missions.decide",
+        "summary": "Decide an exact supervised mission operation",
+        "tags": [
+          "mission"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/inbox/resolve": {
+      "post": {
+        "operationId": "foreman.resolveInput",
+        "summary": "Resolve an inspected Foreman input without replaying it",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/missions": {
+      "get": {
+        "operationId": "missions.list",
+        "summary": "List durable repository missions",
+        "tags": [
+          "mission"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      },
+      "post": {
+        "operationId": "missions.create",
+        "summary": "Create an operator-authorized mission with immutable acceptance and budgets",
+        "tags": [
+          "mission"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/missions/:missionId": {
+      "get": {
+        "operationId": "missions.get",
+        "summary": "Read a mission and its tasks",
+        "tags": [
+          "mission"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/missions/:missionId/control": {
+      "post": {
+        "operationId": "missions.control",
+        "summary": "Control an exact mission revision",
+        "tags": [
+          "mission"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/channel": {
+      "get": {
+        "operationId": "foreman.channel",
+        "summary": "Read bounded repository Foreman channel history",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      },
+      "post": {
+        "operationId": "foreman.send",
+        "summary": "Store an operator instruction in the repository channel using a retry-safe request ID",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "foreman_message_conflict",
+          "foreman_reply_context_conflict",
+          "foreman_reply_not_found",
+          "group_not_found"
+        ]
+      }
+    },
+    "/api/v1/foreman": {
+      "get": {
+        "operationId": "foreman.get",
+        "summary": "Read repository Foreman configuration and runtime",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/configuration": {
+      "put": {
+        "operationId": "foreman.configure",
+        "summary": "Configure a stopped repository Foreman with revision checking",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "foreman_must_stop",
+          "config_revision_conflict"
+        ]
+      }
+    },
+    "/api/v1/foreman/run/start": {
+      "post": {
+        "operationId": "foreman.start",
+        "summary": "Start the configured repository Foreman",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "config_revision_conflict",
+          "foreman_not_enabled",
+          "foreman_mcp_required",
+          "foreman_launch_consent_required",
+          "run_already_active"
+        ]
+      }
+    },
+    "/api/v1/foreman/run/stop": {
+      "post": {
+        "operationId": "foreman.stop",
+        "summary": "Stop the exact repository Foreman generation",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "foreman_run_changed"
+        ]
+      }
+    },
     "/api/v1/meta": {
       "get": {
         "operationId": "meta.get",

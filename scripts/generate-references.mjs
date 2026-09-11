@@ -48,6 +48,28 @@ for (const route of CONTROL_ROUTE_REGISTRY) {
 }
 
 const references = {
+  "foreman.json": {
+    ...header,
+    configuration: schema(contracts.ForemanConfigSchema, "input"),
+    workspace: schema(contracts.ForemanWorkspaceSchema),
+    channel: schema(contracts.ForemanChannelPageSchema),
+    mission: schema(contracts.MissionWorkspaceSchema),
+    commands: {
+      configure: schema(contracts.ConfigureForemanCommandSchema, "input"),
+      start: schema(contracts.StartForemanCommandSchema, "input"),
+      stop: schema(contracts.StopForemanCommandSchema, "input"),
+      send: schema(contracts.SendForemanMessageCommandSchema, "input"),
+      resolveInput: schema(contracts.ResolveForemanInputCommandSchema, "input"),
+      createMission: schema(contracts.CreateMissionCommandSchema, "input"),
+      controlMission: schema(contracts.MissionControlCommandSchema, "input"),
+      decideApproval: schema(contracts.DecideMissionApprovalCommandSchema, "input"),
+      createTask: schema(contracts.CreateMissionTaskCommandSchema, "input"),
+      provisionTeam: schema(contracts.ProvisionMissionTeamCommandSchema, "input"),
+      observeTask: schema(contracts.ObserveMissionTaskCommandSchema, "input"),
+      verifyTask: schema(contracts.VerifyMissionTaskCommandSchema, "input"),
+      integrateMission: schema(contracts.IntegrateMissionCommandSchema, "input"),
+    },
+  },
   "config.schema.json": {
     ...header,
     schemaVersion: contracts.CONFIG_VERSION,

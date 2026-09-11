@@ -3,6 +3,7 @@ import {
   AgentProgressReportCommandSchema,
   CreateMissionTaskCommandSchema,
   ForemanChannelQuerySchema,
+  IntegrateMissionCommandSchema,
   InterveneMissionTaskCommandSchema,
   ObserveMissionTaskCommandSchema,
   ProvisionMissionTeamCommandSchema,
@@ -100,6 +101,15 @@ function tool(input: McpToolDeclaration): McpToolDeclaration {
 }
 
 export const MCP_TOOL_REGISTRY = Object.freeze([
+  tool({
+    name: "nanasa.foreman_integrate_mission",
+    description:
+      "Merge verified task commits into a new owned candidate checkout and run approved integration checks",
+    inputSchema: IntegrateMissionCommandSchema,
+    principals: ["foreman"],
+    scope: "foreman:missions:integrate",
+    authority: "self-write",
+  }),
   tool({
     name: "nanasa.foreman_reply_wait",
     description:

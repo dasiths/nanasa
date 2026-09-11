@@ -308,6 +308,7 @@ export const DATABASE_BASELINE_SQL = `
     objective TEXT NOT NULL,
     acceptance_json TEXT NOT NULL,
     grant_json TEXT NOT NULL,
+    template_digests_json TEXT NOT NULL,
     verification_json TEXT NOT NULL,
     grant_revision INTEGER NOT NULL CHECK (grant_revision > 0),
     revision INTEGER NOT NULL CHECK (revision >= 0),
@@ -386,6 +387,21 @@ export const DATABASE_BASELINE_SQL = `
     created_at TEXT NOT NULL,
     completed_at TEXT,
     UNIQUE(task_id, candidate_commit, recipe_id)
+  ) STRICT;
+
+  CREATE TABLE mission_candidates (
+    id TEXT PRIMARY KEY,
+    mission_id TEXT NOT NULL UNIQUE REFERENCES missions(id),
+    request_id TEXT NOT NULL,
+    branch TEXT NOT NULL UNIQUE,
+    checkout_id TEXT REFERENCES checkouts(id),
+    worktree_id TEXT REFERENCES worktrees(id),
+    candidate_commit TEXT,
+    state TEXT NOT NULL CHECK (state IN ('creating', 'verifying', 'passed', 'blocked')),
+    task_commits_json TEXT NOT NULL,
+    checks_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
   ) STRICT;
 
   CREATE TABLE mission_observations (

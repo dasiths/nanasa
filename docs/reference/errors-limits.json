@@ -2,6 +2,34 @@
   "generatorVersion": 1,
   "packageVersion": "0.1.0-next.12.0",
   "routeErrors": {
+    "missions.decide": [],
+    "foreman.resolveInput": [],
+    "missions.list": [],
+    "missions.create": [],
+    "missions.get": [],
+    "missions.control": [],
+    "foreman.channel": [],
+    "foreman.send": [
+      "foreman_message_conflict",
+      "foreman_reply_context_conflict",
+      "foreman_reply_not_found",
+      "group_not_found"
+    ],
+    "foreman.get": [],
+    "foreman.configure": [
+      "foreman_must_stop",
+      "config_revision_conflict"
+    ],
+    "foreman.start": [
+      "config_revision_conflict",
+      "foreman_not_enabled",
+      "foreman_mcp_required",
+      "foreman_launch_consent_required",
+      "run_already_active"
+    ],
+    "foreman.stop": [
+      "foreman_run_changed"
+    ],
     "meta.get": [],
     "schema.openapi": [],
     "schema.events": [],
@@ -319,6 +347,18 @@
     ]
   },
   "requestBodyLimits": {
+    "missions.decide": 65536,
+    "foreman.resolveInput": 65536,
+    "missions.list": 65536,
+    "missions.create": 65536,
+    "missions.get": 65536,
+    "missions.control": 65536,
+    "foreman.channel": 65536,
+    "foreman.send": 65536,
+    "foreman.get": 65536,
+    "foreman.configure": 65536,
+    "foreman.start": 65536,
+    "foreman.stop": 65536,
     "meta.get": 65536,
     "schema.openapi": 65536,
     "schema.events": 65536,

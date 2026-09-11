@@ -4,6 +4,7 @@ import {
   AgentProgressReportCommandSchema,
   CreateAgentActionCommandSchema,
   ForemanChannelQuerySchema,
+  IntegrateMissionCommandSchema,
   InterveneMissionTaskCommandSchema,
   MAX_MESSAGE_REQUEST_BYTES,
   type MessageSubmissionResult,
@@ -49,6 +50,7 @@ import {
 import { McpCredentialIssuer, type McpPrincipal } from "./mcp-auth.js";
 import { MessageCommandService } from "./message-command-service.js";
 import { MessageRepository } from "./message-repository.js";
+import type { MissionCandidateService } from "./mission-candidate-service.js";
 import type { MissionObservationService } from "./mission-observation-service.js";
 import type { MissionRepository } from "./mission-repository.js";
 import type { MissionTeamService } from "./mission-team-service.js";
@@ -71,6 +73,7 @@ export interface McpRouteOptions {
   missions: MissionRepository;
   missionTeams: MissionTeamService;
   missionVerification: MissionVerificationService;
+  missionCandidates: MissionCandidateService;
   missionObservations: MissionObservationService;
 }
 
@@ -399,11 +402,19 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
       },
       async (input) =>
         actionToolResult(() => {
-          options.missions.assertForeman(principal, input.missionId, input.expectedGrantRevision);
+          options.missions.assertForeman(
+            principal,
+            input.missionId,
+            input.expectedGrantRevision,
+            true,
+            ["planning", "running", "paused", "blocked", "verifying", "awaiting-acceptance"],
+          );
           return {
             ...options.missions.workspace(input.missionId),
             teams: options.missionTeams.list(input.missionId),
             approvals: options.missions.approvals(input.missionId),
+            candidate: options.missionCandidates.get(input.missionId),
+            evidence: options.missionVerification.list(input.missionId),
           };
         }),
     );
@@ -564,6 +575,36 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
                   error instanceof DomainError
                     ? error.message
                     : "Routine wait intervention unavailable",
+              },
+            ],
+          };
+        }
+      },
+    );
+    server.registerTool(
+      "nanasa.foreman_integrate_mission",
+      {
+        description: mcpTool("nanasa.foreman_integrate_mission").description,
+        inputSchema: IntegrateMissionCommandSchema,
+      },
+      async (input) => {
+        try {
+          return {
+            content: [{ type: "text" as const, text: "Integrated candidate state returned." }],
+            structuredContent: {
+              candidate: await options.missionCandidates.integrate(principal, input),
+            },
+          };
+        } catch (error) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  error instanceof DomainError
+                    ? error.message
+                    : "Candidate integration failed; retained workspace requires inspection",
               },
             ],
           };

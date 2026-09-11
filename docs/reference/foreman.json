@@ -1,0 +1,2663 @@
+{
+  "generatorVersion": 1,
+  "packageVersion": "0.1.0-next.12.0",
+  "configuration": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "id": {
+        "default": "repository-foreman",
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "name": {
+        "default": "Foreman",
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      },
+      "enabled": {
+        "default": false,
+        "type": "boolean"
+      },
+      "integrationId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+      },
+      "desiredModel": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "instructions": {
+        "default": [],
+        "maxItems": 32,
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "providerFiles": {
+        "type": "object",
+        "properties": {
+          "mcp": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "default": "append",
+                "type": "string",
+                "enum": [
+                  "append",
+                  "replace",
+                  "disabled"
+                ]
+              },
+              "paths": {
+                "default": [],
+                "maxItems": 16,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "supervision": {
+        "default": {},
+        "type": "object",
+        "properties": {
+          "reconcileIntervalSeconds": {
+            "default": 30,
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 3600
+          },
+          "reviewIntervalSeconds": {
+            "default": 300,
+            "type": "integer",
+            "minimum": 30,
+            "maximum": 86400
+          },
+          "maxRecoveryAttempts": {
+            "default": 3,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 5
+          },
+          "recoveryCooldownSeconds": {
+            "default": 120,
+            "type": "integer",
+            "minimum": 30,
+            "maximum": 3600
+          },
+          "staleProgressSeconds": {
+            "default": 900,
+            "type": "integer",
+            "minimum": 60,
+            "maximum": 86400
+          }
+        },
+        "additionalProperties": false
+      },
+      "autonomy": {
+        "default": {},
+        "type": "object",
+        "properties": {
+          "mode": {
+            "default": "supervised",
+            "type": "string",
+            "enum": [
+              "supervised",
+              "bounded"
+            ]
+          },
+          "permittedTeamTemplates": {
+            "default": [],
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "workspacePolicy": {
+            "default": "managed-only",
+            "type": "string",
+            "const": "managed-only"
+          },
+          "maxActiveMissions": {
+            "default": 1,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16
+          },
+          "maxTeamsPerMission": {
+            "default": 3,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16
+          },
+          "maxConcurrentTasks": {
+            "default": 4,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32
+          },
+          "maxMissionHours": {
+            "default": 24,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 168
+          },
+          "maxForemanTurns": {
+            "default": 200,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "transcript": {
+            "default": {},
+            "type": "object",
+            "properties": {
+              "access": {
+                "default": "mission-owned",
+                "type": "string",
+                "const": "mission-owned"
+              },
+              "maxLines": {
+                "default": 200,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5000
+              },
+              "maxBytes": {
+                "default": 65536,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65536
+              }
+            },
+            "additionalProperties": false
+          },
+          "intervention": {
+            "default": {},
+            "type": "object",
+            "properties": {
+              "idlePrompt": {
+                "default": false,
+                "type": "boolean"
+              },
+              "routineWaitReply": {
+                "default": false,
+                "type": "boolean"
+              },
+              "nativeInput": {
+                "default": "disabled",
+                "type": "string",
+                "enum": [
+                  "disabled",
+                  "approved-adapter-only"
+                ]
+              },
+              "maxPerIncident": {
+                "default": 2,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 5
+              }
+            },
+            "additionalProperties": false
+          },
+          "recovery": {
+            "default": {},
+            "type": "object",
+            "properties": {
+              "restartMissionOwnedAgents": {
+                "default": false,
+                "type": "boolean"
+              },
+              "maxAttemptsPerIncident": {
+                "default": 2,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 5
+              },
+              "maxAttemptsPerMission": {
+                "default": 6,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 30
+              },
+              "cooldownSeconds": {
+                "default": 120,
+                "type": "integer",
+                "minimum": 30,
+                "maximum": 86400
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "integrationId"
+    ],
+    "additionalProperties": false
+  },
+  "workspace": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "configuration": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "default": "repository-foreman",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "name": {
+            "default": "Foreman",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "enabled": {
+            "default": false,
+            "type": "boolean"
+          },
+          "integrationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          },
+          "desiredModel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "instructions": {
+            "default": [],
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          },
+          "providerFiles": {
+            "type": "object",
+            "properties": {
+              "mcp": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "default": "append",
+                    "type": "string",
+                    "enum": [
+                      "append",
+                      "replace",
+                      "disabled"
+                    ]
+                  },
+                  "paths": {
+                    "default": [],
+                    "maxItems": 16,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4096
+                    }
+                  }
+                },
+                "required": [
+                  "mode",
+                  "paths"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "supervision": {
+            "type": "object",
+            "properties": {
+              "reconcileIntervalSeconds": {
+                "default": 30,
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 3600
+              },
+              "reviewIntervalSeconds": {
+                "default": 300,
+                "type": "integer",
+                "minimum": 30,
+                "maximum": 86400
+              },
+              "maxRecoveryAttempts": {
+                "default": 3,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 5
+              },
+              "recoveryCooldownSeconds": {
+                "default": 120,
+                "type": "integer",
+                "minimum": 30,
+                "maximum": 3600
+              },
+              "staleProgressSeconds": {
+                "default": 900,
+                "type": "integer",
+                "minimum": 60,
+                "maximum": 86400
+              }
+            },
+            "required": [
+              "reconcileIntervalSeconds",
+              "reviewIntervalSeconds",
+              "maxRecoveryAttempts",
+              "recoveryCooldownSeconds",
+              "staleProgressSeconds"
+            ],
+            "additionalProperties": false
+          },
+          "autonomy": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "default": "supervised",
+                "type": "string",
+                "enum": [
+                  "supervised",
+                  "bounded"
+                ]
+              },
+              "permittedTeamTemplates": {
+                "default": [],
+                "maxItems": 32,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                }
+              },
+              "workspacePolicy": {
+                "default": "managed-only",
+                "type": "string",
+                "const": "managed-only"
+              },
+              "maxActiveMissions": {
+                "default": 1,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16
+              },
+              "maxTeamsPerMission": {
+                "default": 3,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16
+              },
+              "maxConcurrentTasks": {
+                "default": 4,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 32
+              },
+              "maxMissionHours": {
+                "default": 24,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 168
+              },
+              "maxForemanTurns": {
+                "default": 200,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              },
+              "transcript": {
+                "type": "object",
+                "properties": {
+                  "access": {
+                    "default": "mission-owned",
+                    "type": "string",
+                    "const": "mission-owned"
+                  },
+                  "maxLines": {
+                    "default": 200,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5000
+                  },
+                  "maxBytes": {
+                    "default": 65536,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65536
+                  }
+                },
+                "required": [
+                  "access",
+                  "maxLines",
+                  "maxBytes"
+                ],
+                "additionalProperties": false
+              },
+              "intervention": {
+                "type": "object",
+                "properties": {
+                  "idlePrompt": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "routineWaitReply": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "nativeInput": {
+                    "default": "disabled",
+                    "type": "string",
+                    "enum": [
+                      "disabled",
+                      "approved-adapter-only"
+                    ]
+                  },
+                  "maxPerIncident": {
+                    "default": 2,
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 5
+                  }
+                },
+                "required": [
+                  "idlePrompt",
+                  "routineWaitReply",
+                  "nativeInput",
+                  "maxPerIncident"
+                ],
+                "additionalProperties": false
+              },
+              "recovery": {
+                "type": "object",
+                "properties": {
+                  "restartMissionOwnedAgents": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "maxAttemptsPerIncident": {
+                    "default": 2,
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 5
+                  },
+                  "maxAttemptsPerMission": {
+                    "default": 6,
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 30
+                  },
+                  "cooldownSeconds": {
+                    "default": 120,
+                    "type": "integer",
+                    "minimum": 30,
+                    "maximum": 86400
+                  }
+                },
+                "required": [
+                  "restartMissionOwnedAgents",
+                  "maxAttemptsPerIncident",
+                  "maxAttemptsPerMission",
+                  "cooldownSeconds"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "mode",
+              "permittedTeamTemplates",
+              "workspacePolicy",
+              "maxActiveMissions",
+              "maxTeamsPerMission",
+              "maxConcurrentTasks",
+              "maxMissionHours",
+              "maxForemanTurns",
+              "transcript",
+              "intervention",
+              "recovery"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "enabled",
+          "integrationId",
+          "instructions",
+          "supervision",
+          "autonomy"
+        ],
+        "additionalProperties": false
+      },
+      "actor": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "agentProfileId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "authorityRevision": {
+            "default": 0,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": [
+          "id",
+          "agentProfileId",
+          "enabled",
+          "authorityRevision",
+          "createdAt",
+          "updatedAt"
+        ],
+        "additionalProperties": false
+      },
+      "run": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "agentProfileId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "checkoutId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "resolvedWorkingDirectory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "generation": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "starting",
+              "running",
+              "stopping",
+              "stopped",
+              "failed"
+            ]
+          },
+          "desiredState": {
+            "default": "running",
+            "type": "string",
+            "enum": [
+              "running",
+              "stopped"
+            ]
+          },
+          "recoveryPhase": {
+            "default": "idle",
+            "type": "string",
+            "enum": [
+              "idle",
+              "reconciling",
+              "resuming",
+              "restarting",
+              "recovered",
+              "failed"
+            ]
+          },
+          "recoveryAttempts": {
+            "default": 0,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "recoveryNotBefore": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "recoveryReason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "launchKind": {
+            "default": "fresh",
+            "type": "string",
+            "enum": [
+              "fresh",
+              "adopted",
+              "resuming",
+              "restarted"
+            ]
+          },
+          "requestedModel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "requestedModelSource": {
+            "default": "provider-default",
+            "type": "string",
+            "enum": [
+              "membership",
+              "foreman",
+              "integration",
+              "provider-default"
+            ]
+          },
+          "effectiveModel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "nativeSessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "recoveryOutcome": {
+            "type": "string",
+            "enum": [
+              "retained",
+              "resumed",
+              "restarted",
+              "failed"
+            ]
+          },
+          "terminal": {
+            "type": "object",
+            "properties": {
+              "serverName": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "windowId": {
+                "type": "string",
+                "pattern": "^@[0-9]+$"
+              },
+              "paneId": {
+                "type": "string",
+                "pattern": "^%[0-9]+$"
+              }
+            },
+            "required": [
+              "serverName",
+              "sessionId",
+              "windowId",
+              "paneId"
+            ],
+            "additionalProperties": false
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "stoppedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "foremanId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "id",
+          "agentProfileId",
+          "generation",
+          "status",
+          "desiredState",
+          "recoveryPhase",
+          "recoveryAttempts",
+          "launchKind",
+          "requestedModelSource",
+          "startedAt",
+          "foremanId"
+        ],
+        "additionalProperties": false
+      },
+      "configRevision": {
+        "type": "string",
+        "minLength": 1
+      },
+      "problem": {
+        "type": "string",
+        "maxLength": 1000
+      },
+      "inbox": {
+        "default": [],
+        "maxItems": 100,
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "messageId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "missionId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "writing",
+                "submitted",
+                "answered",
+                "ambiguous",
+                "cancelled"
+              ]
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            }
+          },
+          "required": [
+            "id",
+            "state",
+            "updatedAt"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "inbox"
+    ],
+    "additionalProperties": false
+  },
+  "channel": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "messages": {
+        "maxItems": 100,
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "sequence": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "sender": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "operator"
+                    },
+                    "operatorId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "operatorId"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "foreman"
+                    },
+                    "foremanId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "runId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "generation": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "authorityRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "foremanId",
+                    "runId",
+                    "generation",
+                    "authorityRevision"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32768
+            },
+            "teamId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "replyTo": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            }
+          },
+          "required": [
+            "id",
+            "sequence",
+            "sender",
+            "text",
+            "createdAt"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "nextAfter": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "hasMore": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "messages",
+      "nextAfter",
+      "hasMore"
+    ],
+    "additionalProperties": false
+  },
+  "mission": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "mission": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "foremanId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "operatorId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "objective": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "acceptance": {
+            "minItems": 1,
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            }
+          },
+          "grant": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "default": "supervised",
+                "type": "string",
+                "enum": [
+                  "supervised",
+                  "bounded"
+                ]
+              },
+              "permittedTeamTemplates": {
+                "default": [],
+                "maxItems": 32,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                }
+              },
+              "workspacePolicy": {
+                "default": "managed-only",
+                "type": "string",
+                "const": "managed-only"
+              },
+              "maxActiveMissions": {
+                "default": 1,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16
+              },
+              "maxTeamsPerMission": {
+                "default": 3,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16
+              },
+              "maxConcurrentTasks": {
+                "default": 4,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 32
+              },
+              "maxMissionHours": {
+                "default": 24,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 168
+              },
+              "maxForemanTurns": {
+                "default": 200,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              },
+              "transcript": {
+                "type": "object",
+                "properties": {
+                  "access": {
+                    "default": "mission-owned",
+                    "type": "string",
+                    "const": "mission-owned"
+                  },
+                  "maxLines": {
+                    "default": 200,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5000
+                  },
+                  "maxBytes": {
+                    "default": 65536,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65536
+                  }
+                },
+                "required": [
+                  "access",
+                  "maxLines",
+                  "maxBytes"
+                ],
+                "additionalProperties": false
+              },
+              "intervention": {
+                "type": "object",
+                "properties": {
+                  "idlePrompt": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "routineWaitReply": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "nativeInput": {
+                    "default": "disabled",
+                    "type": "string",
+                    "enum": [
+                      "disabled",
+                      "approved-adapter-only"
+                    ]
+                  },
+                  "maxPerIncident": {
+                    "default": 2,
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 5
+                  }
+                },
+                "required": [
+                  "idlePrompt",
+                  "routineWaitReply",
+                  "nativeInput",
+                  "maxPerIncident"
+                ],
+                "additionalProperties": false
+              },
+              "recovery": {
+                "type": "object",
+                "properties": {
+                  "restartMissionOwnedAgents": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "maxAttemptsPerIncident": {
+                    "default": 2,
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 5
+                  },
+                  "maxAttemptsPerMission": {
+                    "default": 6,
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 30
+                  },
+                  "cooldownSeconds": {
+                    "default": 120,
+                    "type": "integer",
+                    "minimum": 30,
+                    "maximum": 86400
+                  }
+                },
+                "required": [
+                  "restartMissionOwnedAgents",
+                  "maxAttemptsPerIncident",
+                  "maxAttemptsPerMission",
+                  "cooldownSeconds"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "mode",
+              "permittedTeamTemplates",
+              "workspacePolicy",
+              "maxActiveMissions",
+              "maxTeamsPerMission",
+              "maxConcurrentTasks",
+              "maxMissionHours",
+              "maxForemanTurns",
+              "transcript",
+              "intervention",
+              "recovery"
+            ],
+            "additionalProperties": false
+          },
+          "templateDigests": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "verification": {
+            "maxItems": 16,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "command": {
+                  "minItems": 1,
+                  "maxItems": 64,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  }
+                },
+                "acceptanceIndexes": {
+                  "minItems": 1,
+                  "maxItems": 32,
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "timeoutSeconds": {
+                  "default": 300,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 3600
+                }
+              },
+              "required": [
+                "id",
+                "command",
+                "acceptanceIndexes",
+                "timeoutSeconds"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "grantRevision": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "planning",
+              "running",
+              "paused",
+              "blocked",
+              "verifying",
+              "awaiting-acceptance",
+              "completed",
+              "cancelled",
+              "revoked",
+              "failed"
+            ]
+          },
+          "turnsUsed": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "recoveryAttempts": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "nextReviewAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": [
+          "id",
+          "foremanId",
+          "operatorId",
+          "title",
+          "objective",
+          "acceptance",
+          "grant",
+          "templateDigests",
+          "verification",
+          "grantRevision",
+          "revision",
+          "state",
+          "turnsUsed",
+          "recoveryAttempts",
+          "nextReviewAt",
+          "expiresAt",
+          "createdAt",
+          "updatedAt"
+        ],
+        "additionalProperties": false
+      },
+      "tasks": {
+        "maxItems": 256,
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            "instructions": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            "roleId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "templateId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "dependencies": {
+              "default": [],
+              "maxItems": 32,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "acceptanceIndexes": {
+              "minItems": 1,
+              "maxItems": 32,
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "missionId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "actionId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "groupId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "memberId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "generation": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "assigned",
+                "running",
+                "blocked",
+                "verifying",
+                "accepted",
+                "failed",
+                "cancelled"
+              ]
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            }
+          },
+          "required": [
+            "title",
+            "instructions",
+            "roleId",
+            "templateId",
+            "dependencies",
+            "acceptanceIndexes",
+            "id",
+            "missionId",
+            "state",
+            "revision",
+            "createdAt",
+            "updatedAt"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "teams": {
+        "maxItems": 16,
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "missionId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "groupId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "templateId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "templateDigest": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "sourceCheckoutId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "baseCommit": {
+              "type": "string",
+              "minLength": 40,
+              "maxLength": 64
+            },
+            "branch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "checkoutId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "worktreeId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "prepared",
+                "creating",
+                "ready",
+                "blocked"
+              ]
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            }
+          },
+          "required": [
+            "id",
+            "missionId",
+            "groupId",
+            "templateId",
+            "templateDigest",
+            "sourceCheckoutId",
+            "baseCommit",
+            "branch",
+            "state",
+            "createdAt",
+            "updatedAt"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "evidence": {
+        "maxItems": 4096,
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "missionId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "candidateCommit": {
+              "type": "string",
+              "minLength": 40,
+              "maxLength": 64
+            },
+            "checkoutId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "recipeId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "recipeDigest": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "running",
+                "passed",
+                "failed",
+                "ambiguous"
+              ]
+            },
+            "outputDigest": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "exitCode": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "completedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            }
+          },
+          "required": [
+            "id",
+            "missionId",
+            "taskId",
+            "candidateCommit",
+            "checkoutId",
+            "recipeId",
+            "recipeDigest",
+            "state",
+            "createdAt"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "approvals": {
+        "maxItems": 256,
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "missionId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "grantRevision": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "operation": {
+              "type": "string",
+              "enum": [
+                "provision",
+                "task",
+                "verification",
+                "intervention"
+              ]
+            },
+            "operationKey": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "summary": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "approved",
+                "denied",
+                "stale"
+              ]
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "decidedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            }
+          },
+          "required": [
+            "id",
+            "missionId",
+            "grantRevision",
+            "operation",
+            "operationKey",
+            "summary",
+            "state",
+            "createdAt"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "candidate": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "missionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "checkoutId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "worktreeId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "commit": {
+            "type": "string",
+            "minLength": 40,
+            "maxLength": 64
+          },
+          "branch": {
+            "type": "string",
+            "minLength": 1
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "creating",
+              "verifying",
+              "passed",
+              "blocked"
+            ]
+          },
+          "taskCommits": {
+            "maxItems": 256,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 40,
+              "maxLength": 64
+            }
+          },
+          "checks": {
+            "maxItems": 16,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "recipeId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "exitCode": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "outputDigest": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              },
+              "required": [
+                "recipeId",
+                "exitCode",
+                "outputDigest"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": [
+          "id",
+          "missionId",
+          "branch",
+          "state",
+          "taskCommits",
+          "checks",
+          "createdAt",
+          "updatedAt"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "mission",
+      "tasks"
+    ],
+    "additionalProperties": false
+  },
+  "commands": {
+    "configure": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "configuration": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "default": "repository-foreman",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "name": {
+              "default": "Foreman",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "enabled": {
+              "default": false,
+              "type": "boolean"
+            },
+            "integrationId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+            },
+            "desiredModel": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "instructions": {
+              "default": [],
+              "maxItems": 32,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "providerFiles": {
+              "type": "object",
+              "properties": {
+                "mcp": {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "default": "append",
+                      "type": "string",
+                      "enum": [
+                        "append",
+                        "replace",
+                        "disabled"
+                      ]
+                    },
+                    "paths": {
+                      "default": [],
+                      "maxItems": 16,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4096
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "supervision": {
+              "default": {},
+              "type": "object",
+              "properties": {
+                "reconcileIntervalSeconds": {
+                  "default": 30,
+                  "type": "integer",
+                  "minimum": 5,
+                  "maximum": 3600
+                },
+                "reviewIntervalSeconds": {
+                  "default": 300,
+                  "type": "integer",
+                  "minimum": 30,
+                  "maximum": 86400
+                },
+                "maxRecoveryAttempts": {
+                  "default": 3,
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5
+                },
+                "recoveryCooldownSeconds": {
+                  "default": 120,
+                  "type": "integer",
+                  "minimum": 30,
+                  "maximum": 3600
+                },
+                "staleProgressSeconds": {
+                  "default": 900,
+                  "type": "integer",
+                  "minimum": 60,
+                  "maximum": 86400
+                }
+              },
+              "additionalProperties": false
+            },
+            "autonomy": {
+              "default": {},
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "default": "supervised",
+                  "type": "string",
+                  "enum": [
+                    "supervised",
+                    "bounded"
+                  ]
+                },
+                "permittedTeamTemplates": {
+                  "default": [],
+                  "maxItems": 32,
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "workspacePolicy": {
+                  "default": "managed-only",
+                  "type": "string",
+                  "const": "managed-only"
+                },
+                "maxActiveMissions": {
+                  "default": 1,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 16
+                },
+                "maxTeamsPerMission": {
+                  "default": 3,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 16
+                },
+                "maxConcurrentTasks": {
+                  "default": 4,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 32
+                },
+                "maxMissionHours": {
+                  "default": 24,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 168
+                },
+                "maxForemanTurns": {
+                  "default": 200,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000
+                },
+                "transcript": {
+                  "default": {},
+                  "type": "object",
+                  "properties": {
+                    "access": {
+                      "default": "mission-owned",
+                      "type": "string",
+                      "const": "mission-owned"
+                    },
+                    "maxLines": {
+                      "default": 200,
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 5000
+                    },
+                    "maxBytes": {
+                      "default": 65536,
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 65536
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "intervention": {
+                  "default": {},
+                  "type": "object",
+                  "properties": {
+                    "idlePrompt": {
+                      "default": false,
+                      "type": "boolean"
+                    },
+                    "routineWaitReply": {
+                      "default": false,
+                      "type": "boolean"
+                    },
+                    "nativeInput": {
+                      "default": "disabled",
+                      "type": "string",
+                      "enum": [
+                        "disabled",
+                        "approved-adapter-only"
+                      ]
+                    },
+                    "maxPerIncident": {
+                      "default": 2,
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 5
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "recovery": {
+                  "default": {},
+                  "type": "object",
+                  "properties": {
+                    "restartMissionOwnedAgents": {
+                      "default": false,
+                      "type": "boolean"
+                    },
+                    "maxAttemptsPerIncident": {
+                      "default": 2,
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 5
+                    },
+                    "maxAttemptsPerMission": {
+                      "default": 6,
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 30
+                    },
+                    "cooldownSeconds": {
+                      "default": 120,
+                      "type": "integer",
+                      "minimum": 30,
+                      "maximum": 86400
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "integrationId"
+          ],
+          "additionalProperties": false
+        },
+        "expectedConfigRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "configuration",
+        "expectedConfigRevision"
+      ],
+      "additionalProperties": false
+    },
+    "start": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "expectedConfigRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "cols": {
+          "default": 120,
+          "type": "integer",
+          "minimum": 20,
+          "maximum": 500
+        },
+        "rows": {
+          "default": 36,
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 200
+        }
+      },
+      "required": [
+        "expectedConfigRevision"
+      ],
+      "additionalProperties": false
+    },
+    "stop": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "generation": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "runId",
+        "generation"
+      ],
+      "additionalProperties": false
+    },
+    "send": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32768
+        },
+        "teamId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "replyTo": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "requestId",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "resolveInput": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "inboxId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expectedState": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "submitted",
+            "ambiguous"
+          ]
+        },
+        "resolution": {
+          "type": "string",
+          "enum": [
+            "cancel",
+            "handled"
+          ]
+        }
+      },
+      "required": [
+        "inboxId",
+        "expectedState",
+        "resolution"
+      ],
+      "additionalProperties": false
+    },
+    "createMission": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "acceptance": {
+          "minItems": 1,
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "grant": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "default": "supervised",
+              "type": "string",
+              "enum": [
+                "supervised",
+                "bounded"
+              ]
+            },
+            "permittedTeamTemplates": {
+              "default": [],
+              "maxItems": 32,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "workspacePolicy": {
+              "default": "managed-only",
+              "type": "string",
+              "const": "managed-only"
+            },
+            "maxActiveMissions": {
+              "default": 1,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16
+            },
+            "maxTeamsPerMission": {
+              "default": 3,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16
+            },
+            "maxConcurrentTasks": {
+              "default": 4,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 32
+            },
+            "maxMissionHours": {
+              "default": 24,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 168
+            },
+            "maxForemanTurns": {
+              "default": 200,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "transcript": {
+              "default": {},
+              "type": "object",
+              "properties": {
+                "access": {
+                  "default": "mission-owned",
+                  "type": "string",
+                  "const": "mission-owned"
+                },
+                "maxLines": {
+                  "default": 200,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5000
+                },
+                "maxBytes": {
+                  "default": 65536,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65536
+                }
+              },
+              "additionalProperties": false
+            },
+            "intervention": {
+              "default": {},
+              "type": "object",
+              "properties": {
+                "idlePrompt": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "routineWaitReply": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "nativeInput": {
+                  "default": "disabled",
+                  "type": "string",
+                  "enum": [
+                    "disabled",
+                    "approved-adapter-only"
+                  ]
+                },
+                "maxPerIncident": {
+                  "default": 2,
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5
+                }
+              },
+              "additionalProperties": false
+            },
+            "recovery": {
+              "default": {},
+              "type": "object",
+              "properties": {
+                "restartMissionOwnedAgents": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "maxAttemptsPerIncident": {
+                  "default": 2,
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5
+                },
+                "maxAttemptsPerMission": {
+                  "default": 6,
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 30
+                },
+                "cooldownSeconds": {
+                  "default": 120,
+                  "type": "integer",
+                  "minimum": 30,
+                  "maximum": 86400
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "verification": {
+          "default": [],
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "command": {
+                "minItems": 1,
+                "maxItems": 64,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                }
+              },
+              "acceptanceIndexes": {
+                "minItems": 1,
+                "maxItems": 32,
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "timeoutSeconds": {
+                "default": 300,
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3600
+              }
+            },
+            "required": [
+              "id",
+              "command",
+              "acceptanceIndexes"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "requestId",
+        "title",
+        "objective",
+        "acceptance",
+        "grant"
+      ],
+      "additionalProperties": false
+    },
+    "controlMission": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "start",
+            "pause",
+            "resume",
+            "cancel",
+            "revoke",
+            "accept"
+          ]
+        }
+      },
+      "required": [
+        "expectedRevision",
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "decideApproval": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "expectedGrantRevision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "decision": {
+          "type": "string",
+          "enum": [
+            "approved",
+            "denied"
+          ]
+        }
+      },
+      "required": [
+        "expectedGrantRevision",
+        "decision"
+      ],
+      "additionalProperties": false
+    },
+    "createTask": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expectedGrantRevision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "instructions": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "roleId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "templateId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "dependencies": {
+          "default": [],
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "acceptanceIndexes": {
+          "minItems": 1,
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        }
+      },
+      "required": [
+        "requestId",
+        "expectedGrantRevision",
+        "title",
+        "instructions",
+        "roleId",
+        "templateId",
+        "acceptanceIndexes"
+      ],
+      "additionalProperties": false
+    },
+    "provisionTeam": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expectedGrantRevision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expectedConfigRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "templateId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "sourceCheckoutId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "baseCommit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$"
+        }
+      },
+      "required": [
+        "requestId",
+        "expectedGrantRevision",
+        "expectedConfigRevision",
+        "templateId",
+        "sourceCheckoutId",
+        "baseCommit"
+      ],
+      "additionalProperties": false
+    },
+    "observeTask": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "missionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expectedGrantRevision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "maxLines": {
+          "default": 200,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        }
+      },
+      "required": [
+        "missionId",
+        "taskId",
+        "expectedGrantRevision"
+      ],
+      "additionalProperties": false
+    },
+    "verifyTask": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "missionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expectedGrantRevision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "candidateCommit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$"
+        }
+      },
+      "required": [
+        "missionId",
+        "taskId",
+        "expectedGrantRevision",
+        "candidateCommit"
+      ],
+      "additionalProperties": false
+    },
+    "integrateMission": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "missionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expectedGrantRevision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "missionId",
+        "requestId",
+        "expectedGrantRevision"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

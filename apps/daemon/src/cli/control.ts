@@ -42,6 +42,7 @@ function publicPackageRoot(start: string): string {
 }
 
 interface ParsedOptions {
+  foremanScope?: boolean;
   positionals: string[];
   body?: unknown;
   apiUrl?: string;
@@ -117,6 +118,10 @@ function parseOptions(args: readonly string[]): ParsedOptions {
     }
     if (argument === "--json") {
       options.forceJson = true;
+      continue;
+    }
+    if (argument === "--foreman") {
+      options.foremanScope = true;
       continue;
     }
     if (argument === "--mcp" || argument === "--no-mcp") {
@@ -443,7 +448,12 @@ export async function runControlCli(
       return 0;
     }
     if (declaration.id === "auth.login") {
-      await authenticateAgent(repositoryRoot, options.positionals[0] as string, options.agentId);
+      await authenticateAgent(
+        repositoryRoot,
+        options.positionals[0] as string,
+        options.agentId,
+        options.foremanScope,
+      );
       return 0;
     }
     const packageRoot = publicPackageRoot(import.meta.dirname);

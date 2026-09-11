@@ -106,6 +106,7 @@ import type { WorktreeService } from "../git/worktree-service.js";
 import type { LaunchConsentService } from "../launch-consent-service.js";
 import type { MessageCommandService } from "../message-command-service.js";
 import type { MessageRepository } from "../message-repository.js";
+import type { MissionCandidateService } from "../mission-candidate-service.js";
 import type { MissionRepository } from "../mission-repository.js";
 import type { MissionTeamService } from "../mission-team-service.js";
 import type { MissionVerificationService } from "../mission-verification-service.js";
@@ -136,6 +137,7 @@ export interface ControlRouterServices {
   missions: MissionRepository;
   missionTeams: MissionTeamService;
   missionVerification: MissionVerificationService;
+  missionCandidates: MissionCandidateService;
   snapshot: SnapshotReadModel;
   store: NanasaStore;
   repositoryIdentity: string;
@@ -370,6 +372,7 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
       ...services.missions.workspace(id),
       teams: services.missionTeams.list(id),
       evidence: services.missionVerification.list(id),
+      candidate: services.missionCandidates.get(id),
       approvals: services.missions.approvals(id),
     };
   });
@@ -384,7 +387,7 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     const command = MissionControlCommandSchema.parse(
       routeBody(controlRoute("missions.control"), request),
     );
-    if (command.action === "accept") await services.missionVerification.assertAcceptanceCurrent(id);
+    if (command.action === "accept") await services.missionCandidates.assertCurrent(id);
     return services.missions.control(operatorPrincipal(services, request).operatorId, id, command);
   });
   register("foreman.channel", (request) => {

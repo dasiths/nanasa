@@ -12,6 +12,7 @@ import { GitCommandAdapter } from "../src/git/git-command-adapter.js";
 import { GitStatusService } from "../src/git/git-status-service.js";
 import { RepositoryDiscoveryService } from "../src/git/repository-discovery-service.js";
 import { safeWorktreeSlug, WorktreeService } from "../src/git/worktree-service.js";
+import { MissionCandidateService } from "../src/mission-candidate-service.js";
 import { MissionObservationService } from "../src/mission-observation-service.js";
 import { MissionRecoveryPolicy } from "../src/mission-recovery-policy.js";
 import { MissionRepository } from "../src/mission-repository.js";
@@ -437,6 +438,28 @@ groups: {}
         outputDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
       });
       expect(missions.workspace(mission.id).tasks[0]?.state).toBe("accepted");
+      const readyForIntegration = missions.get(mission.id);
+      expect(readyForIntegration.state).toBe("verifying");
+      const candidates = new MissionCandidateService(
+        context.store,
+        missions,
+        teams,
+        verification,
+        context.worktrees,
+        context.git,
+      );
+      const candidate = await candidates.integrate(principal, {
+        missionId: mission.id,
+        requestId: "candidate-one",
+        expectedGrantRevision: readyForIntegration.grantRevision,
+      });
+      expect(candidate).toMatchObject({
+        state: "passed",
+        taskCommits: [candidateCommit],
+        checks: [{ recipeId: "test", exitCode: 0, outputDigest: expect.any(String) }],
+      });
+      expect(candidate.checkoutId).not.toBe(allocation.checkoutId);
+      await candidates.assertCurrent(mission.id);
       const readyForAcceptance = missions.get(mission.id);
       expect(readyForAcceptance.state).toBe("awaiting-acceptance");
       await verification.assertAcceptanceCurrent(mission.id);
