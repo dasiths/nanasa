@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
-  type AgentRun,
   AgentStatusSourceSchema,
   type ProcessIdentityObservation,
   REPORTER_LEASE_MS,
   type ReporterReadinessCoverage,
   type ReporterSession,
+  type RuntimeRun,
   STATUS_PROTOCOL_VERSION,
 } from "@nanasa/contracts";
 import type { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
@@ -41,7 +41,7 @@ export class ReporterRegistry {
     this.#now = options.now ?? (() => new Date());
   }
 
-  public async open(run: AgentRun): Promise<ReporterSession> {
+  public async open(run: RuntimeRun): Promise<ReporterSession> {
     const current = this.#store.getCurrentReporterSession(run.id, run.generation);
     if (current !== undefined) return current;
     const reporter = await this.#authority.reporterPolicy(run);
@@ -70,7 +70,7 @@ export class ReporterRegistry {
     return this.#store.registerReporterSession(session);
   }
 
-  public async environment(run: AgentRun): Promise<Readonly<Record<string, string>>> {
+  public async environment(run: RuntimeRun): Promise<Readonly<Record<string, string>>> {
     const session = await this.open(run);
     return Object.freeze({
       NANASA_REPORTER_PROVIDER_ID: session.providerId,
@@ -91,7 +91,7 @@ export class ReporterRegistry {
     });
   }
 
-  public async observeProcess(run: AgentRun, process: ProcessIdentityObservation): Promise<void> {
+  public async observeProcess(run: RuntimeRun, process: ProcessIdentityObservation): Promise<void> {
     if (process.expectedProviderMatch !== "match") {
       this.#store.revokeReporterAuthority(run.id, run.generation, "provider_process_mismatch");
       throw new DomainError(
@@ -111,7 +111,7 @@ export class ReporterRegistry {
     }
   }
 
-  public revoke(run: AgentRun, reason: string): void {
+  public revoke(run: RuntimeRun, reason: string): void {
     this.#store.revokeReporterAuthority(run.id, run.generation, reason);
   }
 }

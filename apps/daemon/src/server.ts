@@ -30,6 +30,7 @@ import { ProviderCatalogService } from "./extensions/provider-catalog-service.js
 import { ProviderExtensionPlanner } from "./extensions/provider-extension-planner.js";
 import { ProviderExtensionService } from "./extensions/provider-extension-service.js";
 import { ProviderHealthService } from "./extensions/provider-health-service.js";
+import { ForemanInboxScheduler } from "./foreman-inbox-scheduler.js";
 import { ForemanRuntimeService } from "./foreman-runtime-service.js";
 import { GeneratedOverlayTransaction } from "./generated-overlay-transaction.js";
 import { CheckoutService } from "./git/checkout-service.js";
@@ -52,6 +53,7 @@ import { validateMcpEndpointConfiguration } from "./mcp-config.js";
 import { registerMcpRoutes } from "./mcp-server.js";
 import { MessageCommandService } from "./message-command-service.js";
 import { MessageRepository } from "./message-repository.js";
+import { MissionRepository } from "./mission-repository.js";
 import { NativeSessionService } from "./native-session-service.js";
 import { OperatorAuth } from "./operator-auth.js";
 import { controlMetadata, PRODUCT_VERSION, repositoryTmuxNamespace } from "./protocol-metadata.js";
@@ -230,6 +232,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     const eventLog = new EventLog(store);
     const eventSessions = new Set<EventStreamSession>();
     const configRepository = new ConfigRepository(loadedConfig.repoRoot);
+    const missions = new MissionRepository(store, () => configRepository.load().config);
     const mcpPath = options.mcp?.path ?? "/mcp";
     if (!/^\/[A-Za-z0-9/_-]*$/.test(mcpPath) || mcpPath.includes("//")) {
       throw new Error("MCP path must be an absolute URL path");
@@ -458,6 +461,8 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       foremanRuntimeEnvironment: async (run) => ({
         ...(options.mcp?.enabled === true ? { NANASA_MCP_URL: mcpEndpointUrl } : {}),
         NANASA_MCP_TOKEN: mcpCredentials.issueForeman(run),
+        NANASA_STATUS_URL: statusEndpointUrl,
+        ...(await reporterRegistry.environment(run)),
       }),
     });
     const terminalControl = new TerminalControlService(store);
@@ -481,6 +486,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       config: configRepository,
       runtime,
       bindings: providerBindings,
+      reporters: reporterRegistry,
       mcpEnabled: options.mcp?.enabled === true,
       allowAutonomous: options.providerPolicy?.allowAutonomous === true,
       allowProviderFiles: options.providerPolicy?.allowProviderFiles === true,
@@ -489,6 +495,15 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     });
     const terminalDelivery = new TmuxTerminalDelivery(runtime, terminalInput);
     const consoles = new AdHocConsoleManager(runtime, terminalGateway, loadedConfig.repoRoot);
+    const foremanInbox = new ForemanInboxScheduler(
+      store,
+      foreman,
+      runtime,
+      terminalInput,
+      (runId) => terminalGateway.hasController(runId),
+      () => new Date(),
+      missions,
+    );
     const deliveries = new DeliveryRepository(store);
     const messages = new MessageRepository(store);
     const dispatcher = new DeliveryDispatcher(store, deliveries, terminalDelivery);
@@ -538,6 +553,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     coordinator.start();
     actionScheduler.start();
     foreman.startMonitoring();
+    foremanInbox.start();
 
     app.addHook("onRequest", async (request, reply) => {
       const path = requestPath(request.url);
@@ -581,6 +597,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       for (const session of eventSessions) session.plannedRestart();
       await consoles.close();
       await actionScheduler.close();
+      await foremanInbox.close();
       await foreman.close();
       await coordinator.close();
     });
@@ -653,6 +670,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       nativeSessions,
       runtimeProvisioner,
       actionAcks,
+      foreman,
     });
     if (options.mcp?.enabled === true) {
       registerMcpRoutes(app, {
@@ -668,6 +686,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         actionWaits,
         openWaits,
         foremanConfig: () => configRepository.load().config,
+        missions,
       });
     }
     registerControlRouter(app, {
@@ -677,6 +696,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       config: configRepository,
       foreman,
       snapshot: snapshotReadModel,
+      missions,
       store,
       repositoryIdentity,
       launchConsent: launchConsentService,

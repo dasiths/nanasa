@@ -11,6 +11,7 @@ import { ConfigRepository } from "./config-repository.js";
 import { resolveEffectiveForemanPrompt } from "./instruction-resolver.js";
 import { resolveEffectiveForemanProviderPolicy } from "./provider-policy-resolver.js";
 import type { ProviderRunBindingRepository } from "./providers/provider-run-binding-repository.js";
+import type { ReporterRegistry } from "./reporter-registry.js";
 import { DomainError, NanasaStore } from "./store.js";
 import type { TmuxRuntime } from "./tmux-runtime.js";
 
@@ -25,6 +26,7 @@ export interface ForemanRuntimeServiceOptions {
   readonly mcpEnabled: boolean;
   readonly allowAutonomous: boolean;
   readonly allowProviderFiles: boolean;
+  readonly reporters?: ReporterRegistry;
   readonly onRunAvailable?: (run: ForemanRun) => void;
   readonly onRunUnavailable?: (runId: string) => void;
 }
@@ -47,6 +49,7 @@ export class ForemanRuntimeService {
       configRevision: loaded.status.revision,
       configuration,
       problem: this.#problem,
+      inbox: this.#options.store.listForemanInbox(),
     };
     if (configuration === undefined) return result;
     let actor: ForemanActor;
@@ -166,6 +169,7 @@ export class ForemanRuntimeService {
         );
       }
       await runtime.ensureViewSession(run);
+      await this.observeReporterProcess(run);
       this.#options.onRunAvailable?.(run);
       return run;
     });
@@ -219,6 +223,7 @@ export class ForemanRuntimeService {
           continue;
         }
         const observed = await runtime.observeRun(run);
+        await this.#recordObservation(run, observed);
         if (observed.state === "dead" || observed.state === "missing") {
           this.#options.onRunUnavailable?.(run.id);
           store.updateRuntimeRunStatus(run.id, "failed", {
@@ -239,6 +244,36 @@ export class ForemanRuntimeService {
     this.#closed = true;
     if (this.#timer !== undefined) clearTimeout(this.#timer);
     await this.#tail;
+  }
+
+  public async observeReporterProcess(run: ForemanRun): Promise<void> {
+    await this.#recordObservation(run, await this.#options.runtime.observeRun(run));
+  }
+
+  async #recordObservation(
+    run: ForemanRun,
+    observation: Awaited<ReturnType<TmuxRuntime["observeRun"]>>,
+  ): Promise<void> {
+    if (observation.state === "present" && observation.process?.expectedProviderMatch === "match") {
+      await this.#options.reporters?.observeProcess(run, observation.process);
+      this.#options.store.recordRuntimeProcessStatus(run.id, {
+        event: "process.alive",
+        eventId: observation.id,
+        observedAt: observation.observedAt,
+        process: observation.process,
+      });
+    } else {
+      this.#options.store.recordRuntimeProcessStatus(run.id, {
+        event:
+          observation.state === "dead"
+            ? "process.exited"
+            : observation.state === "missing"
+              ? "process.missing"
+              : "process.indeterminate",
+        eventId: observation.id,
+        observedAt: observation.observedAt,
+      });
+    }
   }
 
   public startMonitoring(): void {

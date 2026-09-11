@@ -128,6 +128,7 @@ import {
   resolveAttentionSubscriptionsSnapshot,
   resolveMemberAttentionSubscriptions,
 } from "./attention-subscription-policy.js";
+import type { McpForemanPrincipal } from "./mcp-auth.js";
 import { dockerMemberName, formatMemberId, type MemberNameGenerator } from "./member-id.js";
 import { orderedAgentEntries } from "./membership-order.js";
 import { openNanasaDatabase } from "./persistence/database.js";
@@ -1666,12 +1667,10 @@ export class NanasaStore {
           input.startedAt,
           input.stoppedAt ?? null,
         );
-      if (!("foremanId" in input)) {
-        this.#upsertAgentStatusState(
-          input,
-          createAgentStatusReducerState(input.id, input.generation, input.startedAt),
-        );
-      }
+      this.#upsertAgentStatusState(
+        input,
+        createAgentStatusReducerState(input.id, input.generation, input.startedAt),
+      );
       return {
         result: input,
         event: this.#appendEvent("run.created", "run", input.id, { run: input }),
@@ -1938,6 +1937,26 @@ export class NanasaStore {
       const message = this.#hydrateForemanMessage(
         this.#database.prepare("SELECT * FROM foreman_messages WHERE id = ?").get(id)!,
       );
+      if (principal.kind === "operator") {
+        this.#database
+          .prepare(`INSERT INTO foreman_inbox
+          (id, message_id, dedupe_key, prompt, state, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 'queued', ?, ?)`)
+          .run(
+            `inbox_${randomUUID()}`,
+            message.id,
+            `message:${message.id}`,
+            `Operator channel message ${message.id}. Read it with nanasa.foreman_read_channel and reply using nanasa.foreman_reply. Team context: ${message.teamId ?? "repository"}. This message does not grant new mission authority.\n${message.text}`,
+            createdAt,
+            createdAt,
+          );
+      } else {
+        this.#database
+          .prepare(
+            "UPDATE foreman_inbox SET state = 'answered', updated_at = ? WHERE message_id = ? AND state IN ('queued', 'submitted', 'writing', 'ambiguous')",
+          )
+          .run(createdAt, input.replyTo!);
+      }
       this.#appendEvent("foreman.message-created", "foreman", "repository", {
         messageId: message.id,
         channelSequence: message.sequence,
@@ -1957,6 +1976,27 @@ export class NanasaStore {
       nextAfter: messages.at(-1)?.sequence ?? input.after,
       hasMore: rows.length > input.limit,
     };
+  }
+
+  public listForemanInbox() {
+    return this.#database
+      .prepare(
+        "SELECT id, message_id, mission_id, state, updated_at FROM foreman_inbox ORDER BY created_at DESC, id DESC LIMIT 100",
+      )
+      .all()
+      .map((row) => ({
+        id: String(row.id),
+        messageId: row.message_id === null ? undefined : String(row.message_id),
+        missionId: row.mission_id === null ? undefined : String(row.mission_id),
+        state: row.state as
+          | "queued"
+          | "writing"
+          | "submitted"
+          | "answered"
+          | "ambiguous"
+          | "cancelled",
+        updatedAt: String(row.updated_at),
+      }));
   }
 
   #hydrateForemanMessage(row: Record<string, unknown>): ForemanChannelMessage {
@@ -2517,7 +2557,7 @@ export class NanasaStore {
          WHERE id = ? AND revoked_at IS NULL AND closed_at IS NULL`,
       )
       .run(leaseExpiresAt, session.id);
-    const run = this.getRun(runId);
+    const run = this.getRuntimeRun(runId);
     const state = this.#agentStatusState(run);
     if (state.reporterEpoch === session.reporterEpoch) {
       this.#upsertAgentStatusState(run, { ...state, reporterLeaseExpiresAt: leaseExpiresAt });
@@ -2579,10 +2619,25 @@ export class NanasaStore {
     identity: AgentStatusIdentity,
     event: AgentStatusEventInput,
   ): AgentStatusIngestResult {
+    const result = this.#ingestRuntimeStatusEvent(identity, event);
+    return { ...result, status: AgentStatusDetailSchema.parse(result.status) };
+  }
+
+  public ingestForemanStatusEvent(identity: McpForemanPrincipal, event: AgentStatusEventInput) {
+    return this.#ingestRuntimeStatusEvent(identity, event);
+  }
+
+  #ingestRuntimeStatusEvent(
+    identity: AgentStatusIdentity | McpForemanPrincipal,
+    event: AgentStatusEventInput,
+  ) {
     const input = AgentStatusEventInputSchema.parse(event);
     const observedAt = new Date().toISOString();
     const completed = this.#transaction(() => {
-      const run = this.#requireCurrentAgentStatusRun(identity);
+      const run =
+        "foremanId" in identity
+          ? this.#requireCurrentForemanStatusRun(identity)
+          : this.#requireCurrentAgentStatusRun(identity);
       const profile = this.#requireAgentProfile(run.agentProfileId);
       const session = this.getCurrentReporterSession(run.id, run.generation);
       const wrongIdentity =
@@ -2680,11 +2735,12 @@ export class NanasaStore {
         observedAt,
         input,
       );
-      const openWaitEvents = this.#applyOpenWaitReporterEvent(run, session, input, next);
+      const openWaitEvents =
+        "foremanId" in run ? [] : this.#applyOpenWaitReporterEvent(run, session, input, next);
       this.#upsertAgentStatusState(run, next);
       this.#trimAgentStatusEvents(run.id, run.generation);
       return {
-        status: this.#getAgentStatusDetail(run.groupId, run.memberId),
+        status: this.#statusForRuntime(run),
         duplicate: false as const,
         domainEvents: [
           ...openWaitEvents,
@@ -2694,7 +2750,7 @@ export class NanasaStore {
     });
     for (const domainEvent of completed.domainEvents) this.#publish(domainEvent);
     return {
-      accepted: true,
+      accepted: true as const,
       duplicate: completed.duplicate,
       observedAt,
       status: completed.status,
@@ -2945,8 +3001,13 @@ export class NanasaStore {
     runId: string,
     observation: ProcessStatusObservation,
   ): AgentStatusDetail {
+    this.getRun(runId);
+    return AgentStatusDetailSchema.parse(this.recordRuntimeProcessStatus(runId, observation));
+  }
+
+  public recordRuntimeProcessStatus(runId: string, observation: ProcessStatusObservation) {
     const completed = this.#transaction(() => {
-      const run = this.getRun(runId);
+      const run = this.getRuntimeRun(runId);
       const duplicate = this.#database
         .prepare(
           `SELECT 1 FROM runtime_observations
@@ -2955,7 +3016,7 @@ export class NanasaStore {
         .get(run.id, run.generation, observation.eventId);
       if (duplicate !== undefined) {
         return {
-          status: this.#getAgentStatusDetail(run.groupId, run.memberId),
+          status: this.#statusForRuntime(run),
           domainEvents: [] as DomainEvent[],
         };
       }
@@ -2972,7 +3033,7 @@ export class NanasaStore {
       this.#upsertAgentStatusState(run, next);
       this.#trimAgentStatusEvents(run.id, run.generation);
       return {
-        status: this.#getAgentStatusDetail(run.groupId, run.memberId),
+        status: this.#statusForRuntime(run),
         domainEvents: this.#appendAgentStatusDomainEvents(run, previous, next),
       };
     });
@@ -5493,8 +5554,38 @@ export class NanasaStore {
     return run;
   }
 
+  #requireCurrentForemanStatusRun(identity: McpForemanPrincipal): ForemanRun {
+    const actor = this.getForeman(identity.foremanId);
+    const run = this.getActiveForemanRun(actor.id);
+    if (
+      !actor.enabled ||
+      actor.authorityRevision !== identity.authorityRevision ||
+      run?.id !== identity.runId ||
+      run.generation !== identity.generation ||
+      run.desiredState !== "running" ||
+      !["starting", "running"].includes(run.status)
+    ) {
+      throw new DomainError(
+        "status_generation_fenced",
+        "Foreman status generation is no longer authoritative",
+        409,
+      );
+    }
+    return run;
+  }
+
+  public getRuntimeStatusState(runId: string): AgentStatusReducerState {
+    return this.#agentStatusState(this.getRuntimeRun(runId));
+  }
+
+  #statusForRuntime(run: RuntimeRun) {
+    return "foremanId" in run
+      ? this.#agentStatusState(run)
+      : this.#getAgentStatusDetail(run.groupId, run.memberId);
+  }
+
   #insertAgentStatusEvent(
-    run: AgentRun,
+    run: RuntimeRun,
     eventId: string,
     source: string,
     kind: string,
@@ -5672,7 +5763,7 @@ export class NanasaStore {
   }
 
   #appendAgentStatusDomainEvents(
-    run: AgentRun,
+    run: RuntimeRun,
     previous: AgentStatusReducerState,
     next: AgentStatusReducerState,
   ): DomainEvent[] {
@@ -5689,6 +5780,15 @@ export class NanasaStore {
       previous.lastProgressSummary !== next.lastProgressSummary ||
       previous.blocker !== next.blocker;
     if (!material) return [];
+    if ("foremanId" in run)
+      return [
+        this.#appendEvent("foreman.status-changed", "run", run.id, {
+          foremanId: run.foremanId,
+          runId: run.id,
+          generation: run.generation,
+          statusRevision: next.statusRevision,
+        }),
+      ];
     const status = agentStatusSummary(this.#getAgentStatusDetail(run.groupId, run.memberId));
     const events = [this.#appendEvent("agent-status.changed", "run", run.id, { status })];
     if (
@@ -5702,7 +5802,7 @@ export class NanasaStore {
     return events;
   }
 
-  #agentStatusState(run: AgentRun): AgentStatusReducerState {
+  #agentStatusState(run: RuntimeRun): AgentStatusReducerState {
     const row = this.#database
       .prepare("SELECT reducer_state_json FROM status_revisions WHERE run_id = ?")
       .get(run.id) as unknown as AgentStatusCurrentRow | undefined;
@@ -5711,7 +5811,7 @@ export class NanasaStore {
       : (JSON.parse(row.reducer_state_json) as AgentStatusReducerState);
   }
 
-  #upsertAgentStatusState(run: AgentRun, state: AgentStatusReducerState): void {
+  #upsertAgentStatusState(run: RuntimeRun, state: AgentStatusReducerState): void {
     const serialized = JSON.stringify(state);
     this.#database
       .prepare(

@@ -468,7 +468,11 @@ export class TmuxRuntime {
     }
   }
 
-  public async pasteToRun(run: RuntimeRun, text: string): Promise<void> {
+  public async pasteToRun(
+    run: RuntimeRun,
+    text: string,
+    assertCurrent?: () => void,
+  ): Promise<void> {
     await this.#ownedPaneStatus(run);
     if (Buffer.byteLength(text, "utf8") > 1_048_576) {
       throw new Error("terminal_delivery_too_large");
@@ -481,8 +485,11 @@ export class TmuxRuntime {
     const bufferName = `nanasa-${randomUUID()}`;
     await this.#tmux(["load-buffer", "-b", bufferName, "-"], false, text);
     try {
+      assertCurrent?.();
       await this.#tmux(["paste-buffer", "-b", bufferName, "-d", "-p", "-t", target]);
       await delay(TERMINAL_SUBMIT_DELAY_MS);
+      await this.#ownedPaneStatus(run);
+      assertCurrent?.();
       if (submitInput === "\r") {
         await this.#tmux(["send-keys", "-t", target, "Enter"]);
       } else {

@@ -152,6 +152,10 @@ describe("Streamable HTTP MCP", () => {
         "nanasa.foreman_bootstrap",
         "nanasa.foreman_read_channel",
         "nanasa.foreman_reply",
+        "nanasa.foreman_list_missions",
+        "nanasa.foreman_get_mission",
+        "nanasa.foreman_create_task",
+        "nanasa.foreman_finish_review",
       ]);
       const message = daemon.store.sendForemanMessage(
         { kind: "operator", operatorId: "human" },

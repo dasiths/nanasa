@@ -14,6 +14,20 @@ export const ForemanWorkspaceSchema = z
     run: ForemanRunSchema.optional(),
     configRevision: z.string().min(1).optional(),
     problem: z.string().max(1000).optional(),
+    inbox: z
+      .array(
+        z
+          .object({
+            id: IdentifierSchema,
+            messageId: IdentifierSchema.optional(),
+            missionId: IdentifierSchema.optional(),
+            state: z.enum(["queued", "writing", "submitted", "answered", "ambiguous", "cancelled"]),
+            updatedAt: TimestampSchema,
+          })
+          .strict(),
+      )
+      .max(100)
+      .default([]),
   })
   .strict();
 export type ForemanWorkspace = z.infer<typeof ForemanWorkspaceSchema>;

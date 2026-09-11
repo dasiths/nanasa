@@ -1,6 +1,7 @@
 import {
   AgentActionStateSchema,
   AgentProgressReportCommandSchema,
+  CreateMissionTaskCommandSchema,
   ForemanChannelQuerySchema,
   SendForemanMessageCommandSchema,
 } from "@nanasa/contracts";
@@ -10,6 +11,12 @@ import { DomainError } from "../store.js";
 
 export const McpIdentifierSchema = z.string().trim().min(1).max(128);
 export const McpForemanBootstrapSchema = z.object({}).strict();
+export const McpMissionReferenceSchema = z
+  .object({ missionId: McpIdentifierSchema, expectedGrantRevision: z.number().int().positive() })
+  .strict();
+export const McpMissionTaskSchema = CreateMissionTaskCommandSchema.extend({
+  missionId: McpIdentifierSchema,
+}).strict();
 export const McpMessageFieldsSchema = z
   .object({
     groupId: McpIdentifierSchema.optional(),
@@ -85,6 +92,38 @@ function tool(input: McpToolDeclaration): McpToolDeclaration {
 }
 
 export const MCP_TOOL_REGISTRY = Object.freeze([
+  tool({
+    name: "nanasa.foreman_finish_review",
+    description: "Settle the exact current mission review without claiming mission completion",
+    inputSchema: McpMissionReferenceSchema,
+    principals: ["foreman"],
+    scope: "foreman:reviews:finish",
+    authority: "self-write",
+  }),
+  tool({
+    name: "nanasa.foreman_list_missions",
+    description: "List missions owned by this repository Foreman",
+    inputSchema: McpForemanBootstrapSchema,
+    principals: ["foreman"],
+    scope: "foreman:missions:read",
+    authority: "read",
+  }),
+  tool({
+    name: "nanasa.foreman_get_mission",
+    description: "Read current mission acceptance, grant, and tasks",
+    inputSchema: McpMissionReferenceSchema,
+    principals: ["foreman"],
+    scope: "foreman:missions:read",
+    authority: "read",
+  }),
+  tool({
+    name: "nanasa.foreman_create_task",
+    description: "Plan a bounded task under an existing operator-issued mission grant",
+    inputSchema: McpMissionTaskSchema,
+    principals: ["foreman"],
+    scope: "foreman:tasks:plan",
+    authority: "self-write",
+  }),
   tool({
     name: "nanasa.foreman_read_channel",
     description:

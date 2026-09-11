@@ -31,6 +31,8 @@ import {
   MCP_TOOL_REGISTRY,
   McpDeliverySchema,
   McpForemanBootstrapSchema,
+  McpMissionReferenceSchema,
+  McpMissionTaskSchema,
   McpOwnWaitsSchema,
   McpVisibleHistorySchema,
   McpMessageFieldsSchema as MessageFieldsSchema,
@@ -42,6 +44,7 @@ import {
 import { McpCredentialIssuer, type McpPrincipal } from "./mcp-auth.js";
 import { MessageCommandService } from "./message-command-service.js";
 import { MessageRepository } from "./message-repository.js";
+import type { MissionRepository } from "./mission-repository.js";
 import { DomainError, NanasaStore } from "./store.js";
 
 export interface McpRouteOptions {
@@ -57,6 +60,7 @@ export interface McpRouteOptions {
   actionWaits: AgentWaitService;
   openWaits: AgentOpenWaitService;
   foremanConfig?: () => NanasaConfig;
+  missions: MissionRepository;
 }
 
 class McpRateLimiter {
@@ -358,6 +362,49 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
         inputSchema: SendForemanMessageCommandSchema,
       },
       async (input) => actionToolResult(() => options.store.sendForemanMessage(principal, input)),
+    );
+    server.registerTool(
+      "nanasa.foreman_list_missions",
+      {
+        description: mcpTool("nanasa.foreman_list_missions").description,
+        inputSchema: McpForemanBootstrapSchema,
+      },
+      async () =>
+        actionToolResult(() =>
+          options.missions.list().filter((mission) => mission.foremanId === principal.foremanId),
+        ),
+    );
+    server.registerTool(
+      "nanasa.foreman_get_mission",
+      {
+        description: mcpTool("nanasa.foreman_get_mission").description,
+        inputSchema: McpMissionReferenceSchema,
+      },
+      async (input) =>
+        actionToolResult(() => {
+          options.missions.assertForeman(principal, input.missionId, input.expectedGrantRevision);
+          return options.missions.workspace(input.missionId);
+        }),
+    );
+    server.registerTool(
+      "nanasa.foreman_create_task",
+      {
+        description: mcpTool("nanasa.foreman_create_task").description,
+        inputSchema: McpMissionTaskSchema,
+      },
+      async ({ missionId, ...input }) =>
+        actionToolResult(() => options.missions.createTask(principal, missionId, input)),
+    );
+    server.registerTool(
+      "nanasa.foreman_finish_review",
+      {
+        description: mcpTool("nanasa.foreman_finish_review").description,
+        inputSchema: McpMissionReferenceSchema,
+      },
+      async (input) =>
+        actionToolResult(() =>
+          options.missions.finishReview(principal, input.missionId, input.expectedGrantRevision),
+        ),
     );
     return server;
   }

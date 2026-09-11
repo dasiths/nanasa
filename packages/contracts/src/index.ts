@@ -8,6 +8,7 @@ export * from "./extensions.js";
 export * from "./foreman.js";
 export * from "./git.js";
 export * from "./launch-consent.js";
+export * from "./mission.js";
 export * from "./provider.js";
 export * from "./provider-plugin.js";
 export * from "./provider-rpc.js";

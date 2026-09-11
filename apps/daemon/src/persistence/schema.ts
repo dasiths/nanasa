@@ -283,6 +283,69 @@ export const DATABASE_BASELINE_SQL = `
     UNIQUE(sender_key, request_id)
   ) STRICT;
 
+  CREATE TABLE missions (
+    id TEXT PRIMARY KEY,
+    foreman_id TEXT NOT NULL,
+    operator_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    title TEXT NOT NULL,
+    objective TEXT NOT NULL,
+    acceptance_json TEXT NOT NULL,
+    grant_json TEXT NOT NULL,
+    grant_revision INTEGER NOT NULL CHECK (grant_revision > 0),
+    revision INTEGER NOT NULL CHECK (revision >= 0),
+    state TEXT NOT NULL CHECK (state IN ('planning', 'running', 'paused', 'blocked', 'verifying', 'awaiting-acceptance', 'completed', 'cancelled', 'revoked', 'failed')),
+    turns_used INTEGER NOT NULL DEFAULT 0 CHECK (turns_used >= 0),
+    recovery_attempts INTEGER NOT NULL DEFAULT 0 CHECK (recovery_attempts >= 0),
+    next_review_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(operator_id, request_id)
+  ) STRICT;
+
+  CREATE INDEX missions_due ON missions(state, next_review_at);
+
+  CREATE TABLE mission_tasks (
+    id TEXT PRIMARY KEY,
+    mission_id TEXT NOT NULL REFERENCES missions(id),
+    request_id TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    title TEXT NOT NULL,
+    instructions TEXT NOT NULL,
+    role_id TEXT NOT NULL,
+    template_id TEXT NOT NULL,
+    dependencies_json TEXT NOT NULL,
+    acceptance_indexes_json TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('queued', 'assigned', 'running', 'blocked', 'verifying', 'accepted', 'failed', 'cancelled')),
+    revision INTEGER NOT NULL CHECK (revision >= 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(mission_id, request_id)
+  ) STRICT;
+
+  CREATE TABLE mission_audits (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    mission_id TEXT NOT NULL REFERENCES missions(id),
+    kind TEXT NOT NULL,
+    principal_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    occurred_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE foreman_inbox (
+    id TEXT PRIMARY KEY,
+    message_id TEXT UNIQUE REFERENCES foreman_messages(id),
+    mission_id TEXT REFERENCES missions(id),
+    dedupe_key TEXT NOT NULL UNIQUE,
+    prompt TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('queued', 'writing', 'submitted', 'answered', 'ambiguous', 'cancelled')),
+    target_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT;
+
   CREATE TABLE runs (
     id TEXT PRIMARY KEY,
     group_id TEXT,

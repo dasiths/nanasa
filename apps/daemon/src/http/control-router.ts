@@ -22,6 +22,7 @@ import {
   CreateAgentActionCommandSchema,
   CreateGroupAgentCommandSchema,
   CreateGroupCommandSchema,
+  CreateMissionCommandSchema,
   CreateWorktreeCommandSchema,
   CustomLaunchConsentListQuerySchema,
   DeleteGroupResultSchema,
@@ -37,6 +38,7 @@ import {
   InstallProviderExtensionCommandSchema,
   InterruptAgentRunCommandSchema,
   MemberAttentionSubscriptionsSchema,
+  MissionControlCommandSchema,
   OpenCheckoutCommandSchema,
   OpenWaitSchema,
   ProviderStateBindingSchema,
@@ -102,6 +104,7 @@ import type { WorktreeService } from "../git/worktree-service.js";
 import type { LaunchConsentService } from "../launch-consent-service.js";
 import type { MessageCommandService } from "../message-command-service.js";
 import type { MessageRepository } from "../message-repository.js";
+import type { MissionRepository } from "../mission-repository.js";
 import type { OperatorAuth } from "../operator-auth.js";
 import type { ProviderStateRepository } from "../provider-state-repository.js";
 import type { RunRuntimeCoordinator } from "../run-runtime-coordinator.js";
@@ -126,6 +129,7 @@ export interface ControlRouterServices {
   remote(): RemoteDescriptor;
   config: ConfigRepository;
   foreman: ForemanRuntimeService;
+  missions: MissionRepository;
   snapshot: SnapshotReadModel;
   store: NanasaStore;
   repositoryIdentity: string;
@@ -337,6 +341,23 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
   });
   register("config.get", () => services.config.load().config);
   register("foreman.get", () => ForemanWorkspaceSchema.parse(services.foreman.status()));
+  register("missions.list", () => services.missions.list());
+  register("missions.get", (request) =>
+    services.missions.workspace(record(request.params).missionId ?? ""),
+  );
+  register("missions.create", (request) =>
+    services.missions.create(
+      operatorPrincipal(services, request).operatorId,
+      CreateMissionCommandSchema.parse(routeBody(controlRoute("missions.create"), request)),
+    ),
+  );
+  register("missions.control", (request) =>
+    services.missions.control(
+      operatorPrincipal(services, request).operatorId,
+      record(request.params).missionId ?? "",
+      MissionControlCommandSchema.parse(routeBody(controlRoute("missions.control"), request)),
+    ),
+  );
   register("foreman.channel", (request) => {
     const query = record(request.query);
     return services.store.readForemanChannel(
