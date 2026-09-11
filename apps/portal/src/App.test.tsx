@@ -747,6 +747,18 @@ describe("portal application", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 
+  it("hands a team's context to Foreman without starting or changing a runtime", async () => {
+    const client = createClient();
+    const user = userEvent.setup();
+    render(<App client={client} />);
+    await user.click(await screen.findByRole("link", { name: "Ask Foreman about Backend" }));
+    await screen.findByRole("textbox", { name: "Message Foreman" });
+    expect(screen.getByRole("combobox", { name: "Context" })).toHaveValue("group-backend");
+    expect(client.startForeman).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Back to team" }));
+    expect(window.location.pathname).toBe("/groups/group-backend/messages");
+  });
+
   it("creates a Foreman mission with immutable criteria and controls an exact revision", async () => {
     window.history.replaceState({}, "", "/foreman");
     const client = createClient();

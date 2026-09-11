@@ -53,7 +53,6 @@ import { TeamRecoveryResults } from "./components/team-recovery-results.js";
 import { ErrorNotice, type PortalError, toPortalError } from "./errors.js";
 import { useAttentionWorkspaces } from "./hooks/use-attention-workspaces.js";
 import { useLaunchConsents } from "./hooks/use-launch-consents.js";
-import { useUrlOpenRequests } from "./hooks/use-url-open-requests.js";
 import { useMessageReadCursors } from "./hooks/use-message-read-cursors.js";
 import {
   type TerminalColumnsPreference,
@@ -61,6 +60,7 @@ import {
   usePortalPreferences,
 } from "./hooks/use-portal-preferences.js";
 import { useDomainEvents, usePortalSnapshot } from "./hooks/use-portal-snapshot.js";
+import { useUrlOpenRequests } from "./hooks/use-url-open-requests.js";
 import { memberStatusView } from "./member-status.js";
 import {
   globalDestinationDefinition,
@@ -1021,6 +1021,17 @@ export function App({ client = api }: AppProps) {
           />
         )}
         <div className="header-actions">
+          {route.kind === "group" && selectedGroup !== undefined && (
+            <a
+              className="compact-button header-icon-button"
+              href={`/foreman?team=${encodeURIComponent(selectedGroup.id)}`}
+              aria-label={`Ask Foreman about ${selectedGroup.name}`}
+              title={`Ask Foreman about ${selectedGroup.name}`}
+              onClick={link(`/foreman?team=${encodeURIComponent(selectedGroup.id)}`)}
+            >
+              <Bot aria-hidden="true" size={15} />
+            </a>
+          )}
           <button
             type="button"
             className="icon-button mobile-navigation-trigger"
