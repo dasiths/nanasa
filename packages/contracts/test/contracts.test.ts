@@ -73,6 +73,88 @@ const customLaunchSubject = {
   permissionFloor: "inherit",
 } as const;
 
+describe("Foreman configuration contracts", () => {
+  const base = {
+    version: 2,
+    integrations: {
+      copilot: {
+        id: "copilot",
+        name: "Copilot",
+        kind: "copilot",
+        command: ["copilot"],
+        commandSource: "builtin",
+      },
+    },
+    roles: { builder: { name: "Builder" } },
+  };
+
+  it("does not implicitly configure a Foreman and retains the current schema version", () => {
+    const config = NanasaConfigSchema.parse({ ...base, version: 2 });
+    expect(config.version).toBe(2);
+    expect(config.foreman).toBeUndefined();
+    expect(config.teamTemplates).toBeUndefined();
+  });
+
+  it("defaults to disabled supervised coordination with bounded policy", () => {
+    const config = NanasaConfigSchema.parse({ ...base, foreman: { integrationId: "copilot" } });
+    expect(config.foreman).toMatchObject({
+      enabled: false,
+      autonomy: {
+        mode: "supervised",
+        workspacePolicy: "managed-only",
+        maxMissionHours: 24,
+        intervention: { idlePrompt: false, nativeInput: "disabled" },
+        recovery: { restartMissionOwnedAgents: false },
+      },
+    });
+    expect(config.groups).toEqual({});
+  });
+
+  it("validates providers, roles, templates, and the current version boundary", () => {
+    const input = {
+      ...base,
+      foreman: { integrationId: "copilot", autonomy: { permittedTeamTemplates: ["delivery"] } },
+      teamTemplates: {
+        delivery: { members: { implementor: { integrationId: "copilot", roleId: "builder" } } },
+      },
+    };
+    expect(NanasaConfigSchema.parse(input).groups).toEqual({});
+    for (const invalid of [
+      { ...input, version: 3 },
+      { ...input, teamTemplates: {} },
+      { ...input, roles: {} },
+      { ...input, integrations: {} },
+      { ...input, foreman: { integrationId: "missing" } },
+      {
+        ...input,
+        foreman: {
+          integrationId: "copilot",
+          autonomy: { permittedTeamTemplates: ["delivery", "delivery"] },
+        },
+      },
+      { ...base, teamTemplates: { empty: { members: {} } } },
+    ])
+      expect(NanasaConfigSchema.safeParse(invalid).success).toBe(false);
+  });
+
+  it("rejects unbounded budgets, arbitrary controls, and instruction traversal", () => {
+    for (const invalid of [
+      { autonomy: { maxForemanTurns: 0 } },
+      { autonomy: { maxMissionHours: 169 } },
+      { autonomy: { transcript: { maxBytes: 65_537 } } },
+      { autonomy: { allowAnything: true } },
+      { instructions: ["../outside.md"] },
+    ]) {
+      expect(
+        NanasaConfigSchema.safeParse({
+          ...base,
+          foreman: { integrationId: "copilot", ...invalid },
+        }).success,
+      ).toBe(false);
+    }
+  });
+});
+
 describe("custom launch consent contracts", () => {
   it("accepts redacted stable subjects and rejects duplicate set members or runtime data", () => {
     expect(CustomLaunchConsentSubjectSchema.parse(customLaunchSubject)).toEqual(

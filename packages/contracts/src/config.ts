@@ -223,6 +223,87 @@ export const ConfiguredAgentSchema = z
   .strict();
 export type ConfiguredAgent = z.infer<typeof ConfiguredAgentSchema>;
 
+export const TeamTemplateSchema = z
+  .object({
+    instructions: z.array(InstructionPathSchema).max(32).default([]),
+    members: z
+      .record(
+        ConfiguredAgentIdSchema,
+        ConfiguredAgentSchema.omit({ memberId: true, order: true }).extend({
+          name: z.string().trim().min(1).max(100).optional(),
+          roleId: RoleIdSchema,
+        }),
+      )
+      .refine(
+        (members) => Object.keys(members).length > 0 && Object.keys(members).length <= 32,
+        "Team templates require between one and 32 members",
+      ),
+  })
+  .strict();
+export type TeamTemplate = z.infer<typeof TeamTemplateSchema>;
+
+export const ForemanAutonomySchema = z
+  .object({
+    mode: z.enum(["supervised", "bounded"]).default("supervised"),
+    permittedTeamTemplates: z.array(IdentifierSchema).max(32).default([]),
+    workspacePolicy: z.literal("managed-only").default("managed-only"),
+    maxActiveMissions: z.number().int().min(1).max(16).default(1),
+    maxTeamsPerMission: z.number().int().min(1).max(16).default(3),
+    maxConcurrentTasks: z.number().int().min(1).max(32).default(4),
+    maxMissionHours: z.number().int().min(1).max(168).default(24),
+    maxForemanTurns: z.number().int().min(1).max(10_000).default(200),
+    transcript: z
+      .object({
+        access: z.literal("mission-owned").default("mission-owned"),
+        maxLines: z.number().int().min(1).max(5_000).default(200),
+        maxBytes: z.number().int().min(1).max(65_536).default(65_536),
+      })
+      .strict()
+      .prefault({}),
+    intervention: z
+      .object({
+        idlePrompt: z.boolean().default(false),
+        routineWaitReply: z.boolean().default(false),
+        nativeInput: z.enum(["disabled", "approved-adapter-only"]).default("disabled"),
+        maxPerIncident: z.number().int().min(0).max(5).default(2),
+      })
+      .strict()
+      .prefault({}),
+    recovery: z
+      .object({
+        restartMissionOwnedAgents: z.boolean().default(false),
+        maxAttemptsPerIncident: z.number().int().min(0).max(5).default(2),
+        maxAttemptsPerMission: z.number().int().min(0).max(30).default(6),
+        cooldownSeconds: z.number().int().min(30).max(86_400).default(120),
+      })
+      .strict()
+      .prefault({}),
+  })
+  .strict();
+export type ForemanAutonomy = z.infer<typeof ForemanAutonomySchema>;
+
+export const ForemanConfigSchema = z
+  .object({
+    id: IdentifierSchema.default("repository-foreman"),
+    name: z.string().trim().min(1).max(100).default("Foreman"),
+    enabled: z.boolean().default(false),
+    integrationId: IntegrationIdSchema,
+    desiredModel: z.string().trim().min(1).max(256).optional(),
+    instructions: z.array(InstructionPathSchema).max(32).default([]),
+    providerFiles: ProviderFileSelectionSchema.optional(),
+    supervision: z
+      .object({
+        reconcileIntervalSeconds: z.number().int().min(5).max(3_600).default(30),
+        reviewIntervalSeconds: z.number().int().min(30).max(86_400).default(300),
+        staleProgressSeconds: z.number().int().min(60).max(86_400).default(900),
+      })
+      .strict()
+      .prefault({}),
+    autonomy: ForemanAutonomySchema.prefault({}),
+  })
+  .strict();
+export type ForemanConfig = z.infer<typeof ForemanConfigSchema>;
+
 export const ConfiguredGroupSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
@@ -278,6 +359,8 @@ export type RepositoryIntent = z.infer<typeof RepositoryIntentSchema>;
 export const NanasaConfigSchema = z
   .object({
     version: z.literal(CONFIG_VERSION),
+    foreman: ForemanConfigSchema.optional(),
+    teamTemplates: z.record(IdentifierSchema, TeamTemplateSchema).optional(),
     repository: RepositoryIntentSchema.default({ path: ".", checkout: { kind: "current" } }),
     terminal: TerminalPolicySchema.default({
       checkpoints: {
@@ -303,6 +386,50 @@ export const NanasaConfigSchema = z
   })
   .strict()
   .superRefine((config, context) => {
+    if (config.foreman !== undefined) {
+      if (config.integrations[config.foreman.integrationId] === undefined) {
+        context.addIssue({
+          code: "custom",
+          message: "Foreman references an unknown integration",
+          path: ["foreman", "integrationId"],
+        });
+      }
+      const allowed = config.foreman.autonomy.permittedTeamTemplates;
+      if (new Set(allowed).size !== allowed.length) {
+        context.addIssue({
+          code: "custom",
+          message: "Permitted team templates must be unique",
+          path: ["foreman", "autonomy", "permittedTeamTemplates"],
+        });
+      }
+      for (const templateId of allowed) {
+        if (config.teamTemplates?.[templateId] === undefined) {
+          context.addIssue({
+            code: "custom",
+            message: `Unknown team template ${templateId}`,
+            path: ["foreman", "autonomy", "permittedTeamTemplates"],
+          });
+        }
+      }
+    }
+    for (const [templateId, template] of Object.entries(config.teamTemplates ?? {})) {
+      for (const [slotId, member] of Object.entries(template.members)) {
+        if (config.integrations[member.integrationId] === undefined) {
+          context.addIssue({
+            code: "custom",
+            message: "Template member references an unknown integration",
+            path: ["teamTemplates", templateId, "members", slotId, "integrationId"],
+          });
+        }
+        if (config.roles[member.roleId] === undefined) {
+          context.addIssue({
+            code: "custom",
+            message: "Template member references an unknown role",
+            path: ["teamTemplates", templateId, "members", slotId, "roleId"],
+          });
+        }
+      }
+    }
     for (const [integrationId, integration] of Object.entries(config.integrations)) {
       if (integration.id !== integrationId) {
         context.addIssue({

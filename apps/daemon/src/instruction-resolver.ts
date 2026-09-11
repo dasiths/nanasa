@@ -9,13 +9,16 @@ import type {
   RoleDefinition,
 } from "@nanasa/contracts";
 
-import { NANASA_COORDINATION_INSTRUCTIONS } from "./coordination-instructions.js";
+import {
+  NANASA_COORDINATION_INSTRUCTIONS,
+  NANASA_FOREMAN_INSTRUCTIONS,
+} from "./coordination-instructions.js";
 
 const MAX_INSTRUCTION_FILE_BYTES = 64 * 1024;
 const MAX_EFFECTIVE_PROMPT_BYTES = 256 * 1024;
 
 export interface PromptInstructionSource {
-  scope: "builtin" | "global" | "group" | "role" | "agent";
+  scope: "builtin" | "global" | "group" | "role" | "agent" | "foreman";
   reference: string;
 }
 
@@ -147,9 +150,57 @@ export function resolveEffectiveAgentPrompt(
   };
 }
 
+export function resolveEffectiveForemanPrompt(
+  input: Pick<ResolveEffectiveAgentPromptInput, "repoRoot" | "config">,
+): EffectiveAgentPrompt {
+  const foreman = input.config.foreman;
+  if (foreman === undefined) throw new Error("Foreman is not configured");
+  if (input.config.integrations[foreman.integrationId] === undefined) {
+    throw new Error(`Configured integration not found: ${foreman.integrationId}`);
+  }
+  const sections: Array<{ source: PromptInstructionSource; content: string }> = [
+    {
+      source: { scope: "builtin", reference: "builtin:nanasa-foreman-v1" },
+      content: NANASA_FOREMAN_INSTRUCTIONS,
+    },
+    {
+      source: { scope: "builtin", reference: "builtin:nanasa-foreman-identity-v1" },
+      content: `Nanasa Foreman ID: ${foreman.id}\nNanasa Foreman name: ${foreman.name}\nScope: repository`,
+    },
+  ];
+  const references: Array<{
+    scope: PromptInstructionSource["scope"];
+    paths: readonly InstructionPath[];
+  }> = [
+    { scope: "global", paths: input.config.instructions },
+    { scope: "foreman", paths: foreman.instructions },
+  ];
+  const seen = new Set<string>();
+  for (const { scope, paths } of references) {
+    for (const path of paths) {
+      if (seen.has(path)) throw new Error(`Instruction file is referenced more than once: ${path}`);
+      seen.add(path);
+      sections.push({
+        source: { scope, reference: path },
+        content: readInstruction(input.repoRoot, path),
+      });
+    }
+  }
+  const text = `${sections.map(({ source, content }) => `## ${source.scope}: ${source.reference}\n\n${content.trim()}`).join("\n\n")}\n`;
+  if (Buffer.byteLength(text, "utf8") > MAX_EFFECTIVE_PROMPT_BYTES) {
+    throw new Error(`Effective prompt exceeds ${MAX_EFFECTIVE_PROMPT_BYTES} bytes`);
+  }
+  return {
+    text,
+    revision: createHash("sha256").update(text).digest("hex"),
+    sources: sections.map(({ source }) => source),
+  };
+}
+
 export function validateInstructionFiles(repoRoot: string, config: NanasaConfig): void {
   const references = [
     ...config.instructions,
+    ...(config.foreman?.instructions ?? []),
     ...Object.values(config.roles).flatMap((role) => role.instructions),
     ...Object.values(config.groups).flatMap((group) => [
       ...group.instructions,
@@ -161,5 +212,23 @@ export function validateInstructionFiles(repoRoot: string, config: NanasaConfig)
     if (seen.has(path)) throw new Error(`Instruction file is referenced more than once: ${path}`);
     seen.add(path);
     readInstruction(repoRoot, path);
+  }
+  for (const template of Object.values(config.teamTemplates ?? {})) {
+    for (const member of Object.values(template.members)) {
+      const paths = [
+        ...config.instructions,
+        ...template.instructions,
+        ...(config.roles[member.roleId]?.instructions ?? []),
+        ...member.instructions,
+      ];
+      const templateSeen = new Set<string>();
+      for (const path of paths) {
+        if (templateSeen.has(path)) {
+          throw new Error(`Instruction file is referenced more than once: ${path}`);
+        }
+        templateSeen.add(path);
+        readInstruction(repoRoot, path);
+      }
+    }
   }
 }
