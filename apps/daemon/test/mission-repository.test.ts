@@ -96,6 +96,49 @@ function fixture() {
 }
 
 describe("durable mission authority", () => {
+  it("requires exact operator decisions in supervised mode and fences approved work on pause", () => {
+    const context = fixture();
+    const mission = context.repository.create("human", {
+      ...context.command,
+      grant: { ...context.command.grant, mode: "supervised" },
+    });
+    const running = context.repository.control("human", mission.id, {
+      expectedRevision: 0,
+      action: "start",
+    });
+    expect(
+      context.repository.requestApproval(running, "task", "task-one", "Execute task one"),
+    ).toBe(false);
+    const approval = context.repository.approvals(mission.id)[0]!;
+    context.repository.decideApproval("human", approval.id, {
+      expectedGrantRevision: running.grantRevision,
+      decision: "approved",
+    });
+    expect(
+      context.repository.requestApproval(running, "task", "task-one", "Execute task one"),
+    ).toBe(true);
+    expect(
+      context.repository.requestApproval(running, "task", "task-two", "Execute task two"),
+    ).toBe(false);
+    const paused = context.repository.control("human", mission.id, {
+      expectedRevision: running.revision,
+      action: "pause",
+    });
+    const resumed = context.repository.control("human", mission.id, {
+      expectedRevision: paused.revision,
+      action: "resume",
+    });
+    expect(
+      context.repository.requestApproval(resumed, "task", "task-one", "Execute task one"),
+    ).toBe(false);
+    expect(() =>
+      context.repository.decideApproval("human", approval.id, {
+        expectedGrantRevision: running.grantRevision,
+        decision: "approved",
+      }),
+    ).toThrow("no longer matches");
+  });
+
   it("deduplicates durable due reviews and accounts for turns only at write intent", () => {
     const context = fixture();
     const mission = context.repository.create("human", context.command);

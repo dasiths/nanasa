@@ -6,7 +6,11 @@ import {
   type CreateMissionTaskCommand,
   CreateMissionTaskCommandSchema,
   canonicalJson,
+  type DecideMissionApprovalCommand,
+  DecideMissionApprovalCommandSchema,
   type Mission,
+  type MissionApproval,
+  MissionApprovalSchema,
   type MissionControlCommand,
   MissionControlCommandSchema,
   type MissionGrant,
@@ -75,6 +79,17 @@ export class MissionRepository {
         );
       assertMissionGrantWithin(input.grant, foreman.autonomy);
       if (
+        new Set(input.verification.map((recipe) => recipe.id)).size !== input.verification.length ||
+        input.verification.some((recipe) =>
+          recipe.acceptanceIndexes.some((index) => index >= input.acceptance.length),
+        )
+      )
+        throw new DomainError(
+          "mission_verification_invalid",
+          "Verification recipes require unique IDs and existing acceptance criteria",
+          400,
+        );
+      if (
         new Set(input.grant.permittedTeamTemplates).size !==
         input.grant.permittedTeamTemplates.length
       )
@@ -115,9 +130,9 @@ export class MissionRepository {
       const id = `mission_${randomUUID()}`;
       this.#database
         .prepare(`INSERT INTO missions
-        (id, foreman_id, operator_id, request_id, request_digest, title, objective, acceptance_json, grant_json,
+        (id, foreman_id, operator_id, request_id, request_digest, title, objective, acceptance_json, grant_json, verification_json,
          grant_revision, revision, state, next_review_at, expires_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 'planning', ?, ?, ?, ?)`)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 'planning', ?, ?, ?, ?)`)
         .run(
           id,
           foreman.id,
@@ -128,6 +143,7 @@ export class MissionRepository {
           input.objective,
           JSON.stringify(input.acceptance),
           JSON.stringify(input.grant),
+          JSON.stringify(input.verification),
           timestamp,
           new Date(now.getTime() + input.grant.maxMissionHours * 3600000).toISOString(),
           timestamp,
@@ -254,6 +270,105 @@ export class MissionRepository {
     };
   }
 
+  public approvals(missionId: string): MissionApproval[] {
+    return this.#database
+      .prepare(
+        "SELECT * FROM mission_approvals WHERE mission_id = ? ORDER BY created_at, id LIMIT 256",
+      )
+      .all(missionId)
+      .map((row) =>
+        MissionApprovalSchema.parse({
+          id: row.id,
+          missionId: row.mission_id,
+          grantRevision: row.grant_revision,
+          operation: row.operation,
+          operationKey: row.operation_key,
+          summary: row.summary,
+          state: row.state,
+          createdAt: row.created_at,
+          decidedAt: row.decided_at ?? undefined,
+        }),
+      );
+  }
+
+  public requestApproval(
+    mission: Mission,
+    operation: MissionApproval["operation"],
+    key: string,
+    summary: string,
+  ): boolean {
+    if (mission.grant.mode === "bounded") return true;
+    const existing = this.#database
+      .prepare(
+        "SELECT id FROM mission_approvals WHERE mission_id = ? AND grant_revision = ? AND operation = ? AND operation_key = ?",
+      )
+      .get(mission.id, mission.grantRevision, operation, key);
+    const count = this.#database
+      .prepare("SELECT COUNT(*) AS count FROM mission_approvals WHERE mission_id = ?")
+      .get(mission.id) as { count: number };
+    if (existing === undefined && count.count >= 256)
+      throw new DomainError(
+        "mission_approval_limit",
+        "Mission approval request limit reached",
+        409,
+      );
+    this.#database
+      .prepare(
+        "INSERT OR IGNORE INTO mission_approvals (id, mission_id, grant_revision, operation, operation_key, summary, state, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
+      )
+      .run(
+        `approval_${randomUUID()}`,
+        mission.id,
+        mission.grantRevision,
+        operation,
+        key,
+        summary.slice(0, 2000),
+        this.now().toISOString(),
+      );
+    const row = this.#database
+      .prepare(
+        "SELECT state FROM mission_approvals WHERE mission_id = ? AND grant_revision = ? AND operation = ? AND operation_key = ?",
+      )
+      .get(mission.id, mission.grantRevision, operation, key);
+    return row?.state === "approved";
+  }
+
+  public decideApproval(
+    operatorId: string,
+    approvalId: string,
+    command: DecideMissionApprovalCommand,
+  ): MissionApproval {
+    const input = DecideMissionApprovalCommandSchema.parse(command);
+    return this.#transaction(() => {
+      const row = this.#database
+        .prepare("SELECT * FROM mission_approvals WHERE id = ?")
+        .get(approvalId);
+      if (row === undefined)
+        throw new DomainError("mission_approval_not_found", "Mission approval not found", 404);
+      const mission = this.get(String(row.mission_id));
+      if (
+        mission.grantRevision !== input.expectedGrantRevision ||
+        row.grant_revision !== mission.grantRevision ||
+        row.state !== "pending" ||
+        (mission.state !== "running" &&
+          !(mission.state === "awaiting-acceptance" && row.operation === "verification"))
+      )
+        throw new DomainError(
+          "mission_approval_stale",
+          "Approval no longer matches the current mission grant",
+          409,
+        );
+      this.#assertPolicy(mission, true);
+      this.#database
+        .prepare(
+          "UPDATE mission_approvals SET state = ?, decided_at = ?, decided_by = ? WHERE id = ? AND state = 'pending'",
+        )
+        .run(input.decision, this.now().toISOString(), operatorId, approvalId);
+      this.#audit(mission.id, `approval-${input.decision}`, operatorId, mission.revision);
+      return this.approvals(mission.id).find((approval) => approval.id === approvalId)!;
+    });
+  }
+
   public control(operatorId: string, id: string, command: MissionControlCommand): Mission {
     const input = MissionControlCommandSchema.parse(command);
     return this.#transaction(() => {
@@ -325,6 +440,11 @@ export class MissionRepository {
         )
         .run(this.now().toISOString(), id);
       this.#audit(id, input.action, operatorId, revision);
+      this.#database
+        .prepare(
+          "UPDATE mission_approvals SET state = 'stale' WHERE mission_id = ? AND state IN ('pending', 'approved')",
+        )
+        .run(id);
       return this.get(id);
     });
   }
@@ -334,6 +454,7 @@ export class MissionRepository {
     missionId: string,
     expectedGrantRevision: number,
     allowSpentTurn = false,
+    allowedStates: readonly Mission["state"][] = ["planning", "running"],
   ): Mission {
     const actor = this.store.getForeman(principal.foremanId);
     const run = this.store.getActiveForemanRun(actor.id);
@@ -350,7 +471,7 @@ export class MissionRepository {
       throw new DomainError("mission_principal_revoked", "Foreman authority is not current", 403);
     if (mission.grantRevision !== expectedGrantRevision)
       throw new DomainError("mission_grant_stale", "Mission grant changed", 409);
-    if (!["planning", "running"].includes(mission.state))
+    if (!allowedStates.includes(mission.state))
       throw new DomainError("mission_not_active", "Mission does not allow new work", 409);
     this.#assertPolicy(mission, allowSpentTurn);
     return mission;
@@ -363,7 +484,7 @@ export class MissionRepository {
   ): MissionTask {
     const input = CreateMissionTaskCommandSchema.parse(command);
     return this.#transaction(() => {
-      const mission = this.assertForeman(principal, missionId, input.expectedGrantRevision);
+      const mission = this.assertForeman(principal, missionId, input.expectedGrantRevision, true);
       const { requestId } = input;
       const digest = createHash("sha256")
         .update(
@@ -483,6 +604,7 @@ export class MissionRepository {
       objective: row.objective,
       acceptance: JSON.parse(String(row.acceptance_json)),
       grant: JSON.parse(String(row.grant_json)),
+      verification: JSON.parse(String(row.verification_json)),
       grantRevision: row.grant_revision,
       revision: row.revision,
       state: row.state,

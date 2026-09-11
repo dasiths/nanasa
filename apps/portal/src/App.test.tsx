@@ -11,6 +11,7 @@ import type {
   PortalSnapshot,
   StartGroupRunsResult,
 } from "@nanasa/contracts";
+import { ForemanConfigSchema, MissionSchema } from "@nanasa/contracts";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -300,6 +301,12 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
   };
   return {
     loadForeman: vi.fn().mockResolvedValue({ configRevision: "revision-one" }),
+    resolveForemanInput: vi.fn(),
+    listMissions: vi.fn().mockResolvedValue([]),
+    decideMissionApproval: vi.fn(),
+    getMission: vi.fn(),
+    createMission: vi.fn(),
+    controlMission: vi.fn(),
     configureForeman: vi.fn(),
     startForeman: vi.fn(),
     stopForeman: vi.fn(),
@@ -737,6 +744,62 @@ describe("portal application", () => {
     fireEvent.change(field, { target: { value: "Mission" } });
     expect(screen.getByText("The selected team is unavailable.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
+  it("creates a Foreman mission with immutable criteria and controls an exact revision", async () => {
+    window.history.replaceState({}, "", "/foreman");
+    const client = createClient();
+    const configuration = ForemanConfigSchema.parse({ integrationId: "copilot", enabled: true });
+    vi.mocked(client.loadForeman).mockResolvedValue({
+      configuration,
+      configRevision: "revision-one",
+      inbox: [],
+    });
+    const mission = MissionSchema.parse({
+      id: "mission-one",
+      foremanId: configuration.id,
+      operatorId: "human",
+      title: "Release checks",
+      objective: "Verify the release",
+      acceptance: ["Tests pass"],
+      verification: [],
+      grant: configuration.autonomy,
+      grantRevision: 1,
+      revision: 0,
+      state: "planning",
+      turnsUsed: 0,
+      recoveryAttempts: 0,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      nextReviewAt: timestamp,
+      expiresAt: "2099-01-01T00:00:00Z",
+    });
+    vi.mocked(client.createMission).mockResolvedValue(mission);
+    vi.mocked(client.getMission).mockResolvedValue({ mission, tasks: [] });
+    const user = userEvent.setup();
+    render(<App client={client} />);
+    await screen.findByRole("textbox", { name: "Message Foreman" });
+    await user.click(screen.getByRole("tab", { name: "Missions" }));
+    await user.click(await screen.findByRole("button", { name: "New mission" }));
+    await user.type(screen.getByRole("textbox", { name: "Title" }), "Release checks");
+    await user.type(screen.getByRole("textbox", { name: "Objective" }), "Verify the release");
+    await user.type(screen.getByRole("textbox", { name: "Acceptance criteria" }), "Tests pass");
+    await user.click(screen.getByRole("button", { name: "Create mission" }));
+    await screen.findByRole("button", { name: "Start mission" });
+    expect(client.createMission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Release checks",
+        acceptance: ["Tests pass"],
+        grant: configuration.autonomy,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Start mission" }));
+    await waitFor(() =>
+      expect(client.controlMission).toHaveBeenCalledWith("mission-one", {
+        expectedRevision: 0,
+        action: "start",
+      }),
+    );
   });
 
   it("refreshes the snapshot when a typed domain event arrives", async () => {

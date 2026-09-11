@@ -12,9 +12,12 @@ import { GitCommandAdapter } from "../src/git/git-command-adapter.js";
 import { GitStatusService } from "../src/git/git-status-service.js";
 import { RepositoryDiscoveryService } from "../src/git/repository-discovery-service.js";
 import { safeWorktreeSlug, WorktreeService } from "../src/git/worktree-service.js";
+import { MissionObservationService } from "../src/mission-observation-service.js";
+import { MissionRecoveryPolicy } from "../src/mission-recovery-policy.js";
 import { MissionRepository } from "../src/mission-repository.js";
 import { MissionTaskScheduler } from "../src/mission-task-scheduler.js";
 import { MissionTeamService, runtimeMissionGroups } from "../src/mission-team-service.js";
+import { MissionVerificationService } from "../src/mission-verification-service.js";
 import { buildTrustedBuiltinCopilotPackage } from "../src/providers/builtin-provider-packages.js";
 import { NanasaStore } from "../src/store.js";
 
@@ -81,6 +84,10 @@ foreman:
   autonomy:
     mode: bounded
     permittedTeamTemplates: [build]
+    intervention:
+      idlePrompt: true
+    recovery:
+      restartMissionOwnedAgents: true
 groups: {}
 `;
       writeFileSync(path, authored);
@@ -94,6 +101,14 @@ groups: {}
         objective: "Build a tested feature",
         acceptance: ["Tests pass"],
         grant: config.load().config.foreman!.autonomy,
+        verification: [
+          {
+            id: "test",
+            command: [process.execPath, "-e", "console.log('verification-passed')"],
+            acceptanceIndexes: [0],
+            timeoutSeconds: 10,
+          },
+        ],
       });
       const running = missions.control("human", mission.id, {
         expectedRevision: 0,
@@ -171,7 +186,8 @@ groups: {}
       ).run;
       expect(worker.resolvedWorkingDirectory).toBe(checkout.path);
       expect(worker.checkoutId).toBe(allocation.checkoutId);
-      context.store.updateRunStatus(worker.id, "running");
+      const terminal = { serverName: "fixture", sessionId: "$1", windowId: "@1", paneId: "%1" };
+      context.store.updateRunStatus(worker.id, "running", { terminal });
       const timestamp = new Date().toISOString();
       context.store.registerReporterSession({
         id: "mission-reporter",
@@ -273,11 +289,163 @@ groups: {}
         taskId: task.id,
       });
       scheduler.authorizeAction(action);
+      let recoveryClock = new Date();
+      const recovery = new MissionRecoveryPolicy(
+        context.store,
+        missions,
+        () => config.load().config,
+        () => false,
+        () => recoveryClock,
+      );
+      expect(recovery.authorize(allocation.groupId, worker.memberId)).toBe(true);
+      expect(recovery.authorize(allocation.groupId, worker.memberId)).toBe(false);
+      recoveryClock = new Date(recoveryClock.getTime() + 121000);
+      expect(recovery.authorize(allocation.groupId, worker.memberId)).toBe(true);
+      recoveryClock = new Date(recoveryClock.getTime() + 121000);
+      expect(recovery.authorize(allocation.groupId, worker.memberId)).toBe(false);
+      expect(missions.get(mission.id).recoveryAttempts).toBe(2);
+      let writes = 0;
+      const observations = new MissionObservationService(
+        context.store,
+        missions,
+        teams,
+        {
+          read: async (request) => ({
+            runId: request.runId,
+            generation: request.generation,
+            binding: terminal,
+            source: request.source,
+            text: "Untrusted provider output",
+            lineCount: 1,
+            byteCount: 25,
+            truncated: false,
+            alternateScreen: false,
+            capturedAt: new Date().toISOString(),
+          }),
+        },
+        {
+          observeRun: async () => ({
+            id: "observation",
+            runId: worker.id,
+            generation: worker.generation,
+            state: "present",
+            observedAt: new Date().toISOString(),
+            trigger: "poll",
+            evidenceCode: "fixture",
+            process: {
+              foregroundPgid: 1,
+              leaderPid: 1,
+              pidStartIdentity: "1:1",
+              executableFingerprint: "b".repeat(64),
+              argvFingerprint: "c".repeat(64),
+              processFingerprint: "a".repeat(64),
+              expectedProviderMatch: "match",
+              wrapperChain: ["copilot"],
+            },
+          }),
+          pasteToRun: async (_run, _text, guard) => {
+            guard?.();
+            writes += 1;
+          },
+        },
+        { dispatchAutomated: async (_id, operation) => operation() },
+        () => false,
+      );
+      const observation = await observations.observe(principal, {
+        missionId: mission.id,
+        taskId: task.id,
+        expectedGrantRevision: running.grantRevision,
+        maxLines: 100,
+      });
+      expect(observation.untrustedEvidence).toBe(true);
+      const intervention = {
+        missionId: mission.id,
+        taskId: task.id,
+        expectedGrantRevision: running.grantRevision,
+        requestId: "intervention-one",
+        observationId: observation.id,
+        prompt: "Report the exact blocker",
+      };
+      await expect(observations.intervene(principal, intervention)).rejects.toThrow(
+        "prior task action",
+      );
+      context.store.transitionAgentAction(action.id, [action.state], "stalled");
+      expect(await observations.intervene(principal, intervention)).toMatchObject({
+        state: "submitted",
+      });
+      expect(await observations.intervene(principal, intervention)).toMatchObject({
+        state: "submitted",
+      });
+      expect(writes).toBe(1);
       missions.control("human", mission.id, {
         expectedRevision: running.revision,
         action: "pause",
       });
       expect(() => scheduler.authorizeAction(action)).toThrow("grant changed");
+      const paused = missions.get(mission.id);
+      const resumed = missions.control("human", mission.id, {
+        expectedRevision: paused.revision,
+        action: "resume",
+      });
+      context.store.transitionAgentAction(action.id, ["stalled"], "completed");
+      await scheduler.tick();
+      expect(missions.workspace(mission.id).tasks[0]?.state).toBe("verifying");
+      const verification = new MissionVerificationService(
+        context.store,
+        missions,
+        teams,
+        context.git,
+      );
+      await expect(
+        verification.verify(principal, {
+          missionId: mission.id,
+          taskId: task.id,
+          expectedGrantRevision: resumed.grantRevision,
+          candidateCommit: source.head!,
+        }),
+      ).rejects.toThrow("clean candidate");
+      execFileSync("git", ["-C", checkout.path, "add", "dirty.txt"]);
+      execFileSync(
+        "git",
+        [
+          "-C",
+          checkout.path,
+          "-c",
+          "user.name=Nanasa Test",
+          "-c",
+          "user.email=nanasa@example.invalid",
+          "commit",
+          "-m",
+          "mission result",
+        ],
+        { stdio: "ignore" },
+      );
+      const candidateCommit = execFileSync("git", ["-C", checkout.path, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
+      const evidence = await verification.verify(principal, {
+        missionId: mission.id,
+        taskId: task.id,
+        expectedGrantRevision: resumed.grantRevision,
+        candidateCommit,
+      });
+      expect(evidence).toHaveLength(1);
+      expect(evidence[0]).toMatchObject({
+        state: "passed",
+        candidateCommit,
+        exitCode: 0,
+        outputDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+      expect(missions.workspace(mission.id).tasks[0]?.state).toBe("accepted");
+      const readyForAcceptance = missions.get(mission.id);
+      expect(readyForAcceptance.state).toBe("awaiting-acceptance");
+      await verification.assertAcceptanceCurrent(mission.id);
+      expect(
+        missions.control("human", mission.id, {
+          expectedRevision: readyForAcceptance.revision,
+          action: "accept",
+        }).state,
+      ).toBe("completed");
       await scheduler.close();
     } finally {
       context.store.close();

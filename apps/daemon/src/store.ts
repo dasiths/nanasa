@@ -99,6 +99,8 @@ import {
   ReporterSessionSchema,
   type Repository,
   RepositorySchema,
+  type ResolveForemanInputCommand,
+  ResolveForemanInputCommandSchema,
   type RunStatus,
   type RuntimeRun,
   RuntimeRunSchema,
@@ -2001,6 +2003,31 @@ export class NanasaStore {
           | "cancelled",
         updatedAt: String(row.updated_at),
       }));
+  }
+
+  public resolveForemanInput(operatorId: string, command: ResolveForemanInputCommand): void {
+    const input = ResolveForemanInputCommandSchema.parse(command);
+    this.#transaction(() => {
+      const result = this.#database
+        .prepare("UPDATE foreman_inbox SET state = ?, updated_at = ? WHERE id = ? AND state = ?")
+        .run(
+          input.resolution === "cancel" ? "cancelled" : "answered",
+          new Date().toISOString(),
+          input.inboxId,
+          input.expectedState,
+        );
+      if (result.changes !== 1)
+        throw new DomainError(
+          "foreman_inbox_changed",
+          "Input state changed; inspect it again before resolving",
+          409,
+        );
+      this.#appendEvent("foreman.input-resolved", "foreman", "repository", {
+        inboxId: input.inboxId,
+        operatorId,
+        resolution: input.resolution,
+      });
+    });
   }
 
   #hydrateForemanMessage(row: Record<string, unknown>): ForemanChannelMessage {

@@ -25,6 +25,7 @@ import {
   CreateMissionCommandSchema,
   CreateWorktreeCommandSchema,
   CustomLaunchConsentListQuerySchema,
+  DecideMissionApprovalCommandSchema,
   DeleteGroupResultSchema,
   DenyCustomLaunchConsentCommandSchema,
   DismissAttentionItemsCommandSchema,
@@ -58,6 +59,7 @@ import {
   ReparentGroupAgentResultSchema,
   ReplyOpenWaitCommandSchema,
   RepositorySchema,
+  ResolveForemanInputCommandSchema,
   RevokeCustomLaunchConsentCommandSchema,
   RoleDefinitionSchema,
   SendForemanMessageCommandSchema,
@@ -105,6 +107,8 @@ import type { LaunchConsentService } from "../launch-consent-service.js";
 import type { MessageCommandService } from "../message-command-service.js";
 import type { MessageRepository } from "../message-repository.js";
 import type { MissionRepository } from "../mission-repository.js";
+import type { MissionTeamService } from "../mission-team-service.js";
+import type { MissionVerificationService } from "../mission-verification-service.js";
 import type { OperatorAuth } from "../operator-auth.js";
 import type { ProviderStateRepository } from "../provider-state-repository.js";
 import type { RunRuntimeCoordinator } from "../run-runtime-coordinator.js";
@@ -130,6 +134,8 @@ export interface ControlRouterServices {
   config: ConfigRepository;
   foreman: ForemanRuntimeService;
   missions: MissionRepository;
+  missionTeams: MissionTeamService;
+  missionVerification: MissionVerificationService;
   snapshot: SnapshotReadModel;
   store: NanasaStore;
   repositoryIdentity: string;
@@ -341,23 +347,46 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
   });
   register("config.get", () => services.config.load().config);
   register("foreman.get", () => ForemanWorkspaceSchema.parse(services.foreman.status()));
+  register("foreman.resolveInput", (request) => {
+    services.store.resolveForemanInput(
+      operatorPrincipal(services, request).operatorId,
+      ResolveForemanInputCommandSchema.parse(
+        routeBody(controlRoute("foreman.resolveInput"), request),
+      ),
+    );
+    return services.foreman.status();
+  });
   register("missions.list", () => services.missions.list());
-  register("missions.get", (request) =>
-    services.missions.workspace(record(request.params).missionId ?? ""),
+  register("missions.decide", (request) =>
+    services.missions.decideApproval(
+      operatorPrincipal(services, request).operatorId,
+      record(request.params).approvalId ?? "",
+      DecideMissionApprovalCommandSchema.parse(routeBody(controlRoute("missions.decide"), request)),
+    ),
   );
+  register("missions.get", (request) => {
+    const id = record(request.params).missionId ?? "";
+    return {
+      ...services.missions.workspace(id),
+      teams: services.missionTeams.list(id),
+      evidence: services.missionVerification.list(id),
+      approvals: services.missions.approvals(id),
+    };
+  });
   register("missions.create", (request) =>
     services.missions.create(
       operatorPrincipal(services, request).operatorId,
       CreateMissionCommandSchema.parse(routeBody(controlRoute("missions.create"), request)),
     ),
   );
-  register("missions.control", (request) =>
-    services.missions.control(
-      operatorPrincipal(services, request).operatorId,
-      record(request.params).missionId ?? "",
-      MissionControlCommandSchema.parse(routeBody(controlRoute("missions.control"), request)),
-    ),
-  );
+  register("missions.control", async (request) => {
+    const id = record(request.params).missionId ?? "";
+    const command = MissionControlCommandSchema.parse(
+      routeBody(controlRoute("missions.control"), request),
+    );
+    if (command.action === "accept") await services.missionVerification.assertAcceptanceCurrent(id);
+    return services.missions.control(operatorPrincipal(services, request).operatorId, id, command);
+  });
   register("foreman.channel", (request) => {
     const query = record(request.query);
     return services.store.readForemanChannel(

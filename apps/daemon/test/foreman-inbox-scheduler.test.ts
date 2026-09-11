@@ -178,6 +178,22 @@ describe("Foreman durable input dispatch", () => {
     context.store.database.prepare("UPDATE foreman_inbox SET state = 'writing'").run();
     context.scheduler.start();
     expect(context.state()).toBe("ambiguous");
+    const inbox = context.store.listForemanInbox()[0]!;
+    expect(() =>
+      context.store.resolveForemanInput("human", {
+        inboxId: inbox.id,
+        expectedState: "submitted",
+        resolution: "handled",
+      }),
+    ).toThrow("state changed");
+    context.store.resolveForemanInput("human", {
+      inboxId: inbox.id,
+      expectedState: "ambiguous",
+      resolution: "cancel",
+    });
+    expect(context.state()).toBe("cancelled");
+    await context.scheduler.tick();
+    expect(context.runtime.pasteToRun).toHaveBeenCalledOnce();
     await context.scheduler.close();
   });
 

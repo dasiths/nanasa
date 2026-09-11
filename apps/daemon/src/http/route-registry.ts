@@ -27,6 +27,7 @@ import {
   CustomLaunchConsentListQuerySchema,
   CustomLaunchConsentRequestListSchema,
   CustomLaunchConsentRequestSchema,
+  DecideMissionApprovalCommandSchema,
   DeleteGroupResultSchema,
   DeliveryOutcomeSchema,
   DenyCustomLaunchConsentCommandSchema,
@@ -46,6 +47,7 @@ import {
   MemberAttentionSubscriptionsSchema,
   MessagePageSchema,
   MessageSubmissionResultSchema,
+  MissionApprovalSchema,
   MissionControlCommandSchema,
   MissionSchema,
   MissionWorkspaceSchema,
@@ -77,6 +79,7 @@ import {
   ReparentGroupAgentResultSchema,
   ReplyOpenWaitCommandSchema,
   RepositorySchema,
+  ResolveForemanInputCommandSchema,
   RevokeCustomLaunchConsentCommandSchema,
   RoleDefinitionSchema,
   SendForemanMessageCommandSchema,
@@ -202,6 +205,27 @@ function route(input: RouteInput): ControlRouteDeclaration {
 }
 
 export const CONTROL_ROUTE_REGISTRY = Object.freeze([
+  route({
+    id: "missions.decide",
+    family: "mission",
+    method: "POST",
+    path: "/api/v1/mission-approvals/:approvalId",
+    params: IdParamsSchema,
+    body: DecideMissionApprovalCommandSchema,
+    response: MissionApprovalSchema,
+    idempotency: "forbidden",
+    summary: "Decide an exact supervised mission operation",
+  }),
+  route({
+    id: "foreman.resolveInput",
+    family: "foreman",
+    method: "POST",
+    path: "/api/v1/foreman/inbox/resolve",
+    body: ResolveForemanInputCommandSchema,
+    response: ForemanWorkspaceSchema,
+    idempotency: "forbidden",
+    summary: "Resolve an inspected Foreman input without replaying it",
+  }),
   route({
     id: "missions.list",
     family: "mission",

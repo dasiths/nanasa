@@ -295,6 +295,8 @@ export const ForemanConfigSchema = z
       .object({
         reconcileIntervalSeconds: z.number().int().min(5).max(3_600).default(30),
         reviewIntervalSeconds: z.number().int().min(30).max(86_400).default(300),
+        maxRecoveryAttempts: z.number().int().min(0).max(5).default(3),
+        recoveryCooldownSeconds: z.number().int().min(30).max(3600).default(120),
         staleProgressSeconds: z.number().int().min(60).max(86_400).default(900),
       })
       .strict()

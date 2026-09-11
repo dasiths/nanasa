@@ -3,8 +3,12 @@ import {
   AgentProgressReportCommandSchema,
   CreateMissionTaskCommandSchema,
   ForemanChannelQuerySchema,
+  InterveneMissionTaskCommandSchema,
+  ObserveMissionTaskCommandSchema,
   ProvisionMissionTeamCommandSchema,
+  ReplyMissionWaitCommandSchema,
   SendForemanMessageCommandSchema,
+  VerifyMissionTaskCommandSchema,
 } from "@nanasa/contracts";
 import { z } from "zod";
 import type { McpPrincipal } from "../mcp-auth.js";
@@ -96,6 +100,42 @@ function tool(input: McpToolDeclaration): McpToolDeclaration {
 }
 
 export const MCP_TOOL_REGISTRY = Object.freeze([
+  tool({
+    name: "nanasa.foreman_reply_wait",
+    description:
+      "Answer one exact routine worker wait under an explicit grant and fresh observation; privileged approvals remain forbidden",
+    inputSchema: ReplyMissionWaitCommandSchema,
+    principals: ["foreman"],
+    scope: "foreman:tasks:reply-wait",
+    authority: "self-write",
+  }),
+  tool({
+    name: "nanasa.foreman_observe_task",
+    description:
+      "Read bounded untrusted terminal evidence from the exact mission-owned task runtime",
+    inputSchema: ObserveMissionTaskCommandSchema,
+    principals: ["foreman"],
+    scope: "foreman:tasks:observe",
+    authority: "read",
+  }),
+  tool({
+    name: "nanasa.foreman_prompt_idle",
+    description:
+      "Submit one budgeted idle prompt using a fresh exact task observation; never approve privileged waits",
+    inputSchema: InterveneMissionTaskCommandSchema,
+    principals: ["foreman"],
+    scope: "foreman:tasks:intervene",
+    authority: "self-write",
+  }),
+  tool({
+    name: "nanasa.foreman_verify_task",
+    description:
+      "Run immutable operator-approved verification recipes at an exact clean candidate commit",
+    inputSchema: VerifyMissionTaskCommandSchema,
+    principals: ["foreman"],
+    scope: "foreman:tasks:verify",
+    authority: "self-write",
+  }),
   tool({
     name: "nanasa.foreman_provision_team",
     description:

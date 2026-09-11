@@ -269,6 +269,21 @@ export const DATABASE_BASELINE_SQL = `
 
   CREATE UNIQUE INDEX foremen_one_enabled ON foremen(enabled) WHERE enabled = 1;
 
+  CREATE TABLE foreman_native_sessions (
+    foreman_id TEXT PRIMARY KEY REFERENCES foremen(id),
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    generation INTEGER NOT NULL,
+    reference_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE foreman_recovery (
+    foreman_id TEXT PRIMARY KEY REFERENCES foremen(id),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_allowed_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT;
+
   CREATE TABLE foreman_messages (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
     id TEXT NOT NULL UNIQUE,
@@ -293,6 +308,7 @@ export const DATABASE_BASELINE_SQL = `
     objective TEXT NOT NULL,
     acceptance_json TEXT NOT NULL,
     grant_json TEXT NOT NULL,
+    verification_json TEXT NOT NULL,
     grant_revision INTEGER NOT NULL CHECK (grant_revision > 0),
     revision INTEGER NOT NULL CHECK (revision >= 0),
     state TEXT NOT NULL CHECK (state IN ('planning', 'running', 'paused', 'blocked', 'verifying', 'awaiting-acceptance', 'completed', 'cancelled', 'revoked', 'failed')),
@@ -340,6 +356,71 @@ export const DATABASE_BASELINE_SQL = `
     principal_id TEXT NOT NULL,
     revision INTEGER NOT NULL,
     occurred_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE mission_approvals (
+    id TEXT PRIMARY KEY,
+    mission_id TEXT NOT NULL REFERENCES missions(id),
+    grant_revision INTEGER NOT NULL,
+    operation TEXT NOT NULL CHECK (operation IN ('provision', 'task', 'verification', 'intervention')),
+    operation_key TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'denied', 'stale')),
+    created_at TEXT NOT NULL,
+    decided_at TEXT,
+    decided_by TEXT,
+    UNIQUE(mission_id, grant_revision, operation, operation_key)
+  ) STRICT;
+
+  CREATE TABLE mission_evidence (
+    id TEXT PRIMARY KEY,
+    mission_id TEXT NOT NULL REFERENCES missions(id),
+    task_id TEXT NOT NULL REFERENCES mission_tasks(id),
+    checkout_id TEXT NOT NULL REFERENCES checkouts(id),
+    candidate_commit TEXT NOT NULL,
+    recipe_id TEXT NOT NULL,
+    recipe_digest TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('running', 'passed', 'failed', 'ambiguous')),
+    output_digest TEXT,
+    exit_code INTEGER,
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    UNIQUE(task_id, candidate_commit, recipe_id)
+  ) STRICT;
+
+  CREATE TABLE mission_observations (
+    id TEXT PRIMARY KEY,
+    mission_id TEXT NOT NULL REFERENCES missions(id),
+    task_id TEXT NOT NULL REFERENCES mission_tasks(id),
+    target_json TEXT NOT NULL,
+    content_digest TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE mission_interventions (
+    id TEXT PRIMARY KEY,
+    mission_id TEXT NOT NULL REFERENCES missions(id),
+    task_id TEXT NOT NULL REFERENCES mission_tasks(id),
+    observation_id TEXT NOT NULL UNIQUE REFERENCES mission_observations(id),
+    request_id TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('writing', 'submitted', 'ambiguous')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(mission_id, request_id)
+  ) STRICT;
+
+  CREATE TABLE mission_recovery_incidents (
+    id TEXT PRIMARY KEY,
+    mission_id TEXT NOT NULL REFERENCES missions(id),
+    group_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    attempts INTEGER NOT NULL CHECK (attempts >= 0),
+    previous_run_id TEXT REFERENCES runs(id),
+    next_allowed_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(mission_id, group_id, member_id)
   ) STRICT;
 
   CREATE TABLE mission_team_allocations (

@@ -40,6 +40,8 @@ const ForemanCapabilitySchema = z
   .object({
     version: z.literal(1),
     kind: z.literal("foreman"),
+    audience: z.literal("nanasa:foreman:mcp"),
+    expiresAt: z.number().int().positive(),
     foremanId: z.string().min(1).max(128),
     runId: z.string().min(1).max(128),
     generation: z.number().int().positive(),
@@ -209,6 +211,8 @@ export class McpCredentialIssuer {
     const capability = ForemanCapabilitySchema.parse({
       version: 1,
       kind: "foreman",
+      audience: "nanasa:foreman:mcp",
+      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
       foremanId: run.foremanId,
       runId: run.id,
       generation: run.generation,
@@ -222,6 +226,16 @@ export class McpCredentialIssuer {
   }
 
   #authenticateForeman(capability: z.infer<typeof ForemanCapabilitySchema>): McpForemanPrincipal {
+    if (
+      capability.expiresAt <= Date.now() ||
+      capability.issuedAt > Date.now() ||
+      capability.expiresAt - capability.issuedAt > 7 * 24 * 60 * 60 * 1000
+    )
+      throw new DomainError(
+        "mcp_credential_revoked",
+        "Foreman credential expired or has invalid lifetime",
+        401,
+      );
     try {
       const actor = this.#store.getForeman(capability.foremanId);
       const run = this.#store.getActiveForemanRun(actor.id);

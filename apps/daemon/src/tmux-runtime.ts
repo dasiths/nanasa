@@ -151,12 +151,13 @@ export class TmuxRuntime {
   public async startForemanRun(
     foreman: ForemanRuntimeOwner,
     size: { cols: number; rows: number },
+    nativeSession?: NativeSessionReference,
   ): Promise<ForemanRun> {
     if (this.#runtimeProvisioner === undefined)
       throw new Error("Foreman requires provider runtime provisioning");
     const { run, profile } = this.#store.createRunForForeman(foreman.id);
     return ForemanRunSchema.parse(
-      await this.#launchCreatedRun(run, profile, { kind: "foreman", foreman }, size),
+      await this.#launchCreatedRun(run, profile, { kind: "foreman", foreman }, size, nativeSession),
     );
   }
 

@@ -57,6 +57,15 @@ export const StopForemanCommandSchema = z
   .strict();
 export type StopForemanCommand = z.infer<typeof StopForemanCommandSchema>;
 
+export const ResolveForemanInputCommandSchema = z
+  .object({
+    inboxId: IdentifierSchema,
+    expectedState: z.enum(["queued", "submitted", "ambiguous"]),
+    resolution: z.enum(["cancel", "handled"]),
+  })
+  .strict();
+export type ResolveForemanInputCommand = z.infer<typeof ResolveForemanInputCommandSchema>;
+
 export const ForemanChannelQuerySchema = z
   .object({
     after: z.number().int().nonnegative().default(0),

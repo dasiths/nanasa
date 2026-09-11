@@ -64,6 +64,7 @@ export class ForemanInboxScheduler {
       current?.id === run.id &&
       current.generation === run.generation &&
       current.status === "running" &&
+      ["idle", "recovered"].includes(current.recoveryPhase) &&
       current.desiredState === "running" &&
       !this.hasController(run.id) &&
       state.state === "idle" &&

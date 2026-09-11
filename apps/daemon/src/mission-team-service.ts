@@ -81,7 +81,7 @@ export class MissionTeamService {
     input: ProvisionMissionTeamCommand,
   ): Promise<MissionTeamAllocation> {
     const mission = this.missions.assertForeman(principal, missionId, input.expectedGrantRevision);
-    if (mission.state !== "running" || mission.grant.mode !== "bounded")
+    if (mission.state !== "running")
       throw new DomainError(
         "mission_provision_approval_required",
         "Team creation requires a running bounded mission grant",
@@ -102,6 +102,30 @@ export class MissionTeamService {
         403,
       );
     validateInstructionFiles(loaded.repoRoot, loaded.config);
+    const approvalKey = createHash("sha256")
+      .update(
+        canonicalJson({
+          requestId: input.requestId,
+          templateId: input.templateId,
+          sourceCheckoutId: input.sourceCheckoutId,
+          baseCommit: input.baseCommit,
+          configRevision: input.expectedConfigRevision,
+        }),
+      )
+      .digest("hex");
+    if (
+      !this.missions.requestApproval(
+        mission,
+        "provision",
+        approvalKey,
+        `Provision template ${input.templateId} at ${input.baseCommit} from checkout ${input.sourceCheckoutId}`,
+      )
+    )
+      throw new DomainError(
+        "mission_approval_required",
+        "Operator approval is required for this exact team allocation",
+        403,
+      );
     const source = this.store.getCheckout(input.sourceCheckoutId);
     if (source.kind === "bare")
       throw new DomainError(

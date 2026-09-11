@@ -33,7 +33,15 @@ export class MissionTaskScheduler {
       principal.grantRevision,
       true,
     );
-    if (mission.state !== "running" || mission.grant.mode !== "bounded")
+    if (
+      mission.state !== "running" ||
+      !this.missions.requestApproval(
+        mission,
+        "task",
+        principal.taskId,
+        `Execute task ${principal.taskId}`,
+      )
+    )
       throw new DomainError(
         "mission_dispatch_forbidden",
         "Task execution requires a running bounded mission",
@@ -157,7 +165,7 @@ export class MissionTaskScheduler {
             )
             .run(next, new Date().toISOString(), task.id);
       }
-      if (mission.state !== "running" || mission.grant.mode !== "bounded") continue;
+      if (mission.state !== "running") continue;
       let actor;
       try {
         actor = this.store.getForeman(mission.foremanId);
@@ -187,6 +195,16 @@ export class MissionTaskScheduler {
         ).length;
       for (const task of this.missions.workspace(mission.id).tasks) {
         if (capacity >= mission.grant.maxConcurrentTasks) break;
+        if (
+          task.state === "queued" &&
+          !this.missions.requestApproval(
+            mission,
+            "task",
+            task.id,
+            `Execute ${task.title} as ${task.roleId} in template ${task.templateId}`,
+          )
+        )
+          continue;
         if (
           task.state !== "queued" ||
           task.dependencies.some(

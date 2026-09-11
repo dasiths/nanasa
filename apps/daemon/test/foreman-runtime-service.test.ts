@@ -90,6 +90,59 @@ async function fixture() {
 }
 
 describe("Foreman runtime service", () => {
+  it("recovers a confirmed lost Foreman with recorded native state and fences explicit stop", async () => {
+    const context = await fixture();
+    const run = await context.service.start(context.revision);
+    const native = {
+      provider: "copilot",
+      source: "copilot",
+      referenceKind: "id",
+      referenceValue: "native-session",
+      dedupeHash: "a".repeat(64),
+    };
+    context.store.database
+      .prepare(
+        "INSERT INTO foreman_native_sessions (foreman_id, run_id, generation, reference_json, updated_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(run.foremanId, run.id, run.generation, JSON.stringify(native), new Date().toISOString());
+    vi.mocked(context.runtime.observeRun).mockImplementation(async (current) =>
+      runtimeObservation(current, "missing", { evidenceCode: "confirmed-missing" }),
+    );
+    await context.service.reconcile();
+    expect(context.service.status().run?.status).toBe("failed");
+    await context.service.reconcile();
+    expect(context.runtime.startForemanRun).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(context.runtime.startForemanRun).mock.calls[1]?.[2]).toEqual(native);
+    const replacement = context.service.status().run!;
+    expect(replacement).toMatchObject({
+      generation: 2,
+      launchKind: "resuming",
+      recoveryPhase: "resuming",
+      recoveryAttempts: 1,
+    });
+    context.store.updateRuntimeRunStatus(replacement.id, "failed");
+    await context.service.stop({ runId: replacement.id, generation: replacement.generation });
+    await context.service.reconcile();
+    expect(context.runtime.startForemanRun).toHaveBeenCalledTimes(2);
+    expect(context.service.status().run?.desiredState).toBe("stopped");
+  });
+
+  it("retains the Foreman circuit breaker across reconciliations", async () => {
+    const context = await fixture();
+    const run = await context.service.start(context.revision);
+    context.store.updateRuntimeRunStatus(run.id, "failed");
+    context.store.database
+      .prepare(
+        "INSERT INTO foreman_recovery (foreman_id, attempts, next_allowed_at, updated_at) VALUES (?, 3, ?, ?)",
+      )
+      .run(run.foremanId, "2000-01-01T00:00:00Z", new Date().toISOString());
+    const replacementService = new ForemanRuntimeService(context.options);
+    await replacementService.reconcile();
+    await replacementService.reconcile();
+    expect(replacementService.status().problem).toContain("recovery limit");
+    expect(context.runtime.startForemanRun).toHaveBeenCalledTimes(1);
+  });
+
   it("starts from repository configuration, serializes lifecycle, and reuses a private profile", async () => {
     const context = await fixture();
     const run = await context.service.start(context.revision);

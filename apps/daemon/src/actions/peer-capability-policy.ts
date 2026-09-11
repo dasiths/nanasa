@@ -13,6 +13,11 @@ export class PeerCapabilityPolicy {
       principal: Extract<AgentActionPrincipal, { kind: "foreman" }>,
       command: CreateAgentActionCommand,
     ) => void,
+    private readonly missionWaitAuthorization?: (
+      principal: Extract<AgentActionPrincipal, { kind: "foreman" }>,
+      wait: OpenWait,
+      reply: OpenWaitReply,
+    ) => void,
   ) {}
 
   public assertCreate(principal: AgentActionPrincipal, command: CreateAgentActionCommand): void {
@@ -67,7 +72,17 @@ export class PeerCapabilityPolicy {
 
   public assertReply(principal: AgentActionPrincipal, wait: OpenWait, reply: OpenWaitReply): void {
     if (principal.kind === "operator") return;
-    if (principal.kind === "foreman") this.#forbidden("unapproved worker wait replies");
+    if (principal.kind === "foreman") {
+      if (
+        this.missionWaitAuthorization === undefined ||
+        wait.kind === "permission" ||
+        wait.kind === "plan_approval" ||
+        !["answer", "select"].includes(reply.kind)
+      )
+        this.#forbidden("unapproved worker wait replies");
+      this.missionWaitAuthorization(principal, wait, reply);
+      return;
+    }
     if (principal.groupId !== wait.groupId || principal.memberId !== wait.memberId) {
       this.#forbidden("another agent's wait");
     }

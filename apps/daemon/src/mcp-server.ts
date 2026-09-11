@@ -4,11 +4,15 @@ import {
   AgentProgressReportCommandSchema,
   CreateAgentActionCommandSchema,
   ForemanChannelQuerySchema,
+  InterveneMissionTaskCommandSchema,
   MAX_MESSAGE_REQUEST_BYTES,
   type MessageSubmissionResult,
   type NanasaConfig,
+  ObserveMissionTaskCommandSchema,
+  ReplyMissionWaitCommandSchema,
   SendForemanMessageCommandSchema,
   SubmitMessageCommandSchema,
+  VerifyMissionTaskCommandSchema,
   WaitForAgentActionCommandSchema,
 } from "@nanasa/contracts";
 import type { FastifyInstance } from "fastify";
@@ -45,8 +49,10 @@ import {
 import { McpCredentialIssuer, type McpPrincipal } from "./mcp-auth.js";
 import { MessageCommandService } from "./message-command-service.js";
 import { MessageRepository } from "./message-repository.js";
+import type { MissionObservationService } from "./mission-observation-service.js";
 import type { MissionRepository } from "./mission-repository.js";
 import type { MissionTeamService } from "./mission-team-service.js";
+import type { MissionVerificationService } from "./mission-verification-service.js";
 import { DomainError, NanasaStore } from "./store.js";
 
 export interface McpRouteOptions {
@@ -64,6 +70,8 @@ export interface McpRouteOptions {
   foremanConfig?: () => NanasaConfig;
   missions: MissionRepository;
   missionTeams: MissionTeamService;
+  missionVerification: MissionVerificationService;
+  missionObservations: MissionObservationService;
 }
 
 class McpRateLimiter {
@@ -395,6 +403,7 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
           return {
             ...options.missions.workspace(input.missionId),
             teams: options.missionTeams.list(input.missionId),
+            approvals: options.missions.approvals(input.missionId),
           };
         }),
     );
@@ -442,6 +451,119 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
                   error instanceof DomainError
                     ? error.message
                     : "Mission provisioning failed; inspect retained allocation state",
+              },
+            ],
+          };
+        }
+      },
+    );
+    server.registerTool(
+      "nanasa.foreman_verify_task",
+      {
+        description: mcpTool("nanasa.foreman_verify_task").description,
+        inputSchema: VerifyMissionTaskCommandSchema,
+      },
+      async (input) => {
+        try {
+          return {
+            content: [{ type: "text" as const, text: "Pinned task verification returned." }],
+            structuredContent: {
+              evidence: await options.missionVerification.verify(principal, input),
+            },
+          };
+        } catch (error) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  error instanceof DomainError
+                    ? error.message
+                    : "Verification failed; inspect retained evidence",
+              },
+            ],
+          };
+        }
+      },
+    );
+    server.registerTool(
+      "nanasa.foreman_observe_task",
+      {
+        description: mcpTool("nanasa.foreman_observe_task").description,
+        inputSchema: ObserveMissionTaskCommandSchema,
+      },
+      async (input) => {
+        try {
+          return {
+            content: [{ type: "text" as const, text: "Untrusted bounded task observation." }],
+            structuredContent: await options.missionObservations.observe(principal, input),
+          };
+        } catch (error) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text: error instanceof DomainError ? error.message : "Task observation unavailable",
+              },
+            ],
+          };
+        }
+      },
+    );
+    server.registerTool(
+      "nanasa.foreman_prompt_idle",
+      {
+        description: mcpTool("nanasa.foreman_prompt_idle").description,
+        inputSchema: InterveneMissionTaskCommandSchema,
+      },
+      async (input) => {
+        try {
+          return {
+            content: [{ type: "text" as const, text: "Intervention state returned." }],
+            structuredContent: await options.missionObservations.intervene(principal, input),
+          };
+        } catch (error) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  error instanceof DomainError ? error.message : "Task intervention unavailable",
+              },
+            ],
+          };
+        }
+      },
+    );
+    server.registerTool(
+      "nanasa.foreman_reply_wait",
+      {
+        description: mcpTool("nanasa.foreman_reply_wait").description,
+        inputSchema: ReplyMissionWaitCommandSchema,
+      },
+      async (input) => {
+        try {
+          return {
+            content: [{ type: "text" as const, text: "Routine wait intervention returned." }],
+            structuredContent: await options.missionObservations.replyWait(
+              principal,
+              input,
+              options.openWaits,
+            ),
+          };
+        } catch (error) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  error instanceof DomainError
+                    ? error.message
+                    : "Routine wait intervention unavailable",
               },
             ],
           };

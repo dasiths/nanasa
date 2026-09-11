@@ -11,6 +11,7 @@ import {
 import {
   ArrowLeft,
   Bot,
+  ListChecks,
   MessageSquare,
   Play,
   RefreshCw,
@@ -26,6 +27,7 @@ import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 import { type ThemePreference, useAppliedTheme } from "../hooks/use-portal-preferences.js";
 import { useTerminalEndpoint } from "../hooks/use-terminal-endpoint.js";
 import { TerminalConsole } from "../terminal/terminal-console.js";
+import { ForemanMissions } from "./foreman-missions.js";
 import "./foreman-workspace.css";
 
 function ForemanTerminal({
@@ -274,7 +276,7 @@ export function ForemanWorkspace({
 }) {
   const [state, setState] = useState<ForemanState>();
   const [messages, setMessages] = useState<ForemanChannelMessage[]>([]);
-  const [tab, setTab] = useState<"channel" | "terminal" | "settings">("channel");
+  const [tab, setTab] = useState<"channel" | "terminal" | "missions" | "settings">("channel");
   const [text, setText] = useState("");
   const [teamId, setTeamId] = useState(initialTeamId);
   const [busy, setBusy] = useState(false);
@@ -415,6 +417,7 @@ export function ForemanWorkspace({
           [
             ["channel", "Channel", MessageSquare],
             ["terminal", "Terminal", Terminal],
+            ["missions", "Missions", ListChecks],
             ["settings", "Settings", Settings],
           ] as const
         ).map(([id, label, Icon]) => (
@@ -428,7 +431,7 @@ export function ForemanWorkspace({
             id={`foreman-tab-${id}`}
             onClick={() => setTab(id)}
             onKeyDown={(event) => {
-              const tabs = ["channel", "terminal", "settings"] as const;
+              const tabs = ["channel", "terminal", "missions", "settings"] as const;
               const index = tabs.indexOf(id);
               const next =
                 event.key === "ArrowRight"
@@ -457,6 +460,51 @@ export function ForemanWorkspace({
       </div>
       {error !== undefined && <ErrorNotice error={error} onDismiss={() => setError(undefined)} />}
       {state?.problem !== undefined && <p role="alert">{state.problem}</p>}
+      {state?.inbox
+        ?.filter(
+          (item) =>
+            item.state === "ambiguous" ||
+            (item.state === "submitted" && Date.now() - Date.parse(item.updatedAt) > 60000),
+        )
+        .map((item) => (
+          <div key={item.id} className="foreman-toolbar" role="alert">
+            <span>
+              {item.state === "ambiguous"
+                ? "Input delivery is uncertain."
+                : "Submitted input is awaiting a reply."}
+            </span>
+            <button
+              className="compact-button"
+              disabled={busy}
+              onClick={() =>
+                void operate(() =>
+                  client.resolveForemanInput({
+                    inboxId: item.id,
+                    expectedState: item.state === "ambiguous" ? "ambiguous" : "submitted",
+                    resolution: "handled",
+                  }),
+                )
+              }
+            >
+              Mark inspected input handled
+            </button>
+            <button
+              className="compact-button"
+              disabled={busy}
+              onClick={() =>
+                void operate(() =>
+                  client.resolveForemanInput({
+                    inboxId: item.id,
+                    expectedState: item.state === "ambiguous" ? "ambiguous" : "submitted",
+                    resolution: "cancel",
+                  }),
+                )
+              }
+            >
+              Close without replay
+            </button>
+          </div>
+        ))}
       {contextMissing && <p role="alert">The selected team is unavailable.</p>}
       {tab === "channel" && (
         <div
@@ -519,7 +567,8 @@ export function ForemanWorkspace({
                             reply.replyTo === message.id && reply.sender.kind === "foreman",
                         )
                       ? "Replied"
-                      : "Stored in channel"}
+                      : (state?.inbox?.find((item) => item.messageId === message.id)?.state ??
+                        "Stored in channel")}
                 </small>
               </article>
             ))}
@@ -574,6 +623,15 @@ export function ForemanWorkspace({
           ) : (
             <p className="foreman-empty">Foreman is not running</p>
           )}
+        </div>
+      )}
+      {tab === "missions" && (
+        <div id="foreman-missions" role="tabpanel" aria-labelledby="foreman-tab-missions">
+          <ForemanMissions
+            client={client}
+            configuration={state?.configuration}
+            onNavigate={onNavigate}
+          />
         </div>
       )}
       {tab === "settings" && (

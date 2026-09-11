@@ -371,7 +371,7 @@ export class AgentRuntimeProvisioner {
   }
 
   public async normalizeNativeSession(
-    run: AgentRun,
+    run: Pick<AgentRun, "id" | "generation">,
     report: {
       source: string;
       referenceKind: "id" | "path";
@@ -394,7 +394,7 @@ export class AgentRuntimeProvisioner {
     return this.#planner.recover(run.id, run.generation);
   }
 
-  public async providerStateRoot(run: AgentRun): Promise<string> {
+  public async providerStateRoot(run: Pick<AgentRun, "id" | "generation">): Promise<string> {
     const recovered = await this.#bindings.requireForRecovery(run.id, run.generation);
     return recovered.binding.launchPlan.stateStorageReference;
   }

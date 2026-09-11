@@ -35,6 +35,7 @@ import {
   CreateGroupAgentCommandSchema,
   type CreateGroupCommand,
   CreateGroupCommandSchema,
+  type CreateMissionCommand,
   type CreateWorktreeCommand,
   CreateWorktreeCommandSchema,
   type CustomLaunchConsentDecision,
@@ -45,6 +46,7 @@ import {
   CustomLaunchConsentRequestListSchema,
   CustomLaunchConsentRequestSchema,
   type CustomLaunchConsentRequestState,
+  type DecideMissionApprovalCommand,
   type DeleteGroupResult,
   DeleteGroupResultSchema,
   type DenyCustomLaunchConsentCommand,
@@ -74,6 +76,13 @@ import {
   MessagePageSchema,
   type MessageSubmissionResult,
   MessageSubmissionResultSchema,
+  type Mission,
+  type MissionApproval,
+  MissionApprovalSchema,
+  type MissionControlCommand,
+  MissionSchema,
+  type MissionWorkspace,
+  MissionWorkspaceSchema,
   type NanasaConfig,
   NanasaConfigSchema,
   type OpenCheckoutCommand,
@@ -112,6 +121,7 @@ import {
   type ReparentGroupAgentResult,
   type ReplyOpenWaitCommand,
   ReplyOpenWaitCommandSchema,
+  type ResolveForemanInputCommand,
   type RevokeCustomLaunchConsentCommand,
   RevokeCustomLaunchConsentCommandSchema,
   type RoleDefinition,
@@ -159,6 +169,15 @@ import {
 export { ControlClientError as ApiError };
 
 export interface PortalClient {
+  decideMissionApproval(
+    approvalId: string,
+    command: DecideMissionApprovalCommand,
+  ): Promise<MissionApproval>;
+  resolveForemanInput(command: ResolveForemanInputCommand): Promise<ForemanWorkspace>;
+  listMissions(): Promise<Mission[]>;
+  getMission(missionId: string): Promise<MissionWorkspace>;
+  createMission(command: CreateMissionCommand): Promise<Mission>;
+  controlMission(missionId: string, command: MissionControlCommand): Promise<Mission>;
   loadForeman(): Promise<ForemanWorkspace>;
   configureForeman(command: ConfigureForemanCommand): Promise<ForemanWorkspace>;
   startForeman(command: StartForemanCommand): Promise<ForemanRun>;
@@ -342,6 +361,32 @@ function commandInit(
 }
 
 export const api: PortalClient = {
+  decideMissionApproval: (approvalId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/mission-approvals/${encodeURIComponent(approvalId)}`,
+      MissionApprovalSchema,
+      commandInit("POST", command),
+    ),
+  resolveForemanInput: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/inbox/resolve`,
+      ForemanWorkspaceSchema,
+      commandInit("POST", command),
+    ),
+  listMissions: () => request(`${CONTROL_API_PREFIX}/missions`, MissionSchema.array()),
+  getMission: (missionId) =>
+    request(
+      `${CONTROL_API_PREFIX}/missions/${encodeURIComponent(missionId)}`,
+      MissionWorkspaceSchema,
+    ),
+  createMission: (command) =>
+    request(`${CONTROL_API_PREFIX}/missions`, MissionSchema, commandInit("POST", command)),
+  controlMission: (missionId, command) =>
+    request(
+      `${CONTROL_API_PREFIX}/missions/${encodeURIComponent(missionId)}/control`,
+      MissionSchema,
+      commandInit("POST", command),
+    ),
   loadForeman: () => request(`${CONTROL_API_PREFIX}/foreman`, ForemanWorkspaceSchema),
   configureForeman: (command) =>
     request(
