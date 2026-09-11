@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GeneratedOverlayTransaction } from "../src/generated-overlay-transaction.js";
 import { openNanasaDatabase } from "../src/persistence/database.js";
+import { AgentRuntimeProvisioner } from "../src/provider-runtime-provisioner.js";
 import { buildTrustedBuiltinCopilotPackage } from "../src/providers/builtin-provider-packages.js";
 import { ProviderBoundRuntimePlanner } from "../src/providers/provider-bound-runtime-planner.js";
 import { ProviderOverlayRepository } from "../src/providers/provider-overlay-repository.js";
@@ -47,6 +48,83 @@ afterEach(() => {
 });
 
 describe("snapshot-bound provider runtime planning", () => {
+  it("provisions Foreman through the shared planner without team policy or shared state", async () => {
+    const builtIn = await buildTrustedBuiltinCopilotPackage();
+    const snapshots = new ProviderSnapshotRepository(database);
+    const index = new ProviderRuntimeIndex(database, snapshots);
+    await index.registerTrustedBuiltin(builtIn, now);
+    const bindings = new ProviderRunBindingRepository(database, index, snapshots);
+    const directory = mkdtempSync(join(tmpdir(), "nanasa-foreman-runtime-"));
+    directories.push(directory);
+    const overlays = new ProviderOverlayRepository(
+      database,
+      new GeneratedOverlayTransaction(directory),
+    );
+    const planner = new ProviderBoundRuntimePlanner(bindings, overlays);
+    const provisioner = new AgentRuntimeProvisioner({
+      integrationsDirectory: directory,
+      integrations: {
+        copilot: {
+          providerState: { scope: "integration" },
+          credentials: { kind: "provider-managed" },
+          model: { model: "integration-model", resumePolicy: "preserve-session" },
+          nativeRecovery: { mode: "resume-or-restart", confirmationTimeoutSeconds: 30 },
+        },
+      },
+      statusEndpointUrl: "http://127.0.0.1:3210/status",
+      mcpEndpointUrl: "http://127.0.0.1:3210/mcp",
+      repositoryIdentity: "repo-one",
+      planner,
+      bindings,
+      promptResolver: () => {
+        throw new Error("Team instructions must not be consulted");
+      },
+      desiredModelResolver: () => {
+        throw new Error("Team model must not be consulted");
+      },
+      providerPolicyResolver: () => {
+        throw new Error("Team policy must not be consulted");
+      },
+    });
+    const provisioned = await provisioner.provisionForForeman(
+      { id: "run-one", generation: 1 },
+      {
+        id: "repository-foreman",
+        name: "Foreman",
+        desiredModel: "foreman-model",
+        prompt: {
+          text: "FOREMAN-ONLY-INSTRUCTIONS\n",
+          revision: "b".repeat(64),
+          sources: [{ scope: "foreman", reference: "builtin:test" }],
+        },
+      },
+      {
+        id: "profile-one",
+        name: "Foreman",
+        agentType: "copilot",
+        kind: "copilot",
+        command: "copilot",
+        args: [],
+        environment: {},
+        createdAt: now,
+        updatedAt: now,
+      },
+    );
+    expect(provisioned.stateBinding).toMatchObject({
+      scope: "foreman",
+      foremanId: "repository-foreman",
+    });
+    expect(provisioned.stateBinding.memberId).toBeUndefined();
+    expect(provisioned.stateBinding.storageReference).toContain("/state/foremen/");
+    expect(provisioned.desiredModelSource).toBe("foreman");
+    expect(provisioned.command).toContain("foreman-model");
+    expect(provisioned.environment.COPILOT_HOME).toBe(provisioned.stateBinding.storageReference);
+    const recovered = await planner.recover("run-one", 1);
+    expect(recovered.launchPlan).toEqual(provisioned.binding.launchPlan);
+    expect(recovered.launchPlan.desiredModel).toBe("foreman-model");
+    expect(JSON.stringify(recovered.launchPlan)).not.toContain("FOREMAN-ONLY-INSTRUCTIONS");
+  });
+
   it("persists binding before overlay effects and recovers the exact launch selection", async () => {
     const builtIn = await buildTrustedBuiltinCopilotPackage();
     const snapshots = new ProviderSnapshotRepository(database);

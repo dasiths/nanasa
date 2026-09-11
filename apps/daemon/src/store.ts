@@ -4286,9 +4286,9 @@ export class NanasaStore {
     this.#database
       .prepare(
         `INSERT INTO provider_state
-           (id, integration_id, member_id, scope, storage_reference,
+            (id, integration_id, member_id, foreman_id, scope, storage_reference,
             credential_reference_json, lifecycle, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            storage_reference = excluded.storage_reference,
            credential_reference_json = excluded.credential_reference_json,
@@ -4299,6 +4299,7 @@ export class NanasaStore {
         parsed.id,
         parsed.integrationId,
         parsed.memberId ?? null,
+        parsed.foremanId ?? null,
         parsed.scope,
         parsed.storageReference,
         JSON.stringify(parsed.credentialReference),
@@ -6039,6 +6040,7 @@ export class NanasaStore {
       id: row.id,
       integrationId: row.integration_id,
       memberId: row.member_id ?? undefined,
+      foremanId: row.foreman_id ?? undefined,
       scope: row.scope,
       storageReference: row.storage_reference,
       credentialReference: JSON.parse(String(row.credential_reference_json)),

@@ -6,7 +6,11 @@ import type {
   ProviderStateBinding,
   ProviderStatePolicy,
 } from "@nanasa/contracts";
-import { ProviderStateBindingSchema } from "@nanasa/contracts";
+import {
+  IdentifierSchema,
+  IntegrationIdSchema,
+  ProviderStateBindingSchema,
+} from "@nanasa/contracts";
 import { resolveProviderStateHome } from "./provider-state-home.js";
 
 export interface ProviderStatePersistence {
@@ -75,11 +79,49 @@ export class ProviderStateRepository {
       input.policy,
       input.membershipId,
     );
+    return this.#resolveBinding({
+      integrationId: input.integrationId,
+      ownerId: input.membershipId,
+      memberId: input.membershipId,
+      scope: input.policy.scope,
+      storageReference,
+      credentialReference: input.credentialReference,
+    });
+  }
+
+  public resolveForForeman(input: {
+    foremanId: string;
+    integrationId: string;
+    credentialReference: CredentialProfileReference;
+  }): ProviderStateBinding {
+    const foremanId = IdentifierSchema.parse(input.foremanId);
+    const integrationId = IntegrationIdSchema.parse(input.integrationId);
+    const directory = createHash("sha256").update(foremanId).digest("hex");
+    return this.#resolveBinding({
+      integrationId,
+      ownerId: foremanId,
+      foremanId,
+      scope: "foreman",
+      storageReference: join(this.#root, "state", "foremen", directory, integrationId),
+      credentialReference: input.credentialReference,
+    });
+  }
+
+  #resolveBinding(input: {
+    integrationId: string;
+    ownerId: string;
+    memberId?: string;
+    foremanId?: string;
+    scope: ProviderStateBinding["scope"];
+    storageReference: string;
+    credentialReference: CredentialProfileReference;
+  }): ProviderStateBinding {
+    const { storageReference } = input;
     ensurePrivateTree(this.#root, storageReference);
     const id = `provider-state-${createHash("sha256")
       .update(input.integrationId)
       .update("\0")
-      .update(input.membershipId)
+      .update(input.ownerId)
       .update("\0")
       .update(storageReference)
       .digest("hex")
@@ -89,8 +131,9 @@ export class ProviderStateRepository {
     const binding = ProviderStateBindingSchema.parse({
       id,
       integrationId: input.integrationId,
-      memberId: input.membershipId,
-      scope: input.policy.scope,
+      memberId: input.memberId,
+      foremanId: input.foremanId,
+      scope: input.scope,
       storageReference,
       credentialReference: input.credentialReference,
       lifecycle: existing?.lifecycle === "retained" ? "active" : (existing?.lifecycle ?? "active"),

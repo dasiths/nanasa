@@ -274,7 +274,7 @@ export const DATABASE_BASELINE_SQL = `
     recovery_reason TEXT,
     launch_kind TEXT NOT NULL DEFAULT 'fresh' CHECK (launch_kind IN ('fresh', 'adopted', 'resuming', 'restarted')),
     requested_model TEXT,
-    requested_model_source TEXT NOT NULL DEFAULT 'provider-default' CHECK (requested_model_source IN ('membership', 'integration', 'provider-default')),
+    requested_model_source TEXT NOT NULL DEFAULT 'provider-default' CHECK (requested_model_source IN ('membership', 'foreman', 'integration', 'provider-default')),
     effective_model TEXT,
     native_session_id TEXT,
     recovery_outcome TEXT CHECK (recovery_outcome IN ('retained', 'resumed', 'restarted', 'failed')),
@@ -543,12 +543,17 @@ export const DATABASE_BASELINE_SQL = `
     id TEXT PRIMARY KEY,
     integration_id TEXT NOT NULL,
     member_id TEXT,
-    scope TEXT NOT NULL CHECK (scope IN ('membership', 'integration', 'custom')),
+    foreman_id TEXT,
+    scope TEXT NOT NULL CHECK (scope IN ('membership', 'integration', 'custom', 'foreman')),
     storage_reference TEXT NOT NULL,
     credential_reference_json TEXT NOT NULL,
     lifecycle TEXT NOT NULL CHECK (lifecycle IN ('active', 'retained', 'deleting', 'deleted')),
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    CHECK (
+      (scope = 'foreman' AND foreman_id IS NOT NULL AND member_id IS NULL)
+      OR (scope <> 'foreman' AND foreman_id IS NULL)
+    )
   ) STRICT;
 
   CREATE TABLE overlays (

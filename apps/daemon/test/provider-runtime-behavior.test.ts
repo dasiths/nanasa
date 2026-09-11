@@ -1,4 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -23,6 +31,66 @@ function temporaryRoot(): string {
 }
 
 describe("provider state and generated overlays", () => {
+  it("persists private Foreman state without a group or membership and retains it on reopen", () => {
+    const root = temporaryRoot();
+    const base = join(root, "integrations");
+    const databasePath = join(root, "state.sqlite");
+    let store = new NanasaStore(databasePath);
+    const input = {
+      foremanId: "repository-foreman",
+      integrationId: "copilot",
+      credentialReference: { kind: "provider-managed" } as const,
+    };
+    try {
+      const states = new ProviderStateRepository(base, store);
+      const foreman = states.resolveForForeman(input);
+      const shared = states.resolve({
+        membershipId: input.foremanId,
+        integrationId: input.integrationId,
+        policy: { scope: "integration" },
+        credentialReference: input.credentialReference,
+      });
+      const member = states.resolve({
+        membershipId: input.foremanId,
+        integrationId: input.integrationId,
+        policy: { scope: "membership" },
+        credentialReference: input.credentialReference,
+      });
+      const other = states.resolveForForeman({ ...input, foremanId: "other-foreman" });
+      expect(foreman).toMatchObject({ scope: "foreman", foremanId: input.foremanId });
+      expect(foreman.memberId).toBeUndefined();
+      expect(
+        new Set([foreman, shared, member, other].map((state) => state.storageReference)).size,
+      ).toBe(4);
+      expect(statSync(foreman.storageReference).mode & 0o777).toBe(0o700);
+      const marker = join(foreman.storageReference, "preferences.json");
+      writeFileSync(marker, '{"retained":true}\n', { mode: 0o600 });
+      states.retain(foreman.id);
+      store.close();
+      store = new NanasaStore(databasePath);
+      const reopened = new ProviderStateRepository(base, store).resolveForForeman(input);
+      expect(reopened).toMatchObject({ ...foreman, updatedAt: expect.any(String) });
+      expect(readFileSync(marker, "utf8")).toBe('{"retained":true}\n');
+    } finally {
+      store.close();
+    }
+  });
+
+  it("rejects a symlinked Foreman state parent", () => {
+    const root = temporaryRoot();
+    const states = new ProviderStateRepository(join(root, "integrations"));
+    const outside = join(root, "outside");
+    mkdirSync(outside);
+    symlinkSync(outside, join(root, "integrations", "state", "foremen"));
+    expect(() =>
+      states.resolveForForeman({
+        foremanId: "foreman",
+        integrationId: "copilot",
+        credentialReference: { kind: "provider-managed" },
+      }),
+    ).toThrow("regular directory");
+  });
+
   it("isolates membership state and requires explicit integration sharing", () => {
     const base = join(temporaryRoot(), "integrations");
     const store = new NanasaStore(":memory:");

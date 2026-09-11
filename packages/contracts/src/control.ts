@@ -198,7 +198,7 @@ export const AgentRunSchema = z
     launchKind: z.enum(["fresh", "adopted", "resuming", "restarted"]).default("fresh"),
     requestedModel: z.string().trim().min(1).max(256).optional(),
     requestedModelSource: z
-      .enum(["membership", "integration", "provider-default"])
+      .enum(["membership", "foreman", "integration", "provider-default"])
       .default("provider-default"),
     effectiveModel: z.string().trim().min(1).max(256).optional(),
     nativeSessionId: IdentifierSchema.optional(),
