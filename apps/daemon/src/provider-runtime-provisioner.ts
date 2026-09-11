@@ -60,7 +60,7 @@ export interface ForemanRuntimeOwner {
   readonly providerPolicy?: EffectiveProviderPolicy;
 }
 
-type ProviderRuntimeOwner =
+export type ProviderRuntimeOwner =
   | { readonly kind: "team"; readonly membership: GroupMembership }
   | { readonly kind: "foreman"; readonly foreman: ForemanRuntimeOwner };
 
@@ -110,7 +110,7 @@ export class AgentRuntimeProvisioner {
     profile: AgentProfile,
     nativeSession?: NativeSessionReference,
   ): Promise<AgentRuntimeConfiguration> {
-    return this.#provision(run, { kind: "team", membership }, profile, nativeSession);
+    return this.provisionOwner(run, { kind: "team", membership }, profile, nativeSession);
   }
 
   public async provisionForForeman(
@@ -119,10 +119,10 @@ export class AgentRuntimeProvisioner {
     profile: AgentProfile,
     nativeSession?: NativeSessionReference,
   ): Promise<AgentRuntimeConfiguration> {
-    return this.#provision(run, { kind: "foreman", foreman }, profile, nativeSession);
+    return this.provisionOwner(run, { kind: "foreman", foreman }, profile, nativeSession);
   }
 
-  async #provision(
+  public async provisionOwner(
     run: Pick<AgentRun, "id" | "generation">,
     owner: ProviderRuntimeOwner,
     profile: AgentProfile,
@@ -319,7 +319,9 @@ export class AgentRuntimeProvisioner {
     });
   }
 
-  public async controlPolicy(run: AgentRun): Promise<SnapshotControlPolicy> {
+  public async controlPolicy(
+    run: Pick<AgentRun, "id" | "generation">,
+  ): Promise<SnapshotControlPolicy> {
     return this.#evaluatorForRun(run).then((evaluator) => evaluator.controlPolicy());
   }
 
@@ -330,7 +332,7 @@ export class AgentRuntimeProvisioner {
     return this.#evaluatorForRun(run).then((evaluator) => evaluator.encodeWaitReply(reply));
   }
 
-  public async processRecognizer(run: AgentRun): Promise<{
+  public async processRecognizer(run: Pick<AgentRun, "id" | "generation">): Promise<{
     recognizeCommand(command: readonly string[]): boolean;
   }> {
     const evaluator = await this.#evaluatorForRun(run);
@@ -339,7 +341,7 @@ export class AgentRuntimeProvisioner {
     });
   }
 
-  public async reporterPolicy(run: AgentRun): Promise<{
+  public async reporterPolicy(run: Pick<AgentRun, "id" | "generation">): Promise<{
     integrationId: string;
     adapterId: string;
     reporterId: string;
@@ -384,7 +386,7 @@ export class AgentRuntimeProvisioner {
     });
   }
 
-  public recover(run: AgentRun): Promise<RecoveredProviderRuntime> {
+  public recover(run: Pick<AgentRun, "id" | "generation">): Promise<RecoveredProviderRuntime> {
     return this.#planner.recover(run.id, run.generation);
   }
 
@@ -393,7 +395,9 @@ export class AgentRuntimeProvisioner {
     return recovered.binding.launchPlan.stateStorageReference;
   }
 
-  async #evaluatorForRun(run: AgentRun): Promise<ProviderSnapshotEvaluator> {
+  async #evaluatorForRun(
+    run: Pick<AgentRun, "id" | "generation">,
+  ): Promise<ProviderSnapshotEvaluator> {
     const recovered = await this.#bindings.requireForRecovery(run.id, run.generation);
     return this.#evaluator(recovered.snapshot);
   }

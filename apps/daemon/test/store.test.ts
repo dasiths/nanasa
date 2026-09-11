@@ -19,6 +19,66 @@ afterEach(() => {
 });
 
 describe("NanasaStore persistence", () => {
+  it("owns Foreman runs outside teams with durable monotonically increasing generations", () => {
+    const root = mkdtempSync(join(tmpdir(), "nanasa-foreman-store-"));
+    temporaryDirectories.push(root);
+    const path = join(root, "state.sqlite");
+    let store = new NanasaStore(path);
+    try {
+      const profile = store.createInternalAgentProfile({
+        name: "Foreman",
+        agentType: "copilot",
+        kind: "copilot",
+        command: "copilot",
+        args: [],
+        environment: {},
+      });
+      store.upsertForeman({ id: "foreman", agentProfileId: profile.id, enabled: true });
+      const group = store.createGroup({ name: "Team" });
+      expect(() =>
+        store.addMembership(group.id, { agentProfileId: profile.id, alias: "Foreman" }),
+      ).toThrow("cannot join a team");
+      expect(() =>
+        store.upsertForeman({ id: "second", agentProfileId: profile.id, enabled: true }),
+      ).toThrow("Only one");
+      const { run } = store.createRunForForeman("foreman");
+      expect(run).toMatchObject({ foremanId: "foreman", generation: 1, status: "starting" });
+      expect(run).not.toHaveProperty("groupId");
+      expect(run).not.toHaveProperty("memberId");
+      expect(store.listActiveRuns()).toEqual([]);
+      expect(store.listDesiredRunningRuns()).toEqual([]);
+      expect(() => store.getRun(run.id)).toThrow("Team run not found");
+      expect(() => store.updateRunStatus(run.id, "running")).toThrow("Team run not found");
+      expect(() => store.createRunForForeman("foreman")).toThrow("already has an active run");
+      store.updateRuntimeRunStatus(run.id, "running");
+      store.updateRuntimeRunProviderMetadata(run.id, {
+        requestedModel: "model-one",
+        requestedModelSource: "foreman",
+      });
+      store.close();
+      store = new NanasaStore(path);
+      expect(store.getActiveForemanRun("foreman")).toMatchObject({
+        id: run.id,
+        generation: 1,
+        status: "running",
+      });
+      expect(store.getRuntimeRun(run.id)).toMatchObject({
+        requestedModel: "model-one",
+        requestedModelSource: "foreman",
+      });
+      store.updateRuntimeRunStatus(run.id, "stopping");
+      store.updateRuntimeRunStatus(run.id, "stopped");
+      expect(store.createRunForForeman("foreman").run.generation).toBe(2);
+      store.upsertForeman({ id: "foreman", agentProfileId: profile.id, enabled: false });
+      const active = store.getActiveForemanRun("foreman")!;
+      store.updateRuntimeRunStatus(active.id, "stopping");
+      store.updateRuntimeRunStatus(active.id, "stopped");
+      expect(() => store.createRunForForeman("foreman")).toThrow("not enabled");
+    } finally {
+      store.close();
+    }
+  });
+
   it("persists one checkout per team and maps every member run into it", () => {
     const root = mkdtempSync(join(tmpdir(), "nanasa-team-checkout-"));
     temporaryDirectories.push(root);

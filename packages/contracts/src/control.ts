@@ -211,6 +211,29 @@ export const AgentRunSchema = z
   .strict();
 export type AgentRun = z.infer<typeof AgentRunSchema>;
 
+export const ForemanActorSchema = z
+  .object({
+    id: IdentifierSchema,
+    agentProfileId: IdentifierSchema,
+    enabled: z.boolean(),
+    createdAt: TimestampSchema,
+    updatedAt: TimestampSchema,
+  })
+  .strict();
+export type ForemanActor = z.infer<typeof ForemanActorSchema>;
+
+export const ForemanRunSchema = AgentRunSchema.omit({
+  groupId: true,
+  memberId: true,
+  providerUpdate: true,
+})
+  .extend({ foremanId: IdentifierSchema })
+  .strict();
+export type ForemanRun = z.infer<typeof ForemanRunSchema>;
+
+export const RuntimeRunSchema = z.union([AgentRunSchema, ForemanRunSchema]);
+export type RuntimeRun = z.infer<typeof RuntimeRunSchema>;
+
 export const CreateGroupAgentCommandSchema = z
   .object({
     name: z.string().trim().min(1).max(100),

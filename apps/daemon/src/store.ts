@@ -50,6 +50,10 @@ import {
   DomainEventSchema,
   type DurableNativeSession,
   DurableNativeSessionSchema,
+  type ForemanActor,
+  ForemanActorSchema,
+  type ForemanRun,
+  ForemanRunSchema,
   type GitOperation,
   GitOperationSchema,
   type Group,
@@ -88,6 +92,8 @@ import {
   type Repository,
   RepositorySchema,
   type RunStatus,
+  type RuntimeRun,
+  RuntimeRunSchema,
   type ScreenObservation,
   ScreenObservationSchema,
   type StartGroupRunsResult,
@@ -196,8 +202,9 @@ interface MembershipRow {
 
 interface RunRow {
   id: string;
-  group_id: string;
-  member_id: string;
+  group_id: string | null;
+  member_id: string | null;
+  foreman_id: string | null;
   agent_profile_id: string;
   checkout_id: string | null;
   resolved_working_directory: string | null;
@@ -1396,6 +1403,17 @@ export class NanasaStore {
     return this.#executeIdempotent(scope, idempotencyKey, GroupMembershipSchema, () => {
       this.#requireGroup(groupId);
       this.#requireAgentProfile(input.agentProfileId);
+      if (
+        this.#database
+          .prepare("SELECT id FROM foremen WHERE agent_profile_id = ?")
+          .get(input.agentProfileId) !== undefined
+      ) {
+        throw new DomainError(
+          "profile_is_foreman_owned",
+          "A Foreman profile cannot join a team",
+          409,
+        );
+      }
       const memberId = input.memberId ?? this.#generateMemberId(groupId);
       const existing = this.#getMembershipRow(groupId, memberId);
       if (existing?.state === "active") {
@@ -1562,47 +1580,62 @@ export class NanasaStore {
   }
 
   public createRun(run: AgentRun): AgentRun {
-    const input = AgentRunSchema.parse(run);
-    const { result, event } = this.#transaction(() => {
-      const membership = this.#getMembershipRow(input.groupId, input.memberId);
-      if (
-        membership === undefined ||
-        membership.state !== "active" ||
-        membership.agent_profile_id !== input.agentProfileId
-      ) {
-        throw new DomainError("invalid_run_membership", "Run member is not active", 409);
-      }
+    return AgentRunSchema.parse(this.#createRuntimeRun(AgentRunSchema.parse(run)));
+  }
 
+  #createRuntimeRun(run: RuntimeRun): RuntimeRun {
+    const input = RuntimeRunSchema.parse(run);
+    const { result, event } = this.#transaction(() => {
       const timestamp = new Date().toISOString();
-      this.#database
-        .prepare(
-          `UPDATE actions SET state = 'superseded', updated_at = ?,
+      if ("foremanId" in input) {
+        const actor = this.getForeman(input.foremanId);
+        if (!actor.enabled || actor.agentProfileId !== input.agentProfileId) {
+          throw new DomainError(
+            "foreman_not_enabled",
+            "Foreman is not enabled for this profile",
+            409,
+          );
+        }
+      } else {
+        const membership = this.#getMembershipRow(input.groupId, input.memberId);
+        if (
+          membership === undefined ||
+          membership.state !== "active" ||
+          membership.agent_profile_id !== input.agentProfileId
+        ) {
+          throw new DomainError("invalid_run_membership", "Run member is not active", 409);
+        }
+        this.#database
+          .prepare(
+            `UPDATE actions SET state = 'superseded', updated_at = ?,
              error_json = '{"code":"run_replaced","message":"The target run was replaced","retryable":false}'
            WHERE group_id = ? AND member_id = ? AND run_id <> ?
              AND state IN ('created', 'deferred', 'submitted', 'accepted', 'started', 'blocked')`,
-        )
-        .run(timestamp, input.groupId, input.memberId, input.id);
-      this.#database
-        .prepare(
-          `UPDATE open_waits SET state = 'superseded', updated_at = ?
+          )
+          .run(timestamp, input.groupId, input.memberId, input.id);
+        this.#database
+          .prepare(
+            `UPDATE open_waits SET state = 'superseded', updated_at = ?
            WHERE group_id = ? AND member_id = ? AND run_id <> ? AND state IN ('open', 'replying')`,
-        )
-        .run(timestamp, input.groupId, input.memberId, input.id);
+          )
+          .run(timestamp, input.groupId, input.memberId, input.id);
+      }
 
       this.#database
         .prepare(
           `INSERT INTO runs
-             (id, group_id, member_id, agent_profile_id, checkout_id,
+             (id, group_id, member_id, foreman_id, agent_profile_id, checkout_id,
               resolved_working_directory, generation, status,
             desired_state, recovery_phase, recovery_attempts, recovery_not_before,
             recovery_reason, launch_kind, requested_model, requested_model_source,
             effective_model, native_session_id, recovery_outcome, terminal_json, started_at, stopped_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.id,
-          input.groupId,
-          input.memberId,
+          "groupId" in input ? input.groupId : null,
+          "memberId" in input ? input.memberId : null,
+          "foremanId" in input ? input.foremanId : null,
           input.agentProfileId,
           input.checkoutId ?? null,
           input.resolvedWorkingDirectory ?? null,
@@ -1623,10 +1656,12 @@ export class NanasaStore {
           input.startedAt,
           input.stoppedAt ?? null,
         );
-      this.#upsertAgentStatusState(
-        input,
-        createAgentStatusReducerState(input.id, input.generation, input.startedAt),
-      );
+      if (!("foremanId" in input)) {
+        this.#upsertAgentStatusState(
+          input,
+          createAgentStatusReducerState(input.id, input.generation, input.startedAt),
+        );
+      }
       return {
         result: input,
         event: this.#appendEvent("run.created", "run", input.id, { run: input }),
@@ -1704,13 +1739,108 @@ export class NanasaStore {
   }
 
   public getRun(runId: string): AgentRun {
+    const run = this.getRuntimeRun(runId);
+    if ("foremanId" in run) throw new DomainError("run_not_found", "Team run not found", 404);
+    return run;
+  }
+
+  public getRuntimeRun(runId: string): RuntimeRun {
     const row = this.#database.prepare("SELECT * FROM runs WHERE id = ?").get(runId) as unknown as
       | RunRow
       | undefined;
     if (row === undefined) {
       throw new DomainError("run_not_found", "Run not found", 404);
     }
-    return this.#hydrateRun(row);
+    return this.#hydrateRuntimeRun(row);
+  }
+
+  public getForeman(foremanId: string): ForemanActor {
+    const row = this.#database.prepare("SELECT * FROM foremen WHERE id = ?").get(foremanId);
+    if (row === undefined) throw new DomainError("foreman_not_found", "Foreman not found", 404);
+    return ForemanActorSchema.parse({
+      id: row.id,
+      agentProfileId: row.agent_profile_id,
+      enabled: row.enabled === 1,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    });
+  }
+
+  public upsertForeman(
+    input: Pick<ForemanActor, "id" | "agentProfileId" | "enabled">,
+  ): ForemanActor {
+    const now = new Date().toISOString();
+    const actor = ForemanActorSchema.parse({ ...input, createdAt: now, updatedAt: now });
+    this.#requireAgentProfile(actor.agentProfileId);
+    return this.#transaction(() => {
+      const membership = this.#database
+        .prepare("SELECT id FROM memberships WHERE agent_profile_id = ? LIMIT 1")
+        .get(actor.agentProfileId);
+      if (membership !== undefined)
+        throw new DomainError(
+          "foreman_profile_is_team_owned",
+          "Foreman requires a repository-owned profile",
+          409,
+        );
+      const other = this.#database
+        .prepare("SELECT id FROM foremen WHERE enabled = 1 AND id <> ?")
+        .get(actor.id);
+      if (actor.enabled && other !== undefined)
+        throw new DomainError(
+          "foreman_already_enabled",
+          "Only one repository Foreman may be enabled",
+          409,
+        );
+      const active = this.getActiveForemanRun(actor.id);
+      if (active !== undefined && active.agentProfileId !== actor.agentProfileId)
+        throw new DomainError(
+          "foreman_profile_in_use",
+          "Stop Foreman before changing its profile",
+          409,
+        );
+      this.#database
+        .prepare(`INSERT INTO foremen (id, agent_profile_id, enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET
+        agent_profile_id = excluded.agent_profile_id, enabled = excluded.enabled, updated_at = excluded.updated_at`)
+        .run(actor.id, actor.agentProfileId, actor.enabled ? 1 : 0, now, now);
+      return this.getForeman(actor.id);
+    });
+  }
+
+  public getActiveForemanRun(foremanId: string): ForemanRun | undefined {
+    const row = this.#database
+      .prepare(`SELECT * FROM runs WHERE foreman_id = ?
+      AND status IN ('starting', 'running', 'stopping') ORDER BY generation DESC LIMIT 1`)
+      .get(foremanId) as unknown as RunRow | undefined;
+    return row === undefined ? undefined : ForemanRunSchema.parse(this.#hydrateRuntimeRun(row));
+  }
+
+  public createRunForForeman(foremanId: string): { run: ForemanRun; profile: AgentProfile } {
+    return this.#transaction(() => {
+      const actor = this.getForeman(foremanId);
+      if (this.getActiveForemanRun(foremanId) !== undefined)
+        throw new DomainError("run_already_active", "Foreman already has an active run", 409);
+      const profile = this.#requireAgentProfile(actor.agentProfileId);
+      const row = this.#database
+        .prepare(
+          "SELECT COALESCE(MAX(generation), 0) + 1 AS generation FROM runs WHERE foreman_id = ?",
+        )
+        .get(foremanId) as { generation: number };
+      const run = ForemanRunSchema.parse(
+        this.#createRuntimeRun(
+          ForemanRunSchema.parse({
+            id: `run_${randomUUID()}`,
+            foremanId,
+            agentProfileId: profile.id,
+            resolvedWorkingDirectory: profile.workingDirectory,
+            generation: row.generation,
+            status: "starting",
+            startedAt: new Date().toISOString(),
+          }),
+        ),
+      );
+      return { run, profile };
+    });
   }
 
   public getAgentProfile(profileId: string): AgentProfile {
@@ -1872,7 +2002,7 @@ export class NanasaStore {
   public listActiveRuns(): AgentRun[] {
     const rows = this.#database
       .prepare(
-        `SELECT * FROM runs WHERE status IN ('starting', 'running', 'stopping')
+        `SELECT * FROM runs WHERE foreman_id IS NULL AND status IN ('starting', 'running', 'stopping')
          ORDER BY started_at, id`,
       )
       .all() as unknown as RunRow[];
@@ -1929,7 +2059,16 @@ export class NanasaStore {
     status: RunStatus,
     options: { terminal?: TerminalBinding; reason?: string } = {},
   ): AgentRun {
-    const current = this.getRun(runId);
+    this.getRun(runId);
+    return AgentRunSchema.parse(this.updateRuntimeRunStatus(runId, status, options));
+  }
+
+  public updateRuntimeRunStatus(
+    runId: string,
+    status: RunStatus,
+    options: { terminal?: TerminalBinding; reason?: string } = {},
+  ): RuntimeRun {
+    const current = this.getRuntimeRun(runId);
     const allowed: Record<RunStatus, readonly RunStatus[]> = {
       starting: ["starting", "running", "stopping", "failed"],
       running: ["running", "stopping", "stopped", "failed"],
@@ -1996,7 +2135,7 @@ export class NanasaStore {
           )
           .run(stoppedAt, runId);
       }
-      const updated = this.getRun(runId);
+      const updated = this.getRuntimeRun(runId);
       return {
         result: updated,
         event: this.#appendEvent("run.status-changed", "run", runId, {
@@ -2007,6 +2146,11 @@ export class NanasaStore {
       };
     });
     this.#publish(event);
+    if ("foremanId" in current) {
+      if (status === "stopped" || status === "failed")
+        this.revokeReporterAuthority(runId, current.generation, `run_${status}`);
+      return result;
+    }
     if (status === "running") {
       this.recordProcessStatus(runId, {
         event: "process.alive",
@@ -2039,7 +2183,15 @@ export class NanasaStore {
       >
     >,
   ): AgentRun {
-    const current = this.getRun(runId);
+    this.getRun(runId);
+    return AgentRunSchema.parse(this.updateRuntimeRunProviderMetadata(runId, metadata));
+  }
+
+  public updateRuntimeRunProviderMetadata(
+    runId: string,
+    metadata: Parameters<NanasaStore["updateRunProviderMetadata"]>[1],
+  ): RuntimeRun {
+    const current = this.getRuntimeRun(runId);
     this.#database
       .prepare(
         `UPDATE runs SET
@@ -2056,7 +2208,7 @@ export class NanasaStore {
         metadata.recoveryOutcome ?? current.recoveryOutcome ?? null,
         runId,
       );
-    return this.getRun(runId);
+    return this.getRuntimeRun(runId);
   }
 
   public registerReporterSession(session: ReporterSession): ReporterSession {
@@ -5694,10 +5846,19 @@ export class NanasaStore {
   }
 
   #hydrateRun(row: RunRow): AgentRun {
-    return AgentRunSchema.parse({
+    return AgentRunSchema.parse(this.#hydrateRuntimeRun(row));
+  }
+
+  #hydrateRuntimeRun(row: RunRow): RuntimeRun {
+    return RuntimeRunSchema.parse({
       id: row.id,
-      groupId: row.group_id,
-      memberId: row.member_id,
+      ...(row.foreman_id === null
+        ? {
+            groupId: row.group_id,
+            memberId: row.member_id,
+            providerUpdate: this.#providerUpdateForRun(row.id, row.generation),
+          }
+        : { foremanId: row.foreman_id }),
       agentProfileId: row.agent_profile_id,
       checkoutId: row.checkout_id ?? undefined,
       resolvedWorkingDirectory: row.resolved_working_directory ?? undefined,
@@ -5714,7 +5875,6 @@ export class NanasaStore {
       effectiveModel: row.effective_model ?? undefined,
       nativeSessionId: row.native_session_id ?? undefined,
       recoveryOutcome: row.recovery_outcome ?? undefined,
-      providerUpdate: this.#providerUpdateForRun(row.id, row.generation),
       terminal: row.terminal_json === null ? undefined : JSON.parse(row.terminal_json),
       startedAt: row.started_at,
       stoppedAt: row.stopped_at ?? undefined,

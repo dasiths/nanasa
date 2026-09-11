@@ -258,10 +258,21 @@ export const DATABASE_BASELINE_SQL = `
     error_code TEXT
   ) STRICT;
 
+  CREATE TABLE foremen (
+    id TEXT PRIMARY KEY,
+    agent_profile_id TEXT NOT NULL REFERENCES agent_profiles(id),
+    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE UNIQUE INDEX foremen_one_enabled ON foremen(enabled) WHERE enabled = 1;
+
   CREATE TABLE runs (
     id TEXT PRIMARY KEY,
-    group_id TEXT NOT NULL,
-    member_id TEXT NOT NULL,
+    group_id TEXT,
+    member_id TEXT,
+    foreman_id TEXT REFERENCES foremen(id),
     agent_profile_id TEXT NOT NULL REFERENCES agent_profiles(id),
     checkout_id TEXT REFERENCES checkouts(id),
     resolved_working_directory TEXT,
@@ -281,8 +292,16 @@ export const DATABASE_BASELINE_SQL = `
     terminal_json TEXT,
     started_at TEXT NOT NULL,
     stopped_at TEXT,
-    UNIQUE (group_id, member_id, generation)
+    UNIQUE (group_id, member_id, generation),
+    UNIQUE (foreman_id, generation),
+    CHECK (
+      (foreman_id IS NULL AND group_id IS NOT NULL AND member_id IS NOT NULL)
+      OR (foreman_id IS NOT NULL AND group_id IS NULL AND member_id IS NULL)
+    )
   ) STRICT;
+
+  CREATE UNIQUE INDEX runs_one_active_foreman ON runs(foreman_id)
+    WHERE foreman_id IS NOT NULL AND status IN ('starting', 'running', 'stopping');
 
   CREATE TABLE runtime_observations (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -4,16 +4,20 @@ import { setTimeout as delay } from "node:timers/promises";
 import type {
   AgentProfile,
   AgentRun,
-  GroupMembership,
+  ForemanRun,
   NativeSessionReference,
+  RuntimeRun,
   TerminalBinding,
   TerminalReadRequest,
   TerminalReadResult,
 } from "@nanasa/contracts";
+import { AgentRunSchema, ForemanRunSchema } from "@nanasa/contracts";
 
 import type {
   AgentRuntimeConfiguration,
   AgentRuntimeProvisioner,
+  ForemanRuntimeOwner,
+  ProviderRuntimeOwner,
 } from "./agent-runtime-provisioner.js";
 import { ProcessIdentityObserver } from "./process-identity-observer.js";
 import { type RuntimeObservation, runtimeObservation } from "./runtime-observation.js";
@@ -24,6 +28,9 @@ export interface TmuxRuntimeOptions {
   serverName?: string;
   tmuxPath?: string;
   runtimeEnvironment?: (run: AgentRun) => Record<string, string> | Promise<Record<string, string>>;
+  foremanRuntimeEnvironment?: (
+    run: ForemanRun,
+  ) => Record<string, string> | Promise<Record<string, string>>;
   runtimeProvisioner?: AgentRuntimeProvisioner;
   providerAuthority?: Pick<AgentRuntimeProvisioner, "controlPolicy" | "processRecognizer">;
   processIdentityObserver?: ProcessIdentityObserver;
@@ -68,7 +75,7 @@ function sessionName(groupId: string): string {
   return `nanasa-${createHash("sha256").update(groupId).digest("hex").slice(0, 16)}`;
 }
 
-function windowName(run: AgentRun): string {
+function windowName(run: RuntimeRun): string {
   return `run-${run.generation}-${createHash("sha256").update(run.id).digest("hex").slice(0, 8)}`;
 }
 
@@ -98,6 +105,7 @@ export class TmuxRuntime {
   readonly #store: NanasaStore;
   readonly #tmuxPath: string;
   readonly #runtimeEnvironment: NonNullable<TmuxRuntimeOptions["runtimeEnvironment"]>;
+  readonly #foremanRuntimeEnvironment: NonNullable<TmuxRuntimeOptions["foremanRuntimeEnvironment"]>;
   readonly #runtimeProvisioner: AgentRuntimeProvisioner | undefined;
   readonly #providerAuthority:
     | Pick<AgentRuntimeProvisioner, "controlPolicy" | "processRecognizer">
@@ -116,6 +124,7 @@ export class TmuxRuntime {
     this.serverName = options.serverName ?? "nanasa";
     this.#tmuxPath = options.tmuxPath ?? "tmux";
     this.#runtimeEnvironment = options.runtimeEnvironment ?? (() => ({}));
+    this.#foremanRuntimeEnvironment = options.foremanRuntimeEnvironment ?? (() => ({}));
     this.#runtimeProvisioner = options.runtimeProvisioner;
     this.#providerAuthority = options.providerAuthority ?? options.runtimeProvisioner;
     this.#processIdentityObserver =
@@ -134,7 +143,21 @@ export class TmuxRuntime {
     size: { cols: number; rows: number },
   ): Promise<AgentRun> {
     const { run, profile, membership } = this.#store.createRunForMembership(groupId, memberId);
-    return this.#launchCreatedRun(run, profile, membership, size);
+    return AgentRunSchema.parse(
+      await this.#launchCreatedRun(run, profile, { kind: "team", membership }, size),
+    );
+  }
+
+  public async startForemanRun(
+    foreman: ForemanRuntimeOwner,
+    size: { cols: number; rows: number },
+  ): Promise<ForemanRun> {
+    if (this.#runtimeProvisioner === undefined)
+      throw new Error("Foreman requires provider runtime provisioning");
+    const { run, profile } = this.#store.createRunForForeman(foreman.id);
+    return ForemanRunSchema.parse(
+      await this.#launchCreatedRun(run, profile, { kind: "foreman", foreman }, size),
+    );
   }
 
   public async recoverRun(
@@ -186,7 +209,15 @@ export class TmuxRuntime {
       },
     );
     options.onReplacementCreated?.(run);
-    return this.#launchCreatedRun(run, profile, membership, size, options.nativeSession);
+    return AgentRunSchema.parse(
+      await this.#launchCreatedRun(
+        run,
+        profile,
+        { kind: "team", membership },
+        size,
+        options.nativeSession,
+      ),
+    );
   }
 
   public async inspectProviderUpdatePane(
@@ -303,21 +334,21 @@ export class TmuxRuntime {
   }
 
   async #launchCreatedRun(
-    run: AgentRun,
+    run: RuntimeRun,
     profile: AgentProfile,
-    membership: GroupMembership,
+    owner: ProviderRuntimeOwner,
     size: { cols: number; rows: number },
     nativeSession?: NativeSessionReference,
-  ): Promise<AgentRun> {
+  ): Promise<RuntimeRun> {
     let binding: TerminalBinding | undefined;
     try {
-      binding = await this.#launch(run, profile, membership, size, nativeSession);
-      return this.#store.updateRunStatus(run.id, "running", { terminal: binding });
+      binding = await this.#launch(run, profile, owner, size, nativeSession);
+      return this.#store.updateRuntimeRunStatus(run.id, "running", { terminal: binding });
     } catch (error) {
       if (binding !== undefined) {
         await this.#tmux(["kill-pane", "-t", binding.paneId], true);
       }
-      this.#store.updateRunStatus(run.id, "failed", {
+      this.#store.updateRuntimeRunStatus(run.id, "failed", {
         reason: error instanceof Error ? error.message : "tmux_launch_failed",
       });
       throw error;
@@ -329,7 +360,18 @@ export class TmuxRuntime {
     if (run === undefined) {
       throw new DomainError("active_run_not_found", "The member has no active run", 404);
     }
-    const stopping = this.#store.updateRunStatus(run.id, "stopping");
+    return AgentRunSchema.parse(await this.#stopOwnedRun(run));
+  }
+
+  public async stopForemanRun(foremanId: string): Promise<ForemanRun> {
+    const run = this.#store.getActiveForemanRun(foremanId);
+    if (run === undefined)
+      throw new DomainError("active_run_not_found", "Foreman has no active run", 404);
+    return ForemanRunSchema.parse(await this.#stopOwnedRun(run));
+  }
+
+  async #stopOwnedRun(run: RuntimeRun): Promise<RuntimeRun> {
+    const stopping = this.#store.updateRuntimeRunStatus(run.id, "stopping");
     if (stopping.terminal !== undefined) {
       try {
         await this.#ownedPaneStatus(stopping, true, true);
@@ -339,7 +381,7 @@ export class TmuxRuntime {
           (error.message === "terminal_run_unavailable" ||
             error.message.startsWith("terminal_owner_pane_"))
         ) {
-          return this.#store.updateRunStatus(run.id, "stopped", {
+          return this.#store.updateRuntimeRunStatus(run.id, "stopped", {
             reason: "terminal_binding_not_owned",
           });
         }
@@ -347,14 +389,14 @@ export class TmuxRuntime {
       }
       const result = await this.#tmux(["kill-pane", "-t", stopping.terminal.paneId], true);
       if (result.exitCode !== 0 && !result.stderr.includes("can't find pane")) {
-        this.#store.updateRunStatus(run.id, "failed", { reason: result.stderr.trim() });
+        this.#store.updateRuntimeRunStatus(run.id, "failed", { reason: result.stderr.trim() });
         throw new Error(result.stderr.trim() || "tmux kill-pane failed");
       }
     }
-    return this.#store.updateRunStatus(run.id, "stopped", { reason: "operator_stopped" });
+    return this.#store.updateRuntimeRunStatus(run.id, "stopped", { reason: "operator_stopped" });
   }
 
-  public async ensureViewSession(run: AgentRun): Promise<string> {
+  public async ensureViewSession(run: RuntimeRun): Promise<string> {
     const binding = run.terminal;
     if (binding === undefined || binding.serverName !== this.serverName) {
       throw new Error("Run does not have a binding on this tmux server");
@@ -422,7 +464,7 @@ export class TmuxRuntime {
     }
   }
 
-  public async pasteToRun(run: AgentRun, text: string): Promise<void> {
+  public async pasteToRun(run: RuntimeRun, text: string): Promise<void> {
     await this.#ownedPaneStatus(run);
     if (Buffer.byteLength(text, "utf8") > 1_048_576) {
       throw new Error("terminal_delivery_too_large");
@@ -448,7 +490,7 @@ export class TmuxRuntime {
     }
   }
 
-  public async observeRun(run: AgentRun): Promise<RuntimeObservation> {
+  public async observeRun(run: RuntimeRun): Promise<RuntimeObservation> {
     const binding = run.terminal;
     if (binding === undefined || binding.serverName !== this.serverName) {
       return runtimeObservation(run, "missing", { evidenceCode: "terminal_binding_unavailable" });
@@ -527,13 +569,13 @@ export class TmuxRuntime {
     }
   }
 
-  public async interruptRun(run: AgentRun): Promise<void> {
+  public async interruptRun(run: RuntimeRun): Promise<void> {
     await this.#ownedPaneStatus(run);
     await this.#tmux(["send-keys", "-t", terminalInputTarget(run.terminal!), "C-c"]);
   }
 
   public async readTerminal(request: TerminalReadRequest): Promise<TerminalReadResult> {
-    const run = this.#store.getRun(request.runId);
+    const run = this.#store.getRuntimeRun(request.runId);
     if (run.generation !== request.generation) {
       throw new DomainError(
         "terminal_read_generation_mismatch",
@@ -713,21 +755,23 @@ export class TmuxRuntime {
   }
 
   async #launch(
-    run: AgentRun,
+    run: RuntimeRun,
     profile: AgentProfile,
-    membership: GroupMembership,
+    owner: ProviderRuntimeOwner,
     size: { cols: number; rows: number },
     nativeSession?: NativeSessionReference,
   ): Promise<TerminalBinding> {
-    const provisioned = await this.#runtimeProvisioner?.provision(
+    const provisioned = await this.#runtimeProvisioner?.provisionOwner(
       run,
-      membership,
+      owner,
       profile,
       nativeSession,
     );
     const environment = {
       ...profile.environment,
-      ...(await this.#runtimeEnvironment(run)),
+      ...(await ("foremanId" in run
+        ? this.#foremanRuntimeEnvironment(run)
+        : this.#runtimeEnvironment(run))),
       ...provisioned?.environment,
     };
     if (environment.NANASA_BROWSER_BIN !== undefined) {
@@ -737,7 +781,7 @@ export class TmuxRuntime {
       provisioned === undefined ? [profile.command, ...profile.args] : [...provisioned.command];
     if (provisioned !== undefined) {
       this.#provisionedRuns.set(run.id, provisioned);
-      this.#store.updateRunProviderMetadata(run.id, {
+      this.#store.updateRuntimeRunProviderMetadata(run.id, {
         launchKind: nativeSession === undefined ? run.launchKind : "resuming",
         requestedModel: provisioned.desiredModel,
         requestedModelSource: provisioned.desiredModelSource,
@@ -753,7 +797,7 @@ export class TmuxRuntime {
   }
 
   async #launchCommand(
-    run: AgentRun,
+    run: RuntimeRun,
     launchArguments: string[],
     workingDirectory: string | undefined,
     environment: Record<string, string>,
@@ -771,7 +815,7 @@ export class TmuxRuntime {
       environmentArguments.push("-e", `${name}=${value}`);
     }
     const launchCommand = launchArguments.map(shellQuote).join(" ");
-    const session = sessionName(run.groupId);
+    const session = sessionName("foremanId" in run ? `foreman:${run.foremanId}` : run.groupId);
     const exists = (await this.#tmux(["has-session", "-t", `=${session}`], true)).exitCode === 0;
     let bootstrapWindowId: string | undefined;
     let binding: TerminalBinding | undefined;
@@ -878,7 +922,7 @@ export class TmuxRuntime {
     return this.#serverConfiguration;
   }
 
-  async #enableOwnedPassthrough(run: AgentRun): Promise<void> {
+  async #enableOwnedPassthrough(run: RuntimeRun): Promise<void> {
     await this.#configureServer();
     if (!this.#passthroughSupported) return;
     await this.#ownedPaneStatus(run, true, true);
@@ -915,7 +959,7 @@ export class TmuxRuntime {
   }
 
   async #ownedPaneStatus(
-    run: AgentRun,
+    run: RuntimeRun,
     allowCopyMode = false,
     allowStarting = false,
   ): Promise<OwnedPaneStatus> {
