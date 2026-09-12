@@ -31,6 +31,7 @@ import { ProviderCatalogService } from "./extensions/provider-catalog-service.js
 import { ProviderExtensionPlanner } from "./extensions/provider-extension-planner.js";
 import { ProviderExtensionService } from "./extensions/provider-extension-service.js";
 import { ProviderHealthService } from "./extensions/provider-health-service.js";
+import { ForemanConversationService } from "./foreman-conversation-service.js";
 import { ForemanGoalService } from "./foreman-goal-service.js";
 import { ForemanInboxScheduler } from "./foreman-inbox-scheduler.js";
 import { ForemanRuntimeService } from "./foreman-runtime-service.js";
@@ -156,6 +157,7 @@ export interface DaemonContext {
   loadedConfig: LoadedNanasaConfig;
   foreman: ForemanRuntimeService;
   goals: ForemanGoalService;
+  conversations: ForemanConversationService;
   runtimePath: string;
   guard: DaemonInstanceGuard;
   lifecycle: DaemonLifecycle;
@@ -484,6 +486,9 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       (runId) => terminalControl.hasController(runId),
     );
     const goalService = goals;
+    const conversations = new ForemanConversationService(store, goals, (runId) =>
+      terminalControl.hasController(runId),
+    );
     goalRecoveryReference.current = goalService;
     const terminalReads = new TerminalReadService(
       store,
@@ -522,7 +527,10 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       terminalInput,
       (runId) => terminalGateway.hasController(runId),
       () => new Date(),
-      (inboxId) => goalService.authorizeInbox(inboxId),
+      (inboxId) => {
+        goalService.authorizeInbox(inboxId);
+        conversations.authorizeInbox(inboxId, foreman.status().configuration?.id);
+      },
     );
     const deliveries = new DeliveryRepository(store);
     const messages = new MessageRepository(store);
@@ -538,6 +546,8 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
           goalService.authorizeHandoff(principal, command);
         },
         (principal, command) => goalService.authorizePeer(principal, command),
+        undefined,
+        (principal, command) => conversations.authorize(principal, command),
       ),
       () => new Date(),
       (action) => goalService.linkAction(action),
@@ -550,6 +560,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       1000,
       (action) => {
         goalService.authorizeAction(action);
+        conversations.authorizeAction(action);
       },
     );
     const actionAcks = new AgentActionAckService(store);
@@ -605,6 +616,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     foreman.startMonitoring();
     foremanInbox.start();
     goalService.start(actions, coordinator);
+    conversations.start(actions);
 
     app.addHook("onRequest", async (request, reply) => {
       const path = requestPath(request.url);
@@ -649,6 +661,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       await consoles.close();
       await actionScheduler.close();
       await goalService.close();
+      await conversations.close();
       await foremanInbox.close();
       await foreman.close();
       await coordinator.close();
@@ -739,6 +752,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         openWaits,
         foremanConfig: () => configRepository.load().config,
         goals: goalService,
+        conversations,
         terminalReads,
         checkouts,
       });
@@ -752,6 +766,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       snapshot: snapshotReadModel,
       store,
       goals: goalService,
+      conversations,
       repositoryIdentity,
       launchConsent: launchConsentService,
       urlOpenService,
@@ -808,6 +823,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     }
 
     await app.ready();
+    await foreman.startAutomatically();
     lifecycle.markReady();
     return {
       app,
@@ -831,6 +847,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       foreman,
       goals: goalService,
       runtimePath,
+      conversations,
       guard,
       lifecycle,
       daemonEpoch,

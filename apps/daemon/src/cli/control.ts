@@ -5,6 +5,8 @@ import { type ErrorPayload, ErrorPayloadSchema } from "@nanasa/contracts";
 import { ControlClientError } from "@nanasa/control-client";
 import WebSocket from "ws";
 import { authenticateAgent, CliAdminError, doctorIntegrations } from "../cli-admin.js";
+import { loadNanasaConfig } from "../config-loader.js";
+import { DaemonInstanceGuard } from "../daemon-instance-guard.js";
 import { matchControlRoute } from "../http/route-registry.js";
 import { repositoryIdentity } from "../protocol-metadata.js";
 import { loadBuildIdentity } from "../release/build-identity.js";
@@ -174,6 +176,10 @@ function selectCommand(args: readonly string[]): {
 } {
   const family = args[0];
   if (family === undefined) throw new CliUsageError("A command family is required");
+  if (family === "stop") {
+    const declaration = findCliCommand("daemon", "stop") as CliCommandDeclaration;
+    return { declaration, remainder: args.slice(1) };
+  }
   if (family === "completion") {
     const declaration = findCliCommand("completion", "generate") as CliCommandDeclaration;
     return { declaration, remainder: args.slice(1) };
@@ -226,6 +232,7 @@ function completionInventory(): ReadonlyMap<string, readonly string[]> {
     inventory.set(entry.family, commands);
   }
   inventory.set("doctor", []);
+  inventory.set("stop", []);
   inventory.set("completion", ["bash", "fish", "powershell", "zsh"]);
   return new Map(
     [...inventory.entries()]
@@ -439,6 +446,27 @@ export async function runControlCli(
     const { declaration, remainder } = selectCommand(args);
     const options = parseOptions(remainder);
     assertArguments(declaration, options);
+    if (declaration.id === "daemon.stop") {
+      if (
+        options.apiUrl !== undefined ||
+        options.operatorTokenFile !== undefined ||
+        options.remoteRepo !== undefined
+      ) {
+        throw new CliUsageError(
+          "daemon stop is repository-local; API and remote connection overrides are not supported",
+        );
+      }
+      const loaded = loadNanasaConfig(repositoryRoot);
+      const value = await DaemonInstanceGuard.stop(repositoryRoot, loaded.runtimeDirectory, {
+        timeoutMs: options.timeoutMs,
+      });
+      outputSuccess(
+        value,
+        options.forceJson ? "json" : options.outputExplicit ? options.output : "text",
+        stdout,
+      );
+      return 0;
+    }
     if (declaration.id === "completion.generate") {
       stdout.write(completion(options.positionals[0] as string));
       return 0;

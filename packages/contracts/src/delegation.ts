@@ -14,6 +14,7 @@ export const ProposeForemanGoalCommandSchema = z
     objective: TextSchema,
     constraints: z.array(z.string().trim().min(1).max(2000)).max(32).default([]),
     sourceMessageId: IdentifierSchema.optional(),
+    sourceConversationIds: z.array(IdentifierSchema).max(16).optional(),
   })
   .strict();
 export type ProposeForemanGoalCommand = z.infer<typeof ProposeForemanGoalCommandSchema>;

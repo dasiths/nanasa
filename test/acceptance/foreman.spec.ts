@@ -1,8 +1,109 @@
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { ForemanWorkspace } from "@nanasa/contracts";
+import type { ForemanConversationRequest, ForemanWorkspace } from "@nanasa/contracts";
 import { expect, test } from "@playwright/test";
 import { PackageAcceptanceService } from "./fixtures/package-fixture.js";
+
+test("Foreman auto-starts and asks two teams for durable replies without any goal", async ({
+  page,
+  browserName,
+}, testInfo) => {
+  const nanasa = await PackageAcceptanceService.create(browserName, { foreman: true });
+  try {
+    expect((await nanasa.request<ForemanWorkspace>("/api/v1/foreman")).run?.status).toBe("running");
+    const members: string[] = [];
+    for (const name of ["Backend", "Frontend"]) {
+      const group = await nanasa.request<{ id: string }>("/api/v1/groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const member = await nanasa.request<{ memberId: string }>(
+        `/api/v1/groups/${group.id}/agents`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: `${name} lead`, integrationId: "copilot" }),
+        },
+      );
+      members.push(member.memberId);
+      await nanasa.startAll(group.id);
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(`${nanasa.baseUrl}/foreman${new URL(nanasa.portalUrl).hash}`);
+    await page
+      .getByRole("textbox", { name: "Message Foreman", exact: true })
+      .fill("Ask both teams what they are doing");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    for (const memberId of members)
+      await expect(
+        page.getByText(
+          `Team response: Member ${memberId}: no assigned work; ready for discussion.`,
+          { exact: true },
+        ),
+      ).toBeVisible({ timeout: 30000 });
+    const requests = await nanasa.request<ForemanConversationRequest[]>(
+      "/api/v1/foreman/conversations",
+    );
+    expect(requests).toHaveLength(2);
+    expect(requests.every((request) => request.state === "answered")).toBe(true);
+    expect(await nanasa.request("/api/v1/foreman/goals")).toEqual([]);
+    await page.getByText("Team conversations (0 pending)", { exact: true }).click();
+    for (const button of await page.getByRole("button", { name: "Dismiss", exact: true }).all()) {
+      if (await button.isVisible()) await button.click();
+    }
+    await page.getByRole("heading", { name: "Foreman", level: 2 }).scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: testInfo.outputPath("foreman-ad-hoc-desktop.png"),
+      fullPage: true,
+    });
+    await nanasa.restartDaemon();
+    await page.goto(`${nanasa.baseUrl}/foreman${new URL(nanasa.portalUrl).hash}`);
+    await page.reload();
+    await expect(
+      page.getByText(
+        `Team response: Member ${members[0]}: no assigned work; ready for discussion.`,
+        { exact: true },
+      ),
+    ).toBeVisible();
+    expect(await nanasa.request("/api/v1/foreman/conversations")).toEqual(requests);
+    await page.getByRole("tab", { name: "Terminal", exact: true }).click();
+    await page
+      .getByRole("textbox", { name: "Terminal input", exact: true })
+      .fill("Ask the teams from this terminal");
+    await page.getByRole("textbox", { name: "Terminal input", exact: true }).press("Enter");
+    await page.getByRole("tab", { name: "Channel", exact: true }).click();
+    await expect
+      .poll(
+        async () =>
+          (
+            await nanasa.request<ForemanConversationRequest[]>("/api/v1/foreman/conversations")
+          ).filter((request) => request.state === "answered").length,
+        { timeout: 30000 },
+      )
+      .toBe(4);
+    const nativeRequests = (
+      await nanasa.request<ForemanConversationRequest[]>("/api/v1/foreman/conversations")
+    ).filter((request) => !requests.some((prior) => prior.id === request.id));
+    expect(nativeRequests.every((request) => request.sourceMessageId === undefined)).toBe(true);
+    expect(await nanasa.request("/api/v1/foreman/goals")).toEqual([]);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByText("Team conversations (0 pending)", { exact: true }).click();
+    for (const button of await page.getByRole("button", { name: "Dismiss", exact: true }).all()) {
+      if (await button.isVisible()) await button.click();
+    }
+    await page.getByRole("heading", { name: "Foreman", level: 2 }).scrollIntoViewIfNeeded();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.screenshot({
+      path: testInfo.outputPath("foreman-ad-hoc-mobile.png"),
+      fullPage: true,
+    });
+  } finally {
+    await nanasa.close();
+  }
+});
 
 test("Foreman goals accept high-level outcomes and retain human control across restart", async ({
   page,
@@ -12,6 +113,8 @@ test("Foreman goals accept high-level outcomes and retain human control across r
   try {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto(`${nanasa.baseUrl}/foreman${new URL(nanasa.portalUrl).hash}`);
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Start", exact: true })).toBeVisible();
     await page.getByRole("tab", { name: "Settings", exact: true }).click();
     await page.getByRole("spinbutton", { name: "Concurrent goals", exact: true }).fill("2");
     await page.getByRole("button", { name: "Save settings", exact: true }).click();
@@ -93,7 +196,6 @@ test("Foreman channel, native terminal, goal settings, and restart use the packa
   try {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto(`${nanasa.baseUrl}/foreman${new URL(nanasa.portalUrl).hash}`);
-    await page.getByRole("button", { name: "Start", exact: true }).click();
     await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
     await page
       .getByRole("textbox", { name: "Message Foreman", exact: true })

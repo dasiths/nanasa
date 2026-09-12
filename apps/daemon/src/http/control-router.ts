@@ -99,6 +99,7 @@ import type { EventLog } from "../event-log.js";
 import { EventStreamSession } from "../event-stream-session.js";
 import type { ProviderExtensionService } from "../extensions/provider-extension-service.js";
 import type { ProviderHealthService } from "../extensions/provider-health-service.js";
+import type { ForemanConversationService } from "../foreman-conversation-service.js";
 import type { ForemanGoalService } from "../foreman-goal-service.js";
 import type { ForemanRuntimeService } from "../foreman-runtime-service.js";
 import type { CheckoutService } from "../git/checkout-service.js";
@@ -131,6 +132,7 @@ export interface ControlRouterServices {
   config: ConfigRepository;
   foreman: ForemanRuntimeService;
   goals: ForemanGoalService;
+  conversations: ForemanConversationService;
   snapshot: SnapshotReadModel;
   store: NanasaStore;
   repositoryIdentity: string;
@@ -342,6 +344,10 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
   });
   register("config.get", () => services.config.load().config);
   register("foreman.get", () => ForemanWorkspaceSchema.parse(services.foreman.status()));
+  register("foreman.conversations", () => services.conversations.list());
+  register("foreman.cancelConversation", (request) =>
+    services.conversations.cancel(record(request.params).requestId ?? ""),
+  );
   register("goals.list", () => services.goals.list());
   register("foreman.connectors", () => services.auth.listConnectors());
   register("foreman.createConnector", (request) => services.auth.createConnector(request.body));

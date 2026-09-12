@@ -134,6 +134,7 @@ import type { McpForemanPrincipal } from "./mcp-auth.js";
 import { dockerMemberName, formatMemberId, type MemberNameGenerator } from "./member-id.js";
 import { orderedAgentEntries } from "./membership-order.js";
 import { assertForemanDatabaseLayout, openNanasaDatabase } from "./persistence/database.js";
+import { FOREMAN_CONVERSATIONS_SCHEMA_SQL } from "./persistence/schema.js";
 import type { RepositoryTrustReceipt, TrustSubjectKind } from "./repository-trust-service.js";
 
 interface AddMembershipInput {
@@ -569,6 +570,7 @@ export class NanasaStore {
     this.#database = openNanasaDatabase(path);
     try {
       assertForemanDatabaseLayout(this.#database);
+      this.#database.exec(FOREMAN_CONVERSATIONS_SCHEMA_SQL);
     } catch (error) {
       this.#database.close();
       throw error;

@@ -53,6 +53,7 @@ const references = {
     configuration: schema(contracts.ForemanConfigSchema, "input"),
     workspace: schema(contracts.ForemanWorkspaceSchema),
     channel: schema(contracts.ForemanChannelPageSchema),
+    conversation: schema(contracts.ForemanConversationRequestSchema),
     goal: schema(contracts.ForemanGoalWorkspaceSchema),
     notifications: schema(contracts.ForemanNotificationPageSchema),
     commands: {
@@ -60,6 +61,8 @@ const references = {
       start: schema(contracts.StartForemanCommandSchema, "input"),
       stop: schema(contracts.StopForemanCommandSchema, "input"),
       send: schema(contracts.SendForemanMessageCommandSchema, "input"),
+      askMember: schema(contracts.AskForemanMemberCommandSchema, "input"),
+      replyToForeman: schema(contracts.ReplyForemanConversationCommandSchema, "input"),
       resolveInput: schema(contracts.ResolveForemanInputCommandSchema, "input"),
       proposeGoal: schema(contracts.ProposeForemanGoalCommandSchema, "input"),
       controlGoal: schema(contracts.ControlForemanGoalCommandSchema, "input"),

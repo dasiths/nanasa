@@ -47,6 +47,7 @@ npx nanasa auth login <integration-key> [--agent <agent-map-key>]
 npx nanasa auth portal
 npx nanasa docs
 npx nanasa start [--host <host>] [--port <port>] [--mcp | --no-mcp]
+npx nanasa stop [--timeout <milliseconds>] [--output json|text]
 npx nanasa service install [--host <host>] [--port <port>] [--mcp | --no-mcp]
 npx nanasa reset --from-alpha --confirm <repository-root>
 ```
@@ -64,6 +65,26 @@ for a deliberate diagnostic or single-agent session without coordination tools.
 For startup settings, command-line options override their `NANASA_*` environment
 equivalents, which override product defaults. `service install` persists the resolved
 host, port, and MCP state in the owner-only service environment file.
+
+### Stop a running daemon
+
+Run `npx nanasa stop` from the repository or a nested directory. The equivalent
+command is `npx nanasa daemon stop`. This is useful when a second `start` reports
+that another daemon already holds mutable authority.
+
+Stop verifies the repository's owner-only lock and process start identity before
+sending SIGTERM, then waits up to 30 seconds for that process to exit. Use
+`--timeout <milliseconds>` to change that limit. It does not force-kill a process
+on timeout or signal a reused PID. No running daemon is a successful no-op.
+
+The command preserves configuration, credentials, database state, and managed
+tmux agent sessions. It prints a short status by default; `--json` or
+`--output json` returns a structured result. No HTTP port or operator token is
+needed, even if startup used a different port or `NANASA_RUNTIME_PATH`.
+For a systemd-managed installation, `npx nanasa service stop` remains available
+to stop the repository's user service through systemd.
+
+### Reset alpha state
 
 The alpha reset is destructive. It creates a verified backup, reports a redacted
 inventory, removes owned runtime state, and initializes the current schema. Use

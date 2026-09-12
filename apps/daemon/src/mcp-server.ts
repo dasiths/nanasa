@@ -2,14 +2,17 @@ import { hostHeaderValidation, originValidation, toNodeHandler } from "@modelcon
 import { type AuthInfo, createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import {
   AgentProgressReportCommandSchema,
+  AskForemanMemberCommandSchema,
   CreateAgentActionCommandSchema,
   DelegateForemanGoalCommandSchema,
   ForemanChannelQuerySchema,
   ForemanCheckInCommandSchema,
+  ForemanConversationQuerySchema,
   MAX_MESSAGE_REQUEST_BYTES,
   type MessageSubmissionResult,
   type NanasaConfig,
   ProposeForemanGoalCommandSchema,
+  ReplyForemanConversationCommandSchema,
   ReportDelegationCommandSchema,
   RequestHumanDecisionCommandSchema,
   SendForemanMessageCommandSchema,
@@ -26,6 +29,7 @@ import {
   nanasaMcpServerInstructions,
 } from "./coordination-instructions.js";
 import { DeliveryRepository } from "./delivery-repository.js";
+import type { ForemanConversationService } from "./foreman-conversation-service.js";
 import type { ForemanGoalService } from "./foreman-goal-service.js";
 import type { CheckoutService } from "./git/checkout-service.js";
 import {
@@ -36,6 +40,7 @@ import {
   McpListAgentStatusesSchema as ListAgentStatusesSchema,
   McpListMembersSchema as ListMembersSchema,
   MCP_TOOL_REGISTRY,
+  McpConversationReferenceSchema,
   McpDeliverySchema,
   McpForemanBootstrapSchema,
   McpGoalReferenceSchema,
@@ -68,6 +73,7 @@ export interface McpRouteOptions {
   openWaits: AgentOpenWaitService;
   foremanConfig?: () => NanasaConfig;
   goals: ForemanGoalService;
+  conversations: ForemanConversationService;
   terminalReads: TerminalReadService;
   checkouts: CheckoutService;
 }
@@ -330,7 +336,34 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
   if (principal.kind === "foreman") {
     const server = new McpServer(
       { name: "nanasa", version: "0.0.0" },
-      { instructions: NANASA_FOREMAN_INSTRUCTIONS },
+      {
+        instructions: NANASA_FOREMAN_INSTRUCTIONS,
+        capabilities: { tools: { listChanged: false } },
+      },
+    );
+    server.registerTool(
+      "nanasa.foreman_ask_member",
+      {
+        description: mcpTool("nanasa.foreman_ask_member").description,
+        inputSchema: AskForemanMemberCommandSchema,
+      },
+      async (input) => actionToolResult(() => options.conversations.ask(principal, input)),
+    );
+    server.registerTool(
+      "nanasa.foreman_read_conversations",
+      {
+        description: mcpTool("nanasa.foreman_read_conversations").description,
+        inputSchema: ForemanConversationQuerySchema,
+      },
+      async (input) => actionToolResult(() => options.conversations.read(principal, input)),
+    );
+    server.registerTool(
+      "nanasa.foreman_finish_conversation",
+      {
+        description: mcpTool("nanasa.foreman_finish_conversation").description,
+        inputSchema: McpConversationReferenceSchema,
+      },
+      async (input) => actionToolResult(() => options.conversations.finish(principal, input.id)),
     );
     server.registerTool(
       "nanasa.foreman_bootstrap",
@@ -479,7 +512,10 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
   }
   const server = new McpServer(
     { name: "nanasa", version: "0.0.0" },
-    { instructions: nanasaMcpServerInstructions() },
+    {
+      instructions: nanasaMcpServerInstructions(),
+      capabilities: { tools: { listChanged: false } },
+    },
   );
   server.registerTool(
     "nanasa.list_members",
@@ -523,6 +559,22 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
     },
   );
   if (principal.kind === "agent") {
+    server.registerTool(
+      "nanasa.member_foreman_conversations",
+      {
+        description: mcpTool("nanasa.member_foreman_conversations").description,
+        inputSchema: ForemanConversationQuerySchema,
+      },
+      async (input) => actionToolResult(() => options.conversations.read(principal, input)),
+    );
+    server.registerTool(
+      "nanasa.reply_foreman",
+      {
+        description: mcpTool("nanasa.reply_foreman").description,
+        inputSchema: ReplyForemanConversationCommandSchema,
+      },
+      async (input) => actionToolResult(() => options.conversations.reply(principal, input)),
+    );
     server.registerTool(
       "nanasa.team_delegations",
       {

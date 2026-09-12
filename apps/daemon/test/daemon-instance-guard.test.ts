@@ -1,7 +1,15 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DaemonInstanceGuard,
   linuxProcessStartIdentityFromStat,
@@ -16,6 +24,115 @@ afterEach(() => {
 });
 
 describe("DaemonInstanceGuard", () => {
+  it("stops only the recorded process and waits for its exit", async () => {
+    const repository = mkdtempSync(join(tmpdir(), "nanasa-stop-"));
+    temporaryDirectories.push(repository);
+    const runtime = join(repository, ".nanasa", "runtime");
+    const guard = DaemonInstanceGuard.acquire(repository, runtime, {
+      processId: 101,
+      processStartedAt: "original-start",
+    });
+    let identity: string | undefined = "original-start";
+    const signalProcess = vi.fn(() => {
+      guard.release();
+      identity = undefined;
+    });
+    expect(
+      await DaemonInstanceGuard.stop(repository, runtime, {
+        processIdentity: () => identity,
+        signalProcess,
+      }),
+    ).toMatchObject({ state: "stopped", instanceId: guard.instanceId });
+    expect(signalProcess).toHaveBeenCalledExactlyOnceWith(101, "SIGTERM");
+    expect(existsSync(guard.lockPath)).toBe(false);
+  });
+
+  it.each([undefined, "reused-pid-start"])(
+    "does not signal a stale owner (%s)",
+    async (identity) => {
+      const repository = mkdtempSync(join(tmpdir(), "nanasa-stop-stale-"));
+      temporaryDirectories.push(repository);
+      const runtime = join(repository, ".nanasa", "runtime");
+      const signalProcess = vi.fn();
+      expect(await DaemonInstanceGuard.stop(repository, runtime, { signalProcess })).toMatchObject({
+        state: "not-running",
+      });
+      const guard = DaemonInstanceGuard.acquire(repository, runtime, {
+        processId: 101,
+        processStartedAt: "original-start",
+      });
+      try {
+        expect(
+          await DaemonInstanceGuard.stop(repository, runtime, {
+            processIdentity: () => identity,
+            signalProcess,
+          }),
+        ).toMatchObject({ state: "not-running" });
+        expect(signalProcess).not.toHaveBeenCalled();
+        expect(existsSync(guard.lockPath)).toBe(true);
+      } finally {
+        guard.release();
+      }
+    },
+  );
+
+  it("refuses unsafe locks and process group IDs", async () => {
+    const repository = mkdtempSync(join(tmpdir(), "nanasa-stop-unsafe-"));
+    temporaryDirectories.push(repository);
+    const runtime = join(repository, ".nanasa", "runtime");
+    const guard = DaemonInstanceGuard.acquire(repository, runtime);
+    const original = readFileSync(guard.lockPath, "utf8");
+    const signalProcess = vi.fn();
+    try {
+      chmodSync(guard.lockPath, 0o644);
+      await expect(
+        DaemonInstanceGuard.stop(repository, runtime, { signalProcess }),
+      ).rejects.toThrow("owner-only");
+      chmodSync(guard.lockPath, 0o600);
+      for (const processId of [0, -1]) {
+        writeFileSync(guard.lockPath, JSON.stringify({ ...JSON.parse(original), processId }));
+        await expect(
+          DaemonInstanceGuard.stop(repository, runtime, { signalProcess }),
+        ).rejects.toThrow("malformed");
+      }
+      writeFileSync(
+        guard.lockPath,
+        JSON.stringify({ ...JSON.parse(original), repositoryRoot: "/other-repository" }),
+      );
+      await expect(
+        DaemonInstanceGuard.stop(repository, runtime, { signalProcess }),
+      ).rejects.toThrow("another repository");
+      expect(signalProcess).not.toHaveBeenCalled();
+    } finally {
+      writeFileSync(guard.lockPath, original);
+      guard.release();
+    }
+  });
+
+  it("times out without escalating or removing the live lock", async () => {
+    const repository = mkdtempSync(join(tmpdir(), "nanasa-stop-timeout-"));
+    temporaryDirectories.push(repository);
+    const runtime = join(repository, ".nanasa", "runtime");
+    const guard = DaemonInstanceGuard.acquire(repository, runtime, {
+      processId: 101,
+      processStartedAt: "original-start",
+    });
+    const signalProcess = vi.fn();
+    try {
+      await expect(
+        DaemonInstanceGuard.stop(repository, runtime, {
+          timeoutMs: 1,
+          processIdentity: () => "original-start",
+          signalProcess,
+        }),
+      ).rejects.toThrow("no force kill");
+      expect(signalProcess).toHaveBeenCalledExactlyOnceWith(101, "SIGTERM");
+      expect(existsSync(guard.lockPath)).toBe(true);
+    } finally {
+      guard.release();
+    }
+  });
+
   it("treats Linux zombie process records as dead", () => {
     const fields = ["S", ...Array.from({ length: 18 }, (_, index) => String(index + 1)), "4242"];
     const active = `101 (node worker) ${fields.join(" ")}`;

@@ -126,3 +126,48 @@ export const ForemanChannelPageSchema = z
   })
   .strict();
 export type ForemanChannelPage = z.infer<typeof ForemanChannelPageSchema>;
+
+export const AskForemanMemberCommandSchema = z
+  .object({
+    requestId: IdentifierSchema,
+    groupId: IdentifierSchema,
+    memberId: IdentifierSchema,
+    text: z.string().trim().min(1).max(8000),
+    replyTo: IdentifierSchema.optional(),
+    sourceMessageId: IdentifierSchema.optional(),
+    expiresInSeconds: z.number().int().min(30).max(86400).default(3600),
+  })
+  .strict();
+export type AskForemanMemberCommand = z.infer<typeof AskForemanMemberCommandSchema>;
+export const ForemanConversationRequestSchema = AskForemanMemberCommandSchema.extend({
+  id: IdentifierSchema,
+  conversationId: IdentifierSchema,
+  foremanId: IdentifierSchema,
+  memberProfileId: IdentifierSchema,
+  authorityRevision: z.number().int().nonnegative(),
+  state: z.enum(["queued", "submitted", "answered", "failed", "expired", "cancelled", "ambiguous"]),
+  actionId: IdentifierSchema.optional(),
+  runId: IdentifierSchema.optional(),
+  generation: z.number().int().positive().optional(),
+  response: z.string().trim().min(1).max(8000).optional(),
+  responseRequestId: IdentifierSchema.optional(),
+  answeredAt: TimestampSchema.optional(),
+  problem: z.string().max(500).optional(),
+  createdAt: TimestampSchema,
+  expiresAt: TimestampSchema,
+}).strict();
+export type ForemanConversationRequest = z.infer<typeof ForemanConversationRequestSchema>;
+export const ReplyForemanConversationCommandSchema = z
+  .object({
+    id: IdentifierSchema,
+    requestId: IdentifierSchema,
+    text: z.string().trim().min(1).max(8000),
+  })
+  .strict();
+export type ReplyForemanConversationCommand = z.infer<typeof ReplyForemanConversationCommandSchema>;
+export const ForemanConversationQuerySchema = z
+  .object({
+    id: IdentifierSchema.optional(),
+    limit: z.number().int().min(1).max(100).default(50),
+  })
+  .strict();

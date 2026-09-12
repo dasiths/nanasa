@@ -101,6 +101,14 @@
       "summary": "Resolve an exact human decision"
     },
     {
+      "id": "daemon.stop",
+      "family": "daemon",
+      "command": "stop",
+      "mode": "local",
+      "positionals": [],
+      "summary": "Gracefully stop the repository daemon, preserving agent sessions (alias: nanasa stop)"
+    },
+    {
       "id": "daemon.status",
       "family": "daemon",
       "command": "status",

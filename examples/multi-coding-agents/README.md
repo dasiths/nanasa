@@ -17,28 +17,37 @@ under this example directory.
 | Repository (no team) | Foreman | GitHub Copilot CLI | Repository coordination | Inherit; approved goal grants |
 | Backend | Project Manager | GitHub Copilot CLI | Project Manager | Inherit |
 | Backend | Engineer 1 | Pi | Implementor | Inherit |
-| Backend | Engineer 2 | Claude Code through LiteLLM | Implementor | Inherit |
+| Backend | Engineer 2 | Pi | Implementor | Inherit |
 | Backend | Reviewer | OpenCode | Reviewer | Read-only |
 | Frontend | Frontend Engineer | Pi | Implementor | Inherit |
 | Frontend | Frontend Reviewer | OpenCode | Reviewer | Read-only |
 
-The existing Backend IDs and provider homes are unchanged. Frontend reuses the
+The existing Backend IDs are unchanged. Engineers 1 and 2 use the `pi-backend`
+integration with a shared provider home. Frontend uses the membership-scoped
 Pi and OpenCode definitions with stable IDs `frontend-builder` and
 `frontend-reviewer` in `team-frontend`. It does not have a project manager;
 cross-team requirements and decisions go through the Human, who can hand team
 context to Foreman. Foreman does not replace Backend's Project Manager and does
 not join either team's broadcasts.
 
-Foreman is enabled in configuration but starts only when the operator chooses
-**Start** in its portal workspace. With both teams and Foreman running, there are
+Foreman is enabled in configuration and starts automatically with the daemon.
+Its **Stop** control lasts for the current daemon session; disable it to keep it
+off across restarts. With both teams and Foreman running, there are
 seven processes. Foreman discovers these teams and their roles dynamically; no
 static template or additional team is needed. Existing team IDs and workspaces
 are unchanged, and delegation requires Human approval.
 
-The configuration also declares a direct Claude Code integration so operators
-can add or reassign an agent without rewriting the provider definition.
+The configuration retains direct Claude Code and Claude-through-LiteLLM
+integrations for optional use. Engineer 2 currently uses Pi with its own
+Nanasa identity and the shared Backend Pi home; no Claude model access or gateway
+is needed for it.
 `doctor` checks every declared integration, including integrations without a
 current agent.
+
+The Backend Project Manager and both engineers request GPT-5.6 Terra. Copilot
+uses `gpt-5.6-terra`; Pi uses `github-copilot/gpt-5.6-terra`. Their model policies
+enforce the configured selection when resuming, rather than preserving an old
+Sonnet or Opus choice. Frontend Pi's existing model selection is unchanged.
 
 Every integration selects the checked-in `autonomous` execution profile. The
 provider adapters translate that profile into native continuation, question,
@@ -117,7 +126,7 @@ make example-doctor
 The setup target builds the local Nanasa package and creates private provider
 homes under `examples/multi-coding-agents/.nanasa/integrations`. The doctor
 target validates the nested configuration, instruction files, ownership, and
-all five provider commands. Foreman always has its own private home under
+all configured provider commands. Foreman always has its own private home under
 `integrations/state/foremen`, even though the Copilot integration uses membership
 scope for team agents.
 
@@ -134,7 +143,6 @@ make -C examples/multi-coding-agents auth-foreman
 make -C examples/multi-coding-agents auth-copilot
 make -C examples/multi-coding-agents auth-pi
 make -C examples/multi-coding-agents auth-opencode
-make -C examples/multi-coding-agents auth-litellm
 make -C examples/multi-coding-agents auth-frontend
 ```
 
@@ -142,14 +150,27 @@ make -C examples/multi-coding-agents auth-frontend
 running it. The Project Manager's Copilot login does not authenticate Foreman,
 and `--foreman` must not be combined with `--agent`.
 
-The `auth-copilot`, `auth-pi`, and `auth-opencode` targets use `nanasa auth login`
-with the exact configured agent ID. This writes provider-owned credentials to
-that agent's membership-scoped home. The LiteLLM target authenticates the
-Docker-backed GitHub Copilot gateway used by Engineer 2.
+The `auth-copilot` and `auth-opencode` targets use `nanasa auth login` with the
+exact configured agent ID and write credentials to that agent's private home.
+
+Run `auth-pi` once for both Backend engineers. It uses `nanasa auth login pi-backend`
+and the integration-scoped home `.nanasa/integrations/state/integrations/pi-backend`.
+`auth-pi-2` is an alias for the same login. Sign in to GitHub Copilot in that shared
+profile; managed Backend runs select GPT-5.6 Terra from configuration.
+Pi authentication and provider settings are shared, while
+Nanasa member identities, roles, terminals, and MCP credentials remain separate.
+Stop both Backend engineer runs before switching profiles, then start them again
+after login. Old private Pi and Claude homes are preserved; credentials are not
+copied automatically.
+
+The optional `auth-litellm` target authenticates the Docker-backed Claude gateway.
+Its checked-in model route and launcher default are `gpt-5.6-terra`, including
+the launcher's Sonnet, Haiku, and Opus aliases. The gateway is not needed by the
+current team and can remain stopped.
 
 The Frontend target authenticates Pi and OpenCode for the two new agent IDs.
-Their membership-scoped homes are separate from Backend's homes even though
-they use the same integrations. Reuse a provider's supported login mechanism;
+Their membership-scoped homes remain separate from Backend's homes. Reuse a
+provider's supported login mechanism;
 do not copy credentials or private homes into a worktree.
 
 Use `make -C examples/multi-coding-agents auth` to run Foreman and both teams'
@@ -157,19 +178,21 @@ flows in order. If both teams are already authenticated, only `auth-foreman` is
 needed for the new Foreman. Do not commit anything created under
 `.nanasa/integrations`.
 
-The `first-run` target stops after setup and diagnostics, then prints the three
-commands required to authenticate providers, start the gateway, and start
-Nanasa. It does not launch unauthenticated agents. Portal authentication is a
+The `first-run` target stops after setup and diagnostics, then prints the
+commands required to authenticate providers and start Nanasa.
+It does not launch unauthenticated agents. Portal authentication is a
 separate browser login and does not replace these provider flows.
 
 ## Start the example
 
-Start the LiteLLM gateway first because Engineer 2 uses it:
+Start Nanasa after authenticating the configured agents:
 
 ```bash
-make -C examples/multi-coding-agents proxy-start
 make example-start
 ```
+
+The LiteLLM gateway is optional; use `proxy-start` only when an agent is assigned
+to the `claude-copilot` integration.
 
 `example-start` builds the package and starts Nanasa with authenticated MCP
 enabled. The example Makefile exports `NANASA_ALLOW_AUTONOMOUS=true` and
@@ -186,9 +209,21 @@ a group-bound MCP credential and can use `nanasa.list_members` to discover its
 peers. Messages, progress, direct requests, and status remain scoped to the
 group represented by that credential.
 
+To stop this example's daemon from another terminal:
+
+```bash
+make -C examples/multi-coding-agents stop
+```
+
+This runs `nanasa stop` for the example repository and preserves its state,
+credentials, and managed agent sessions. Run the start target again after it
+exits. Use this command if startup reports that a daemon already holds mutable
+authority.
+
 ## Coordinate with the GitHub Copilot Foreman
 
-After `auth-foreman`, open **Coordination > Foreman** and choose **Start**. Use
+After `auth-foreman`, start the daemon and open **Coordination > Foreman**. Foreman
+starts automatically; use **Start** only after a manual stop or to retry a failure. Use
 Channel for durable instructions and replies and Terminal for direct native CLI
 control. They share one run. **Ask Foreman about Backend Team** or its Frontend
 equivalent carries team context to the channel; **Back to team** returns you.

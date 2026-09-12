@@ -57,6 +57,8 @@ import {
   ForemanChannelMessageSchema,
   type ForemanChannelPage,
   ForemanChannelPageSchema,
+  type ForemanConversationRequest,
+  ForemanConversationRequestSchema,
   type ForemanRun,
   ForemanRunSchema,
   type ForemanWorkspace,
@@ -171,6 +173,8 @@ import {
 } from "@nanasa/contracts";
 
 export interface PortalClient {
+  loadForemanConversations(): Promise<ForemanConversationRequest[]>;
+  cancelForemanConversation(id: string): Promise<ForemanConversationRequest>;
   listForemanGoals(): Promise<ForemanGoal[]>;
   getForemanGoal(id: string): Promise<ForemanGoalWorkspace>;
   proposeForemanGoal(command: ProposeForemanGoalCommand): Promise<ForemanGoal>;
@@ -364,6 +368,17 @@ function commandInit(
 }
 
 export const api: PortalClient = {
+  loadForemanConversations: () =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/conversations`,
+      ForemanConversationRequestSchema.array(),
+    ),
+  cancelForemanConversation: (id) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/conversations/${encodeURIComponent(id)}/cancel`,
+      ForemanConversationRequestSchema,
+      commandInit("POST", {}),
+    ),
   listForemanGoals: () => request(`${CONTROL_API_PREFIX}/foreman/goals`, ForemanGoalSchema.array()),
   getForemanGoal: (id) =>
     request(

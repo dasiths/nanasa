@@ -1,10 +1,13 @@
 import {
   AgentActionStateSchema,
   AgentProgressReportCommandSchema,
+  AskForemanMemberCommandSchema,
   DelegateForemanGoalCommandSchema,
   ForemanChannelQuerySchema,
   ForemanCheckInCommandSchema,
+  ForemanConversationQuerySchema,
   ProposeForemanGoalCommandSchema,
+  ReplyForemanConversationCommandSchema,
   ReportDelegationCommandSchema,
   RequestHumanDecisionCommandSchema,
   SendForemanMessageCommandSchema,
@@ -15,6 +18,7 @@ import { DomainError } from "../store.js";
 
 export const McpIdentifierSchema = z.string().trim().min(1).max(128);
 export const McpForemanBootstrapSchema = z.object({}).strict();
+export const McpConversationReferenceSchema = z.object({ id: McpIdentifierSchema }).strict();
 export const McpGoalReferenceSchema = z.object({ goalId: McpIdentifierSchema }).strict();
 export const McpObserveTeamSchema = z
   .object({ delegationId: McpIdentifierSchema, memberId: McpIdentifierSchema.optional() })
@@ -94,6 +98,51 @@ function tool(input: McpToolDeclaration): McpToolDeclaration {
 }
 
 export const MCP_TOOL_REGISTRY = Object.freeze([
+  tool({
+    name: "nanasa.foreman_ask_member",
+    description:
+      "Ask a selected team member a bounded question without creating a goal or reserving a team; delivery waits for idle readiness, and only a correlated reply counts as answered",
+    inputSchema: AskForemanMemberCommandSchema,
+    principals: ["foreman"],
+    scope: "foreman:conversations:ask",
+    authority: "message",
+  }),
+  tool({
+    name: "nanasa.foreman_read_conversations",
+    description:
+      "Read durable ad hoc requests and member replies, including pending and expired requests",
+    inputSchema: ForemanConversationQuerySchema,
+    principals: ["foreman"],
+    scope: "foreman:conversations:read",
+    authority: "read",
+  }),
+  tool({
+    name: "nanasa.foreman_finish_conversation",
+    description:
+      "Acknowledge processing a conversation result after reporting it to the Human; does not erase the thread",
+    inputSchema: McpConversationReferenceSchema,
+    principals: ["foreman"],
+    scope: "foreman:conversations:finish",
+    authority: "self-write",
+  }),
+  tool({
+    name: "nanasa.member_foreman_conversations",
+    description:
+      "Read only conversation requests addressed to your authenticated member and runtime",
+    inputSchema: ForemanConversationQuerySchema,
+    principals: ["agent"],
+    scope: "member:foreman-conversations:read",
+    authority: "read",
+  }),
+  tool({
+    name: "nanasa.reply_foreman",
+    description:
+      "Deliver a durable correlated answer to an addressed Foreman request; terminal output alone is not a reply",
+    inputSchema: ReplyForemanConversationCommandSchema,
+    principals: ["agent"],
+    scope: "member:foreman-conversations:reply",
+    authority: "message",
+  }),
   tool({
     name: "nanasa.foreman_check_in",
     description:
@@ -201,8 +250,7 @@ export const MCP_TOOL_REGISTRY = Object.freeze([
   }),
   tool({
     name: "nanasa.foreman_bootstrap",
-    description:
-      "Read repository Foreman identity, policy ceilings, approved templates, and team metadata",
+    description: "Read repository Foreman identity, policy ceilings, goals, and live team metadata",
     inputSchema: McpForemanBootstrapSchema,
     principals: ["foreman"],
     scope: "foreman:bootstrap",

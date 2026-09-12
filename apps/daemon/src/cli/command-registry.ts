@@ -242,6 +242,18 @@ export const CLI_COMMAND_REGISTRY = Object.freeze([
     summary: "Resolve an exact human decision",
   }),
   command({
+    id: "daemon.stop",
+    family: "daemon",
+    command: "stop",
+    mode: "local",
+    positionals: [],
+    response: UnknownSchema,
+    mutating: true,
+    output: "text",
+    summary:
+      "Gracefully stop the repository daemon, preserving agent sessions (alias: nanasa stop)",
+  }),
+  command({
     id: "daemon.status",
     family: "daemon",
     command: "status",

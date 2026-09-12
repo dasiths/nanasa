@@ -1,14 +1,62 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { findCliCommand } from "../src/cli/command-registry.js";
-import { completion, resolveServiceStartup } from "../src/cli/control.js";
+import { completion, resolveServiceStartup, runControlCli } from "../src/cli/control.js";
 import { defaultControlApiUrl } from "../src/cli/control-client-loader.js";
 import { authenticateAgent, setupIntegrations } from "../src/cli-admin.js";
 import { SystemdUserService } from "../src/service/systemd-user-service.js";
 
 describe("CLI surface defaults", () => {
+  it.each([["stop"], ["daemon", "stop"]])(
+    "stops idempotently without HTTP access: %j",
+    async (...args) => {
+      const root = mkdtempSync(join(tmpdir(), "nanasa-cli-stop-"));
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      try {
+        mkdirSync(join(root, ".nanasa"));
+        writeFileSync(join(root, ".nanasa", "config.yaml"), "version: 2\nintegrations: {}\n");
+        expect(await runControlCli(args, root, { stdout, stderr })).toBe(0);
+        expect(stdout.read().toString()).toBe("Repository daemon is not running\n");
+        expect(await runControlCli([...args, "--output", "json"], root, { stdout, stderr })).toBe(
+          0,
+        );
+        expect(JSON.parse(stdout.read().toString())).toMatchObject({ state: "not-running" });
+        expect(
+          await runControlCli([...args, "--api-url", "http://127.0.0.1:9999"], root, {
+            stdout,
+            stderr,
+          }),
+        ).toBe(2);
+        expect(stderr.read().toString()).toContain("repository-local");
+        expect(existsSync(join(root, ".nanasa", "runtime"))).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("declares and completes both graceful stop command forms", () => {
+    expect(findCliCommand("daemon", "stop")).toMatchObject({
+      mode: "local",
+      mutating: true,
+      body: "none",
+    });
+    expect(completion("bash")).toContain("daemon) COMPREPLY=( $(compgen -W 'open status stop'");
+    expect(completion("powershell")).toContain("'stop' = @()");
+  });
+
   it("declares Foreman and goal control without exposing legacy mission commands", () => {
     expect(findCliCommand("foreman", "start")).toMatchObject({ body: "required", mutating: true });
     expect(findCliCommand("foreman", "status")?.path?.([])).toBe("/api/v1/foreman");

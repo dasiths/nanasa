@@ -15,6 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 interface LockRecord {
   version: 1;
@@ -31,6 +32,13 @@ export interface DaemonInstanceGuardOptions {
   processStartedAt?: string;
   expectedUid?: number;
   processIdentity?: (processId: number) => string | undefined;
+}
+
+export interface DaemonStopOptions {
+  timeoutMs?: number;
+  expectedUid?: number;
+  processIdentity?: (processId: number) => string | undefined;
+  signalProcess?: (processId: number, signal: "SIGTERM") => void;
 }
 
 export class DaemonLeadershipError extends Error {
@@ -68,6 +76,7 @@ function parseRecord(value: string): LockRecord {
     parsed.version !== 1 ||
     typeof parsed.instanceId !== "string" ||
     !Number.isInteger(parsed.processId) ||
+    (parsed.processId ?? 0) <= 0 ||
     typeof parsed.processStartedAt !== "string" ||
     typeof parsed.repositoryRoot !== "string" ||
     typeof parsed.acquiredAt !== "string"
@@ -188,7 +197,7 @@ export class DaemonInstanceGuard {
       }
       if (currentIdentity === existing.processStartedAt) {
         throw new DaemonLeadershipError(
-          `Repository daemon ${existing.instanceId} already holds mutable authority`,
+          `Repository daemon ${existing.instanceId} already holds mutable authority. Run nanasa stop in this repository before starting another daemon`,
         );
       }
       const after = lstatSync(lockPath);
@@ -214,5 +223,98 @@ export class DaemonInstanceGuard {
     } finally {
       closeSync(this.#descriptor);
     }
+  }
+
+  public static async stop(
+    repositoryRoot: string,
+    runtimePath: string,
+    options: DaemonStopOptions = {},
+  ): Promise<{ state: "stopped" | "not-running"; instanceId?: string; text: string }> {
+    const timeoutMs = options.timeoutMs ?? 30_000;
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300_000) {
+      throw new DaemonLeadershipError(
+        "Stop timeout must be an integer from 1 to 300000 milliseconds",
+      );
+    }
+    const notRunning = { state: "not-running" as const, text: "Repository daemon is not running" };
+    const canonicalRepositoryRoot = realpathSync(repositoryRoot);
+    const canonicalRuntimePath = resolve(runtimePath);
+    const expectedUid = options.expectedUid ?? process.getuid?.();
+    const lockPath = join(canonicalRuntimePath, "daemon.lock");
+    let record: LockRecord;
+    try {
+      const directory = lstatSync(canonicalRuntimePath);
+      if (
+        !directory.isDirectory() ||
+        directory.isSymbolicLink() ||
+        realpathSync(canonicalRuntimePath) !== canonicalRuntimePath ||
+        (expectedUid !== undefined && directory.uid !== expectedUid)
+      ) {
+        throw new DaemonLeadershipError(
+          "The daemon runtime path is not an owner-controlled directory",
+        );
+      }
+      const before = lstatSync(lockPath);
+      if (
+        !before.isFile() ||
+        before.isSymbolicLink() ||
+        before.nlink !== 1 ||
+        (before.mode & 0o777) !== 0o600 ||
+        (expectedUid !== undefined && before.uid !== expectedUid)
+      ) {
+        throw new DaemonLeadershipError(
+          "The repository daemon lock is not an owner-only regular file",
+        );
+      }
+      const descriptor = openSync(lockPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+      try {
+        const opened = fstatSync(descriptor);
+        if (opened.dev !== before.dev || opened.ino !== before.ino) {
+          throw new DaemonLeadershipError("The repository daemon lock changed while opening");
+        }
+        record = parseRecord(readFileSync(descriptor, "utf8"));
+      } finally {
+        closeSync(descriptor);
+      }
+      if (record.repositoryRoot !== canonicalRepositoryRoot) {
+        throw new DaemonLeadershipError("The repository daemon lock belongs to another repository");
+      }
+      const after = lstatSync(lockPath);
+      if (
+        after.dev !== before.dev ||
+        after.ino !== before.ino ||
+        after.nlink !== 1 ||
+        after.ctimeMs !== before.ctimeMs
+      ) {
+        throw new DaemonLeadershipError("The repository daemon lock changed before shutdown");
+      }
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return notRunning;
+      throw error;
+    }
+    const processIdentity = options.processIdentity ?? linuxProcessStartIdentity;
+    if (processIdentity(record.processId) !== record.processStartedAt) return notRunning;
+    const signalProcess = options.signalProcess ?? process.kill.bind(process);
+    try {
+      signalProcess(record.processId, "SIGTERM");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ESRCH") return notRunning;
+      throw error;
+    }
+    const deadline = Date.now() + timeoutMs;
+    while (processIdentity(record.processId) === record.processStartedAt) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new DaemonLeadershipError(
+          `Timed out waiting for daemon ${record.instanceId} to stop; no force kill was attempted`,
+        );
+      }
+      await delay(Math.min(100, remaining));
+    }
+    return {
+      state: "stopped",
+      instanceId: record.instanceId,
+      text: `Stopped repository daemon ${record.instanceId}`,
+    };
   }
 }

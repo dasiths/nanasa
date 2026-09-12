@@ -8,6 +8,48 @@ This development change retains configuration version 2 and database version 16.
 Databases created before goal delegation need a fresh state directory. Preserve
 existing state before switching; Nanasa does not migrate or delete it automatically.
 
+## Converse without a goal
+
+An enabled Foreman starts automatically when the daemon starts. Authenticate its
+private provider home first. An existing active run is reconciled rather than
+duplicated. **Stop** keeps it stopped for the current daemon session; the next
+daemon start launches it again when enabled. Failed runs retain their recovery
+budgets. Disable Foreman to keep it off across daemon restarts. Blocked startup
+prerequisites appear in its workspace without preventing the portal from starting.
+
+Ask questions in Channel or directly in Foreman's native terminal. For example,
+"Ask both teams what they are doing" does not require a goal, delegation approval,
+or bounded intervention mode. Foreman discovers current members and sends bounded
+questions with `nanasa.foreman_ask_member`. It can follow up on an answered request
+using `replyTo`. Conversation is not permission to override an assignment, switch
+checkouts, restart members, or approve native permission prompts.
+
+Members see **From: Repository Foreman**, conversation and request IDs, and the
+explicit reply tool. They read addressed requests with
+`nanasa.member_foreman_conversations` and reply with `nanasa.reply_foreman`.
+Nanasa supplies this protocol in core prompts; no user instruction file is needed.
+Terminal output and completed model turns do not count as answers.
+
+Delivery waits for a verified idle recipient with no Human terminal controller.
+It never starts a stopped member or interrupts a working one. Requests default to
+one-hour expiry, with at most four pending questions per member and 100 overall.
+Threads are limited to 16 requests; stored requests are capped at 10,000. Replies
+are bound to the addressed member and runtime. Replaced runtimes, expired requests,
+revoked authority, and ambiguous delivery are not automatically retried.
+
+The Channel's **Team conversations** section shows requests, delivery state and
+member replies. **Cancel request** prevents further delivery without pretending
+to interrupt work already submitted. Foreman receives durable result wakeups,
+reads responses with `nanasa.foreman_read_conversations`, reports back through
+the Human channel, and acknowledges each result with
+`nanasa.foreman_finish_conversation`. Requests and replies survive daemon restarts.
+
+When discussion becomes substantial, Foreman suggests a goal. With your agreement,
+it proposes the objective and constraints and retains relevant request IDs in
+`sourceConversationIds`. The conversation remains available; the goal remains
+unapproved until you approve it through operator controls. A casual "yes" is not
+an unrestricted execution grant.
+
 ## Delegate an outcome
 
 Give Foreman a high-level goal through Channel, or open **Goals > New goal**.
@@ -194,7 +236,9 @@ Foreman's private home. Nanasa does not copy provider credentials between homes.
 
 Open an authenticated portal session and choose **Coordination > Foreman**.
 Settings select the provider, model, instruction paths, goal limits, and optional
-supervision actions. Save settings while stopped, then choose **Start**. Custom
+supervision actions. Save settings while stopped, then choose **Start** to resume
+within the same daemon session; enabled Foreman starts automatically on daemon
+startup. Custom
 Foreman launchers currently block with `foreman_launch_consent_required`; use
 the integration's built-in command. No operator token is given to Foreman.
 
@@ -220,7 +264,8 @@ not stop provider work that may already have started.
 
 ## Set goal limits
 
-Goals is the only Foreman workflow. Team templates and the legacy Missions API,
+Goals provides sustained supervision in addition to ad hoc conversations.
+Team templates and the legacy Missions API,
 CLI and portal view have been removed. Existing teams and role descriptions are
 discovered dynamically; each delegation still requires Human approval.
 
@@ -243,7 +288,8 @@ bounded by `supervision` settings.
 Replace old mission-named budget keys with the goal keys above. Remove
 `teamTemplates`, `permittedTeamTemplates`, `workspacePolicy`, and the old
 `routineWaitReply` and `nativeInput` settings. Older goal records and action
-principals are not upgraded automatically; use fresh development state when
+principals are not upgraded automatically. Conversation storage is added to
+otherwise current goal databases without resetting records. Use fresh development state when
 switching from the retired layout. No state is automatically deleted.
 
 ## Use the CLI

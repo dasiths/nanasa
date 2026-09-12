@@ -5,6 +5,17 @@ import {
 
 export const DATABASE_SCHEMA_VERSION = 16;
 
+export const FOREMAN_CONVERSATIONS_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS foreman_conversations (
+    id TEXT PRIMARY KEY,
+    foreman_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    data_json TEXT NOT NULL,
+    UNIQUE(foreman_id, request_id)
+  ) STRICT;
+`;
+
 const URL_OPEN_SCHEMA_SQL = `
   CREATE TABLE url_open_requests (
     id TEXT PRIMARY KEY,
@@ -134,6 +145,7 @@ export const DATABASE_MIGRATION_10_TO_11_SQL = `
 
 export const DATABASE_BASELINE_SQL = `
   ${URL_OPEN_SCHEMA_SQL}
+  ${FOREMAN_CONVERSATIONS_SCHEMA_SQL}
   CREATE TABLE foreman_coordination_records (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('goal', 'delegation', 'report', 'decision')),

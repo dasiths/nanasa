@@ -10,7 +10,7 @@ configures six team agents and a separate repository Foreman:
 | Repository | Foreman | GitHub Copilot CLI | Supervise Human-approved team goals |
 | Backend | Project Manager | GitHub Copilot CLI | Coordinate Backend work |
 | Backend | Engineer 1 | Pi | Implement and validate changes |
-| Backend | Engineer 2 | Claude Code | Implement through a local model gateway |
+| Backend | Engineer 2 | Pi | Implement and validate changes |
 | Backend | Reviewer | OpenCode | Review without modifying files |
 | Frontend | Frontend Engineer | Pi | Implement in the Frontend worktree |
 | Frontend | Frontend Reviewer | OpenCode | Review Frontend work read-only |
@@ -20,14 +20,16 @@ integration, role, group, and agent identity.
 
 Foreman is a repository runtime, not a `roles.foreman` entry or team member.
 It reuses the built-in `copilot` integration but has a private home distinct
-from Backend's Project Manager. Teams start independently; configuring Foreman
-does not automatically start these processes or grant access to existing teams.
+from Backend's Project Manager. An enabled Foreman starts with the daemon.
+Team members still start independently; Foreman's startup does not start them
+or grant control of their work.
 
 ## Define integrations once
 
-An integration tells Nanasa which provider adapter and command to launch. Keep
-provider state membership-scoped so each configured agent receives a separate
-provider home:
+An integration tells Nanasa which provider adapter and command to launch.
+Membership scope gives each agent a private provider home. Engineers 1 and 2
+instead share the integration-scoped `pi-backend` home to authenticate once;
+Frontend Pi remains membership-scoped:
 
 ```yaml
 integrations:
@@ -43,6 +45,13 @@ integrations:
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
+  pi-backend:
+    name: Backend Pi
+    kind: pi
+    cwd: .
+    providerState: { scope: integration }
+    credentials: { kind: provider-managed }
+    model: { model: github-copilot/gpt-5.6-terra, resumePolicy: enforce-configured }
   opencode:
     name: OpenCode
     kind: opencode
@@ -60,12 +69,18 @@ integrations:
     credentials: { kind: provider-managed }
 ```
 
+Run `make -C examples/multi-coding-agents auth-pi` to authenticate the shared
+Backend home. Sharing provider state also shares Pi settings, but does not merge
+Nanasa identities or MCP authorization. The Frontend Engineer still logs in
+separately with `auth-frontend-pi`.
+
 When `command` is omitted, Nanasa derives the built-in executable from `kind`.
-The explicit Claude command is a custom launcher. Nanasa appends generated
+The optional Claude command is a custom launcher; no current example member
+uses it. Nanasa appends generated
 prompt, MCP, model, settings, and reporter arguments to the script command as
 individual arguments.
 
-The first start pauses before credentials or private launch state are created.
+The first start of that custom launcher pauses before credentials or private launch state are created.
 Review the command, append strategy, and repository script digest, then approve
 it in the terminal consent pane or Attention workspace. Later starts reuse the
 approval while the stable launch properties and script contents remain
@@ -262,7 +277,7 @@ operator direction and take precedence over conflicting peer requests.
 
 1. Authenticate Foreman, start the example daemon with MCP, and open a one-use
   portal session using `make example-portal-auth` from the repository root.
-2. Choose **Coordination > Foreman**, review Settings, and choose **Start**.
+2. Choose **Coordination > Foreman**; the enabled Foreman starts automatically.
   Channel provides durable instructions and replies; Terminal directly controls
   the same native Copilot run.
 3. Use **Ask Foreman about Backend Team** or the Frontend equivalent for context.

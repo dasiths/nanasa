@@ -2,6 +2,7 @@ import {
   type ForemanChannelMessage,
   type ForemanConfig,
   ForemanConfigSchema,
+  type ForemanConversationRequest,
   type ForemanRun,
   type ForemanWorkspace as ForemanState,
   type Group,
@@ -321,6 +322,7 @@ export function ForemanWorkspace({
 }) {
   const [state, setState] = useState<ForemanState>();
   const [messages, setMessages] = useState<ForemanChannelMessage[]>([]);
+  const [conversations, setConversations] = useState<ForemanConversationRequest[]>([]);
   const [tab, setTab] = useState<"channel" | "terminal" | "goals" | "settings">("channel");
   const [text, setText] = useState("");
   const [teamId, setTeamId] = useState(initialTeamId);
@@ -337,12 +339,14 @@ export function ForemanWorkspace({
     let timer: ReturnType<typeof setTimeout>;
     const load = async () => {
       try {
-        const [next, page] = await Promise.all([
+        const [next, page, requests] = await Promise.all([
           client.loadForeman(),
           client.loadForemanChannel(cursor.current),
+          client.loadForemanConversations(),
         ]);
         if (cancelled) return;
         setState(next);
+        setConversations(requests);
         setMessages((current) =>
           [
             ...new Map(
@@ -620,6 +624,50 @@ export function ForemanWorkspace({
           </div>
           {hasMore && (
             <button onClick={() => setRefresh((value) => value + 1)}>Load more messages</button>
+          )}
+          {conversations.length > 0 && (
+            <details className="foreman-team-conversations">
+              <summary>
+                Team conversations (
+                {
+                  conversations.filter((item) =>
+                    ["queued", "submitted", "ambiguous"].includes(item.state),
+                  ).length
+                }{" "}
+                pending)
+              </summary>
+              {conversations.map((request) => (
+                <article className="foreman-message" key={request.id}>
+                  <header>
+                    <strong>
+                      {groups.find((group) => group.id === request.groupId)?.name ??
+                        request.groupId}{" "}
+                      / {request.memberId}
+                    </strong>
+                    <span>{request.state}</span>
+                  </header>
+                  <p>{request.text}</p>
+                  {request.response && (
+                    <p>
+                      <strong>Member reply:</strong> {request.response}
+                    </p>
+                  )}
+                  {request.problem && <p role="status">{request.problem}</p>}
+                  {["queued", "submitted", "ambiguous"].includes(request.state) && (
+                    <button
+                      className="compact-button"
+                      disabled={busy}
+                      onClick={() =>
+                        void operate(() => client.cancelForemanConversation(request.id))
+                      }
+                    >
+                      <Square size={14} />
+                      Cancel request
+                    </button>
+                  )}
+                </article>
+              ))}
+            </details>
           )}
           <form
             className="foreman-composer"

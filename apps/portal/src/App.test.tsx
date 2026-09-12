@@ -301,6 +301,8 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
   };
   return {
     loadForeman: vi.fn().mockResolvedValue({ configRevision: "revision-one" }),
+    loadForemanConversations: vi.fn().mockResolvedValue([]),
+    cancelForemanConversation: vi.fn(),
     listForemanGoals: vi.fn().mockResolvedValue([]),
     getForemanGoal: vi.fn(),
     proposeForemanGoal: vi.fn(),

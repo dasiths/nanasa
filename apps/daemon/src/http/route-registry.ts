@@ -38,6 +38,7 @@ import {
   ForemanChannelPageSchema,
   ForemanConnectorCredentialSchema,
   ForemanConnectorSchema,
+  ForemanConversationRequestSchema,
   ForemanGoalSchema,
   ForemanGoalWorkspaceSchema,
   ForemanNotificationPageSchema,
@@ -210,6 +211,25 @@ function route(input: RouteInput): ControlRouteDeclaration {
 }
 
 export const CONTROL_ROUTE_REGISTRY = Object.freeze([
+  route({
+    id: "foreman.conversations",
+    family: "foreman",
+    method: "GET",
+    path: "/api/v1/foreman/conversations",
+    response: ForemanConversationRequestSchema.array(),
+    summary: "Read recent ad hoc team conversations and reply states",
+  }),
+  route({
+    id: "foreman.cancelConversation",
+    family: "foreman",
+    method: "POST",
+    path: "/api/v1/foreman/conversations/:requestId/cancel",
+    params: IdParamsSchema,
+    body: EmptyObjectSchema,
+    response: ForemanConversationRequestSchema,
+    idempotency: "forbidden",
+    summary: "Cancel a conversation request without replaying or interrupting provider work",
+  }),
   route({
     id: "foreman.connectors",
     family: "foreman",

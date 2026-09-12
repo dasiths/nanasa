@@ -7,7 +7,7 @@ COMPOSE_PROJECT := $(or $(shell docker inspect "$(shell hostname)" --format '{{ 
 COMPOSE := docker compose --project-name $(COMPOSE_PROJECT) --file $(PRODUCT_ROOT)/.devcontainer/compose.yaml
 LITELLM_URL ?= http://litellm:4000
 LITELLM_KEY ?= sk-local-litellm
-COPILOT_MODEL ?= claude-sonnet-5
+COPILOT_MODEL ?= gpt-5.6-terra
 PORTAL_URL ?= http://127.0.0.1:3210
 DEV_PORTAL_URL ?= http://127.0.0.1:5173
 NANASA_ALLOW_AUTONOMOUS ?= true
@@ -63,7 +63,8 @@ help:
 		'  make auth-frontend-pi        Authenticate the frontend implementor' \
 		'  make auth-frontend-opencode  Authenticate the frontend reviewer' \
 		'  make auth-copilot    Authenticate the project manager home' \
-		'  make auth-pi         Authenticate the Pi implementor home' \
+		'  make auth-pi         Authenticate the shared Backend engineers Pi home' \
+		'  make auth-pi-2       Alias for make auth-pi' \
 		'  make auth-opencode   Authenticate the reviewer home' \
 		'  make auth-litellm    Authenticate the Claude gateway' \
 		'' \
@@ -73,7 +74,7 @@ help:
 		'  make proxy-logs      Follow proxy logs' \
 		'  make proxy-status    Check proxy health and models'
 
-.PHONY: install package init reset-alpha setup doctor start run first-run dev
+.PHONY: install package init reset-alpha setup doctor start stop run first-run dev
 
 install:
 	@$(MAKE) -C $(PRODUCT_ROOT) --no-print-directory install
@@ -97,6 +98,9 @@ doctor: package
 start: package
 	$(NANASA) start
 
+stop:
+	$(NANASA) stop
+
 run: start
 
 first-run:
@@ -108,7 +112,6 @@ first-run:
 		'' \
 		'Preparation complete. Authenticate each provider before starting agents:' \
 		'  make auth' \
-		'  make proxy-start' \
 		'  make start'
 
 dev:
@@ -133,14 +136,13 @@ portal-auth: package
 portal-dev:
 	@$(call open_url,DEV_PORTAL_URL)
 
-.PHONY: auth auth-foreman auth-copilot auth-pi auth-opencode auth-litellm auth-frontend auth-frontend-pi auth-frontend-opencode
+.PHONY: auth auth-foreman auth-copilot auth-pi auth-pi-2 auth-opencode auth-litellm auth-frontend auth-frontend-pi auth-frontend-opencode
 
 auth:
 	@$(MAKE) --no-print-directory auth-foreman
 	@$(MAKE) --no-print-directory auth-copilot
 	@$(MAKE) --no-print-directory auth-pi
 	@$(MAKE) --no-print-directory auth-opencode
-	@$(MAKE) --no-print-directory auth-litellm
 	@$(MAKE) --no-print-directory auth-frontend
 
 auth-frontend:
@@ -160,7 +162,9 @@ auth-copilot: setup
 	$(NANASA) auth login copilot --agent agent_318f514e-2347-4d87-8c64-aef0752e7bfb
 
 auth-pi: setup
-	$(NANASA) auth login pi --agent agent_0ae65cd2-985d-498c-9399-0978bae77827
+	$(NANASA) auth login pi-backend
+
+auth-pi-2: auth-pi
 
 auth-opencode: setup
 	$(NANASA) auth login opencode --agent agent_9e2cdefb-cc96-4b4e-865f-b4ac17f6c4f9

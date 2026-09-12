@@ -18,11 +18,21 @@ export class PeerCapabilityPolicy {
       command: CreateAgentActionCommand,
     ) => void,
     private readonly delegationWaitAuthorization?: (principal: AgentActionPrincipal) => void,
+    private readonly conversationAuthorization?: (
+      principal: Extract<AgentActionPrincipal, { kind: "foreman-conversation" }>,
+      command: CreateAgentActionCommand,
+    ) => void,
   ) {}
 
   public assertCreate(principal: AgentActionPrincipal, command: CreateAgentActionCommand): void {
     this.delegationAuthorization?.(principal, command);
     if (principal.kind === "operator") return;
+    if (principal.kind === "foreman-conversation") {
+      if (!this.conversationAuthorization || command.kind !== "prompt" || command.allowWorking)
+        this.#forbidden("unapproved conversations");
+      this.conversationAuthorization(principal, command);
+      return;
+    }
     if (principal.kind === "foreman") {
       if (this.goalAuthorization === undefined || command.kind !== "prompt" || command.allowWorking)
         this.#forbidden("unapproved goal actions");
@@ -36,6 +46,15 @@ export class PeerCapabilityPolicy {
 
   public assertRead(principal: AgentActionPrincipal, action: AgentAction): void {
     if (principal.kind === "operator") return;
+    if (principal.kind === "foreman-conversation") {
+      if (
+        action.principal.kind !== "foreman-conversation" ||
+        action.principal.foremanId !== principal.foremanId ||
+        action.principal.conversationRequestId !== principal.conversationRequestId
+      )
+        this.#forbidden("another conversation's action");
+      return;
+    }
     if (principal.kind === "foreman") {
       if (
         action.principal.kind !== "foreman" ||
@@ -61,7 +80,8 @@ export class PeerCapabilityPolicy {
 
   public assertOwnWaits(principal: AgentActionPrincipal, groupId: string, memberId: string): void {
     if (principal.kind === "operator") return;
-    if (principal.kind === "foreman") this.#forbidden("unapproved worker waits");
+    if (principal.kind === "foreman" || principal.kind === "foreman-conversation")
+      this.#forbidden("unapproved worker waits");
     if (principal.groupId !== groupId || principal.memberId !== memberId) {
       this.#forbidden("another agent's waits");
     }
@@ -70,7 +90,7 @@ export class PeerCapabilityPolicy {
   public assertReply(principal: AgentActionPrincipal, wait: OpenWait, reply: OpenWaitReply): void {
     if (principal.kind === "operator") return;
     this.delegationWaitAuthorization?.(principal);
-    if (principal.kind === "foreman") {
+    if (principal.kind === "foreman" || principal.kind === "foreman-conversation") {
       this.#forbidden("worker wait replies");
     }
     if (principal.groupId !== wait.groupId || principal.memberId !== wait.memberId) {

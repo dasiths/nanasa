@@ -198,7 +198,7 @@ describe("Streamable HTTP MCP", () => {
       expect(initialized.statusCode).toBe(200);
       expect(initialized.body).toContain(JSON.stringify(nanasaMcpServerInstructions()));
       expect(initialized.body).toContain("## Repository Foreman");
-      expect(initialized.body).toContain("no direct worker-to-Foreman DM tool");
+      expect(initialized.body).toContain("no unrestricted worker-to-Foreman DM tool");
 
       const listed = await mcpRequest(daemon, agentToken, "tools/list", {});
       const names = listed.json().result.tools.map((tool: { name: string }) => tool.name);
@@ -229,6 +229,35 @@ describe("Streamable HTTP MCP", () => {
       daemon.store.upsertForeman({ id: "foreman", agentProfileId: profile.id, enabled: true });
       const { run } = daemon.store.createRunForForeman("foreman");
       const token = new McpCredentialIssuer(daemon.store, { secretPath }).issueForeman(run);
+      for (const method of ["initialize", "tools/list", "tools/list"]) {
+        const response = await daemon.app.inject({
+          method: "POST",
+          url: "/mcp",
+          headers: {
+            host: "127.0.0.1:3210",
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+            ...(method === "initialize" ? {} : { "mcp-protocol-version": "2025-06-18" }),
+          },
+          payload: {
+            jsonrpc: "2.0",
+            id: 1,
+            method,
+            params:
+              method === "initialize"
+                ? {
+                    protocolVersion: "2025-06-18",
+                    capabilities: {},
+                    clientInfo: { name: "legacy-catalog", version: "1.0.0" },
+                  }
+                : {},
+          },
+        });
+        expect(response.statusCode).toBe(200);
+        if (method === "tools/list")
+          expect(response.body).toContain('"name":"nanasa.foreman_ask_member"');
+      }
       expect(daemon.loadedConfig.config.instructions).toEqual([]);
       expect(daemon.foreman.status().configuration?.instructions).toEqual([]);
       const initialized = await mcpRequest(daemon, token, "initialize", {
@@ -239,8 +268,13 @@ describe("Streamable HTTP MCP", () => {
       expect(initialized.statusCode).toBe(200);
       expect(initialized.body).toContain(JSON.stringify(NANASA_FOREMAN_INSTRUCTIONS));
       expect(initialized.body).toContain("Terminal output alone is not a channel reply");
+      const discovery = await mcpRequest(daemon, token, "server/discover", {});
+      expect(discovery.json().result.capabilities.tools.listChanged).toBe(false);
       const listed = await mcpRequest(daemon, token, "tools/list", {});
       expect(listed.json().result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+        "nanasa.foreman_ask_member",
+        "nanasa.foreman_read_conversations",
+        "nanasa.foreman_finish_conversation",
         "nanasa.foreman_bootstrap",
         "nanasa.foreman_read_channel",
         "nanasa.foreman_reply",
@@ -292,6 +326,31 @@ describe("Streamable HTTP MCP", () => {
       const forbiddenAgent = await callTool(daemon, agentToken, "nanasa.foreman_bootstrap", {});
       expect(forbiddenAgent.json()).toHaveProperty("error");
       expect(daemon.store.getSnapshot().messages).toEqual([]);
+      const question = await callTool(daemon, token, "nanasa.foreman_ask_member", {
+        requestId: "status-question",
+        groupId: group.id,
+        memberId: "sender",
+        text: "What are you working on?",
+      });
+      expect(question.json().result.structuredContent.result).toMatchObject({
+        state: "queued",
+        text: "What are you working on?",
+      });
+      expect(daemon.goals.list()).toEqual([]);
+      const memberRequests = await callTool(
+        daemon,
+        agentToken,
+        "nanasa.member_foreman_conversations",
+        {},
+      );
+      expect(memberRequests.json().result.structuredContent.result.requests).toHaveLength(1);
+      const forbiddenAsk = await callTool(daemon, agentToken, "nanasa.foreman_ask_member", {
+        requestId: "forbidden",
+        groupId: group.id,
+        memberId: "alpha",
+        text: "Bypass peer scope",
+      });
+      expect(forbiddenAsk.json()).toHaveProperty("error");
       const proactive = await callTool(daemon, token, "nanasa.foreman_reply", {
         requestId: "proactive-one",
         text: "A repository decision needs Human attention",

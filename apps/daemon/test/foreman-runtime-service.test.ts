@@ -90,6 +90,62 @@ async function fixture() {
 }
 
 describe("Foreman runtime service", () => {
+  it("keeps Foreman alive across unrelated team changes but fences changed Foreman instructions", async () => {
+    const context = await fixture();
+    const run = await context.service.start(context.revision);
+    await context.config.mutate((config) => ({
+      config: { ...config, groups: { team: { name: "New team", agents: {}, instructions: [] } } },
+      result: undefined,
+    }));
+    const restarted = new ForemanRuntimeService(context.options);
+    await restarted.startAutomatically();
+    expect(context.store.getActiveForemanRun(run.foremanId)?.id).toBe(run.id);
+    expect(context.runtime.startForemanRun).toHaveBeenCalledTimes(1);
+    const instruction = join(context.config.load().repoRoot, ".nanasa", "foreman.md");
+    writeFileSync(instruction, "New repository priorities");
+    await context.config.mutate((config) => ({
+      config: { ...config, foreman: { ...config.foreman!, instructions: [".nanasa/foreman.md"] } },
+      result: undefined,
+    }));
+    await restarted.reconcile();
+    expect(context.store.getActiveForemanRun(run.foremanId)).toBeUndefined();
+  });
+  it("automatically starts once, respects Stop, and starts again on the next daemon session", async () => {
+    const context = await fixture();
+    await context.service.startAutomatically();
+    await context.service.startAutomatically();
+    expect(context.runtime.startForemanRun).toHaveBeenCalledTimes(1);
+    await context.service.stop();
+    await context.service.startAutomatically();
+    await context.service.reconcile();
+    expect(context.runtime.startForemanRun).toHaveBeenCalledTimes(1);
+    const nextDaemon = new ForemanRuntimeService(context.options);
+    await nextDaemon.startAutomatically();
+    expect(context.runtime.startForemanRun).toHaveBeenCalledTimes(2);
+    await nextDaemon.close();
+    await context.service.close();
+  });
+
+  it("retains active runs and reports unavailable auto-start prerequisites without throwing", async () => {
+    const context = await fixture();
+    await context.service.start(context.revision);
+    const restarted = new ForemanRuntimeService(context.options);
+    await restarted.startAutomatically();
+    expect(context.runtime.startForemanRun).toHaveBeenCalledTimes(1);
+    await context.service.stop();
+    const blocked = new ForemanRuntimeService({ ...context.options, mcpEnabled: false });
+    await blocked.startAutomatically();
+    expect(blocked.status().problem).toContain("MCP");
+    await blocked.reconcile();
+    expect(blocked.status().problem).toContain("MCP");
+    await context.service.configure(
+      { ...context.config.load().config.foreman!, enabled: false },
+      context.revision,
+    );
+    const disabled = new ForemanRuntimeService(context.options);
+    await disabled.startAutomatically();
+    expect(context.runtime.startForemanRun).toHaveBeenCalledTimes(1);
+  });
   it("recovers a confirmed lost Foreman with recorded native state and fences explicit stop", async () => {
     const context = await fixture();
     const run = await context.service.start(context.revision);

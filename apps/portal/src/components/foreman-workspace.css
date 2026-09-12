@@ -150,6 +150,15 @@
   min-height: 480px;
   gap: 14px;
 }
+.foreman-team-conversations {
+  max-height: 320px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.foreman-team-conversations summary {
+  cursor: pointer;
+  padding: 10px 0;
+}
 .foreman-context label {
   display: flex;
   align-items: center;

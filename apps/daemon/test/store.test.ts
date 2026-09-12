@@ -19,6 +19,28 @@ afterEach(() => {
 });
 
 describe("NanasaStore persistence", () => {
+  it("adds conversation storage to an existing goal database without resetting team state", () => {
+    const root = mkdtempSync(join(tmpdir(), "nanasa-conversation-upgrade-"));
+    temporaryDirectories.push(root);
+    const path = join(root, "state.sqlite");
+    const store = new NanasaStore(path);
+    const group = store.createGroup({ name: "Keep this team" });
+    store.database.exec("DROP TABLE foreman_conversations");
+    store.close();
+    const reopened = new NanasaStore(path);
+    try {
+      expect(reopened.getSnapshot().groups).toContainEqual(group);
+      expect(
+        reopened.database.prepare("SELECT COUNT(*) AS count FROM foreman_conversations").get()
+          ?.count,
+      ).toBe(0);
+      expect(reopened.database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        DATABASE_SCHEMA_VERSION,
+      );
+    } finally {
+      reopened.close();
+    }
+  });
   it("initializes goal storage without legacy mission tables", () => {
     const store = new NanasaStore(":memory:");
     try {

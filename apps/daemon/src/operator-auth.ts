@@ -202,7 +202,10 @@ export class OperatorAuth {
               (request.method === "POST" && path === base + "/notifications/ack")
             );
           if (scope === "conversation")
-            return ["GET", "POST"].includes(request.method) && path === base + "/channel";
+            return (
+              (["GET", "POST"].includes(request.method) && path === base + "/channel") ||
+              (request.method === "GET" && path === base + "/conversations")
+            );
           if (scope === "goals")
             return (
               (request.method === "GET" &&

@@ -3,6 +3,185 @@
   "packageVersion": "0.1.0-next.12.0",
   "tools": [
     {
+      "name": "nanasa.foreman_ask_member",
+      "description": "Ask a selected team member a bounded question without creating a goal or reserving a team; delivery waits for idle readiness, and only a correlated reply counts as answered",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:conversations:ask",
+      "authority": "message",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "groupId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "memberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000
+          },
+          "replyTo": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "sourceMessageId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expiresInSeconds": {
+            "default": 3600,
+            "type": "integer",
+            "minimum": 30,
+            "maximum": 86400
+          }
+        },
+        "required": [
+          "requestId",
+          "groupId",
+          "memberId",
+          "text",
+          "expiresInSeconds"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_read_conversations",
+      "description": "Read durable ad hoc requests and member replies, including pending and expired requests",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:conversations:read",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "limit": {
+            "default": 50,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "limit"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_finish_conversation",
+      "description": "Acknowledge processing a conversation result after reporting it to the Human; does not erase the thread",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:conversations:finish",
+      "authority": "self-write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.member_foreman_conversations",
+      "description": "Read only conversation requests addressed to your authenticated member and runtime",
+      "principals": [
+        "agent"
+      ],
+      "scope": "member:foreman-conversations:read",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "limit": {
+            "default": 50,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "limit"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.reply_foreman",
+      "description": "Deliver a durable correlated answer to an addressed Foreman request; terminal output alone is not a reply",
+      "principals": [
+        "agent"
+      ],
+      "scope": "member:foreman-conversations:reply",
+      "authority": "message",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000
+          }
+        },
+        "required": [
+          "id",
+          "requestId",
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "nanasa.foreman_check_in",
       "description": "Send a bounded idle check-in to the accountable member only, under explicit intervention policy and exact observed runtime identity",
       "principals": [
@@ -112,6 +291,15 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128
+          },
+          "sourceConversationIds": {
+            "maxItems": 16,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
           }
         },
         "required": [
@@ -494,7 +682,7 @@
     },
     {
       "name": "nanasa.foreman_bootstrap",
-      "description": "Read repository Foreman identity, policy ceilings, approved templates, and team metadata",
+      "description": "Read repository Foreman identity, policy ceilings, goals, and live team metadata",
       "principals": [
         "foreman"
       ],

@@ -69,7 +69,11 @@ function bindingFingerprint(value: unknown): string {
 }
 
 function actionPrompt(action: AgentAction): string {
-  return `[Nanasa Action: ${action.id} | Exact Run: ${action.target.runId} | Generation: ${action.target.generation}]\n${action.prompt ?? "Wait for the correlated result."}`;
+  const sender =
+    action.principal.kind === "foreman" || action.principal.kind === "foreman-conversation"
+      ? "From: Repository Foreman | "
+      : "";
+  return `[${sender}Nanasa Action: ${action.id} | Exact Run: ${action.target.runId} | Generation: ${action.target.generation}]\n${action.prompt ?? "Wait for the correlated result."}`;
 }
 
 export class AgentActionScheduler {
@@ -157,7 +161,11 @@ export class AgentActionScheduler {
   }
 
   async #consider(action: AgentAction, now: Date): Promise<void> {
-    if (action.principal.kind === "foreman" || this.authorizeDelegatedAction !== undefined) {
+    if (
+      action.principal.kind === "foreman" ||
+      action.principal.kind === "foreman-conversation" ||
+      this.authorizeDelegatedAction !== undefined
+    ) {
       try {
         if (this.authorizeDelegatedAction === undefined)
           throw new DomainError(

@@ -6,6 +6,50 @@
   },
   "x-generator-version": 1,
   "paths": {
+    "/api/v1/foreman/conversations": {
+      "get": {
+        "operationId": "foreman.conversations",
+        "summary": "Read recent ad hoc team conversations and reply states",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/conversations/:requestId/cancel": {
+      "post": {
+        "operationId": "foreman.cancelConversation",
+        "summary": "Cancel a conversation request without replaying or interrupting provider work",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
     "/api/v1/foreman/connectors": {
       "get": {
         "operationId": "foreman.connectors",

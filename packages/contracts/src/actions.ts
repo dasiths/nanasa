@@ -81,6 +81,16 @@ export const AgentActionPrincipalSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("operator"), operatorId: IdentifierSchema }).strict(),
   z
     .object({
+      kind: z.literal("foreman-conversation"),
+      foremanId: IdentifierSchema,
+      runId: IdentifierSchema,
+      generation: z.number().int().positive(),
+      authorityRevision: z.number().int().nonnegative(),
+      conversationRequestId: IdentifierSchema,
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal("foreman"),
       foremanId: IdentifierSchema,
       runId: IdentifierSchema,

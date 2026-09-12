@@ -12,6 +12,7 @@ import {
   ForemanConfigSchema,
   NativeSessionReferenceSchema,
 } from "@nanasa/contracts";
+import type { LoadedNanasaConfig } from "./config-loader.js";
 import { ConfigRepository } from "./config-repository.js";
 import { resolveEffectiveForemanPrompt } from "./instruction-resolver.js";
 import { resolveEffectiveForemanProviderPolicy } from "./provider-policy-resolver.js";
@@ -43,6 +44,8 @@ export class ForemanRuntimeService {
   #timer: NodeJS.Timeout | undefined;
   #closed = false;
   #problem: string | undefined;
+  #startupProblem: string | undefined;
+  #automaticStartAttempted = false;
 
   public constructor(options: ForemanRuntimeServiceOptions) {
     this.#options = options;
@@ -54,7 +57,7 @@ export class ForemanRuntimeService {
     const result = {
       configRevision: loaded.status.revision,
       configuration,
-      problem: this.#problem,
+      problem: this.#problem ?? this.#startupProblem,
       inbox: this.#options.store.listForemanInbox(),
     };
     if (configuration === undefined) return result;
@@ -101,8 +104,34 @@ export class ForemanRuntimeService {
         .prepare("DELETE FROM foreman_recovery WHERE foreman_id = ?")
         .run(run.foremanId);
       this.#problem = undefined;
+      this.#startupProblem = undefined;
       return run;
     });
+  }
+
+  public async startAutomatically(): Promise<void> {
+    if (this.#automaticStartAttempted) return;
+    this.#automaticStartAttempted = true;
+    try {
+      const loaded = this.#options.config.load();
+      if (loaded.config.foreman?.enabled !== true) return;
+      const latest = this.#options.store.getLatestForemanRun(loaded.config.foreman.id);
+      if (latest && latest.desiredState === "running") {
+        await this.reconcile();
+        if (
+          this.#options.store.getLatestForemanRun(loaded.config.foreman.id)?.desiredState ===
+          "stopped"
+        )
+          await this.start(this.#options.config.load().status.revision!);
+        return;
+      }
+      await this.start(loaded.status.revision!);
+    } catch (error) {
+      this.#startupProblem =
+        error instanceof DomainError
+          ? error.message
+          : "Foreman could not start automatically; inspect provider setup and retry Start.";
+    }
   }
 
   async #launch(
@@ -143,17 +172,7 @@ export class ForemanRuntimeService {
       if (actor.id !== foreman.id && actor.enabled)
         store.upsertForeman({ ...actor, enabled: false });
     }
-    const prompt = resolveEffectiveForemanPrompt({
-      repoRoot: loaded.repoRoot,
-      config: loaded.config,
-    });
-    const providerPolicy = resolveEffectiveForemanProviderPolicy({
-      repoRoot: loaded.repoRoot,
-      config: loaded.config,
-      configRevision: expectedConfigRevision,
-      allowAutonomous: this.#options.allowAutonomous,
-      allowProviderFiles: this.#options.allowProviderFiles,
-    });
+    const { prompt, providerPolicy } = this.#launchContext(loaded);
     const profileInput = {
       name: foreman.name,
       agentType: foreman.integrationId,
@@ -256,7 +275,10 @@ export class ForemanRuntimeService {
           continue;
         }
         const bound = await this.#options.bindings.requireForRecovery(run.id, run.generation);
-        if (bound.binding.launchPlan.configRevision !== loaded.status.revision) {
+        if (
+          bound.binding.launchPlan.configRevision !==
+          this.#launchContext(loaded).providerPolicy.configRevision
+        ) {
           this.#options.onRunUnavailable?.(run.id);
           await runtime.stopForemanRun(actor.id);
           continue;
@@ -316,7 +338,11 @@ export class ForemanRuntimeService {
     if (recovery !== undefined && Date.parse(String(recovery.next_allowed_at)) > now.getTime())
       return;
     const bound = await this.#options.bindings.requireForRecovery(latest.id, latest.generation);
-    if (bound.binding.launchPlan.configRevision !== loaded.status.revision) return;
+    if (
+      bound.binding.launchPlan.configRevision !==
+      this.#launchContext(loaded).providerPolicy.configRevision
+    )
+      return;
     const observation = await runtime.observeRun(latest);
     if (observation.state !== "missing" && observation.state !== "dead") return;
     const integration = loaded.config.integrations[foreman.integrationId];
@@ -372,6 +398,36 @@ export class ForemanRuntimeService {
           : "resuming",
         resumed.id,
       );
+  }
+
+  #launchContext(loaded: LoadedNanasaConfig) {
+    const foreman = loaded.config.foreman!;
+    const prompt = resolveEffectiveForemanPrompt({
+      repoRoot: loaded.repoRoot,
+      config: loaded.config,
+    });
+    const policy = resolveEffectiveForemanProviderPolicy({
+      repoRoot: loaded.repoRoot,
+      config: loaded.config,
+      allowAutonomous: this.#options.allowAutonomous,
+      allowProviderFiles: this.#options.allowProviderFiles,
+    });
+    const configRevision = createHash("sha256")
+      .update(
+        canonicalJson(
+          JSON.parse(
+            JSON.stringify({
+              foreman,
+              integration: loaded.config.integrations[foreman.integrationId],
+              repository: loaded.config.repository,
+              promptRevision: prompt.revision,
+              policy,
+            }),
+          ),
+        ),
+      )
+      .digest("hex");
+    return { prompt, providerPolicy: { ...policy, configRevision } };
   }
 
   public async observeReporterProcess(run: ForemanRun): Promise<void> {

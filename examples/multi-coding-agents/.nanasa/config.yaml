@@ -33,7 +33,7 @@ integrations:
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
-    model: { resumePolicy: preserve-session }
+    model: { resumePolicy: enforce-configured }
     nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
     executionProfile: autonomous
     providerFiles:
@@ -46,6 +46,18 @@ integrations:
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
     model: { resumePolicy: preserve-session }
+    nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+    executionProfile: autonomous
+    providerFiles:
+      mcp:
+        paths: [ .nanasa/providers/pi/mcp.json ]
+  pi-backend:
+    name: Backend Pi
+    kind: pi
+    cwd: .
+    providerState: { scope: integration }
+    credentials: { kind: provider-managed }
+    model: { model: github-copilot/gpt-5.6-terra, resumePolicy: enforce-configured }
     nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
     executionProfile: autonomous
     providerFiles:
@@ -149,6 +161,7 @@ groups:
         memberId: nice-dijkstra
         name: Project Manager
         integrationId: copilot
+        desiredModel: gpt-5.6-terra
         roleId: project-manager
         instructions: []
         attention:
@@ -161,14 +174,14 @@ groups:
       agent_0ae65cd2-985d-498c-9399-0978bae77827:
         memberId: keen-hawking
         name: Engineer 1
-        integrationId: pi
+        integrationId: pi-backend
         roleId: implementor
         instructions: []
         order: 1
       agent_e0f1b592-5fb2-4fe2-93e4-ac9da40dedf1:
         memberId: musing-kilby
         name: Engineer 2
-        integrationId: claude-copilot
+        integrationId: pi-backend
         roleId: implementor
         instructions: []
         order: 2

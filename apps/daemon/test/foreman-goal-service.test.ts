@@ -9,6 +9,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentActionService } from "../src/actions/agent-action-service.js";
 import { PeerCapabilityPolicy } from "../src/actions/peer-capability-policy.js";
+import { ForemanConversationService } from "../src/foreman-conversation-service.js";
 import { ForemanGoalService } from "../src/foreman-goal-service.js";
 import { NanasaStore } from "../src/store.js";
 
@@ -336,6 +337,266 @@ function multiTeamFixture(separateGoals = false) {
 }
 
 describe("Foreman outcome delegation", () => {
+  it("converses without goals, requires a tool reply, and persists context across restart", async () => {
+    const context = teamFixture();
+    const { store, service, foreman, lead, reviewer, config, path } = context;
+    store.database.exec("DELETE FROM foreman_coordination_records; DELETE FROM foreman_inbox");
+    const conversations = new ForemanConversationService(store, service, () => false);
+    const actions = new AgentActionService(
+      store,
+      1,
+      new PeerCapabilityPolicy(undefined, undefined, undefined, (principal, command) =>
+        conversations.authorize(principal, command),
+      ),
+    );
+    const question = {
+      requestId: "ad-hoc-one",
+      groupId: lead.groupId,
+      memberId: lead.memberId,
+      text: "What is the team working on?",
+      expiresInSeconds: 3600,
+    };
+    const request = conversations.ask(foreman, question);
+    expect(conversations.ask(foreman, question)).toEqual(request);
+    expect(() => conversations.ask(foreman, { ...question, text: "Changed question" })).toThrow(
+      "reused",
+    );
+    expect(service.list()).toEqual([]);
+    expect(service.delegations()).toEqual([]);
+    await conversations.tick(actions);
+    const delivered = conversations.get(request.id);
+    const action = store.getAgentAction(delivered.actionId!);
+    expect(action.principal.kind).toBe("foreman-conversation");
+    expect(action.prompt).toContain("From: Repository Foreman");
+    expect(action.prompt).toContain(`Reply using nanasa.reply_foreman with id ${request.id}`);
+    expect(action.prompt).toContain("Terminal output alone is not delivered");
+    expect(action.allowWorking).toBe(false);
+    expect(() =>
+      conversations.reply(lead, { id: request.id, requestId: "early", text: "Not delivered yet" }),
+    ).toThrow("not reached");
+    store.transitionAgentAction(action.id, ["created"], "submitted");
+    store.transitionAgentAction(action.id, ["submitted"], "completed");
+    await conversations.tick(actions);
+    expect(conversations.get(request.id).state).toBe("submitted");
+    expect(() => conversations.read(reviewer, { id: request.id })).toThrow("exact addressed");
+    expect(() =>
+      conversations.reply(reviewer, {
+        id: request.id,
+        requestId: "wrong-member",
+        text: "Spoofed response",
+      }),
+    ).toThrow("exact addressed");
+    const response = {
+      id: request.id,
+      requestId: "reply-one",
+      text: "The team is implementing the agreed API changes.",
+    };
+    conversations.reply(lead, response);
+    expect(conversations.reply(lead, response).state).toBe("answered");
+    expect(() => conversations.reply(lead, { ...response, text: "Different answer" })).toThrow(
+      "different reply",
+    );
+    expect(
+      store.database
+        .prepare("SELECT * FROM foreman_inbox WHERE dedupe_key = ?")
+        .all(`conversation-result:${request.id}`),
+    ).toHaveLength(1);
+    const inboxId = String(
+      store.database
+        .prepare("SELECT id FROM foreman_inbox WHERE dedupe_key = ?")
+        .get(`conversation-result:${request.id}`)!.id,
+    );
+    expect(() => conversations.authorizeInbox(inboxId, "another-foreman")).toThrow(
+      "another Foreman",
+    );
+    expect(() => conversations.authorizeInbox(inboxId, foreman.foremanId)).not.toThrow();
+    const reopened = new NanasaStore(path);
+    try {
+      const restored = new ForemanConversationService(
+        reopened,
+        new ForemanGoalService(reopened, () => config),
+        () => false,
+      );
+      expect(restored.read(foreman, { id: request.id }).requests[0]).toMatchObject({
+        state: "answered",
+        response: response.text,
+      });
+      restored.finish(foreman, request.id);
+      expect(
+        reopened.database
+          .prepare("SELECT state FROM foreman_inbox WHERE dedupe_key = ?")
+          .get(`conversation-result:${request.id}`)?.state,
+      ).toBe("answered");
+    } finally {
+      reopened.close();
+    }
+    const followup = conversations.ask(foreman, {
+      ...question,
+      requestId: "follow-up",
+      replyTo: request.id,
+      text: "Any blockers?",
+    });
+    expect(followup.conversationId).toBe(request.conversationId);
+    const goal = service.propose({
+      requestId: "promoted-goal",
+      title: "Finish API changes",
+      objective: "Complete the discussed work",
+      constraints: [],
+      sourceConversationIds: [request.id, followup.id],
+    });
+    expect(goal.state).toBe("proposed");
+    expect(goal.sourceConversationIds).toEqual([request.id, followup.id]);
+    expect(service.delegations()).toEqual([]);
+  });
+
+  it("queues ad hoc questions behind busy or Human-controlled recipients and expires without replay", async () => {
+    const { store, service, foreman, lead } = teamFixture();
+    store.database.exec("DELETE FROM foreman_coordination_records; DELETE FROM foreman_inbox");
+    let controlled = true;
+    let clock = new Date();
+    const conversations = new ForemanConversationService(
+      store,
+      service,
+      () => controlled,
+      () => clock,
+    );
+    const actions = new AgentActionService(
+      store,
+      1,
+      new PeerCapabilityPolicy(undefined, undefined, undefined, (principal, command) =>
+        conversations.authorize(principal, command),
+      ),
+    );
+    const request = conversations.ask(foreman, {
+      requestId: "queue",
+      groupId: lead.groupId,
+      memberId: lead.memberId,
+      text: "Status?",
+      expiresInSeconds: 30,
+    });
+    await conversations.tick(actions);
+    expect(store.listAgentActions()).toEqual([]);
+    controlled = false;
+    const status = store.getAgentStatus(lead.groupId, lead.memberId);
+    const busy = vi.spyOn(store, "getAgentStatus").mockReturnValue({ ...status, state: "working" });
+    try {
+      await conversations.tick(actions);
+      expect(store.listAgentActions()).toEqual([]);
+    } finally {
+      busy.mockRestore();
+    }
+    clock = new Date(clock.getTime() + 31000);
+    await conversations.tick(actions);
+    expect(conversations.get(request.id).state).toBe("expired");
+    expect(store.listAgentActions()).toEqual([]);
+    expect(() =>
+      conversations.reply(lead, { id: request.id, requestId: "late", text: "Late answer" }),
+    ).toThrow("expired");
+  });
+
+  it("keeps conversation authority separate from goals and rejects replaced recipients", async () => {
+    const { store, service, foreman, lead } = teamFixture();
+    store.database.exec("DELETE FROM foreman_coordination_records; DELETE FROM foreman_inbox");
+    const conversations = new ForemanConversationService(store, service, () => false);
+    const policy = new PeerCapabilityPolicy(undefined, undefined, undefined, (principal, command) =>
+      conversations.authorize(principal, command),
+    );
+    const actions = new AgentActionService(store, 1, policy);
+    const request = conversations.ask(foreman, {
+      requestId: "identity",
+      groupId: lead.groupId,
+      memberId: lead.memberId,
+      text: "Status?",
+      expiresInSeconds: 3600,
+    });
+    await conversations.tick(actions);
+    const action = store.getAgentAction(conversations.get(request.id).actionId!);
+    expect(() => policy.assertNoPeerTerminalOrRunControl(action.principal)).toThrow(
+      "cannot control",
+    );
+    expect(() =>
+      actions.create(
+        action.principal,
+        CreateAgentActionCommandSchema.parse({
+          kind: "prompt",
+          groupId: lead.groupId,
+          memberId: lead.memberId,
+          prompt: "Unrelated execution",
+        }),
+        "bypass",
+      ),
+    ).toThrow("does not match");
+    store.transitionAgentAction(action.id, ["created"], "stalled");
+    await conversations.tick(actions);
+    expect(conversations.get(request.id).state).toBe("ambiguous");
+    await conversations.tick(actions);
+    expect(store.listAgentActions()).toHaveLength(1);
+    const second = conversations.ask(foreman, {
+      requestId: "identity-two",
+      groupId: lead.groupId,
+      memberId: lead.memberId,
+      text: "New status request",
+      expiresInSeconds: 3600,
+    });
+    store.updateRuntimeRunStatus(lead.runId, "stopping");
+    store.updateRuntimeRunStatus(lead.runId, "stopped");
+    store.createRunForMembership(lead.groupId, lead.memberId);
+    await conversations.tick(actions);
+    expect(conversations.get(second.id).state).toBe("cancelled");
+  });
+
+  it("cancels queued conversation input without replay and keeps questions out of goal action budgets", async () => {
+    const { store, service, foreman, lead, delegation } = teamFixture();
+    const conversations = new ForemanConversationService(store, service, () => false);
+    const actions = new AgentActionService(
+      store,
+      1,
+      new PeerCapabilityPolicy(undefined, undefined, undefined, (principal, command) =>
+        conversations.authorize(principal, command),
+      ),
+    );
+    const request = conversations.ask(foreman, {
+      requestId: "cancel-me",
+      groupId: lead.groupId,
+      memberId: lead.memberId,
+      text: "What is your current status?",
+      expiresInSeconds: 3600,
+    });
+    await conversations.tick(actions);
+    const action = store.getAgentAction(conversations.get(request.id).actionId!);
+    expect(service.unsettled(service.delegation(delegation.id))).toEqual([]);
+    conversations.cancel(request.id);
+    expect(store.getAgentAction(action.id).state).toBe("cancelled");
+    expect(() => conversations.authorizeAction(action)).toThrow("expired or no longer");
+    await conversations.tick(actions);
+    expect(store.listAgentActions()).toHaveLength(1);
+    expect(conversations.cancel(request.id).state).toBe("cancelled");
+  });
+
+  it("does not carry queued conversation authority through disable and re-enable", async () => {
+    const { store, service, foreman, lead } = teamFixture();
+    const conversations = new ForemanConversationService(store, service, () => false);
+    const actions = new AgentActionService(
+      store,
+      1,
+      new PeerCapabilityPolicy(undefined, undefined, undefined, (principal, command) =>
+        conversations.authorize(principal, command),
+      ),
+    );
+    const request = conversations.ask(foreman, {
+      requestId: "before-revoke",
+      groupId: lead.groupId,
+      memberId: lead.memberId,
+      text: "Status?",
+      expiresInSeconds: 3600,
+    });
+    const actor = store.getForeman(foreman.foremanId);
+    store.upsertForeman({ ...actor, enabled: false });
+    store.upsertForeman({ ...actor, enabled: true });
+    await conversations.tick(actions);
+    expect(conversations.get(request.id).state).toBe("cancelled");
+    expect(store.listAgentActions()).toEqual([]);
+  });
   it("runs separate goals concurrently and pauses only the selected goal", async () => {
     const {
       service,

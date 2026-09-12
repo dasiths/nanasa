@@ -11,6 +11,7 @@ import {
   type DelegationReport,
   type ForemanCheckInCommand,
   ForemanCheckInCommandSchema,
+  ForemanConversationRequestSchema,
   type ForemanGoal,
   ForemanGoalSchema,
   type ForemanGoalWorkspace,
@@ -285,6 +286,17 @@ export class ForemanGoalService {
           this.now().getTime() + foreman.autonomy.maxGoalHours * 3600000,
         ).toISOString(),
       };
+      for (const id of input.sourceConversationIds ?? []) {
+        const row = this.store.database
+          .prepare("SELECT data_json FROM foreman_conversations WHERE id = ?")
+          .get(id);
+        if (
+          !row ||
+          ForemanConversationRequestSchema.parse(JSON.parse(String(row.data_json))).foremanId !==
+            goal.foremanId
+        )
+          this.#fail("Goal conversation context is unavailable or belongs to another Foreman");
+      }
       this.#save("goal", goal, `goal:${input.requestId}`, input);
       this.notify(`goal:${goal.id}`, {
         kind: "goal",
@@ -751,7 +763,12 @@ export class ForemanGoalService {
   unsettled(delegation: TeamDelegation) {
     return this.store
       .listAgentActions(delegation.groupId)
-      .filter((action) => action.id !== delegation.actionId && !settled.has(action.state));
+      .filter(
+        (action) =>
+          action.principal.kind !== "foreman-conversation" &&
+          action.id !== delegation.actionId &&
+          !settled.has(action.state),
+      );
   }
   authorizeTeamInput(principal: AgentActionPrincipal) {
     if (principal.kind !== "agent") return;

@@ -905,6 +905,145 @@
     ],
     "additionalProperties": false
   },
+  "conversation": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "requestId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "groupId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "memberId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "text": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 8000
+      },
+      "replyTo": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "sourceMessageId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "expiresInSeconds": {
+        "default": 3600,
+        "type": "integer",
+        "minimum": 30,
+        "maximum": 86400
+      },
+      "id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "conversationId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "foremanId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "memberProfileId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "authorityRevision": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "state": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "submitted",
+          "answered",
+          "failed",
+          "expired",
+          "cancelled",
+          "ambiguous"
+        ]
+      },
+      "actionId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "runId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "generation": {
+        "type": "integer",
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991
+      },
+      "response": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 8000
+      },
+      "responseRequestId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "answeredAt": {
+        "type": "string",
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+      },
+      "problem": {
+        "type": "string",
+        "maxLength": 500
+      },
+      "createdAt": {
+        "type": "string",
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+      },
+      "expiresAt": {
+        "type": "string",
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+      }
+    },
+    "required": [
+      "requestId",
+      "groupId",
+      "memberId",
+      "text",
+      "expiresInSeconds",
+      "id",
+      "conversationId",
+      "foremanId",
+      "memberProfileId",
+      "authorityRevision",
+      "state",
+      "createdAt",
+      "expiresAt"
+    ],
+    "additionalProperties": false
+  },
   "goal": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -941,6 +1080,15 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128
+          },
+          "sourceConversationIds": {
+            "maxItems": 16,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
           },
           "id": {
             "type": "string",
@@ -1900,6 +2048,82 @@
       ],
       "additionalProperties": false
     },
+    "askMember": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "groupId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "memberId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        },
+        "replyTo": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "sourceMessageId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expiresInSeconds": {
+          "default": 3600,
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 86400
+        }
+      },
+      "required": [
+        "requestId",
+        "groupId",
+        "memberId",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "replyToForeman": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        }
+      },
+      "required": [
+        "id",
+        "requestId",
+        "text"
+      ],
+      "additionalProperties": false
+    },
     "resolveInput": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -1965,6 +2189,15 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128
+        },
+        "sourceConversationIds": {
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
         }
       },
       "required": [

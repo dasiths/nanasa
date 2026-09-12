@@ -89,7 +89,8 @@ groups:
       expect(instructions).toContain("## Repository Foreman");
       expect(instructions).toContain("does not replace your team's project manager or the Human");
       expect(instructions).toContain("does not receive team broadcasts");
-      expect(instructions).toContain("no direct worker-to-Foreman DM tool");
+      expect(instructions).toContain("no unrestricted worker-to-Foreman DM tool");
+      expect(instructions).toContain("nanasa.reply_foreman");
       expect(instructions).toContain(
         "report concrete progress, blockers, and results with nanasa.report_progress",
       );
@@ -130,7 +131,10 @@ groups:
     }
     expect(prompt.text).toContain("preserve its teamId exactly");
     expect(prompt.text).toContain("Terminal output alone is not a channel reply");
-    expect(prompt.text).toContain("You may converse with the Human without a goal");
+    expect(prompt.text).toContain("Converse with the Human and team members without a goal");
+    expect(prompt.text).toContain("nanasa.foreman_ask_member");
+    expect(prompt.text).toContain("end your turn so result wakeups can be delivered");
+    expect(prompt.text).toContain("Do not use shell waits, sleep commands, or repeated polling");
     expect(prompt.text).toContain("nanasa.request_human_decision cannot approve a proposed goal");
     expect(prompt.text).toContain("Foreman cannot answer worker waits");
     expect(prompt.text).toContain("Never copy provider credentials between homes");
