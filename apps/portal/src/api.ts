@@ -301,7 +301,11 @@ export interface PortalClient {
     receiptId: string,
     command: RevokeCustomLaunchConsentCommand,
   ): Promise<CustomLaunchConsentDecision>;
-  submitMessage(groupId: string, command: SubmitMessageCommand): Promise<MessageSubmissionResult>;
+  submitMessage(
+    groupId: string,
+    command: SubmitMessageCommand,
+    idempotencyKey?: string,
+  ): Promise<MessageSubmissionResult>;
   createAgentAction(command: CreateAgentActionCommand): Promise<AgentAction>;
   loadActionWorkspace(groupId: string): Promise<AgentActionWorkspace>;
   cancelAgentAction(actionId: string): Promise<AgentAction>;
@@ -642,11 +646,15 @@ export const api: PortalClient = {
       CustomLaunchConsentDecisionSchema,
       commandInit("POST", RevokeCustomLaunchConsentCommandSchema.parse(command)),
     ),
-  submitMessage: (groupId, command) =>
+  submitMessage: (groupId, command, idempotencyKey) =>
     request(
       `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/messages`,
       MessageSubmissionResultSchema,
-      commandInit("POST", SubmitMessageCommandSchema.parse(command), crypto.randomUUID()),
+      commandInit(
+        "POST",
+        SubmitMessageCommandSchema.parse(command),
+        idempotencyKey ?? crypto.randomUUID(),
+      ),
     ),
   createAgentAction: (command) =>
     request(

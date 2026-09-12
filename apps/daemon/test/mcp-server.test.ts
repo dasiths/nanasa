@@ -211,6 +211,77 @@ describe("Streamable HTTP MCP", () => {
     }
   });
 
+  it("discovers Foreman presence independently of empty member requests and team delegations", async () => {
+    const { daemon, agentToken } = await createFixture();
+    const discover = async () => {
+      const response = await callTool(
+        daemon,
+        agentToken,
+        "nanasa.member_foreman_conversations",
+        {},
+      );
+      expect(response.statusCode).toBe(200);
+      expect(response.json().result.isError, response.body).not.toBe(true);
+      return response.json().result.structuredContent.result;
+    };
+    try {
+      expect(await discover()).toEqual({ requests: [], foreman: { configured: false } });
+      for (const enabled of [false, true]) {
+        await daemon.foreman.configure(
+          ForemanConfigSchema.parse({
+            id: "foreman",
+            name: "Repository Foreman",
+            integrationId: "fixture",
+            enabled,
+          }),
+          daemon.foreman.status().configRevision!,
+        );
+        expect(await discover()).toEqual({
+          requests: [],
+          foreman: {
+            configured: true,
+            id: "foreman",
+            name: "Repository Foreman",
+            enabled,
+            runStatus: "not-started",
+          },
+        });
+      }
+      const profile = daemon.store.createInternalAgentProfile({
+        name: "Foreman",
+        agentType: "fixture",
+        kind: "opencode",
+        command: "node",
+        args: [],
+        environment: {},
+      });
+      daemon.store.upsertForeman({ id: "foreman", agentProfileId: profile.id, enabled: true });
+      const { run } = daemon.store.createRunForForeman("foreman");
+      daemon.store.sendForemanMessage(
+        { kind: "operator", operatorId: "human" },
+        { requestId: "private-channel", text: "Private Human-Foreman conversation" },
+      );
+      for (const runStatus of ["running", "stopped"] as const) {
+        daemon.store.updateRuntimeRunStatus(run.id, runStatus);
+        expect(await discover()).toEqual({
+          requests: [],
+          foreman: {
+            configured: true,
+            id: "foreman",
+            name: "Repository Foreman",
+            enabled: true,
+            runStatus,
+          },
+        });
+        const delegations = await callTool(daemon, agentToken, "nanasa.team_delegations", {});
+        expect(delegations.json().result.structuredContent.result).toEqual([]);
+      }
+      expect(daemon.goals.list()).toEqual([]);
+    } finally {
+      await daemon.app.close();
+    }
+  });
+
   it("advertises a separate Foreman scope and denies direct cross-principal tool calls", async () => {
     const { daemon, agentToken, secretPath, group } = await createFixture();
     try {

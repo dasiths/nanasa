@@ -10,17 +10,17 @@ import {
   type SendForemanMessageCommand,
 } from "@nanasa/contracts";
 import {
-  ArrowLeft,
   Bot,
+  Check,
   ListChecks,
   MessageSquare,
   Play,
   RefreshCw,
   Save,
-  Send,
   Settings,
   Square,
   Terminal,
+  X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { PortalClient } from "../api.js";
@@ -28,6 +28,7 @@ import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 import { type ThemePreference, useAppliedTheme } from "../hooks/use-portal-preferences.js";
 import { useTerminalEndpoint } from "../hooks/use-terminal-endpoint.js";
 import { TerminalConsole } from "../terminal/terminal-console.js";
+import { CommunicationWorkspace } from "./communication-workspace.js";
 import { ForemanGoals } from "./foreman-goals.js";
 import "./foreman-workspace.css";
 
@@ -324,14 +325,12 @@ export function ForemanWorkspace({
   const [messages, setMessages] = useState<ForemanChannelMessage[]>([]);
   const [conversations, setConversations] = useState<ForemanConversationRequest[]>([]);
   const [tab, setTab] = useState<"channel" | "terminal" | "goals" | "settings">("channel");
-  const [text, setText] = useState("");
   const [teamId, setTeamId] = useState(initialTeamId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<PortalError>();
   const [refresh, setRefresh] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const cursor = useRef(0);
-  const retry = useRef<SendForemanMessageCommand | undefined>(undefined);
   const theme = useAppliedTheme(themePreference);
   const contextMissing = teamId !== "" && !groups.some((group) => group.id === teamId);
   useEffect(() => {
@@ -383,18 +382,16 @@ export function ForemanWorkspace({
       setBusy(false);
     }
   };
-  const send = () =>
-    operate(async () => {
-      const prior = retry.current;
-      const command =
-        prior?.text === text && prior.teamId === (teamId || undefined)
-          ? prior
-          : { requestId: crypto.randomUUID(), text, ...(teamId === "" ? {} : { teamId }) };
-      retry.current = command;
-      await client.sendForemanMessage(command);
-      retry.current = undefined;
-      setText("");
-    });
+  const send = async (command: SendForemanMessageCommand) => {
+    const message = await client.sendForemanMessage(command);
+    setMessages((current) =>
+      [...new Map([...current, message].map((entry) => [entry.id, entry])).values()]
+        .sort((left, right) => left.sequence - right.sequence)
+        .slice(-500),
+    );
+    setRefresh((value) => value + 1);
+    return message;
+  };
   const running =
     state?.run !== undefined && ["starting", "running", "stopping"].includes(state.run.status);
   return (
@@ -515,195 +512,125 @@ export function ForemanWorkspace({
             item.state === "ambiguous" ||
             (item.state === "submitted" && Date.now() - Date.parse(item.updatedAt) > 60000),
         )
-        .map((item) => (
-          <div key={item.id} className="foreman-toolbar" role="alert">
-            <span>
-              {item.state === "ambiguous"
-                ? "Input delivery is uncertain."
-                : "Submitted input is awaiting a reply."}
-            </span>
-            <button
-              className="compact-button"
-              disabled={busy}
-              onClick={() =>
-                void operate(() =>
-                  client.resolveForemanInput({
-                    inboxId: item.id,
-                    expectedState: item.state === "ambiguous" ? "ambiguous" : "submitted",
-                    resolution: "handled",
-                  }),
-                )
-              }
-            >
-              Mark inspected input handled
-            </button>
-            <button
-              className="compact-button"
-              disabled={busy}
-              onClick={() =>
-                void operate(() =>
-                  client.resolveForemanInput({
-                    inboxId: item.id,
-                    expectedState: item.state === "ambiguous" ? "ambiguous" : "submitted",
-                    resolution: "cancel",
-                  }),
-                )
-              }
-            >
-              Close without replay
-            </button>
-          </div>
-        ))}
+        .map((item) => {
+          const request = conversations.find((entry) => entry.id === item.conversationRequestId);
+          const member =
+            request === undefined
+              ? undefined
+              : Object.values(config.groups[request.groupId]?.agents ?? {}).find(
+                  (agent) => agent.memberId === request.memberId,
+                );
+          const source =
+            item.kind === "human-message"
+              ? "Your channel message"
+              : item.kind === "conversation-result"
+                ? `Member result${request === undefined ? " notification" : `: ${member?.name ?? request.memberId}`}`
+                : "Coordination notification";
+          const previousRun =
+            item.submittedRunId !== undefined && item.submittedRunId !== state.run?.id;
+          const preview =
+            messages.find((message) => message.id === item.messageId)?.text.slice(0, 500) ??
+            item.preview;
+          return (
+            <div key={item.id} className="foreman-inbox-notice" role="alert">
+              <h3>Foreman updates are paused</h3>
+              <p>
+                <strong>{source}</strong>:{" "}
+                {item.state === "ambiguous"
+                  ? "delivery could not be confirmed."
+                  : "sent, but not acknowledged by Foreman."}
+              </p>
+              <p className="foreman-inbox-meta">
+                {item.submittedGeneration !== undefined && (
+                  <span>
+                    Foreman run {item.submittedGeneration}
+                    {previousRun ? " (previous run)" : ""}
+                  </span>
+                )}
+                <time dateTime={item.updatedAt}>{new Date(item.updatedAt).toLocaleString()}</time>
+              </p>
+              <p>
+                New reply notifications are queued behind this item. Neither action below resends
+                input or undoes work.
+              </p>
+              <details>
+                <summary>View blocked input</summary>
+                <p className="foreman-inbox-preview">{preview}</p>
+                <code>{item.conversationRequestId ?? item.messageId ?? item.id}</code>
+              </details>
+              <div className="foreman-toolbar">
+                <button
+                  className="compact-button"
+                  disabled={state.run === undefined}
+                  onClick={() => setTab("terminal")}
+                >
+                  <Terminal size={14} aria-hidden="true" />
+                  Review terminal
+                </button>
+                <button
+                  className="compact-button"
+                  disabled={busy}
+                  title="Confirm you checked Foreman's response and this item is handled"
+                  onClick={() =>
+                    void operate(() =>
+                      client.resolveForemanInput({
+                        inboxId: item.id,
+                        expectedState: item.state === "ambiguous" ? "ambiguous" : "submitted",
+                        resolution: "handled",
+                      }),
+                    )
+                  }
+                >
+                  <Check size={14} aria-hidden="true" />
+                  Mark handled
+                </button>
+                <button
+                  className="compact-button"
+                  disabled={busy}
+                  title="Stop waiting for this item without marking it handled or sending it again"
+                  onClick={() =>
+                    void operate(() =>
+                      client.resolveForemanInput({
+                        inboxId: item.id,
+                        expectedState: item.state === "ambiguous" ? "ambiguous" : "submitted",
+                        resolution: "cancel",
+                      }),
+                    )
+                  }
+                >
+                  <X size={14} aria-hidden="true" />
+                  Dismiss without resend
+                </button>
+              </div>
+            </div>
+          );
+        })}
       {contextMissing && <p role="alert">The selected team is unavailable.</p>}
-      {tab === "channel" && (
+      {
         <div
           id="foreman-channel"
+          hidden={tab !== "channel"}
           role="tabpanel"
           aria-labelledby="foreman-tab-channel"
           className="foreman-channel"
         >
-          <div className="foreman-context">
-            <label>
-              Context
-              <select value={teamId} onChange={(event) => setTeamId(event.target.value)}>
-                <option value="">Repository</option>
-                {contextMissing && <option value={teamId}>Unavailable team</option>}
-                {groups.map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {teamId !== "" && !contextMissing && (
-              <button
-                className="compact-button"
-                onClick={() => onNavigate(`/groups/${encodeURIComponent(teamId)}/messages`)}
-              >
-                <ArrowLeft size={14} aria-hidden="true" />
-                Back to team
-              </button>
-            )}
-          </div>
-          <div className="foreman-conversation" aria-label="Foreman channel messages">
-            {messages.length === 0 && <p className="foreman-empty">No messages yet</p>}
-            {messages.map((message) => (
-              <article
-                className={`foreman-message foreman-message-${message.sender.kind}`}
-                key={message.id}
-              >
-                <header>
-                  <strong>{message.sender.kind === "operator" ? "You" : "Foreman"}</strong>
-                  <time dateTime={message.createdAt}>
-                    {new Date(message.createdAt).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </time>
-                  {message.teamId && (
-                    <span>
-                      {groups.find((group) => group.id === message.teamId)?.name ??
-                        "Unavailable team"}
-                    </span>
-                  )}
-                </header>
-                <p>{message.text}</p>
-                <small>
-                  {message.sender.kind === "foreman"
-                    ? "Reply"
-                    : messages.some(
-                          (reply) =>
-                            reply.replyTo === message.id && reply.sender.kind === "foreman",
-                        )
-                      ? "Replied"
-                      : (state?.inbox?.find((item) => item.messageId === message.id)?.state ??
-                        "Stored in channel")}
-                </small>
-              </article>
-            ))}
-          </div>
-          {hasMore && (
-            <button onClick={() => setRefresh((value) => value + 1)}>Load more messages</button>
-          )}
-          {conversations.length > 0 && (
-            <details className="foreman-team-conversations">
-              <summary>
-                Team conversations (
-                {
-                  conversations.filter((item) =>
-                    ["queued", "submitted", "ambiguous"].includes(item.state),
-                  ).length
-                }{" "}
-                pending)
-              </summary>
-              {conversations.map((request) => (
-                <article className="foreman-message" key={request.id}>
-                  <header>
-                    <strong>
-                      {groups.find((group) => group.id === request.groupId)?.name ??
-                        request.groupId}{" "}
-                      / {request.memberId}
-                    </strong>
-                    <span>{request.state}</span>
-                  </header>
-                  <p>{request.text}</p>
-                  {request.response && (
-                    <p>
-                      <strong>Member reply:</strong> {request.response}
-                    </p>
-                  )}
-                  {request.problem && <p role="status">{request.problem}</p>}
-                  {["queued", "submitted", "ambiguous"].includes(request.state) && (
-                    <button
-                      className="compact-button"
-                      disabled={busy}
-                      onClick={() =>
-                        void operate(() => client.cancelForemanConversation(request.id))
-                      }
-                    >
-                      <Square size={14} />
-                      Cancel request
-                    </button>
-                  )}
-                </article>
-              ))}
-            </details>
-          )}
-          <form
-            className="foreman-composer"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void send();
-            }}
-          >
-            <label className="sr-only" htmlFor="foreman-message">
-              Message Foreman
-            </label>
-            <textarea
-              id="foreman-message"
-              rows={3}
-              value={text}
-              maxLength={32768}
-              disabled={busy}
-              onChange={(event) => setText(event.target.value)}
-              placeholder="Message Foreman"
-            />
-            <button
-              className="primary-button"
-              type="submit"
-              disabled={
-                busy ||
-                contextMissing ||
-                text.trim().length === 0 ||
-                new TextEncoder().encode(text).length > 32768
-              }
-            >
-              <Send size={16} aria-hidden="true" />
-              Send
-            </button>
-          </form>
+          <CommunicationWorkspace
+            client={client}
+            config={config}
+            groups={groups}
+            messages={messages}
+            requests={conversations}
+            inbox={state?.inbox ?? []}
+            teamId={teamId}
+            onTeamChange={setTeamId}
+            hasMore={hasMore}
+            onLoadMore={() => setRefresh((value) => value + 1)}
+            onSendForeman={send}
+            onCancelRequest={(id) => operate(() => client.cancelForemanConversation(id))}
+            onNavigate={onNavigate}
+          />
         </div>
-      )}
+      }
       {tab === "terminal" && (
         <div
           id="foreman-terminal"

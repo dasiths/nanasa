@@ -1989,21 +1989,41 @@ export class NanasaStore {
   public listForemanInbox() {
     return this.#database
       .prepare(
-        "SELECT id, message_id, state, updated_at FROM foreman_inbox ORDER BY created_at DESC, id DESC LIMIT 100",
+        "SELECT id, message_id, dedupe_key, prompt, target_json, state, created_at, updated_at FROM foreman_inbox ORDER BY created_at DESC, id DESC LIMIT 100",
       )
       .all()
-      .map((row) => ({
-        id: String(row.id),
-        messageId: row.message_id === null ? undefined : String(row.message_id),
-        state: row.state as
-          | "queued"
-          | "writing"
-          | "submitted"
-          | "answered"
-          | "ambiguous"
-          | "cancelled",
-        updatedAt: String(row.updated_at),
-      }));
+      .map((row) => {
+        const key = String(row.dedupe_key ?? "");
+        const target =
+          row.target_json === null
+            ? undefined
+            : (JSON.parse(String(row.target_json)) as { runId?: string; generation?: number });
+        return {
+          id: String(row.id),
+          messageId: row.message_id === null ? undefined : String(row.message_id),
+          kind:
+            row.message_id !== null
+              ? ("human-message" as const)
+              : key.startsWith("conversation-result:")
+                ? ("conversation-result" as const)
+                : ("notification" as const),
+          preview: String(row.prompt).slice(0, 500),
+          conversationRequestId: key.startsWith("conversation-result:")
+            ? key.slice("conversation-result:".length)
+            : undefined,
+          submittedRunId: target?.runId,
+          submittedGeneration: target?.generation,
+          createdAt: String(row.created_at),
+          state: row.state as
+            | "queued"
+            | "writing"
+            | "submitted"
+            | "answered"
+            | "ambiguous"
+            | "cancelled",
+          updatedAt: String(row.updated_at),
+        };
+      });
   }
 
   public resolveForemanInput(operatorId: string, command: ResolveForemanInputCommand): void {

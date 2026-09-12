@@ -565,7 +565,29 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
         description: mcpTool("nanasa.member_foreman_conversations").description,
         inputSchema: ForemanConversationQuerySchema,
       },
-      async (input) => actionToolResult(() => options.conversations.read(principal, input)),
+      async (input) =>
+        actionToolResult(() => {
+          const conversations = options.conversations.read(principal, input);
+          const config = options.foremanConfig?.() ?? options.store.getSnapshot().config;
+          const configuration = config?.foreman;
+          const run =
+            configuration === undefined
+              ? undefined
+              : options.store.getLatestForemanRun(configuration.id);
+          return {
+            ...conversations,
+            foreman:
+              configuration === undefined
+                ? { configured: false }
+                : {
+                    configured: true,
+                    id: configuration.id,
+                    name: configuration.name,
+                    enabled: configuration.enabled,
+                    runStatus: run?.status ?? "not-started",
+                  },
+          };
+        }),
     );
     server.registerTool(
       "nanasa.reply_foreman",

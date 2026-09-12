@@ -128,7 +128,7 @@ export const MCP_TOOL_REGISTRY = Object.freeze([
   tool({
     name: "nanasa.member_foreman_conversations",
     description:
-      "Read only conversation requests addressed to your authenticated member and runtime",
+      "Discover whether the repository Foreman is configured, enabled and running, and read only conversation requests addressed to your authenticated member and runtime; empty requests do not mean Foreman is absent",
     inputSchema: ForemanConversationQuerySchema,
     principals: ["agent"],
     scope: "member:foreman-conversations:read",

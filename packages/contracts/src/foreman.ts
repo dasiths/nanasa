@@ -20,6 +20,12 @@ export const ForemanWorkspaceSchema = z
           .object({
             id: IdentifierSchema,
             messageId: IdentifierSchema.optional(),
+            kind: z.enum(["human-message", "conversation-result", "notification"]),
+            preview: z.string().max(500),
+            conversationRequestId: IdentifierSchema.optional(),
+            submittedRunId: IdentifierSchema.optional(),
+            submittedGeneration: z.number().int().positive().optional(),
+            createdAt: TimestampSchema,
             state: z.enum(["queued", "writing", "submitted", "answered", "ambiguous", "cancelled"]),
             updatedAt: TimestampSchema,
           })

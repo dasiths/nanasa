@@ -8,7 +8,7 @@ afterEach(() => {
   for (const store of stores.splice(0)) store.close();
 });
 
-function fixture() {
+function fixture(withPreviousRun = false) {
   const store = new NanasaStore(":memory:");
   stores.push(store);
   const profile = store.createInternalAgentProfile({
@@ -24,6 +24,11 @@ function fixture() {
     agentProfileId: profile.id,
     enabled: true,
   });
+  const previousRun = withPreviousRun ? store.createRunForForeman(actor.id).run : undefined;
+  if (previousRun !== undefined) {
+    store.updateRuntimeRunStatus(previousRun.id, "running");
+    store.updateRuntimeRunStatus(previousRun.id, "stopped");
+  }
   const created = store.createRunForForeman(actor.id).run;
   store.updateRuntimeRunStatus(created.id, "running");
   const run = store.getActiveForemanRun(actor.id)!;
@@ -31,7 +36,7 @@ function fixture() {
   store.registerReporterSession({
     id: "reporter",
     runId: run.id,
-    generation: 1,
+    generation: run.generation,
     providerId: "copilot",
     adapterId: "copilot",
     reporterId: "copilot-hooks",
@@ -44,12 +49,12 @@ function fixture() {
     openedAt: now,
     leaseExpiresAt: "2099-01-01T00:00:00Z",
   });
-  store.bindReporterProcess(run.id, 1, "a".repeat(64));
+  store.bindReporterProcess(run.id, run.generation, "a".repeat(64));
   const identity = {
     kind: "foreman" as const,
     foremanId: actor.id,
     runId: run.id,
-    generation: 1,
+    generation: run.generation,
     authorityRevision: 0,
   };
   const event: AgentStatusEventInput = {
@@ -62,7 +67,7 @@ function fixture() {
     protocolVersion: 2,
     reporterVersion: "2",
     runId: run.id,
-    generation: 1,
+    generation: run.generation,
     reporterEpoch: "epoch",
     sourceSequence: 1,
     event: "session.ready",
@@ -115,6 +120,7 @@ function fixture() {
   return {
     store,
     run,
+    previousRun,
     event,
     identity,
     ready,
@@ -131,6 +137,77 @@ function fixture() {
 }
 
 describe("Foreman durable input dispatch", () => {
+  it.each(["writing", "submitted", "ambiguous"])(
+    "recovers a %s conversation-result wakeup from a stopped Foreman run",
+    async (state) => {
+      const context = fixture(true);
+      context.ready();
+      context.store.database
+        .prepare(
+          "INSERT INTO foreman_inbox (id, dedupe_key, prompt, state, target_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          "previous-result",
+          "conversation-result:question-previous",
+          "Read the durable member reply for question-previous",
+          state,
+          JSON.stringify({
+            runId: context.previousRun!.id,
+            generation: context.previousRun!.generation,
+          }),
+          "2000-01-01T00:00:00Z",
+          "2000-01-01T00:00:00Z",
+        );
+      await context.scheduler.tick();
+      const result = context.store.database
+        .prepare("SELECT state, target_json FROM foreman_inbox WHERE id = ?")
+        .get("previous-result")!;
+      expect(result.state).toBe("submitted");
+      expect(JSON.parse(String(result.target_json))).toMatchObject({
+        runId: context.run.id,
+        generation: context.run.generation,
+      });
+      expect(context.runtime.pasteToRun).toHaveBeenCalledWith(
+        context.run,
+        "Read the durable member reply for question-previous",
+        expect.any(Function),
+      );
+      await context.scheduler.tick();
+      expect(context.runtime.pasteToRun).toHaveBeenCalledOnce();
+      context.store.resolveForemanInput("human", {
+        inboxId: "previous-result",
+        expectedState: "submitted",
+        resolution: "handled",
+      });
+      await context.scheduler.tick();
+      expect(context.state()).toBe("submitted");
+      expect(context.runtime.pasteToRun).toHaveBeenCalledTimes(2);
+      await context.scheduler.close();
+    },
+  );
+
+  it("does not replay or discard unresolved Human input from a stopped run", async () => {
+    const context = fixture(true);
+    context.ready();
+    context.store.database
+      .prepare("UPDATE foreman_inbox SET state = 'submitted', target_json = ? WHERE message_id = ?")
+      .run(
+        JSON.stringify({
+          runId: context.previousRun!.id,
+          generation: context.previousRun!.generation,
+        }),
+        context.message.id,
+      );
+    context.store.sendForemanMessage(
+      { kind: "operator", operatorId: "human" },
+      { requestId: "later-message", text: "A later instruction" },
+    );
+    await context.scheduler.tick();
+    expect(context.state()).toBe("submitted");
+    expect(context.runtime.pasteToRun).not.toHaveBeenCalled();
+    await context.scheduler.close();
+  });
+
   it("accepts lease-only reporter heartbeats during paste without weakening the target fence", async () => {
     const context = fixture();
     context.ready();

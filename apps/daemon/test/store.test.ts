@@ -106,6 +106,12 @@ describe("NanasaStore persistence", () => {
       const operator = { kind: "operator" as const, operatorId: "operator-one" };
       const input = { requestId: "request-one", text: "Coordinate this work", teamId: team.id };
       const message = store.sendForemanMessage(operator, input);
+      expect(store.listForemanInbox()[0]).toMatchObject({
+        messageId: message.id,
+        kind: "human-message",
+        preview: expect.stringContaining(input.text),
+        createdAt: expect.any(String),
+      });
       expect(store.sendForemanMessage(operator, input)).toEqual(message);
       expect(() => store.sendForemanMessage(operator, { ...input, text: "changed" })).toThrow(
         "different content",
@@ -155,6 +161,42 @@ describe("NanasaStore persistence", () => {
         nextAfter: response.sequence,
         hasMore: false,
       });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("exposes bounded context for unresolved Foreman notifications without internal target details", () => {
+    const store = new NanasaStore(":memory:");
+    try {
+      const timestamp = new Date().toISOString();
+      store.database
+        .prepare(
+          "INSERT INTO foreman_inbox (id, dedupe_key, prompt, state, target_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          "result-inbox",
+          "conversation-result:question-one",
+          "Result ".repeat(100),
+          "submitted",
+          JSON.stringify({
+            runId: "old-run",
+            generation: 6,
+            processFingerprint: "internal-process-fingerprint",
+          }),
+          timestamp,
+          timestamp,
+        );
+      const result = store.listForemanInbox()[0]!;
+      expect(result).toMatchObject({
+        kind: "conversation-result",
+        conversationRequestId: "question-one",
+        submittedRunId: "old-run",
+        submittedGeneration: 6,
+        createdAt: timestamp,
+      });
+      expect(result.preview).toHaveLength(500);
+      expect(JSON.stringify(result)).not.toContain("internal-process-fingerprint");
     } finally {
       store.close();
     }

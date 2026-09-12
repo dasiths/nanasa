@@ -4,6 +4,74 @@ import type { ForemanConversationRequest, ForemanWorkspace } from "@nanasa/contr
 import { expect, test } from "@playwright/test";
 import { PackageAcceptanceService } from "./fixtures/package-fixture.js";
 
+test("Foreman blocked input explains its source and resolution on desktop and mobile", async ({
+  page,
+  browserName,
+}, testInfo) => {
+  const nanasa = await PackageAcceptanceService.create(browserName);
+  try {
+    const message = await nanasa.request<{ id: string }>("/api/v1/foreman/channel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requestId: "blocked-human-input",
+        text: "Check the published API contract; do not start implementation.",
+      }),
+    });
+    const database = new DatabaseSync(join(nanasa.configRoot, ".nanasa", "state", "nanasa.sqlite"));
+    try {
+      database
+        .prepare(
+          "UPDATE foreman_inbox SET state = 'submitted', target_json = ?, updated_at = ? WHERE message_id = ?",
+        )
+        .run(
+          JSON.stringify({ runId: "previous-foreman-run", generation: 6 }),
+          new Date(Date.now() - 120000).toISOString(),
+          message.id,
+        );
+    } finally {
+      database.close();
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(`${nanasa.baseUrl}/foreman${new URL(nanasa.portalUrl).hash}`);
+    const notice = page
+      .getByRole("alert")
+      .filter({ has: page.getByRole("heading", { name: "Foreman updates are paused" }) });
+    await expect(notice.getByText("Your channel message", { exact: true })).toBeVisible();
+    await expect(notice.getByText("Foreman run 6 (previous run)", { exact: true })).toBeVisible();
+    await notice.getByText("View blocked input", { exact: true }).click();
+    await expect(
+      notice.getByText("Check the published API contract; do not start implementation.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(notice.getByText(message.id, { exact: true })).toBeVisible();
+    for (const [name, width, height] of [
+      ["desktop", 1440, 1000],
+      ["mobile", 390, 844],
+    ] as const) {
+      await page.setViewportSize({ width, height });
+      await expect(
+        notice.getByRole("button", { name: "Dismiss without resend", exact: true }),
+      ).toBeVisible();
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      await page.screenshot({
+        path: testInfo.outputPath(`foreman-blocked-input-${name}.png`),
+        fullPage: true,
+      });
+    }
+    await notice.getByRole("button", { name: "Dismiss without resend", exact: true }).click();
+    await expect(notice).toHaveCount(0);
+    const workspace = await nanasa.request<ForemanWorkspace>("/api/v1/foreman");
+    expect(workspace.inbox.find((item) => item.messageId === message.id)?.state).toBe("cancelled");
+    expect(await nanasa.request("/api/v1/foreman/conversations")).toEqual([]);
+  } finally {
+    await nanasa.close();
+  }
+});
+
 test("Foreman auto-starts and asks two teams for durable replies without any goal", async ({
   page,
   browserName,
@@ -35,12 +103,16 @@ test("Foreman auto-starts and asks two teams for durable replies without any goa
       .getByRole("textbox", { name: "Message Foreman", exact: true })
       .fill("Ask both teams what they are doing");
     await page.getByRole("button", { name: "Send", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Open thread: Ask both teams what they are doing", exact: true })
+      .click();
     for (const memberId of members)
       await expect(
-        page.getByText(
-          `Team response: Member ${memberId}: no assigned work; ready for discussion.`,
-          { exact: true },
-        ),
+        page
+          .getByRole("complementary", { name: "Conversation thread" })
+          .getByText(`Team response: Member ${memberId}: no assigned work; ready for discussion.`, {
+            exact: true,
+          }),
       ).toBeVisible({ timeout: 30000 });
     const requests = await nanasa.request<ForemanConversationRequest[]>(
       "/api/v1/foreman/conversations",
@@ -48,7 +120,6 @@ test("Foreman auto-starts and asks two teams for durable replies without any goa
     expect(requests).toHaveLength(2);
     expect(requests.every((request) => request.state === "answered")).toBe(true);
     expect(await nanasa.request("/api/v1/foreman/goals")).toEqual([]);
-    await page.getByText("Team conversations (0 pending)", { exact: true }).click();
     for (const button of await page.getByRole("button", { name: "Dismiss", exact: true }).all()) {
       if (await button.isVisible()) await button.click();
     }
@@ -60,11 +131,15 @@ test("Foreman auto-starts and asks two teams for durable replies without any goa
     await nanasa.restartDaemon();
     await page.goto(`${nanasa.baseUrl}/foreman${new URL(nanasa.portalUrl).hash}`);
     await page.reload();
+    await page
+      .getByRole("button", { name: "Open thread: Ask both teams what they are doing", exact: true })
+      .click();
     await expect(
-      page.getByText(
-        `Team response: Member ${members[0]}: no assigned work; ready for discussion.`,
-        { exact: true },
-      ),
+      page
+        .getByRole("complementary", { name: "Conversation thread" })
+        .getByText(`Team response: Member ${members[0]}: no assigned work; ready for discussion.`, {
+          exact: true,
+        }),
     ).toBeVisible();
     expect(await nanasa.request("/api/v1/foreman/conversations")).toEqual(requests);
     await page.getByRole("tab", { name: "Terminal", exact: true }).click();
@@ -88,7 +163,6 @@ test("Foreman auto-starts and asks two teams for durable replies without any goa
     expect(nativeRequests.every((request) => request.sourceMessageId === undefined)).toBe(true);
     expect(await nanasa.request("/api/v1/foreman/goals")).toEqual([]);
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.getByText("Team conversations (0 pending)", { exact: true }).click();
     for (const button of await page.getByRole("button", { name: "Dismiss", exact: true }).all()) {
       if (await button.isVisible()) await button.click();
     }

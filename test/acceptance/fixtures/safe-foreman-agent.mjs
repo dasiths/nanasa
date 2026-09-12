@@ -118,9 +118,22 @@ function submit(line) {
       } else if (resultId !== undefined) {
         const requests = await tool("nanasa.foreman_read_conversations", { id: resultId });
         const request = requests.result.requests[0];
+        const channel =
+          request.sourceMessageId === undefined
+            ? undefined
+            : await tool("nanasa.foreman_read_channel", { limit: 100 });
+        const source = channel?.result.messages.find(
+          (message) => message.id === request.sourceMessageId,
+        );
         await tool("nanasa.foreman_reply", {
           requestId: `summary-${resultId}`,
           text: `Team response: ${request.response ?? request.state}`,
+          ...(source === undefined
+            ? {}
+            : {
+                replyTo: source.id,
+                ...(source.teamId === undefined ? {} : { teamId: source.teamId }),
+              }),
         });
         await tool("nanasa.foreman_finish_conversation", { id: resultId });
       } else if (messageId !== undefined) {

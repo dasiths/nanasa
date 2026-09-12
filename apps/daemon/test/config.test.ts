@@ -91,6 +91,10 @@ groups:
       expect(instructions).toContain("does not receive team broadcasts");
       expect(instructions).toContain("no unrestricted worker-to-Foreman DM tool");
       expect(instructions).toContain("nanasa.reply_foreman");
+      expect(instructions).toContain("discover Foreman presence from its foreman summary");
+      expect(instructions).toContain(
+        "Empty requests or team_delegations lists do not mean Foreman is absent",
+      );
       expect(instructions).toContain(
         "report concrete progress, blockers, and results with nanasa.report_progress",
       );

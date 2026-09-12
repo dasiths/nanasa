@@ -117,7 +117,7 @@
     },
     {
       "name": "nanasa.member_foreman_conversations",
-      "description": "Read only conversation requests addressed to your authenticated member and runtime",
+      "description": "Discover whether the repository Foreman is configured, enabled and running, and read only conversation requests addressed to your authenticated member and runtime; empty requests do not mean Foreman is absent",
       "principals": [
         "agent"
       ],

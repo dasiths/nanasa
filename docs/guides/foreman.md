@@ -37,8 +37,9 @@ Threads are limited to 16 requests; stored requests are capped at 10,000. Replie
 are bound to the addressed member and runtime. Replaced runtimes, expired requests,
 revoked authority, and ambiguous delivery are not automatically retried.
 
-The Channel's **Team conversations** section shows requests, delivery state and
-member replies. **Cancel request** prevents further delivery without pretending
+Channel groups requests, delivery state and member replies into threads alongside
+Human-Foreman messages and team communication. Open a thread to read the complete
+exchange. **Cancel request** prevents further delivery without pretending
 to interrupt work already submitted. Foreman receives durable result wakeups,
 reads responses with `nanasa.foreman_read_conversations`, reports back through
 the Human channel, and acknowledges each result with
@@ -178,6 +179,18 @@ guidance covers `nanasa.team_delegations`, `nanasa.report_delegation` and
 peer discovery and broadcasts. Role metadata describes project responsibilities;
 the coordination protocol itself comes from Nanasa.
 
+Members discover current Foreman presence through
+`nanasa.member_foreman_conversations`. Alongside their own `requests`, the response
+includes a limited `foreman` summary: `configured`, and when configured, `id`,
+`name`, `enabled`, and `runStatus`. A `not-started` run status means no run exists
+yet. The summary does not expose Human channel messages, private settings, or
+terminal details, and a running process is not a promise of immediate response.
+
+Empty conversation or delegation lists mean there is no matching work visible to
+that member or team. They do not mean Foreman is absent, disabled, or stopped.
+Members should use the summary for those facts and report presence as unknown if
+discovery fails or the summary is unavailable.
+
 Team members report runtime status through `nanasa.report_progress` and durable
 goal progress through `nanasa.report_delegation`. They use
 `nanasa.request_human_decision` for scoped questions. These are not unrestricted
@@ -248,19 +261,45 @@ Channel stores operator instructions and Foreman replies with stable sequence
 numbers. Retrying the same request ID and content does not duplicate a message.
 Team context is provenance only: it grants no permissions and changes no cwd.
 
+The repository channel combines durable communication across teams. Use the
+context selector, search, and activity filter to narrow the feed. Thread summaries
+show recent responses without mixing terminal delivery with actual replies.
+**Foreman responded** describes the coordinator's response; queued questions and
+member replies have separate states.
+
+The pinned **New message** composer has an explicit recipient. Select Foreman, a
+team, or an individual member. **Reply in this thread** preserves the conversation
+and displays the destination before sending. Replies to Foreman coordination
+threads go to Foreman, not directly to a member. Drafts remain separate by
+recipient and survive switching between Channel and Terminal. New activity does
+not move the feed while you are reading older messages. Markdown, lists, links,
+and code blocks render in message bodies; code wrapping can be toggled per message.
+
 Input remains queued until Foreman has a current, verified, idle reporter and no
 human terminal controller. Submitted means terminal input completed, not that
 the provider accepted or completed the work. A Foreman MCP reply settles its
 channel instruction. Only one unresolved input is dispatched at a time.
+
+Each correlated member reply queues a durable Foreman result notification. The
+scheduler delivers it when Foreman is idle and input is not blocked. If a
+read-only result notification was left unresolved on a stopped or failed Foreman
+run, it is requeued for the current run. This rereads the stored result; it does
+not repeat the member's question or replay a Human command. Already handled
+notifications and uncertain input on the current run are not replayed.
 
 Terminal uses the normal native terminal controller and observer leases. There
 is no separate CLI command composer. Switch to observe mode, or leave Terminal,
 to allow automatic input after the provider becomes idle again.
 
 If a write is interrupted, Nanasa records it as ambiguous and does not replay
-it. Inspect Terminal and the transcript, then use **Mark inspected input handled**
-or **Close without replay**. These controls resolve the inbox record; they do
-not stop provider work that may already have started.
+it. The **Foreman updates are paused** notice identifies the blocked message or
+member result, its run and timestamp. Expand **View blocked input** to inspect
+the preview and related record ID, then review Terminal or the transcript.
+**Mark handled** confirms you have checked that the item was handled.
+**Dismiss without resend** stops waiting for it without claiming it was handled.
+Neither action resends input, undoes work, or stops provider work that may already
+have started. Unresolved Human commands from older runs still require this
+explicit inspection; they are not replayed automatically.
 
 ## Set goal limits
 

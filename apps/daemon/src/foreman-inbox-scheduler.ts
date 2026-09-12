@@ -89,6 +89,11 @@ export class ForemanInboxScheduler {
       !this.#ready(run)
     )
       return;
+    this.store.database
+      .prepare(
+        "UPDATE foreman_inbox SET state = 'queued', target_json = NULL, updated_at = ? WHERE dedupe_key LIKE 'conversation-result:%' AND state IN ('writing', 'submitted', 'ambiguous') AND json_extract(target_json, '$.runId') IN (SELECT id FROM runs WHERE foreman_id = ? AND id != ? AND status IN ('stopped', 'failed'))",
+      )
+      .run(this.now().toISOString(), run.foremanId, run.id);
     const blocked = this.store.database
       .prepare(
         "SELECT id FROM foreman_inbox WHERE state IN ('writing', 'submitted', 'ambiguous') LIMIT 1",

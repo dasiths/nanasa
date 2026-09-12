@@ -11,7 +11,11 @@ import type {
   PortalSnapshot,
   StartGroupRunsResult,
 } from "@nanasa/contracts";
-import { ForemanConfigSchema, ForemanGoalSchema } from "@nanasa/contracts";
+import {
+  ForemanConfigSchema,
+  ForemanConversationRequestSchema,
+  ForemanGoalSchema,
+} from "@nanasa/contracts";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -738,6 +742,196 @@ describe("portal application", () => {
     await user.click(screen.getByRole("tab", { name: "Terminal" }));
     expect(screen.getByText("Foreman is not running")).toBeTruthy();
     expect(screen.queryByRole("textbox", { name: "Message Foreman" })).toBeNull();
+  });
+
+  it.each([
+    { state: "submitted", label: "Mark handled", resolution: "handled" },
+    { state: "ambiguous", label: "Dismiss without resend", resolution: "cancel" },
+  ] as const)(
+    "identifies blocked Foreman input and resolves it as $resolution",
+    async ({ state, label, resolution }) => {
+      window.history.replaceState({}, "", "/foreman");
+      const client = createClient();
+      vi.mocked(client.loadForeman).mockResolvedValue({
+        configRevision: "revision-one",
+        inbox: [
+          {
+            id: "blocked-inbox",
+            messageId: "human-message",
+            kind: "human-message",
+            preview: "Review the API changes before starting implementation.",
+            submittedRunId: "old-foreman-run",
+            submittedGeneration: 6,
+            state,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          },
+        ],
+      });
+      const user = userEvent.setup();
+      render(<App client={client} />);
+      await screen.findByRole("heading", { name: "Foreman updates are paused" });
+      expect(screen.getByText("Your channel message")).toBeTruthy();
+      expect(screen.getByText("Foreman run 6 (previous run)")).toBeTruthy();
+      expect(screen.getByText(/Neither action below resends input or undoes work/)).toBeTruthy();
+      await user.click(screen.getByText("View blocked input"));
+      expect(
+        screen.getByText("Review the API changes before starting implementation."),
+      ).toBeVisible();
+      expect(screen.getByText("human-message")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: label }));
+      await waitFor(() =>
+        expect(client.resolveForemanInput).toHaveBeenCalledWith({
+          inboxId: "blocked-inbox",
+          expectedState: state,
+          resolution,
+        }),
+      );
+      expect(client.sendForemanMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("groups member replies and sends Foreman thread follow-ups with their original context", async () => {
+    window.history.replaceState({}, "", "/foreman");
+    const client = createClient();
+    const root = {
+      id: "human-thread",
+      sequence: 1,
+      sender: { kind: "operator" as const, operatorId: "human" },
+      text: "Check the Backend release",
+      teamId: "group-backend",
+      createdAt: timestamp,
+    };
+    vi.mocked(client.loadForemanChannel).mockResolvedValue({
+      messages: [root],
+      nextAfter: 1,
+      hasMore: false,
+    });
+    vi.mocked(client.loadForemanConversations).mockResolvedValue([
+      ForemanConversationRequestSchema.parse({
+        id: "release-question",
+        requestId: "release-check",
+        conversationId: "release-conversation",
+        foremanId: "foreman",
+        groupId: "group-backend",
+        memberId: "builder",
+        memberProfileId: profile.id,
+        authorityRevision: 0,
+        state: "answered",
+        sourceMessageId: root.id,
+        text: "Is the release ready?",
+        response: "Validation passed; waiting for review.",
+        createdAt: timestamp,
+        answeredAt: timestamp,
+        expiresAt: "2099-01-01T00:00:00Z",
+      }),
+    ]);
+    vi.mocked(client.sendForemanMessage).mockResolvedValue({
+      ...root,
+      id: "human-followup",
+      sequence: 2,
+      replyTo: root.id,
+      text: "Request the review",
+    });
+    const user = userEvent.setup();
+    render(<App client={client} />);
+    await user.click(
+      await screen.findByRole("button", { name: "Open thread: Check the Backend release" }),
+    );
+    const thread = screen.getByRole("complementary", { name: "Conversation thread" });
+    expect(within(thread).getByText("Validation passed; waiting for review.")).toBeVisible();
+    expect(within(thread).getByText("Reply received")).toBeVisible();
+    await user.type(
+      within(thread).getByRole("textbox", { name: "Reply in thread" }),
+      "Request the review",
+    );
+    await user.click(within(thread).getByRole("button", { name: "Send reply" }));
+    await waitFor(() =>
+      expect(client.sendForemanMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replyTo: root.id,
+          teamId: "group-backend",
+          text: "Request the review",
+        }),
+      ),
+    );
+    expect(client.submitMessage).not.toHaveBeenCalled();
+  });
+
+  it("preserves channel drafts across recipients and Foreman tabs", async () => {
+    window.history.replaceState({}, "", "/foreman");
+    const client = createClient();
+    const user = userEvent.setup();
+    render(<App client={client} />);
+    await user.type(
+      await screen.findByRole("textbox", { name: "Message Foreman" }),
+      "Repository draft",
+    );
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Message recipient" }),
+      JSON.stringify({ kind: "group", groupId: "group-backend" }),
+    );
+    await user.type(screen.getByRole("textbox", { name: "Message agents" }), "Backend draft");
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Message recipient" }),
+      JSON.stringify({ kind: "foreman" }),
+    );
+    expect(screen.getByRole("textbox", { name: "Message Foreman" })).toHaveValue(
+      "Repository draft",
+    );
+    await user.click(screen.getByRole("tab", { name: "Terminal" }));
+    expect(screen.queryByRole("textbox", { name: "Message Foreman" })).toBeNull();
+    await user.click(screen.getByRole("tab", { name: "Channel" }));
+    expect(screen.getByRole("textbox", { name: "Message Foreman" })).toHaveValue(
+      "Repository draft",
+    );
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Message recipient" }),
+      JSON.stringify({ kind: "group", groupId: "group-backend" }),
+    );
+    expect(screen.getByRole("textbox", { name: "Message agents" })).toHaveValue("Backend draft");
+  });
+
+  it("retries team channel messages with the same idempotency identity", async () => {
+    window.history.replaceState({}, "", "/foreman");
+    const client = createClient();
+    vi.mocked(client.submitMessage)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({
+        message: {
+          id: "retried-message",
+          groupId: "group-backend",
+          groupSeq: 1,
+          conversationId: "retried-conversation",
+          hop: 0,
+          intent: "request",
+          sender: { kind: "operator", operatorId: "portal-operator" },
+          audience: { kind: "group", membershipRevision: snapshot.groups[0]!.membershipRevision },
+          body: { contentType: "text/markdown", text: "Check the API" },
+          delivery: {},
+          createdAt: timestamp,
+        },
+        deliveryOutcomes: [],
+      });
+    const user = userEvent.setup();
+    render(<App client={client} />);
+    await user.selectOptions(
+      await screen.findByRole("combobox", { name: "Message recipient" }),
+      JSON.stringify({ kind: "group", groupId: "group-backend" }),
+    );
+    await user.type(screen.getByRole("textbox", { name: "Message agents" }), "Check the API");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("Unable to send message");
+    expect(screen.getByRole("textbox", { name: "Message agents" })).toHaveValue("Check the API");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(client.submitMessage).toHaveBeenCalledTimes(2));
+    const calls = vi.mocked(client.submitMessage).mock.calls;
+    expect(calls[1]).toEqual(calls[0]);
+    expect(calls[0]?.[2]).toEqual(expect.any(String));
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Message agents" })).toHaveValue(""),
+    );
+    expect(client.sendForemanMessage).not.toHaveBeenCalled();
   });
 
   it("keeps invalid Foreman context unavailable instead of silently changing scope", async () => {
