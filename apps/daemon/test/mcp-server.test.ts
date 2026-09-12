@@ -6,6 +6,10 @@ import { ForemanConfigSchema } from "@nanasa/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadNanasaConfig } from "../src/config-loader.js";
+import {
+  NANASA_FOREMAN_INSTRUCTIONS,
+  nanasaMcpServerInstructions,
+} from "../src/coordination-instructions.js";
 import { McpCredentialIssuer } from "../src/mcp-auth.js";
 import {
   createDaemon as createDaemonBase,
@@ -129,6 +133,84 @@ async function callTool(
 }
 
 describe("Streamable HTTP MCP", () => {
+  it("scopes persistent external connectors and keeps notification cursors independent", async () => {
+    const { daemon } = await createFixture();
+    try {
+      const first = daemon.operatorAuth.createConnector({
+        principalId: "human-one",
+        name: "phone",
+        scopes: ["notifications"],
+      });
+      const second = daemon.operatorAuth.createConnector({
+        principalId: "human-one",
+        name: "other",
+        scopes: ["notifications"],
+      });
+      daemon.goals.notify("test-one", { kind: "health", summary: "Foreman needs attention" });
+      const headers = { authorization: `Bearer ${first.token}` };
+      const page = await daemon.app.inject({
+        method: "GET",
+        url: "/api/v1/foreman/notifications",
+        headers,
+      });
+      expect(page.statusCode).toBe(200);
+      expect(page.json().notifications).toHaveLength(1);
+      const ack = await daemon.app.inject({
+        method: "POST",
+        url: "/api/v1/foreman/notifications/ack",
+        headers,
+        payload: { after: page.json().nextAfter },
+      });
+      expect(ack.statusCode).toBe(200);
+      const forbidden = await daemon.app.inject({
+        method: "POST",
+        url: "/api/v1/foreman/goals/control",
+        headers,
+        payload: { id: "goal-one", expectedRevision: 0, action: "approve" },
+      });
+      expect(forbidden.statusCode).toBe(403);
+      const peerCursor = await daemon.app.inject({
+        method: "GET",
+        url: "/api/v1/foreman/notifications/cursor",
+        headers: { authorization: `Bearer ${second.token}` },
+      });
+      expect(peerCursor.json().after).toBe(0);
+      expect(JSON.stringify(daemon.operatorAuth.listConnectors())).not.toContain(first.token);
+      daemon.operatorAuth.revokeConnector(first.connector.id);
+      expect(
+        (await daemon.app.inject({ method: "GET", url: "/api/v1/foreman/notifications", headers }))
+          .statusCode,
+      ).toBe(401);
+    } finally {
+      await daemon.app.close();
+    }
+  });
+  it("teaches team members about Foreman without custom instructions or elevated tools", async () => {
+    const { daemon, agentToken } = await createFixture();
+    try {
+      expect(daemon.loadedConfig.config.instructions).toEqual([]);
+      expect(daemon.loadedConfig.config.foreman).toBeUndefined();
+      const initialized = await mcpRequest(daemon, agentToken, "initialize", {
+        protocolVersion: "2026-07-28",
+        capabilities: {},
+        clientInfo: { name: "worker-client", version: "1.0.0" },
+      });
+      expect(initialized.statusCode).toBe(200);
+      expect(initialized.body).toContain(JSON.stringify(nanasaMcpServerInstructions()));
+      expect(initialized.body).toContain("## Repository Foreman");
+      expect(initialized.body).toContain("no direct worker-to-Foreman DM tool");
+
+      const listed = await mcpRequest(daemon, agentToken, "tools/list", {});
+      const names = listed.json().result.tools.map((tool: { name: string }) => tool.name);
+      expect(names).toContain("nanasa.report_progress");
+      expect(names.some((name: string) => name.startsWith("nanasa.foreman_"))).toBe(false);
+      const forbidden = await callTool(daemon, agentToken, "nanasa.foreman_read_channel", {});
+      expect(forbidden.json()).toHaveProperty("error");
+    } finally {
+      await daemon.app.close();
+    }
+  });
+
   it("advertises a separate Foreman scope and denies direct cross-principal tool calls", async () => {
     const { daemon, agentToken, secretPath, group } = await createFixture();
     try {
@@ -147,21 +229,29 @@ describe("Streamable HTTP MCP", () => {
       daemon.store.upsertForeman({ id: "foreman", agentProfileId: profile.id, enabled: true });
       const { run } = daemon.store.createRunForForeman("foreman");
       const token = new McpCredentialIssuer(daemon.store, { secretPath }).issueForeman(run);
+      expect(daemon.loadedConfig.config.instructions).toEqual([]);
+      expect(daemon.foreman.status().configuration?.instructions).toEqual([]);
+      const initialized = await mcpRequest(daemon, token, "initialize", {
+        protocolVersion: "2026-07-28",
+        capabilities: {},
+        clientInfo: { name: "foreman-client", version: "1.0.0" },
+      });
+      expect(initialized.statusCode).toBe(200);
+      expect(initialized.body).toContain(JSON.stringify(NANASA_FOREMAN_INSTRUCTIONS));
+      expect(initialized.body).toContain("Terminal output alone is not a channel reply");
       const listed = await mcpRequest(daemon, token, "tools/list", {});
       expect(listed.json().result.tools.map((tool: { name: string }) => tool.name)).toEqual([
         "nanasa.foreman_bootstrap",
         "nanasa.foreman_read_channel",
         "nanasa.foreman_reply",
-        "nanasa.foreman_list_missions",
-        "nanasa.foreman_get_mission",
-        "nanasa.foreman_create_task",
-        "nanasa.foreman_finish_review",
-        "nanasa.foreman_provision_team",
-        "nanasa.foreman_verify_task",
-        "nanasa.foreman_observe_task",
-        "nanasa.foreman_prompt_idle",
-        "nanasa.foreman_reply_wait",
-        "nanasa.foreman_integrate_mission",
+        "nanasa.foreman_check_in",
+        "nanasa.foreman_discover_teams",
+        "nanasa.foreman_propose_goal",
+        "nanasa.foreman_get_goal",
+        "nanasa.foreman_delegate_goal",
+        "nanasa.foreman_finish_goal_review",
+        "nanasa.request_human_decision",
+        "nanasa.foreman_observe_team",
       ]);
       const message = daemon.store.sendForemanMessage(
         { kind: "operator", operatorId: "human" },
@@ -188,6 +278,12 @@ describe("Streamable HTTP MCP", () => {
         principal: { kind: "foreman", foremanId: "foreman", runId: run.id },
         teams: expect.arrayContaining([{ id: group.id, name: group.name }]),
       });
+      expect(bootstrap.json().result.structuredContent.result).not.toHaveProperty("templates");
+      const removed = await callTool(daemon, token, "nanasa.foreman_create_task", {});
+      expect(removed.json()).toHaveProperty("error");
+      expect((await daemon.app.inject({ method: "GET", url: "/api/v1/missions" })).statusCode).toBe(
+        404,
+      );
       const forbidden = await callTool(daemon, token, "nanasa.broadcast_group", {
         groupId: group.id,
         text: "Must not send",
@@ -196,6 +292,14 @@ describe("Streamable HTTP MCP", () => {
       const forbiddenAgent = await callTool(daemon, agentToken, "nanasa.foreman_bootstrap", {});
       expect(forbiddenAgent.json()).toHaveProperty("error");
       expect(daemon.store.getSnapshot().messages).toEqual([]);
+      const proactive = await callTool(daemon, token, "nanasa.foreman_reply", {
+        requestId: "proactive-one",
+        text: "A repository decision needs Human attention",
+      });
+      expect(proactive.json().result.isError).not.toBe(true);
+      expect(
+        daemon.store.readForemanChannel({ after: 0, limit: 100 }).messages.at(-1),
+      ).toMatchObject({ text: "A repository decision needs Human attention" });
       daemon.store.updateRuntimeRunStatus(run.id, "stopping");
       expect((await mcpRequest(daemon, token, "tools/list", {})).statusCode).toBe(401);
     } finally {
@@ -367,6 +471,7 @@ describe("Streamable HTTP MCP", () => {
           agentType: "fixture",
           roleId: "reviewer",
           roleName: "Reviewer",
+          permissionPolicy: "inherit",
           runStatus: "starting",
           isCaller: true,
         },

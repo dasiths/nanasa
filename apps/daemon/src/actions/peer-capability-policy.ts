@@ -9,27 +9,24 @@ import { DomainError } from "../store.js";
 
 export class PeerCapabilityPolicy {
   public constructor(
-    private readonly missionAuthorization?: (
+    private readonly goalAuthorization?: (
       principal: Extract<AgentActionPrincipal, { kind: "foreman" }>,
       command: CreateAgentActionCommand,
     ) => void,
-    private readonly missionWaitAuthorization?: (
-      principal: Extract<AgentActionPrincipal, { kind: "foreman" }>,
-      wait: OpenWait,
-      reply: OpenWaitReply,
+    private readonly delegationAuthorization?: (
+      principal: AgentActionPrincipal,
+      command: CreateAgentActionCommand,
     ) => void,
+    private readonly delegationWaitAuthorization?: (principal: AgentActionPrincipal) => void,
   ) {}
 
   public assertCreate(principal: AgentActionPrincipal, command: CreateAgentActionCommand): void {
+    this.delegationAuthorization?.(principal, command);
     if (principal.kind === "operator") return;
     if (principal.kind === "foreman") {
-      if (
-        this.missionAuthorization === undefined ||
-        command.kind !== "prompt" ||
-        command.allowWorking
-      )
-        this.#forbidden("unapproved mission actions");
-      this.missionAuthorization(principal, command);
+      if (this.goalAuthorization === undefined || command.kind !== "prompt" || command.allowWorking)
+        this.#forbidden("unapproved goal actions");
+      this.goalAuthorization(principal, command);
       return;
     }
     if (principal.groupId !== command.groupId) this.#forbidden("another group");
@@ -43,10 +40,10 @@ export class PeerCapabilityPolicy {
       if (
         action.principal.kind !== "foreman" ||
         action.principal.foremanId !== principal.foremanId ||
-        action.principal.missionId !== principal.missionId ||
-        action.principal.taskId !== principal.taskId
+        action.principal.goalId !== principal.goalId ||
+        action.principal.delegationId !== principal.delegationId
       )
-        this.#forbidden("another mission's action");
+        this.#forbidden("another delegation's action");
       return;
     }
     if (
@@ -72,16 +69,9 @@ export class PeerCapabilityPolicy {
 
   public assertReply(principal: AgentActionPrincipal, wait: OpenWait, reply: OpenWaitReply): void {
     if (principal.kind === "operator") return;
+    this.delegationWaitAuthorization?.(principal);
     if (principal.kind === "foreman") {
-      if (
-        this.missionWaitAuthorization === undefined ||
-        wait.kind === "permission" ||
-        wait.kind === "plan_approval" ||
-        !["answer", "select"].includes(reply.kind)
-      )
-        this.#forbidden("unapproved worker wait replies");
-      this.missionWaitAuthorization(principal, wait, reply);
-      return;
+      this.#forbidden("worker wait replies");
     }
     if (principal.groupId !== wait.groupId || principal.memberId !== wait.memberId) {
       this.#forbidden("another agent's wait");

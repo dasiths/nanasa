@@ -1,6 +1,5 @@
 import type { ForemanRun } from "@nanasa/contracts";
 import type { ForemanRuntimeService } from "./foreman-runtime-service.js";
-import type { MissionRepository } from "./mission-repository.js";
 import { DomainError, NanasaStore } from "./store.js";
 import type { TerminalInputArbiter } from "./terminal/terminal-input-arbiter.js";
 import type { TmuxRuntime } from "./tmux-runtime.js";
@@ -8,7 +7,6 @@ import type { TmuxRuntime } from "./tmux-runtime.js";
 interface InboxRow {
   id: string;
   prompt: string;
-  mission_id: string | null;
 }
 
 export class ForemanInboxScheduler {
@@ -22,7 +20,7 @@ export class ForemanInboxScheduler {
     private readonly arbiter: Pick<TerminalInputArbiter, "dispatchAutomated">,
     private readonly hasController: (runId: string) => boolean,
     private readonly now: () => Date = () => new Date(),
-    private readonly missions?: MissionRepository,
+    private readonly authorizeGoalInput?: (inboxId: string) => void,
   ) {}
 
   public start(): void {
@@ -82,7 +80,6 @@ export class ForemanInboxScheduler {
   }
 
   async #dispatch(): Promise<void> {
-    this.missions?.queueDueReviews();
     const view = this.foreman.status();
     const run = view.run;
     if (
@@ -102,20 +99,21 @@ export class ForemanInboxScheduler {
       .prepare("SELECT * FROM foreman_inbox WHERE state = 'queued' ORDER BY created_at, id LIMIT 1")
       .get() as unknown as InboxRow | undefined;
     if (item === undefined) return;
+    try {
+      this.authorizeGoalInput?.(item.id);
+    } catch {
+      this.store.database
+        .prepare(
+          "UPDATE foreman_inbox SET state = 'cancelled', updated_at = ? WHERE id = ? AND state = 'queued'",
+        )
+        .run(this.now().toISOString(), item.id);
+      return;
+    }
     await this.arbiter.dispatchAutomated(run.id, async () => {
       await this.foreman.observeReporterProcess(run);
       if (!this.#ready(run)) return;
       const initial = this.store.getRuntimeStatusState(run.id);
       const actor = this.store.getForeman(run.foremanId);
-      const principal = {
-        kind: "foreman" as const,
-        foremanId: actor.id,
-        runId: run.id,
-        generation: run.generation,
-        authorityRevision: actor.authorityRevision,
-      };
-      const mission = item.mission_id === null ? undefined : this.missions?.get(item.mission_id);
-      if (item.mission_id !== null && mission === undefined) return;
       const target = {
         runId: run.id,
         generation: run.generation,
@@ -127,18 +125,15 @@ export class ForemanInboxScheduler {
         authorityRevision: actor.authorityRevision,
       };
       const claimed =
-        mission === undefined
-          ? this.store.database
-              .prepare(
-                "UPDATE foreman_inbox SET state = 'writing', target_json = ?, updated_at = ? WHERE id = ? AND state = 'queued'",
-              )
-              .run(JSON.stringify(target), this.now().toISOString(), item.id).changes === 1
-          : this.missions!.claimReview(principal, mission.id, item.id, target);
+        this.store.database
+          .prepare(
+            "UPDATE foreman_inbox SET state = 'writing', target_json = ?, updated_at = ? WHERE id = ? AND state = 'queued'",
+          )
+          .run(JSON.stringify(target), this.now().toISOString(), item.id).changes === 1;
       if (!claimed) return;
       try {
         await this.runtime.pasteToRun(run, item.prompt, () => {
-          if (mission !== undefined)
-            this.missions!.assertForeman(principal, mission.id, mission.grantRevision, true);
+          this.authorizeGoalInput?.(item.id);
           const state = this.store.getRuntimeStatusState(run.id);
           const view = this.foreman.status();
           if (

@@ -92,7 +92,7 @@ describe("Foreman configuration contracts", () => {
     const config = NanasaConfigSchema.parse({ ...base, version: 2 });
     expect(config.version).toBe(2);
     expect(config.foreman).toBeUndefined();
-    expect(config.teamTemplates).toBeUndefined();
+    expect(config).not.toHaveProperty("teamTemplates");
   });
 
   it("defaults to disabled supervised coordination with bounded policy", () => {
@@ -101,28 +101,23 @@ describe("Foreman configuration contracts", () => {
       enabled: false,
       autonomy: {
         mode: "supervised",
-        workspacePolicy: "managed-only",
-        maxMissionHours: 24,
-        intervention: { idlePrompt: false, nativeInput: "disabled" },
-        recovery: { restartMissionOwnedAgents: false },
+        maxGoalHours: 24,
+        intervention: { idlePrompt: false },
+        recovery: { restartDelegatedAgents: false },
       },
     });
     expect(config.groups).toEqual({});
   });
 
-  it("validates providers, roles, templates, and the current version boundary", () => {
+  it("validates goal policy and rejects the removed mission and template settings", () => {
     const input = {
       ...base,
-      foreman: { integrationId: "copilot", autonomy: { permittedTeamTemplates: ["delivery"] } },
-      teamTemplates: {
-        delivery: { members: { implementor: { integrationId: "copilot", roleId: "builder" } } },
-      },
+      foreman: { integrationId: "copilot", autonomy: { maxActiveGoals: 2 } },
     };
     expect(NanasaConfigSchema.parse(input).groups).toEqual({});
     for (const invalid of [
       { ...input, version: 3 },
       { ...input, teamTemplates: {} },
-      { ...input, roles: {} },
       { ...input, integrations: {} },
       { ...input, foreman: { integrationId: "missing" } },
       {
@@ -133,6 +128,18 @@ describe("Foreman configuration contracts", () => {
         },
       },
       { ...base, teamTemplates: { empty: { members: {} } } },
+      { ...base, foreman: { integrationId: "copilot", autonomy: { maxActiveMissions: 1 } } },
+      {
+        ...base,
+        foreman: { integrationId: "copilot", autonomy: { workspacePolicy: "managed-only" } },
+      },
+      {
+        ...base,
+        foreman: {
+          integrationId: "copilot",
+          autonomy: { intervention: { routineWaitReply: true } },
+        },
+      },
     ])
       expect(NanasaConfigSchema.safeParse(invalid).success).toBe(false);
   });
@@ -140,7 +147,7 @@ describe("Foreman configuration contracts", () => {
   it("rejects unbounded budgets, arbitrary controls, and instruction traversal", () => {
     for (const invalid of [
       { autonomy: { maxForemanTurns: 0 } },
-      { autonomy: { maxMissionHours: 169 } },
+      { autonomy: { maxGoalHours: 169 } },
       { autonomy: { transcript: { maxBytes: 65_537 } } },
       { autonomy: { allowAnything: true } },
       { instructions: ["../outside.md"] },

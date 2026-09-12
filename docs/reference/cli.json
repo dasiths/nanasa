@@ -59,50 +59,46 @@
       "summary": "Resolve inspected input without replay"
     },
     {
-      "id": "missions.list",
-      "family": "missions",
+      "id": "goal.list",
+      "family": "goal",
       "command": "list",
       "mode": "control",
       "positionals": [],
-      "summary": "List durable repository missions"
+      "summary": "List repository goals"
     },
     {
-      "id": "missions.create",
-      "family": "missions",
-      "command": "create",
+      "id": "goal.propose",
+      "family": "goal",
+      "command": "propose",
       "mode": "control",
       "positionals": [],
-      "summary": "Create immutable mission acceptance, recipes, and grant"
+      "summary": "Propose a high-level outcome for human approval"
     },
     {
-      "id": "missions.get",
-      "family": "missions",
+      "id": "goal.get",
+      "family": "goal",
       "command": "get",
       "mode": "control",
       "positionals": [
-        "missionId"
+        "goalId"
       ],
-      "summary": "Read mission tasks, approvals, evidence, and candidate"
+      "summary": "Read goal delegations, reports and decisions"
     },
     {
-      "id": "missions.control",
-      "family": "missions",
+      "id": "goal.control",
+      "family": "goal",
       "command": "control",
       "mode": "control",
-      "positionals": [
-        "missionId"
-      ],
-      "summary": "Control an exact mission revision"
+      "positionals": [],
+      "summary": "Control an exact goal revision"
     },
     {
-      "id": "missions.decide",
-      "family": "missions",
+      "id": "goal.decide",
+      "family": "goal",
       "command": "decide",
       "mode": "control",
-      "positionals": [
-        "approvalId"
-      ],
-      "summary": "Approve or deny an exact supervised operation"
+      "positionals": [],
+      "summary": "Resolve an exact human decision"
     },
     {
       "id": "daemon.status",

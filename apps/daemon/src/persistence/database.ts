@@ -135,6 +135,28 @@ function assertCurrentSchema(database: DatabaseSync): void {
   }
 }
 
+export function assertForemanDatabaseLayout(database: DatabaseSync): void {
+  const version = schemaVersion(database);
+  const tables = new Set(userTableNames(database));
+  const missing = [
+    "foremen",
+    "foreman_messages",
+    "foreman_inbox",
+    "foreman_coordination_records",
+    "foreman_notifications",
+    "foreman_notification_cursors",
+    "foreman_connectors",
+    "delegation_actions",
+    "delegation_recovery",
+  ].filter((table) => !tables.has(table));
+  if (missing.length > 0) {
+    throw new DatabaseSchemaError(
+      version,
+      `Database schema ${version} predates the current Foreman layout (missing tables: ${missing.join(", ")}). Stop Nanasa and create a verified database backup before replacing its state database. Configuration and provider homes can be preserved. No state was reset.`,
+    );
+  }
+}
+
 export function openNanasaDatabase(path: string): DatabaseSync {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const database = new DatabaseSync(path);

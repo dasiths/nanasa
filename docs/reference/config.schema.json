@@ -130,40 +130,25 @@
                   "bounded"
                 ]
               },
-              "permittedTeamTemplates": {
-                "default": [],
-                "maxItems": 32,
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 128
-                }
-              },
-              "workspacePolicy": {
-                "default": "managed-only",
-                "type": "string",
-                "const": "managed-only"
-              },
-              "maxActiveMissions": {
+              "maxActiveGoals": {
                 "default": 1,
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 16
               },
-              "maxTeamsPerMission": {
+              "maxTeamsPerGoal": {
                 "default": 3,
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 16
               },
-              "maxConcurrentTasks": {
+              "maxConcurrentActions": {
                 "default": 4,
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 32
               },
-              "maxMissionHours": {
+              "maxGoalHours": {
                 "default": 24,
                 "type": "integer",
                 "minimum": 1,
@@ -180,9 +165,9 @@
                 "type": "object",
                 "properties": {
                   "access": {
-                    "default": "mission-owned",
+                    "default": "delegated-team",
                     "type": "string",
-                    "const": "mission-owned"
+                    "const": "delegated-team"
                   },
                   "maxLines": {
                     "default": 200,
@@ -207,18 +192,6 @@
                     "default": false,
                     "type": "boolean"
                   },
-                  "routineWaitReply": {
-                    "default": false,
-                    "type": "boolean"
-                  },
-                  "nativeInput": {
-                    "default": "disabled",
-                    "type": "string",
-                    "enum": [
-                      "disabled",
-                      "approved-adapter-only"
-                    ]
-                  },
                   "maxPerIncident": {
                     "default": 2,
                     "type": "integer",
@@ -232,7 +205,7 @@
                 "default": {},
                 "type": "object",
                 "properties": {
-                  "restartMissionOwnedAgents": {
+                  "restartDelegatedAgents": {
                     "default": false,
                     "type": "boolean"
                   },
@@ -242,7 +215,7 @@
                     "minimum": 0,
                     "maximum": 5
                   },
-                  "maxAttemptsPerMission": {
+                  "maxAttemptsPerGoal": {
                     "default": 6,
                     "type": "integer",
                     "minimum": 0,
@@ -265,149 +238,6 @@
           "integrationId"
         ],
         "additionalProperties": false
-      },
-      "teamTemplates": {
-        "type": "object",
-        "propertyNames": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
-        },
-        "additionalProperties": {
-          "type": "object",
-          "properties": {
-            "instructions": {
-              "default": [],
-              "maxItems": 32,
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 4096
-              }
-            },
-            "members": {
-              "type": "object",
-              "propertyNames": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 128,
-                "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
-              },
-              "additionalProperties": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 100
-                  },
-                  "integrationId": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 64,
-                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
-                  },
-                  "roleId": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 64,
-                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
-                  },
-                  "desiredModel": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 256
-                  },
-                  "instructions": {
-                    "default": [],
-                    "maxItems": 32,
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 4096
-                    }
-                  },
-                  "providerFiles": {
-                    "type": "object",
-                    "properties": {
-                      "mcp": {
-                        "type": "object",
-                        "properties": {
-                          "mode": {
-                            "default": "append",
-                            "type": "string",
-                            "enum": [
-                              "append",
-                              "replace",
-                              "disabled"
-                            ]
-                          },
-                          "paths": {
-                            "default": [],
-                            "maxItems": 16,
-                            "type": "array",
-                            "items": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 4096
-                            }
-                          }
-                        },
-                        "additionalProperties": false
-                      }
-                    },
-                    "additionalProperties": false
-                  },
-                  "attention": {
-                    "default": {},
-                    "type": "object",
-                    "properties": {
-                      "response-required": {
-                        "type": "boolean"
-                      },
-                      "agent-health": {
-                        "type": "boolean"
-                      },
-                      "completion": {
-                        "type": "boolean"
-                      },
-                      "delivery-failure": {
-                        "type": "boolean"
-                      },
-                      "action-state": {
-                        "type": "boolean"
-                      },
-                      "provider-update-failed": {
-                        "type": "boolean"
-                      },
-                      "provider-update-succeeded": {
-                        "type": "boolean"
-                      },
-                      "unread-message": {
-                        "type": "boolean"
-                      },
-                      "url-open-request": {
-                        "type": "boolean"
-                      }
-                    },
-                    "additionalProperties": false
-                  }
-                },
-                "required": [
-                  "integrationId",
-                  "roleId"
-                ],
-                "additionalProperties": false
-              }
-            }
-          },
-          "required": [
-            "members"
-          ],
-          "additionalProperties": false
-        }
       },
       "repository": {
         "default": {

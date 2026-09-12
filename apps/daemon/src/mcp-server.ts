@@ -3,17 +3,17 @@ import { type AuthInfo, createMcpHandler, McpServer } from "@modelcontextprotoco
 import {
   AgentProgressReportCommandSchema,
   CreateAgentActionCommandSchema,
+  DelegateForemanGoalCommandSchema,
   ForemanChannelQuerySchema,
-  IntegrateMissionCommandSchema,
-  InterveneMissionTaskCommandSchema,
+  ForemanCheckInCommandSchema,
   MAX_MESSAGE_REQUEST_BYTES,
   type MessageSubmissionResult,
   type NanasaConfig,
-  ObserveMissionTaskCommandSchema,
-  ReplyMissionWaitCommandSchema,
+  ProposeForemanGoalCommandSchema,
+  ReportDelegationCommandSchema,
+  RequestHumanDecisionCommandSchema,
   SendForemanMessageCommandSchema,
   SubmitMessageCommandSchema,
-  VerifyMissionTaskCommandSchema,
   WaitForAgentActionCommandSchema,
 } from "@nanasa/contracts";
 import type { FastifyInstance } from "fastify";
@@ -26,6 +26,8 @@ import {
   nanasaMcpServerInstructions,
 } from "./coordination-instructions.js";
 import { DeliveryRepository } from "./delivery-repository.js";
+import type { ForemanGoalService } from "./foreman-goal-service.js";
+import type { CheckoutService } from "./git/checkout-service.js";
 import {
   McpActionReferenceSchema as ActionReferenceSchema,
   assertMcpToolPrincipal,
@@ -36,9 +38,8 @@ import {
   MCP_TOOL_REGISTRY,
   McpDeliverySchema,
   McpForemanBootstrapSchema,
-  McpMissionProvisionSchema,
-  McpMissionReferenceSchema,
-  McpMissionTaskSchema,
+  McpGoalReferenceSchema,
+  McpObserveTeamSchema,
   McpOwnWaitsSchema,
   McpVisibleHistorySchema,
   McpMessageFieldsSchema as MessageFieldsSchema,
@@ -50,12 +51,8 @@ import {
 import { McpCredentialIssuer, type McpPrincipal } from "./mcp-auth.js";
 import { MessageCommandService } from "./message-command-service.js";
 import { MessageRepository } from "./message-repository.js";
-import type { MissionCandidateService } from "./mission-candidate-service.js";
-import type { MissionObservationService } from "./mission-observation-service.js";
-import type { MissionRepository } from "./mission-repository.js";
-import type { MissionTeamService } from "./mission-team-service.js";
-import type { MissionVerificationService } from "./mission-verification-service.js";
 import { DomainError, NanasaStore } from "./store.js";
+import type { TerminalReadService } from "./terminal/terminal-read-service.js";
 
 export interface McpRouteOptions {
   path: string;
@@ -70,11 +67,9 @@ export interface McpRouteOptions {
   actionWaits: AgentWaitService;
   openWaits: AgentOpenWaitService;
   foremanConfig?: () => NanasaConfig;
-  missions: MissionRepository;
-  missionTeams: MissionTeamService;
-  missionVerification: MissionVerificationService;
-  missionCandidates: MissionCandidateService;
-  missionObservations: MissionObservationService;
+  goals: ForemanGoalService;
+  terminalReads: TerminalReadService;
+  checkouts: CheckoutService;
 }
 
 class McpRateLimiter {
@@ -254,6 +249,14 @@ function listMembersResult(
           membership.roleId === undefined
             ? undefined
             : snapshot.config?.roles[membership.roleId]?.name,
+        roleDescription:
+          membership.roleId === undefined
+            ? undefined
+            : snapshot.config?.roles[membership.roleId]?.description,
+        permissionPolicy:
+          membership.roleId === undefined
+            ? undefined
+            : snapshot.config?.roles[membership.roleId]?.permissionPolicy,
         runStatus:
           run !== undefined && ["starting", "running", "stopping"].includes(run.status)
             ? run.status
@@ -344,17 +347,9 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
           return {
             principal,
             policyCeilings: foreman?.autonomy,
-            templates: (foreman?.autonomy.permittedTeamTemplates ?? []).map((id) => ({
-              id,
-              members: Object.entries(config?.teamTemplates?.[id]?.members ?? {}).map(
-                ([slot, member]) => ({
-                  slot,
-                  roleId: member.roleId,
-                  integrationId: member.integrationId,
-                }),
-              ),
-            })),
             teams: snapshot.groups.map((group) => ({ id: group.id, name: group.name })),
+            teamDirectory: options.goals.discover(),
+            goals: options.goals.list(),
             sourceCheckouts: snapshot.checkouts.map((checkout) => ({
               id: checkout.id,
               repositoryId: checkout.repositoryId,
@@ -384,185 +379,87 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
       async (input) => actionToolResult(() => options.store.sendForemanMessage(principal, input)),
     );
     server.registerTool(
-      "nanasa.foreman_list_missions",
+      "nanasa.foreman_check_in",
       {
-        description: mcpTool("nanasa.foreman_list_missions").description,
-        inputSchema: McpForemanBootstrapSchema,
+        description: mcpTool("nanasa.foreman_check_in").description,
+        inputSchema: ForemanCheckInCommandSchema,
       },
-      async () =>
-        actionToolResult(() =>
-          options.missions.list().filter((mission) => mission.foremanId === principal.foremanId),
-        ),
+      async (input) =>
+        actionToolResult(() => options.goals.checkIn(principal, input, options.actions)),
     );
     server.registerTool(
-      "nanasa.foreman_get_mission",
+      "nanasa.foreman_discover_teams",
       {
-        description: mcpTool("nanasa.foreman_get_mission").description,
-        inputSchema: McpMissionReferenceSchema,
+        description: mcpTool("nanasa.foreman_discover_teams").description,
+        inputSchema: McpForemanBootstrapSchema,
+      },
+      async () => actionToolResult(() => options.goals.discover()),
+    );
+    server.registerTool(
+      "nanasa.foreman_propose_goal",
+      {
+        description: mcpTool("nanasa.foreman_propose_goal").description,
+        inputSchema: ProposeForemanGoalCommandSchema,
       },
       async (input) =>
         actionToolResult(() => {
-          options.missions.assertForeman(
-            principal,
-            input.missionId,
-            input.expectedGrantRevision,
-            true,
-            ["planning", "running", "paused", "blocked", "verifying", "awaiting-acceptance"],
-          );
-          return {
-            ...options.missions.workspace(input.missionId),
-            teams: options.missionTeams.list(input.missionId),
-            approvals: options.missions.approvals(input.missionId),
-            candidate: options.missionCandidates.get(input.missionId),
-            evidence: options.missionVerification.list(input.missionId),
-          };
+          options.goals.assertForeman(principal);
+          return options.goals.propose(input);
         }),
     );
     server.registerTool(
-      "nanasa.foreman_create_task",
+      "nanasa.foreman_get_goal",
       {
-        description: mcpTool("nanasa.foreman_create_task").description,
-        inputSchema: McpMissionTaskSchema,
-      },
-      async ({ missionId, ...input }) =>
-        actionToolResult(() => options.missions.createTask(principal, missionId, input)),
-    );
-    server.registerTool(
-      "nanasa.foreman_finish_review",
-      {
-        description: mcpTool("nanasa.foreman_finish_review").description,
-        inputSchema: McpMissionReferenceSchema,
+        description: mcpTool("nanasa.foreman_get_goal").description,
+        inputSchema: McpGoalReferenceSchema,
       },
       async (input) =>
-        actionToolResult(() =>
-          options.missions.finishReview(principal, input.missionId, input.expectedGrantRevision),
-        ),
+        actionToolResult(() => {
+          options.goals.assertForeman(principal);
+          if (options.goals.get(input.goalId).foremanId !== principal.foremanId)
+            throw new DomainError("goal_forbidden", "Goal belongs to another Foreman", 403);
+          return options.goals.workspace(input.goalId);
+        }),
     );
     server.registerTool(
-      "nanasa.foreman_provision_team",
+      "nanasa.foreman_delegate_goal",
       {
-        description: mcpTool("nanasa.foreman_provision_team").description,
-        inputSchema: McpMissionProvisionSchema,
+        description: mcpTool("nanasa.foreman_delegate_goal").description,
+        inputSchema: DelegateForemanGoalCommandSchema,
       },
-      async ({ missionId, ...input }) => {
-        try {
-          return {
-            content: [{ type: "text" as const, text: "Mission team allocation returned." }],
-            structuredContent: {
-              result: await options.missionTeams.provision(principal, missionId, input),
-            },
-          };
-        } catch (error) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text" as const,
-                text:
-                  error instanceof DomainError
-                    ? error.message
-                    : "Mission provisioning failed; inspect retained allocation state",
-              },
-            ],
-          };
-        }
-      },
+      async (input) => actionToolResult(() => options.goals.delegate(principal, input)),
     );
     server.registerTool(
-      "nanasa.foreman_verify_task",
+      "nanasa.foreman_finish_goal_review",
       {
-        description: mcpTool("nanasa.foreman_verify_task").description,
-        inputSchema: VerifyMissionTaskCommandSchema,
+        description: mcpTool("nanasa.foreman_finish_goal_review").description,
+        inputSchema: McpGoalReferenceSchema,
+      },
+      async (input) => actionToolResult(() => options.goals.finishReview(principal, input.goalId)),
+    );
+    server.registerTool(
+      "nanasa.request_human_decision",
+      {
+        description: mcpTool("nanasa.request_human_decision").description,
+        inputSchema: RequestHumanDecisionCommandSchema,
+      },
+      async (input) => actionToolResult(() => options.goals.question(principal, input)),
+    );
+    server.registerTool(
+      "nanasa.foreman_observe_team",
+      {
+        description: mcpTool("nanasa.foreman_observe_team").description,
+        inputSchema: McpObserveTeamSchema,
       },
       async (input) => {
         try {
           return {
-            content: [{ type: "text" as const, text: "Pinned task verification returned." }],
-            structuredContent: {
-              evidence: await options.missionVerification.verify(principal, input),
-            },
-          };
-        } catch (error) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text" as const,
-                text:
-                  error instanceof DomainError
-                    ? error.message
-                    : "Verification failed; inspect retained evidence",
-              },
-            ],
-          };
-        }
-      },
-    );
-    server.registerTool(
-      "nanasa.foreman_observe_task",
-      {
-        description: mcpTool("nanasa.foreman_observe_task").description,
-        inputSchema: ObserveMissionTaskCommandSchema,
-      },
-      async (input) => {
-        try {
-          return {
-            content: [{ type: "text" as const, text: "Untrusted bounded task observation." }],
-            structuredContent: await options.missionObservations.observe(principal, input),
-          };
-        } catch (error) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text" as const,
-                text: error instanceof DomainError ? error.message : "Task observation unavailable",
-              },
-            ],
-          };
-        }
-      },
-    );
-    server.registerTool(
-      "nanasa.foreman_prompt_idle",
-      {
-        description: mcpTool("nanasa.foreman_prompt_idle").description,
-        inputSchema: InterveneMissionTaskCommandSchema,
-      },
-      async (input) => {
-        try {
-          return {
-            content: [{ type: "text" as const, text: "Intervention state returned." }],
-            structuredContent: await options.missionObservations.intervene(principal, input),
-          };
-        } catch (error) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text" as const,
-                text:
-                  error instanceof DomainError ? error.message : "Task intervention unavailable",
-              },
-            ],
-          };
-        }
-      },
-    );
-    server.registerTool(
-      "nanasa.foreman_reply_wait",
-      {
-        description: mcpTool("nanasa.foreman_reply_wait").description,
-        inputSchema: ReplyMissionWaitCommandSchema,
-      },
-      async (input) => {
-        try {
-          return {
-            content: [{ type: "text" as const, text: "Routine wait intervention returned." }],
-            structuredContent: await options.missionObservations.replyWait(
+            content: [{ type: "text" as const, text: "Untrusted delegated-team observation" }],
+            structuredContent: await options.goals.observe(
               principal,
-              input,
-              options.openWaits,
+              input.delegationId,
+              input.memberId,
+              options.terminalReads,
             ),
           };
         } catch (error) {
@@ -571,40 +468,7 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
             content: [
               {
                 type: "text" as const,
-                text:
-                  error instanceof DomainError
-                    ? error.message
-                    : "Routine wait intervention unavailable",
-              },
-            ],
-          };
-        }
-      },
-    );
-    server.registerTool(
-      "nanasa.foreman_integrate_mission",
-      {
-        description: mcpTool("nanasa.foreman_integrate_mission").description,
-        inputSchema: IntegrateMissionCommandSchema,
-      },
-      async (input) => {
-        try {
-          return {
-            content: [{ type: "text" as const, text: "Integrated candidate state returned." }],
-            structuredContent: {
-              candidate: await options.missionCandidates.integrate(principal, input),
-            },
-          };
-        } catch (error) {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text" as const,
-                text:
-                  error instanceof DomainError
-                    ? error.message
-                    : "Candidate integration failed; retained workspace requires inspection",
+                text: error instanceof DomainError ? error.message : "Team observation unavailable",
               },
             ],
           };
@@ -659,6 +523,60 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
     },
   );
   if (principal.kind === "agent") {
+    server.registerTool(
+      "nanasa.team_delegations",
+      {
+        description: mcpTool("nanasa.team_delegations").description,
+        inputSchema: McpForemanBootstrapSchema,
+      },
+      async () => actionToolResult(() => options.goals.own(principal)),
+    );
+    server.registerTool(
+      "nanasa.report_delegation",
+      {
+        description: mcpTool("nanasa.report_delegation").description,
+        inputSchema: ReportDelegationCommandSchema,
+      },
+      async (input) => {
+        try {
+          const own = options.goals.own(principal);
+          const delegation = own
+            .flatMap((workspace) => workspace.delegations)
+            .find((item) => item.id === input.delegationId && item.groupId === principal.groupId);
+          if (delegation === undefined)
+            throw new DomainError(
+              "delegation_forbidden",
+              "Delegation is not owned by this team",
+              403,
+            );
+          if (input.kind === "ready" || input.kind === "review")
+            await options.checkouts.refresh(delegation.checkoutId);
+          return actionToolResult(() => options.goals.report(principal, input));
+        } catch (error) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  error instanceof DomainError
+                    ? error.message
+                    : "Unable to validate report evidence",
+              },
+            ],
+          };
+        }
+      },
+    );
+    server.registerTool(
+      "nanasa.request_human_decision",
+      {
+        description: mcpTool("nanasa.request_human_decision").description,
+        inputSchema: RequestHumanDecisionCommandSchema,
+      },
+      async (input) =>
+        actionToolResult(() => options.goals.question({ ...principal, kind: "agent" }, input)),
+    );
     server.registerTool(
       "nanasa.report_progress",
       {

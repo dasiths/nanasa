@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -13,7 +13,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import {
+  CreateForemanConnectorCommandSchema,
+  type ForemanConnector,
   OperatorBootstrapCommandSchema,
   type OperatorBootstrapGrant,
   OperatorBootstrapGrantSchema,
@@ -31,6 +34,7 @@ const MAX_BOOTSTRAP_TOKENS = 32;
 interface SessionRecord extends OperatorSession {
   id: string;
   revoked: boolean;
+  connectorId?: string;
 }
 
 export interface OperatorAuthOptions {
@@ -38,6 +42,7 @@ export interface OperatorAuthOptions {
   secureCookies?: boolean;
   expectedUid?: number;
   now?: () => Date;
+  database?: DatabaseSync;
 }
 
 function opaqueToken(bytes = 32): string {
@@ -110,6 +115,7 @@ function cookieValue(request: FastifyRequest): string | undefined {
 }
 
 export class OperatorAuth {
+  readonly #database: DatabaseSync | undefined;
   readonly #credential: string;
   readonly #secureCookies: boolean;
   readonly #now: () => Date;
@@ -117,6 +123,7 @@ export class OperatorAuth {
   readonly #sessions = new Map<string, SessionRecord>();
 
   public constructor(options: OperatorAuthOptions) {
+    this.#database = options.database;
     this.#credential = secret(options.secretPath, options.expectedUid).toString("base64url");
     this.#secureCookies = options.secureCookies ?? false;
     this.#now = options.now ?? (() => new Date());
@@ -174,6 +181,57 @@ export class OperatorAuth {
     const authorization = request.headers.authorization;
     if (typeof authorization === "string" && authorization.startsWith("Bearer ")) {
       const value = authorization.slice("Bearer ".length);
+      const row = this.#database
+        ?.prepare("SELECT data_json FROM foreman_connectors WHERE token_hash = ?")
+        .get(createHash("sha256").update(value).digest("hex"));
+      if (row !== undefined) {
+        const connector = JSON.parse(String(row.data_json)) as ForemanConnector;
+        if (connector.revoked || Date.parse(connector.expiresAt) <= this.#now().getTime())
+          throw new DomainError(
+            "operator_unauthorized",
+            "Connector credential expired or revoked",
+            401,
+          );
+        const path = request.url.split("?", 1)[0]!;
+        const base = "/api/v1/foreman";
+        const allowed = connector.scopes.some((scope) => {
+          if (scope === "notifications")
+            return (
+              (request.method === "GET" &&
+                [base + "/notifications", base + "/notifications/cursor"].includes(path)) ||
+              (request.method === "POST" && path === base + "/notifications/ack")
+            );
+          if (scope === "conversation")
+            return ["GET", "POST"].includes(request.method) && path === base + "/channel";
+          if (scope === "goals")
+            return (
+              (request.method === "GET" &&
+                (path === base + "/goals" ||
+                  /^\/api\/v1\/foreman\/goals\/goal_[a-zA-Z0-9_-]+$/.test(path))) ||
+              (request.method === "POST" && path === base + "/goals")
+            );
+          if (scope === "decisions")
+            return request.method === "POST" && path === base + "/decisions/resolve";
+          return (
+            request.method === "POST" &&
+            [base + "/goals/control", base + "/run/stop"].includes(path)
+          );
+        });
+        if (!allowed)
+          throw new DomainError(
+            "connector_scope_forbidden",
+            "Connector scope does not permit this operation",
+            403,
+          );
+        return {
+          id: connector.id,
+          connectorId: connector.id,
+          operatorId: connector.principalId,
+          csrfToken: "connector-bearer",
+          expiresAt: connector.expiresAt,
+          revoked: false,
+        };
+      }
       if (tokenEquals(value, this.#credential)) {
         return {
           id: "cli",
@@ -199,11 +257,55 @@ export class OperatorAuth {
 
   public authorize(request: FastifyRequest): void {
     const session = this.authenticate(request);
-    if (["GET", "HEAD", "OPTIONS"].includes(request.method) || session.id === "cli") return;
+    if (
+      ["GET", "HEAD", "OPTIONS"].includes(request.method) ||
+      session.id === "cli" ||
+      session.connectorId !== undefined
+    )
+      return;
     const csrf = request.headers["x-nanasa-csrf"];
     if (typeof csrf !== "string" || !tokenEquals(csrf, session.csrfToken)) {
       throw new DomainError("csrf_invalid", "A valid operator CSRF token is required", 403);
     }
+  }
+
+  public createConnector(command: unknown) {
+    if (!this.#database)
+      throw new DomainError("connector_unavailable", "Connector persistence is unavailable", 503);
+    const input = CreateForemanConnectorCommandSchema.parse(command);
+    const token = opaqueToken();
+    const connector: ForemanConnector = {
+      id: `connector_${opaqueToken(16)}`,
+      principalId: input.principalId,
+      name: input.name,
+      scopes: [...new Set(input.scopes)],
+      expiresAt: new Date(this.#now().getTime() + input.expiresInHours * 3600000).toISOString(),
+      createdAt: this.#now().toISOString(),
+      revoked: false,
+    };
+    this.#database
+      .prepare("INSERT INTO foreman_connectors VALUES (?, ?, ?)")
+      .run(
+        connector.id,
+        createHash("sha256").update(token).digest("hex"),
+        JSON.stringify(connector),
+      );
+    return { connector, token };
+  }
+  public listConnectors(): ForemanConnector[] {
+    return (
+      this.#database?.prepare("SELECT data_json FROM foreman_connectors ORDER BY rowid").all() ?? []
+    ).map((row) => JSON.parse(String(row.data_json)) as ForemanConnector);
+  }
+  public revokeConnector(id: string) {
+    const connector = this.listConnectors().find((item) => item.id === id);
+    if (!connector) throw new DomainError("connector_not_found", "Connector not found", 404);
+    connector.revoked = true;
+    this.#database!.prepare("UPDATE foreman_connectors SET data_json = ? WHERE id = ?").run(
+      JSON.stringify(connector),
+      id,
+    );
+    return connector;
   }
 
   #issueSession(reply: FastifyReply): OperatorSession {

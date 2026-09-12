@@ -22,10 +22,8 @@ import {
   CreateAgentActionCommandSchema,
   CreateGroupAgentCommandSchema,
   CreateGroupCommandSchema,
-  CreateMissionCommandSchema,
   CreateWorktreeCommandSchema,
   CustomLaunchConsentListQuerySchema,
-  DecideMissionApprovalCommandSchema,
   DeleteGroupResultSchema,
   DenyCustomLaunchConsentCommandSchema,
   DismissAttentionItemsCommandSchema,
@@ -39,9 +37,9 @@ import {
   InstallProviderExtensionCommandSchema,
   InterruptAgentRunCommandSchema,
   MemberAttentionSubscriptionsSchema,
-  MissionControlCommandSchema,
   OpenCheckoutCommandSchema,
   OpenWaitSchema,
+  ProposeForemanGoalCommandSchema,
   ProviderStateBindingSchema,
   ProviderUpdateOutcomeSchema,
   ProviderUpdateRecoveryCommandSchema,
@@ -60,6 +58,7 @@ import {
   ReplyOpenWaitCommandSchema,
   RepositorySchema,
   ResolveForemanInputCommandSchema,
+  ResolveHumanDecisionCommandSchema,
   RevokeCustomLaunchConsentCommandSchema,
   RoleDefinitionSchema,
   SendForemanMessageCommandSchema,
@@ -100,16 +99,13 @@ import type { EventLog } from "../event-log.js";
 import { EventStreamSession } from "../event-stream-session.js";
 import type { ProviderExtensionService } from "../extensions/provider-extension-service.js";
 import type { ProviderHealthService } from "../extensions/provider-health-service.js";
+import type { ForemanGoalService } from "../foreman-goal-service.js";
 import type { ForemanRuntimeService } from "../foreman-runtime-service.js";
 import type { CheckoutService } from "../git/checkout-service.js";
 import type { WorktreeService } from "../git/worktree-service.js";
 import type { LaunchConsentService } from "../launch-consent-service.js";
 import type { MessageCommandService } from "../message-command-service.js";
 import type { MessageRepository } from "../message-repository.js";
-import type { MissionCandidateService } from "../mission-candidate-service.js";
-import type { MissionRepository } from "../mission-repository.js";
-import type { MissionTeamService } from "../mission-team-service.js";
-import type { MissionVerificationService } from "../mission-verification-service.js";
 import type { OperatorAuth } from "../operator-auth.js";
 import type { ProviderStateRepository } from "../provider-state-repository.js";
 import type { RunRuntimeCoordinator } from "../run-runtime-coordinator.js";
@@ -134,10 +130,7 @@ export interface ControlRouterServices {
   remote(): RemoteDescriptor;
   config: ConfigRepository;
   foreman: ForemanRuntimeService;
-  missions: MissionRepository;
-  missionTeams: MissionTeamService;
-  missionVerification: MissionVerificationService;
-  missionCandidates: MissionCandidateService;
+  goals: ForemanGoalService;
   snapshot: SnapshotReadModel;
   store: NanasaStore;
   repositoryIdentity: string;
@@ -349,6 +342,43 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
   });
   register("config.get", () => services.config.load().config);
   register("foreman.get", () => ForemanWorkspaceSchema.parse(services.foreman.status()));
+  register("goals.list", () => services.goals.list());
+  register("foreman.connectors", () => services.auth.listConnectors());
+  register("foreman.createConnector", (request) => services.auth.createConnector(request.body));
+  register("foreman.revokeConnector", (request) =>
+    services.auth.revokeConnector(record(request.params).connectorId ?? ""),
+  );
+  register("goals.propose", (request) =>
+    services.goals.propose(ProposeForemanGoalCommandSchema.parse(request.body)),
+  );
+  register("goals.get", (request) => services.goals.workspace(record(request.params).goalId ?? ""));
+  register("goals.control", async (request) => {
+    const command = request.body as { id: string; action: string };
+    if (command.action === "accept")
+      for (const delegation of services.goals
+        .workspace(command.id)
+        .delegations.filter((item) => item.state === "ready"))
+        await services.checkouts.refresh(delegation.checkoutId);
+    return services.goals.control(operatorPrincipal(services, request).operatorId, request.body);
+  });
+  register("goals.resolve", (request) =>
+    services.goals.resolve(
+      operatorPrincipal(services, request).operatorId,
+      ResolveHumanDecisionCommandSchema.parse(request.body),
+    ),
+  );
+  register("foreman.notifications", (request) => services.goals.notifications(request.query));
+  register("foreman.notificationCursor", (request) => {
+    const principal = operatorPrincipal(services, request);
+    return services.goals.cursor(principal.connectorId ?? principal.operatorId);
+  });
+  register("foreman.ackNotifications", (request) => {
+    const principal = operatorPrincipal(services, request);
+    return services.goals.acknowledge(
+      principal.connectorId ?? principal.operatorId,
+      Number((request.body as { after: number }).after),
+    );
+  });
   register("foreman.resolveInput", (request) => {
     services.store.resolveForemanInput(
       operatorPrincipal(services, request).operatorId,
@@ -357,38 +387,6 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
       ),
     );
     return services.foreman.status();
-  });
-  register("missions.list", () => services.missions.list());
-  register("missions.decide", (request) =>
-    services.missions.decideApproval(
-      operatorPrincipal(services, request).operatorId,
-      record(request.params).approvalId ?? "",
-      DecideMissionApprovalCommandSchema.parse(routeBody(controlRoute("missions.decide"), request)),
-    ),
-  );
-  register("missions.get", (request) => {
-    const id = record(request.params).missionId ?? "";
-    return {
-      ...services.missions.workspace(id),
-      teams: services.missionTeams.list(id),
-      evidence: services.missionVerification.list(id),
-      candidate: services.missionCandidates.get(id),
-      approvals: services.missions.approvals(id),
-    };
-  });
-  register("missions.create", (request) =>
-    services.missions.create(
-      operatorPrincipal(services, request).operatorId,
-      CreateMissionCommandSchema.parse(routeBody(controlRoute("missions.create"), request)),
-    ),
-  );
-  register("missions.control", async (request) => {
-    const id = record(request.params).missionId ?? "";
-    const command = MissionControlCommandSchema.parse(
-      routeBody(controlRoute("missions.control"), request),
-    );
-    if (command.action === "accept") await services.missionCandidates.assertCurrent(id);
-    return services.missions.control(operatorPrincipal(services, request).operatorId, id, command);
   });
   register("foreman.channel", (request) => {
     const query = record(request.query);

@@ -1,15 +1,13 @@
 import {
   AgentActionStateSchema,
   AgentProgressReportCommandSchema,
-  CreateMissionTaskCommandSchema,
+  DelegateForemanGoalCommandSchema,
   ForemanChannelQuerySchema,
-  IntegrateMissionCommandSchema,
-  InterveneMissionTaskCommandSchema,
-  ObserveMissionTaskCommandSchema,
-  ProvisionMissionTeamCommandSchema,
-  ReplyMissionWaitCommandSchema,
+  ForemanCheckInCommandSchema,
+  ProposeForemanGoalCommandSchema,
+  ReportDelegationCommandSchema,
+  RequestHumanDecisionCommandSchema,
   SendForemanMessageCommandSchema,
-  VerifyMissionTaskCommandSchema,
 } from "@nanasa/contracts";
 import { z } from "zod";
 import type { McpPrincipal } from "../mcp-auth.js";
@@ -17,15 +15,10 @@ import { DomainError } from "../store.js";
 
 export const McpIdentifierSchema = z.string().trim().min(1).max(128);
 export const McpForemanBootstrapSchema = z.object({}).strict();
-export const McpMissionReferenceSchema = z
-  .object({ missionId: McpIdentifierSchema, expectedGrantRevision: z.number().int().positive() })
+export const McpGoalReferenceSchema = z.object({ goalId: McpIdentifierSchema }).strict();
+export const McpObserveTeamSchema = z
+  .object({ delegationId: McpIdentifierSchema, memberId: McpIdentifierSchema.optional() })
   .strict();
-export const McpMissionTaskSchema = CreateMissionTaskCommandSchema.extend({
-  missionId: McpIdentifierSchema,
-}).strict();
-export const McpMissionProvisionSchema = ProvisionMissionTeamCommandSchema.extend({
-  missionId: McpIdentifierSchema,
-}).strict();
 export const McpMessageFieldsSchema = z
   .object({
     groupId: McpIdentifierSchema.optional(),
@@ -102,89 +95,90 @@ function tool(input: McpToolDeclaration): McpToolDeclaration {
 
 export const MCP_TOOL_REGISTRY = Object.freeze([
   tool({
-    name: "nanasa.foreman_integrate_mission",
+    name: "nanasa.foreman_check_in",
     description:
-      "Merge verified task commits into a new owned candidate checkout and run approved integration checks",
-    inputSchema: IntegrateMissionCommandSchema,
+      "Send a bounded idle check-in to the accountable member only, under explicit intervention policy and exact observed runtime identity",
+    inputSchema: ForemanCheckInCommandSchema,
     principals: ["foreman"],
-    scope: "foreman:missions:integrate",
-    authority: "self-write",
+    scope: "foreman:teams:check-in",
+    authority: "scoped-peer-action",
   }),
   tool({
-    name: "nanasa.foreman_reply_wait",
+    name: "nanasa.foreman_discover_teams",
     description:
-      "Answer one exact routine worker wait under an explicit grant and fresh observation; privileged approvals remain forbidden",
-    inputSchema: ReplyMissionWaitCommandSchema,
-    principals: ["foreman"],
-    scope: "foreman:tasks:reply-wait",
-    authority: "self-write",
-  }),
-  tool({
-    name: "nanasa.foreman_observe_task",
-    description:
-      "Read bounded untrusted terminal evidence from the exact mission-owned task runtime",
-    inputSchema: ObserveMissionTaskCommandSchema,
-    principals: ["foreman"],
-    scope: "foreman:tasks:observe",
-    authority: "read",
-  }),
-  tool({
-    name: "nanasa.foreman_prompt_idle",
-    description:
-      "Submit one budgeted idle prompt using a fresh exact task observation; never approve privileged waits",
-    inputSchema: InterveneMissionTaskCommandSchema,
-    principals: ["foreman"],
-    scope: "foreman:tasks:intervene",
-    authority: "self-write",
-  }),
-  tool({
-    name: "nanasa.foreman_verify_task",
-    description:
-      "Run immutable operator-approved verification recipes at an exact clean candidate commit",
-    inputSchema: VerifyMissionTaskCommandSchema,
-    principals: ["foreman"],
-    scope: "foreman:tasks:verify",
-    authority: "self-write",
-  }),
-  tool({
-    name: "nanasa.foreman_provision_team",
-    description:
-      "Create a new mission-owned team and managed worktree from an approved template and pinned commit",
-    inputSchema: McpMissionProvisionSchema,
-    principals: ["foreman"],
-    scope: "foreman:teams:provision",
-    authority: "self-write",
-  }),
-  tool({
-    name: "nanasa.foreman_finish_review",
-    description: "Settle the exact current mission review without claiming mission completion",
-    inputSchema: McpMissionReferenceSchema,
-    principals: ["foreman"],
-    scope: "foreman:reviews:finish",
-    authority: "self-write",
-  }),
-  tool({
-    name: "nanasa.foreman_list_missions",
-    description: "List missions owned by this repository Foreman",
+      "Discover current teams, role descriptions, permissions, readiness and reservations; discovery does not grant authority",
     inputSchema: McpForemanBootstrapSchema,
     principals: ["foreman"],
-    scope: "foreman:missions:read",
+    scope: "foreman:teams:discover",
     authority: "read",
   }),
   tool({
-    name: "nanasa.foreman_get_mission",
-    description: "Read current mission acceptance, grant, and tasks",
-    inputSchema: McpMissionReferenceSchema,
+    name: "nanasa.foreman_propose_goal",
+    description:
+      "Propose a high-level outcome for human approval without requiring an implementation plan",
+    inputSchema: ProposeForemanGoalCommandSchema,
     principals: ["foreman"],
-    scope: "foreman:missions:read",
+    scope: "foreman:goals:propose",
+    authority: "self-write",
+  }),
+  tool({
+    name: "nanasa.foreman_get_goal",
+    description: "Read durable goal, team delegations, reports and human decisions",
+    inputSchema: McpGoalReferenceSchema,
+    principals: ["foreman"],
+    scope: "foreman:goals:read",
     authority: "read",
   }),
   tool({
-    name: "nanasa.foreman_create_task",
-    description: "Plan a bounded task under an existing operator-issued mission grant",
-    inputSchema: McpMissionTaskSchema,
+    name: "nanasa.foreman_delegate_goal",
+    description:
+      "Propose a specific team and accountable member to own research, planning, implementation and review; requires explicit human authorization",
+    inputSchema: DelegateForemanGoalCommandSchema,
     principals: ["foreman"],
-    scope: "foreman:tasks:plan",
+    scope: "foreman:goals:delegate",
+    authority: "self-write",
+  }),
+  tool({
+    name: "nanasa.foreman_observe_team",
+    description:
+      "Observe approved delegated team health and optionally bounded untrusted member transcript evidence",
+    inputSchema: McpObserveTeamSchema,
+    principals: ["foreman"],
+    scope: "foreman:teams:observe",
+    authority: "read",
+  }),
+  tool({
+    name: "nanasa.foreman_finish_goal_review",
+    description: "Finish the durable goal supervision wakeup without claiming team completion",
+    inputSchema: McpGoalReferenceSchema,
+    principals: ["foreman"],
+    scope: "foreman:goals:review",
+    authority: "self-write",
+  }),
+  tool({
+    name: "nanasa.team_delegations",
+    description: "Read your team's approved outcome delegation, checkpoints and human decisions",
+    inputSchema: McpForemanBootstrapSchema,
+    principals: ["agent"],
+    scope: "team:delegations:read",
+    authority: "read",
+  }),
+  tool({
+    name: "nanasa.report_delegation",
+    description:
+      "Report acceptance, a plan, progress, blockers or readiness with evidence; only the accountable member can accept or finish",
+    inputSchema: ReportDelegationCommandSchema,
+    principals: ["agent"],
+    scope: "team:delegations:report",
+    authority: "self-write",
+  }),
+  tool({
+    name: "nanasa.request_human_decision",
+    description:
+      "Raise a durable correlated human question; an answer never grants unrelated runtime permissions",
+    inputSchema: RequestHumanDecisionCommandSchema,
+    principals: ["foreman", "agent"],
+    scope: "coordination:decisions:request",
     authority: "self-write",
   }),
   tool({

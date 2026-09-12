@@ -9,16 +9,17 @@ import { authenticateAgent, setupIntegrations } from "../src/cli-admin.js";
 import { SystemdUserService } from "../src/service/systemd-user-service.js";
 
 describe("CLI surface defaults", () => {
-  it("declares Foreman and mission control without translating them into team commands", () => {
+  it("declares Foreman and goal control without exposing legacy mission commands", () => {
     expect(findCliCommand("foreman", "start")).toMatchObject({ body: "required", mutating: true });
     expect(findCliCommand("foreman", "status")?.path?.([])).toBe("/api/v1/foreman");
-    expect(findCliCommand("missions", "get")?.path?.(["mission one"])).toBe(
-      "/api/v1/missions/mission%20one",
+    expect(findCliCommand("missions", "get")).toBeUndefined();
+    expect(findCliCommand("missions", "decide")).toBeUndefined();
+    expect(findCliCommand("goal", "get")?.path?.(["goal one"])).toBe(
+      "/api/v1/foreman/goals/goal%20one",
     );
-    expect(findCliCommand("missions", "decide")?.path?.(["approval-one"])).toBe(
-      "/api/v1/mission-approvals/approval-one",
-    );
+    expect(findCliCommand("goal", "decide")?.path?.([])).toBe("/api/v1/foreman/decisions/resolve");
     expect(completion("bash")).toContain("foreman)");
+    expect(completion("bash")).not.toContain("missions)");
   });
 
   it("authenticates Foreman in a private home rather than the integration-shared home", async () => {

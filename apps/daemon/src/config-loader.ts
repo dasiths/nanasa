@@ -17,7 +17,6 @@ import {
   ExecutionProfileSchema,
   ExtensionIdSchema,
   ForemanConfigSchema,
-  IdentifierSchema,
   InstructionPathSchema,
   IntegrationConfigSchema,
   IntegrationIdSchema,
@@ -31,7 +30,6 @@ import {
   RepositoryIntentSchema,
   RoleDefinitionSchema,
   RoleIdSchema,
-  TeamTemplateSchema,
   TerminalPolicySchema,
 } from "@nanasa/contracts";
 import { isScalar, LineCounter, parseDocument, visit } from "yaml";
@@ -88,7 +86,6 @@ export const AuthoredNanasaConfigSchema = z
   .object({
     version: z.literal(CONFIG_VERSION),
     foreman: ForemanConfigSchema.optional(),
-    teamTemplates: z.record(IdentifierSchema, TeamTemplateSchema).optional(),
     repository: RepositoryIntentSchema.default({ path: ".", checkout: { kind: "current" } }),
     terminal: TerminalPolicySchema.default({
       checkpoints: {

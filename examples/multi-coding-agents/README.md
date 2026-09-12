@@ -1,10 +1,11 @@
 ---
 title: Run the multi-coding-agents example
-description: Operate Backend and Frontend teams in separate Git workspaces with one Nanasa daemon
+description: Coordinate Backend, Frontend, and team-owned goals with a GitHub Copilot Foreman and one Nanasa daemon
 ---
 
-This example runs six coding-agent processes in two teams under one Nanasa
-daemon. Backend uses the current checkout and branch. Frontend uses a linked
+This example configures a repository Foreman using GitHub Copilot CLI alongside
+six coding agents in two teams under one Nanasa daemon. Backend uses the current
+checkout and branch. Frontend uses a linked
 worktree on a separate branch, assigned through the portal before starting its
 agents. Configuration, commands, instructions, and private runtime state remain
 under this example directory.
@@ -13,6 +14,7 @@ under this example directory.
 
 | Team | Agent | Integration | Role | Permission policy |
 |------|-------|-------------|------|-------------------|
+| Repository (no team) | Foreman | GitHub Copilot CLI | Repository coordination | Inherit; approved goal grants |
 | Backend | Project Manager | GitHub Copilot CLI | Project Manager | Inherit |
 | Backend | Engineer 1 | Pi | Implementor | Inherit |
 | Backend | Engineer 2 | Claude Code through LiteLLM | Implementor | Inherit |
@@ -23,7 +25,15 @@ under this example directory.
 The existing Backend IDs and provider homes are unchanged. Frontend reuses the
 Pi and OpenCode definitions with stable IDs `frontend-builder` and
 `frontend-reviewer` in `team-frontend`. It does not have a project manager;
-cross-team requirements and decisions go through the Human.
+cross-team requirements and decisions go through the Human, who can hand team
+context to Foreman. Foreman does not replace Backend's Project Manager and does
+not join either team's broadcasts.
+
+Foreman is enabled in configuration but starts only when the operator chooses
+**Start** in its portal workspace. With both teams and Foreman running, there are
+seven processes. Foreman discovers these teams and their roles dynamically; no
+static template or additional team is needed. Existing team IDs and workspaces
+are unchanged, and delegation requires Human approval.
 
 The configuration also declares a direct Claude Code integration so operators
 can add or reassign an agent without rewriting the provider definition.
@@ -33,7 +43,15 @@ current agent.
 Every integration selects the checked-in `autonomous` execution profile. The
 provider adapters translate that profile into native continuation, question,
 and approval controls. The reviewer remains read-only because its role denial
-floor wins over autonomous grants.
+floor wins over autonomous grants. This provider execution profile is separate
+from Foreman's `autonomy.mode: supervised`: Nanasa still requires exact operator
+approval of the goal and team delegation. Provider permission controls are not a
+substitute for goal grants or an OS sandbox.
+
+Foreman uses the built-in `copilot` integration, not the `claude-copilot` gateway.
+No model is pinned for Foreman; it uses the provider default until a model is
+selected in Foreman Settings. The Makefile's `COPILOT_MODEL` variable belongs to
+the Claude gateway and does not choose Foreman's model.
 
 Each provider kind also references a native JSON file beneath
 `.nanasa/providers`. These files are intentionally empty starting points for
@@ -60,19 +78,28 @@ these checked-in files:
 
 | Scope | Files |
 |-------|-------|
-| Global | `.nanasa/instructions/nanasa-mcp.md`, `.nanasa/instructions/team.md` |
+| Global | `.nanasa/instructions/team.md` |
 | Backend group | `.nanasa/instructions/groups/agent-team.md` |
 | Frontend group | `.nanasa/instructions/groups/frontend-team.md` |
+| Foreman only | `.nanasa/instructions/foreman.md` |
 | Project Manager role | `.nanasa/instructions/project-manager.md` |
 | Implementor role | `.nanasa/instructions/implementor.md` |
 | Reviewer role | `.nanasa/instructions/reviewer.md` |
 | Agent | None |
 
-Global guidance reaches every configured agent. Each team receives only its own
-group guidance, then each agent receives its role instructions. Backend owns
-`apps/daemon`; Frontend owns `apps/portal`. Coordinate shared contract changes
-through the Human. Nanasa also injects the member ID, alias, role, MCP
-coordination guidance, and authenticated MCP configuration at launch.
+Nanasa supplies MCP discovery, sender authority, reply routing, delegation reporting,
+and Foreman supervision instructions in its built-in prompts and MCP initialization.
+Those rules work even when no user instruction files are configured. The example
+files add repository conventions and project priorities, not the coordination protocol.
+
+Global project guidance reaches Foreman and every team member.
+Each team member receives its group and role instructions; Foreman
+receives only the global and Foreman-specific files after Nanasa's built-in
+Foreman protocol and identity. Selecting a team context does not inject that
+team's prompts or change Foreman's cwd. Backend owns `apps/daemon`; Frontend owns
+`apps/portal`. Coordinate shared contract changes through the Human and the
+Foreman channel. Nanasa injects authenticated, principal-specific MCP
+configuration at launch.
 
 See [Configure Nanasa](../../docs/guides/configuration.md) for the complete
 configuration model and [Add scoped prompts](../../docs/guides/prompts.md)
@@ -90,7 +117,9 @@ make example-doctor
 The setup target builds the local Nanasa package and creates private provider
 homes under `examples/multi-coding-agents/.nanasa/integrations`. The doctor
 target validates the nested configuration, instruction files, ownership, and
-all five provider commands.
+all five provider commands. Foreman always has its own private home under
+`integrations/state/foremen`, even though the Copilot integration uses membership
+scope for team agents.
 
 The example starts with clean private state. Provider homes from an older root
 `.nanasa` directory are deliberately not copied into this directory.
@@ -101,6 +130,7 @@ Authentication is interactive. Run the targets separately when you want to
 control each provider's login flow:
 
 ```bash
+make -C examples/multi-coding-agents auth-foreman
 make -C examples/multi-coding-agents auth-copilot
 make -C examples/multi-coding-agents auth-pi
 make -C examples/multi-coding-agents auth-opencode
@@ -108,19 +138,24 @@ make -C examples/multi-coding-agents auth-litellm
 make -C examples/multi-coding-agents auth-frontend
 ```
 
-The first three targets use `nanasa auth login` with the exact configured agent
-ID. This writes provider-owned credentials to that agent's membership-scoped
-home. The LiteLLM target authenticates the Docker-backed GitHub Copilot gateway
-used by Engineer 2.
+`auth-foreman` uses `nanasa auth login copilot --foreman`. Stop Foreman before
+running it. The Project Manager's Copilot login does not authenticate Foreman,
+and `--foreman` must not be combined with `--agent`.
+
+The `auth-copilot`, `auth-pi`, and `auth-opencode` targets use `nanasa auth login`
+with the exact configured agent ID. This writes provider-owned credentials to
+that agent's membership-scoped home. The LiteLLM target authenticates the
+Docker-backed GitHub Copilot gateway used by Engineer 2.
 
 The Frontend target authenticates Pi and OpenCode for the two new agent IDs.
 Their membership-scoped homes are separate from Backend's homes even though
 they use the same integrations. Reuse a provider's supported login mechanism;
 do not copy credentials or private homes into a worktree.
 
-Use `make -C examples/multi-coding-agents auth` to run both teams' flows in order.
-If Backend is already authenticated, only `auth-frontend` is needed for the new
-agents. Do not commit anything created under `.nanasa/integrations`.
+Use `make -C examples/multi-coding-agents auth` to run Foreman and both teams'
+flows in order. If both teams are already authenticated, only `auth-foreman` is
+needed for the new Foreman. Do not commit anything created under
+`.nanasa/integrations`.
 
 The `first-run` target stops after setup and diagnostics, then prints the three
 commands required to authenticate providers, start the gateway, and start
@@ -150,6 +185,39 @@ Select **Backend Team** in the portal and start the agents. Each runtime receive
 a group-bound MCP credential and can use `nanasa.list_members` to discover its
 peers. Messages, progress, direct requests, and status remain scoped to the
 group represented by that credential.
+
+## Coordinate with the GitHub Copilot Foreman
+
+After `auth-foreman`, open **Coordination > Foreman** and choose **Start**. Use
+Channel for durable instructions and replies and Terminal for direct native CLI
+control. They share one run. **Ask Foreman about Backend Team** or its Frontend
+equivalent carries team context to the channel; **Back to team** returns you.
+These links grant no team control and do not switch the Foreman checkout.
+
+Give Foreman a high-level objective or open **Goals > New goal**. Approve the
+goal, then the proposed accountable member and team checkout under **Decisions**.
+The team owns research, planning, implementation, independent review and validation.
+Foreman supervises its progress and health rather than assigning every worker task.
+
+The example allows two active goals, up to two teams and four concurrent peer
+actions per goal, eight hours per goal, and 100 Foreman review turns per goal.
+Backend and Frontend can work on separate goals concurrently, or on distinct
+workstreams of one goal. Each team needs its own assigned checkout and can hold
+only one unfinished delegation. Idle lead check-ins and delegated-agent
+restart automation remain off unless bounded mode and the individual settings
+are enabled. Foreman never approves native worker permission prompts.
+
+Agents start in `examples/multi-coding-agents` within their assigned checkout.
+Run validation from the directory the repository commands require. A clean diff
+alone does not establish completion: report tests and independent review evidence
+for the same clean committed candidate. Foreman's login does not populate team
+member homes; resolve each member's authentication before expecting work.
+
+Use **Pause** or **Cancel goal** to fence further autonomous effects. These controls
+do not claim to stop work already submitted to a provider.
+Read [Foreman and goals](../../docs/guides/foreman.md) for private-state setup,
+supervision, recovery limits, ambiguous input, and outcome acceptance.
+This example is not certification of overnight model reliability.
 
 ## Assign the two workspaces
 
@@ -214,6 +282,7 @@ Nanasa maps that same directory into each team's selected checkout:
 ```text
 Backend:  <primary>/examples/multi-coding-agents
 Frontend: <frontend-worktree>/examples/multi-coding-agents
+Foreman:  <primary>/examples/multi-coding-agents
 ```
 
 Agents find their own checkout root with `git rev-parse --show-toplevel` and
@@ -226,9 +295,11 @@ that is `/workspaces/.nanasa-worktrees/nanasa/<branch-slug>`, backed by the host
 sibling mount. Git administrative links are relative. Previously created
 worktrees are not moved automatically.
 
-The two checkouts can evolve independently, but MCP communication remains
-team-scoped. Use an operator-agreed API contract and relay cross-team handoffs
-through the Human. A worktree contains the whole repository and is not a sandbox.
+The two authored teams can evolve independently, but their MCP communication
+remains team-scoped. Use an operator-agreed API contract and relay cross-team
+handoffs through the Human and Foreman channel. Existing authored teams are not
+automatically included in a goal grant. A worktree contains the whole
+repository and is not a sandbox.
 
 ## Review changes before restarting
 

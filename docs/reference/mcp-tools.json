@@ -3,18 +3,18 @@
   "packageVersion": "0.1.0-next.12.0",
   "tools": [
     {
-      "name": "nanasa.foreman_integrate_mission",
-      "description": "Merge verified task commits into a new owned candidate checkout and run approved integration checks",
+      "name": "nanasa.foreman_check_in",
+      "description": "Send a bounded idle check-in to the accountable member only, under explicit intervention policy and exact observed runtime identity",
       "principals": [
         "foreman"
       ],
-      "scope": "foreman:missions:integrate",
-      "authority": "self-write",
+      "scope": "foreman:teams:check-in",
+      "authority": "scoped-peer-action",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
-          "missionId": {
+          "delegationId": {
             "type": "string",
             "minLength": 1,
             "maxLength": 128
@@ -24,403 +24,45 @@
             "minLength": 1,
             "maxLength": 128
           },
-          "expectedGrantRevision": {
+          "expectedRunId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedGeneration": {
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991
+          },
+          "expectedStatusRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
           }
         },
         "required": [
-          "missionId",
+          "delegationId",
           "requestId",
-          "expectedGrantRevision"
+          "expectedRunId",
+          "expectedGeneration",
+          "expectedStatusRevision",
+          "text"
         ],
         "additionalProperties": false
       }
     },
     {
-      "name": "nanasa.foreman_reply_wait",
-      "description": "Answer one exact routine worker wait under an explicit grant and fresh observation; privileged approvals remain forbidden",
+      "name": "nanasa.foreman_discover_teams",
+      "description": "Discover current teams, role descriptions, permissions, readiness and reservations; discovery does not grant authority",
       "principals": [
         "foreman"
       ],
-      "scope": "foreman:tasks:reply-wait",
-      "authority": "self-write",
-      "inputSchema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "properties": {
-          "missionId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "taskId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "expectedGrantRevision": {
-            "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
-          },
-          "requestId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "observationId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "waitId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "reply": {
-            "oneOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "type": "string",
-                    "const": "answer"
-                  },
-                  "text": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 8192
-                  }
-                },
-                "required": [
-                  "kind",
-                  "text"
-                ],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "type": "string",
-                    "const": "allow-once"
-                  }
-                },
-                "required": [
-                  "kind"
-                ],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "type": "string",
-                    "const": "deny"
-                  }
-                },
-                "required": [
-                  "kind"
-                ],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "type": "string",
-                    "const": "approve-plan"
-                  }
-                },
-                "required": [
-                  "kind"
-                ],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "type": "string",
-                    "const": "reject-plan"
-                  }
-                },
-                "required": [
-                  "kind"
-                ],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "type": "string",
-                    "const": "select"
-                  },
-                  "option": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 256
-                  }
-                },
-                "required": [
-                  "kind",
-                  "option"
-                ],
-                "additionalProperties": false
-              }
-            ]
-          }
-        },
-        "required": [
-          "missionId",
-          "taskId",
-          "expectedGrantRevision",
-          "requestId",
-          "observationId",
-          "waitId",
-          "reply"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "name": "nanasa.foreman_observe_task",
-      "description": "Read bounded untrusted terminal evidence from the exact mission-owned task runtime",
-      "principals": [
-        "foreman"
-      ],
-      "scope": "foreman:tasks:observe",
-      "authority": "read",
-      "inputSchema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "properties": {
-          "missionId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "taskId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "expectedGrantRevision": {
-            "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
-          },
-          "maxLines": {
-            "default": 200,
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 5000
-          }
-        },
-        "required": [
-          "missionId",
-          "taskId",
-          "expectedGrantRevision",
-          "maxLines"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "name": "nanasa.foreman_prompt_idle",
-      "description": "Submit one budgeted idle prompt using a fresh exact task observation; never approve privileged waits",
-      "principals": [
-        "foreman"
-      ],
-      "scope": "foreman:tasks:intervene",
-      "authority": "self-write",
-      "inputSchema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "properties": {
-          "missionId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "taskId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "expectedGrantRevision": {
-            "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
-          },
-          "requestId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "observationId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "prompt": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 4000
-          }
-        },
-        "required": [
-          "missionId",
-          "taskId",
-          "expectedGrantRevision",
-          "requestId",
-          "observationId",
-          "prompt"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "name": "nanasa.foreman_verify_task",
-      "description": "Run immutable operator-approved verification recipes at an exact clean candidate commit",
-      "principals": [
-        "foreman"
-      ],
-      "scope": "foreman:tasks:verify",
-      "authority": "self-write",
-      "inputSchema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "properties": {
-          "missionId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "taskId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "expectedGrantRevision": {
-            "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
-          },
-          "candidateCommit": {
-            "type": "string",
-            "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$"
-          }
-        },
-        "required": [
-          "missionId",
-          "taskId",
-          "expectedGrantRevision",
-          "candidateCommit"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "name": "nanasa.foreman_provision_team",
-      "description": "Create a new mission-owned team and managed worktree from an approved template and pinned commit",
-      "principals": [
-        "foreman"
-      ],
-      "scope": "foreman:teams:provision",
-      "authority": "self-write",
-      "inputSchema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "properties": {
-          "requestId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "expectedGrantRevision": {
-            "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
-          },
-          "expectedConfigRevision": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "templateId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "sourceCheckoutId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "baseCommit": {
-            "type": "string",
-            "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$"
-          },
-          "missionId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          }
-        },
-        "required": [
-          "requestId",
-          "expectedGrantRevision",
-          "expectedConfigRevision",
-          "templateId",
-          "sourceCheckoutId",
-          "baseCommit",
-          "missionId"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "name": "nanasa.foreman_finish_review",
-      "description": "Settle the exact current mission review without claiming mission completion",
-      "principals": [
-        "foreman"
-      ],
-      "scope": "foreman:reviews:finish",
-      "authority": "self-write",
-      "inputSchema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "properties": {
-          "missionId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "expectedGrantRevision": {
-            "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
-          }
-        },
-        "required": [
-          "missionId",
-          "expectedGrantRevision"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "name": "nanasa.foreman_list_missions",
-      "description": "List missions owned by this repository Foreman",
-      "principals": [
-        "foreman"
-      ],
-      "scope": "foreman:missions:read",
+      "scope": "foreman:teams:discover",
       "authority": "read",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -430,42 +72,12 @@
       }
     },
     {
-      "name": "nanasa.foreman_get_mission",
-      "description": "Read current mission acceptance, grant, and tasks",
+      "name": "nanasa.foreman_propose_goal",
+      "description": "Propose a high-level outcome for human approval without requiring an implementation plan",
       "principals": [
         "foreman"
       ],
-      "scope": "foreman:missions:read",
-      "authority": "read",
-      "inputSchema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "properties": {
-          "missionId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "expectedGrantRevision": {
-            "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
-          }
-        },
-        "required": [
-          "missionId",
-          "expectedGrantRevision"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "name": "nanasa.foreman_create_task",
-      "description": "Plan a bounded task under an existing operator-issued mission grant",
-      "principals": [
-        "foreman"
-      ],
-      "scope": "foreman:tasks:plan",
+      "scope": "foreman:goals:propose",
       "authority": "self-write",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -476,52 +88,27 @@
             "minLength": 1,
             "maxLength": 128
           },
-          "expectedGrantRevision": {
-            "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
-          },
           "title": {
             "type": "string",
             "minLength": 1,
             "maxLength": 160
           },
-          "instructions": {
+          "objective": {
             "type": "string",
             "minLength": 1,
             "maxLength": 16384
           },
-          "roleId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "templateId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "dependencies": {
+          "constraints": {
             "default": [],
             "maxItems": 32,
             "type": "array",
             "items": {
               "type": "string",
               "minLength": 1,
-              "maxLength": 128
+              "maxLength": 2000
             }
           },
-          "acceptanceIndexes": {
-            "minItems": 1,
-            "maxItems": 32,
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            }
-          },
-          "missionId": {
+          "sourceMessageId": {
             "type": "string",
             "minLength": 1,
             "maxLength": 128
@@ -529,14 +116,306 @@
         },
         "required": [
           "requestId",
-          "expectedGrantRevision",
           "title",
-          "instructions",
-          "roleId",
-          "templateId",
-          "dependencies",
-          "acceptanceIndexes",
-          "missionId"
+          "objective",
+          "constraints"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_get_goal",
+      "description": "Read durable goal, team delegations, reports and human decisions",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:goals:read",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "goalId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "goalId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_delegate_goal",
+      "description": "Propose a specific team and accountable member to own research, planning, implementation and review; requires explicit human authorization",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:goals:delegate",
+      "authority": "self-write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "goalId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "groupId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "memberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedMembershipRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "expectedCheckoutRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "brief": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          }
+        },
+        "required": [
+          "requestId",
+          "goalId",
+          "expectedRevision",
+          "groupId",
+          "memberId",
+          "expectedMembershipRevision",
+          "expectedCheckoutRevision",
+          "rationale",
+          "brief"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_observe_team",
+      "description": "Observe approved delegated team health and optionally bounded untrusted member transcript evidence",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:teams:observe",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "delegationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "memberId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "delegationId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.foreman_finish_goal_review",
+      "description": "Finish the durable goal supervision wakeup without claiming team completion",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:goals:review",
+      "authority": "self-write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "goalId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "goalId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.team_delegations",
+      "description": "Read your team's approved outcome delegation, checkpoints and human decisions",
+      "principals": [
+        "agent"
+      ],
+      "scope": "team:delegations:read",
+      "authority": "read",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.report_delegation",
+      "description": "Report acceptance, a plan, progress, blockers or readiness with evidence; only the accountable member can accept or finish",
+      "principals": [
+        "agent"
+      ],
+      "scope": "team:delegations:report",
+      "authority": "self-write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "delegationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "progress",
+              "blocked",
+              "plan",
+              "review",
+              "ready"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "evidence": {
+            "default": [],
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            }
+          },
+          "candidateHead": {
+            "type": "string",
+            "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+          },
+          "nextCheckSeconds": {
+            "default": 900,
+            "type": "integer",
+            "minimum": 30,
+            "maximum": 86400
+          }
+        },
+        "required": [
+          "requestId",
+          "delegationId",
+          "kind",
+          "summary",
+          "evidence",
+          "nextCheckSeconds"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nanasa.request_human_decision",
+      "description": "Raise a durable correlated human question; an answer never grants unrelated runtime permissions",
+      "principals": [
+        "foreman",
+        "agent"
+      ],
+      "scope": "coordination:decisions:request",
+      "authority": "self-write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "goalId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "delegationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "options": {
+            "default": [],
+            "maxItems": 12,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            }
+          },
+          "recommendation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "blocking": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "requestId",
+          "goalId",
+          "question",
+          "options",
+          "blocking"
         ],
         "additionalProperties": false
       }

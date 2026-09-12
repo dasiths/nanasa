@@ -83,7 +83,7 @@ function submit(line) {
   pending = pending
     .then(async () => {
       const messageId = line.match(/Operator channel message (fm_[a-z0-9-]+)/)?.[1];
-      const review = line.match(/Review mission (mission_[a-z0-9-]+) under grant revision (\d+)/);
+      const review = line.match(/Supervise goal (goal_[a-z0-9-]+)/);
       if (messageId === undefined && review === null) return;
       await report("turn.started");
       if (messageId !== undefined) {
@@ -97,9 +97,8 @@ function submit(line) {
           ...(message.teamId === undefined ? {} : { teamId: message.teamId }),
         });
       } else {
-        await tool("nanasa.foreman_finish_review", {
-          missionId: review[1],
-          expectedGrantRevision: Number(review[2]),
+        await tool("nanasa.foreman_finish_goal_review", {
+          goalId: review[1],
         });
       }
       await report("turn.settled");

@@ -27,7 +27,7 @@ import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 import { type ThemePreference, useAppliedTheme } from "../hooks/use-portal-preferences.js";
 import { useTerminalEndpoint } from "../hooks/use-terminal-endpoint.js";
 import { TerminalConsole } from "../terminal/terminal-console.js";
-import { ForemanMissions } from "./foreman-missions.js";
+import { ForemanGoals } from "./foreman-goals.js";
 import "./foreman-workspace.css";
 
 function ForemanTerminal({
@@ -153,9 +153,41 @@ function ForemanSettings({
         </label>
       </fieldset>
       <fieldset disabled={busy}>
-        <legend>Mission Limits</legend>
+        <legend>Goal Limits</legend>
         <label>
-          Autonomy
+          Concurrent goals
+          <input
+            type="number"
+            min={1}
+            max={16}
+            required
+            value={draft.autonomy.maxActiveGoals}
+            onChange={(event) =>
+              setDraft({
+                ...draft,
+                autonomy: { ...draft.autonomy, maxActiveGoals: Number(event.target.value) },
+              })
+            }
+          />
+        </label>
+        <label>
+          Teams per goal
+          <input
+            type="number"
+            min={1}
+            max={16}
+            required
+            value={draft.autonomy.maxTeamsPerGoal}
+            onChange={(event) =>
+              setDraft({
+                ...draft,
+                autonomy: { ...draft.autonomy, maxTeamsPerGoal: Number(event.target.value) },
+              })
+            }
+          />
+        </label>
+        <label>
+          Intervention mode
           <select
             value={draft.autonomy.mode}
             onChange={(event) =>
@@ -173,39 +205,39 @@ function ForemanSettings({
           </select>
         </label>
         <label>
-          Mission hours
+          Goal hours
           <input
             type="number"
             min={1}
             max={168}
             required
-            value={draft.autonomy.maxMissionHours}
+            value={draft.autonomy.maxGoalHours}
             onChange={(event) =>
               setDraft({
                 ...draft,
-                autonomy: { ...draft.autonomy, maxMissionHours: Number(event.target.value) },
+                autonomy: { ...draft.autonomy, maxGoalHours: Number(event.target.value) },
               })
             }
           />
         </label>
         <label>
-          Concurrent tasks
+          Concurrent actions per goal
           <input
             type="number"
             min={1}
             max={32}
             required
-            value={draft.autonomy.maxConcurrentTasks}
+            value={draft.autonomy.maxConcurrentActions}
             onChange={(event) =>
               setDraft({
                 ...draft,
-                autonomy: { ...draft.autonomy, maxConcurrentTasks: Number(event.target.value) },
+                autonomy: { ...draft.autonomy, maxConcurrentActions: Number(event.target.value) },
               })
             }
           />
         </label>
         <label>
-          Foreman turns
+          Foreman review budget
           <input
             type="number"
             min={1}
@@ -220,33 +252,46 @@ function ForemanSettings({
             }
           />
         </label>
-        <div className="foreman-wide">
-          <span>Approved team templates</span>
-          {Object.keys(config.teamTemplates ?? {}).length === 0 ? (
-            <p>No team templates configured</p>
-          ) : (
-            Object.keys(config.teamTemplates ?? {}).map((id) => (
-              <label key={id} className="foreman-checkbox">
-                <input
-                  type="checkbox"
-                  checked={draft.autonomy.permittedTeamTemplates.includes(id)}
-                  onChange={(event) =>
-                    setDraft({
-                      ...draft,
-                      autonomy: {
-                        ...draft.autonomy,
-                        permittedTeamTemplates: event.target.checked
-                          ? [...draft.autonomy.permittedTeamTemplates, id]
-                          : draft.autonomy.permittedTeamTemplates.filter((value) => value !== id),
-                      },
-                    })
-                  }
-                />
-                {id}
-              </label>
-            ))
-          )}
-        </div>
+        <label className="foreman-checkbox">
+          <input
+            type="checkbox"
+            disabled={draft.autonomy.mode !== "bounded"}
+            checked={draft.autonomy.intervention.idlePrompt}
+            onChange={(event) =>
+              setDraft({
+                ...draft,
+                autonomy: {
+                  ...draft.autonomy,
+                  intervention: {
+                    ...draft.autonomy.intervention,
+                    idlePrompt: event.target.checked,
+                  },
+                },
+              })
+            }
+          />
+          Allow idle lead check-ins
+        </label>
+        <label className="foreman-checkbox">
+          <input
+            type="checkbox"
+            disabled={draft.autonomy.mode !== "bounded"}
+            checked={draft.autonomy.recovery.restartDelegatedAgents}
+            onChange={(event) =>
+              setDraft({
+                ...draft,
+                autonomy: {
+                  ...draft.autonomy,
+                  recovery: {
+                    ...draft.autonomy.recovery,
+                    restartDelegatedAgents: event.target.checked,
+                  },
+                },
+              })
+            }
+          />
+          Recover failed delegated agents
+        </label>
       </fieldset>
       <button
         className="primary-button"
@@ -276,7 +321,7 @@ export function ForemanWorkspace({
 }) {
   const [state, setState] = useState<ForemanState>();
   const [messages, setMessages] = useState<ForemanChannelMessage[]>([]);
-  const [tab, setTab] = useState<"channel" | "terminal" | "missions" | "settings">("channel");
+  const [tab, setTab] = useState<"channel" | "terminal" | "goals" | "settings">("channel");
   const [text, setText] = useState("");
   const [teamId, setTeamId] = useState(initialTeamId);
   const [busy, setBusy] = useState(false);
@@ -417,7 +462,7 @@ export function ForemanWorkspace({
           [
             ["channel", "Channel", MessageSquare],
             ["terminal", "Terminal", Terminal],
-            ["missions", "Missions", ListChecks],
+            ["goals", "Goals", ListChecks],
             ["settings", "Settings", Settings],
           ] as const
         ).map(([id, label, Icon]) => (
@@ -431,7 +476,7 @@ export function ForemanWorkspace({
             id={`foreman-tab-${id}`}
             onClick={() => setTab(id)}
             onKeyDown={(event) => {
-              const tabs = ["channel", "terminal", "missions", "settings"] as const;
+              const tabs = ["channel", "terminal", "goals", "settings"] as const;
               const index = tabs.indexOf(id);
               const next =
                 event.key === "ArrowRight"
@@ -625,13 +670,9 @@ export function ForemanWorkspace({
           )}
         </div>
       )}
-      {tab === "missions" && (
-        <div id="foreman-missions" role="tabpanel" aria-labelledby="foreman-tab-missions">
-          <ForemanMissions
-            client={client}
-            configuration={state?.configuration}
-            onNavigate={onNavigate}
-          />
+      {tab === "goals" && (
+        <div id="foreman-goals" role="tabpanel" aria-labelledby="foreman-tab-goals">
+          <ForemanGoals client={client} configuration={state?.configuration} />
         </div>
       )}
       {tab === "settings" && (

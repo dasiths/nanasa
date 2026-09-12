@@ -64,7 +64,7 @@ export const globalDestinationDefinitions = [
     group: "coordination",
     commandLabel: "Open Foreman",
     commandDescription: "Open repository coordination and the Foreman terminal",
-    keywords: ["coordination", "mission", "channel"],
+    keywords: ["coordination", "goal", "channel"],
   },
   {
     id: "attention",

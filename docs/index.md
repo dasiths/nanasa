@@ -26,7 +26,7 @@ provider-state configurations.
 * [Portal and provider authentication](guides/authentication.md)
 * [Built-in providers](guides/providers.md)
 * [Portal and everyday use](guides/portal.md)
-* [Repository Foreman and missions](guides/foreman.md)
+* [Repository Foreman and goals](guides/foreman.md)
 * [Messaging and Model Context Protocol](guides/messaging-and-mcp.md)
 * [Git worktrees](guides/git-worktrees.md)
 * [Provider extensions](guides/extensions.md)

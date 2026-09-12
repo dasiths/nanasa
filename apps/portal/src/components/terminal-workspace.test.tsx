@@ -66,12 +66,12 @@ function ready(runId: string): TerminalEndpointStatus {
 function client(): PortalClient {
   return {
     loadForeman: vi.fn(),
+    listForemanGoals: vi.fn().mockResolvedValue([]),
+    getForemanGoal: vi.fn(),
+    proposeForemanGoal: vi.fn(),
+    controlForemanGoal: vi.fn(),
+    resolveHumanDecision: vi.fn(),
     resolveForemanInput: vi.fn(),
-    listMissions: vi.fn().mockResolvedValue([]),
-    decideMissionApproval: vi.fn(),
-    getMission: vi.fn(),
-    createMission: vi.fn(),
-    controlMission: vi.fn(),
     configureForeman: vi.fn(),
     startForeman: vi.fn(),
     stopForeman: vi.fn(),

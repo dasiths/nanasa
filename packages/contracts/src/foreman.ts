@@ -20,7 +20,6 @@ export const ForemanWorkspaceSchema = z
           .object({
             id: IdentifierSchema,
             messageId: IdentifierSchema.optional(),
-            missionId: IdentifierSchema.optional(),
             state: z.enum(["queued", "writing", "submitted", "answered", "ambiguous", "cancelled"]),
             updatedAt: TimestampSchema,
           })

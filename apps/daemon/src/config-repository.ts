@@ -10,12 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
-import {
-  type ConfiguredGroup,
-  ConfiguredGroupSchema,
-  canonicalJson,
-  type NanasaConfig,
-} from "@nanasa/contracts";
+import type { NanasaConfig } from "@nanasa/contracts";
 import { parseDocument } from "yaml";
 import {
   type LoadedNanasaConfig,
@@ -33,22 +28,12 @@ export class ConfigRepository {
   readonly #repositoryRoot: string;
   #queue: Promise<void> = Promise.resolve();
 
-  public constructor(
-    repositoryRoot: string,
-    private readonly runtimeGroups: () => Readonly<Record<string, ConfiguredGroup>> = () => ({}),
-  ) {
+  public constructor(repositoryRoot: string) {
     this.#repositoryRoot = repositoryRoot;
   }
 
   public load(): LoadedNanasaConfig {
-    const loaded = loadNanasaConfig(this.#repositoryRoot);
-    const groups = { ...loaded.config.groups };
-    for (const [id, definition] of Object.entries(this.runtimeGroups())) {
-      if (groups[id] !== undefined && canonicalJson(groups[id]) !== canonicalJson(definition))
-        throw new Error(`Runtime team conflicts with authored configuration: ${id}`);
-      groups[id] = ConfiguredGroupSchema.parse(definition);
-    }
-    return { ...loaded, config: { ...loaded.config, groups } };
+    return loadNanasaConfig(this.#repositoryRoot);
   }
 
   public mutate<T>(
@@ -85,10 +70,8 @@ export class ConfigRepository {
     }
     const document = parseDocument(source, { version: "1.2" });
     document.set("version", config.version);
-    for (const key of ["foreman", "teamTemplates"] as const) {
-      if (config[key] === undefined) document.delete(key);
-      else document.set(key, config[key]);
-    }
+    if (config.foreman === undefined) document.delete("foreman");
+    else document.set("foreman", config.foreman);
     document.set("instructions", config.instructions);
     document.set("roles", config.roles);
     document.set("groups", config.groups);

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { NanasaConfigSchema } from "@nanasa/contracts";
 import { afterEach, describe, expect, it } from "vitest";
-
+import { DatabaseSchemaError } from "../src/persistence/database.js";
 import { DATABASE_SCHEMA_VERSION } from "../src/persistence/schema.js";
 import { NanasaStore } from "../src/store.js";
 
@@ -19,6 +19,61 @@ afterEach(() => {
 });
 
 describe("NanasaStore persistence", () => {
+  it("initializes goal storage without legacy mission tables", () => {
+    const store = new NanasaStore(":memory:");
+    try {
+      const tables = store.database
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table'")
+        .all()
+        .map((row) => String(row.name));
+      expect(tables).toContain("foreman_coordination_records");
+      expect(tables.filter((name) => /^mission/.test(name))).toEqual([]);
+      expect(
+        store.database
+          .prepare("PRAGMA table_info(foreman_inbox)")
+          .all()
+          .map((column) => column.name),
+      ).not.toContain("mission_id");
+    } finally {
+      store.close();
+    }
+  });
+
+  it.each(["foreman_notifications", "foreman_coordination_records"])(
+    "rejects a same-version database missing %s before startup can mutate records",
+    (missingTable) => {
+      const root = mkdtempSync(join(tmpdir(), "nanasa-old-layout-"));
+      temporaryDirectories.push(root);
+      const path = join(root, "state.sqlite");
+      const store = new NanasaStore(path);
+      const group = store.createGroup({ name: "Preserve my team" });
+      store.close();
+      const old = new DatabaseSync(path);
+      old.exec(`DROP TABLE ${missingTable}`);
+      const before = old.prepare("SELECT * FROM groups").all();
+      old.close();
+
+      expect(() => new NanasaStore(path)).toThrow(DatabaseSchemaError);
+      expect(() => new NanasaStore(path)).toThrow(`missing tables: ${missingTable}`);
+      expect(() => new NanasaStore(path)).toThrow("No state was reset");
+      const retained = new DatabaseSync(path, { readOnly: true });
+      try {
+        expect(retained.prepare("SELECT * FROM groups").all()).toEqual(before);
+        expect(retained.prepare("SELECT name FROM groups WHERE id = ?").get(group.id)?.name).toBe(
+          "Preserve my team",
+        );
+        expect(retained.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          DATABASE_SCHEMA_VERSION,
+        );
+        expect(retained.prepare("SELECT COUNT(*) AS count FROM daemon_epochs").get()?.count).toBe(
+          0,
+        );
+      } finally {
+        retained.close();
+      }
+    },
+  );
+
   it("persists an isolated retry-safe Foreman channel with scoped replies", () => {
     const root = mkdtempSync(join(tmpdir(), "nanasa-channel-"));
     temporaryDirectories.push(root);

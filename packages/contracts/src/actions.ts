@@ -86,9 +86,9 @@ export const AgentActionPrincipalSchema = z.discriminatedUnion("kind", [
       runId: IdentifierSchema,
       generation: z.number().int().positive(),
       authorityRevision: z.number().int().nonnegative(),
-      missionId: IdentifierSchema,
-      taskId: IdentifierSchema,
-      grantRevision: z.number().int().positive(),
+      goalId: IdentifierSchema,
+      delegationId: IdentifierSchema,
+      goalRevision: z.number().int().positive(),
     })
     .strict(),
   z

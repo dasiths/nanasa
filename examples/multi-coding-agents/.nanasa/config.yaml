@@ -10,7 +10,6 @@ terminal:
     retentionSeconds: 86400
     sensitivity: repository-private
 instructions:
-  - .nanasa/instructions/nanasa-mcp.md
   - .nanasa/instructions/team.md
 attention:
   defaults:
@@ -92,6 +91,25 @@ integrations:
       mcp:
         paths: [ .nanasa/providers/claude-code/mcp.json ]
 extensions: {}
+foreman:
+  id: repository-foreman
+  name: Foreman
+  integrationId: copilot
+  enabled: true
+  instructions:
+    - .nanasa/instructions/foreman.md
+  supervision:
+    reconcileIntervalSeconds: 30
+    reviewIntervalSeconds: 300
+    maxRecoveryAttempts: 3
+    recoveryCooldownSeconds: 120
+  autonomy:
+    mode: supervised
+    maxActiveGoals: 2
+    maxTeamsPerGoal: 2
+    maxConcurrentActions: 4
+    maxGoalHours: 8
+    maxForemanTurns: 100
 roles:
   project-manager:
     name: Project Manager

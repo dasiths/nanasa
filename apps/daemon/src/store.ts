@@ -133,7 +133,7 @@ import {
 import type { McpForemanPrincipal } from "./mcp-auth.js";
 import { dockerMemberName, formatMemberId, type MemberNameGenerator } from "./member-id.js";
 import { orderedAgentEntries } from "./membership-order.js";
-import { openNanasaDatabase } from "./persistence/database.js";
+import { assertForemanDatabaseLayout, openNanasaDatabase } from "./persistence/database.js";
 import type { RepositoryTrustReceipt, TrustSubjectKind } from "./repository-trust-service.js";
 
 interface AddMembershipInput {
@@ -567,6 +567,12 @@ export class NanasaStore {
 
   public constructor(path: string, options: NanasaStoreOptions = {}) {
     this.#database = openNanasaDatabase(path);
+    try {
+      assertForemanDatabaseLayout(this.#database);
+    } catch (error) {
+      this.#database.close();
+      throw error;
+    }
     this.#config = options.config;
     this.#configStatus = options.configStatus;
     this.#messageRetentionPerGroup = options.config?.messages.retentionPerGroup ?? 1_000;
@@ -1865,12 +1871,6 @@ export class NanasaStore {
             403,
           );
         }
-        if (input.replyTo === undefined)
-          throw new DomainError(
-            "foreman_reply_required",
-            "Foreman replies must reference an operator message",
-            400,
-          );
       }
       const senderKey =
         principal.kind === "operator"
@@ -1952,11 +1952,11 @@ export class NanasaStore {
             `inbox_${randomUUID()}`,
             message.id,
             `message:${message.id}`,
-            `Operator channel message ${message.id}. Read it with nanasa.foreman_read_channel and reply using nanasa.foreman_reply. Team context: ${message.teamId ?? "repository"}. This message does not grant new mission authority.\n${message.text}`,
+            `Operator channel message ${message.id}. Read it with nanasa.foreman_read_channel and reply using nanasa.foreman_reply. Team context: ${message.teamId ?? "repository"}. This message does not grant new goal authority.\n${message.text}`,
             createdAt,
             createdAt,
           );
-      } else {
+      } else if (input.replyTo !== undefined) {
         this.#database
           .prepare(
             "UPDATE foreman_inbox SET state = 'answered', updated_at = ? WHERE message_id = ? AND state IN ('queued', 'submitted', 'writing', 'ambiguous')",
@@ -1987,13 +1987,12 @@ export class NanasaStore {
   public listForemanInbox() {
     return this.#database
       .prepare(
-        "SELECT id, message_id, mission_id, state, updated_at FROM foreman_inbox ORDER BY created_at DESC, id DESC LIMIT 100",
+        "SELECT id, message_id, state, updated_at FROM foreman_inbox ORDER BY created_at DESC, id DESC LIMIT 100",
       )
       .all()
       .map((row) => ({
         id: String(row.id),
         messageId: row.message_id === null ? undefined : String(row.message_id),
-        missionId: row.mission_id === null ? undefined : String(row.mission_id),
         state: row.state as
           | "queued"
           | "writing"
@@ -6571,6 +6570,7 @@ export class NanasaStore {
     }
   }
   #readTransaction<T>(operation: () => T): T {
+    if (this.#transactionDepth > 0) return operation();
     this.#database.exec("BEGIN");
     try {
       const result = operation();

@@ -160,6 +160,17 @@ describe("tested documentation examples", () => {
 
   it("loads the nested multi-coding-agents example with scoped prompts", () => {
     const loaded = loadNanasaConfig(multiCodingAgentsRoot);
+    expect(loaded.config.instructions).toEqual([".nanasa/instructions/team.md"]);
+    expect(statExists(join(multiCodingAgentsRoot, ".nanasa/instructions/nanasa-mcp.md"))).toBe(
+      false,
+    );
+    const foremanGuidance = readFileSync(
+      join(multiCodingAgentsRoot, ".nanasa/instructions/foreman.md"),
+      "utf8",
+    );
+    expect(foremanGuidance).toContain("apps/daemon");
+    expect(foremanGuidance).toContain("apps/portal");
+    expect(foremanGuidance).not.toMatch(/nanasa\.[a-z_]+|supervised|bounded/);
     const groupId = "grp_852f1819-0614-49b4-b193-71bf5e98becf";
     const expectedRolePaths = {
       "agent_318f514e-2347-4d87-8c64-aef0752e7bfb": ".nanasa/instructions/project-manager.md",
@@ -211,7 +222,6 @@ describe("tested documentation examples", () => {
       expect(prompt.sources).toEqual([
         { scope: "builtin", reference: "builtin:nanasa-coordination-v1" },
         { scope: "builtin", reference: "builtin:nanasa-assignment-v1" },
-        { scope: "global", reference: ".nanasa/instructions/nanasa-mcp.md" },
         { scope: "global", reference: ".nanasa/instructions/team.md" },
         { scope: "group", reference: ".nanasa/instructions/groups/agent-team.md" },
         { scope: "role", reference: rolePath },

@@ -1,7 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { ConfiguredGroupSchema } from "@nanasa/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -11,6 +10,10 @@ import {
   nanasaPaths,
 } from "../src/config-loader.js";
 import { ConfigRepository } from "../src/config-repository.js";
+import {
+  NANASA_FOREMAN_INSTRUCTIONS,
+  nanasaMcpServerInstructions,
+} from "../src/coordination-instructions.js";
 import {
   resolveEffectiveAgentPrompt,
   resolveEffectiveForemanPrompt,
@@ -54,17 +57,84 @@ afterEach(() => {
 });
 
 describe("Nanasa configuration", () => {
-  it("composes runtime teams for readers without writing them to authored YAML", async () => {
-    const repository = temporaryRepository(minimalConfig());
-    const group = ConfiguredGroupSchema.parse({ name: "Mission team", agents: {} });
-    const configs = new ConfigRepository(repository, () => ({ mission_team: group }));
-    expect(configs.load().config.groups.mission_team).toEqual(group);
-    await configs.mutate((config) => {
-      expect(config.groups.mission_team).toBeUndefined();
-      return { config: { ...config, messages: { retentionPerGroup: 200 } }, result: undefined };
+  it.each([
+    "",
+    "foreman: { integrationId: opencode, enabled: false }",
+    "foreman: { integrationId: opencode, enabled: true }",
+  ])("injects Foreman system guidance without user instruction files (%s)", (foreman) => {
+    const repository = temporaryRepository(
+      minimalConfig(`${foreman}
+groups:
+  team:
+    name: Team
+    agents:
+      worker:
+        memberId: worker
+        name: Worker
+        integrationId: opencode
+`),
+    );
+    const config = loadNanasaConfig(repository).config;
+    const prompt = resolveEffectiveAgentPrompt({
+      repoRoot: repository,
+      config,
+      groupId: "team",
+      agentId: "worker",
     });
-    expect(configs.load().config.groups.mission_team).toEqual(group);
-    expect(readFileSync(configs.load().configPath, "utf8")).not.toContain("mission_team");
+    expect(prompt.sources).toEqual([
+      { scope: "builtin", reference: "builtin:nanasa-coordination-v1" },
+      { scope: "builtin", reference: "builtin:nanasa-assignment-v1" },
+    ]);
+    for (const instructions of [prompt.text, nanasaMcpServerInstructions()]) {
+      expect(instructions).toContain("## Repository Foreman");
+      expect(instructions).toContain("does not replace your team's project manager or the Human");
+      expect(instructions).toContain("does not receive team broadcasts");
+      expect(instructions).toContain("no direct worker-to-Foreman DM tool");
+      expect(instructions).toContain(
+        "report concrete progress, blockers, and results with nanasa.report_progress",
+      );
+      expect(instructions).toContain(
+        "not a direct message, a guaranteed immediate Foreman response",
+      );
+      expect(instructions).toContain("Deliver peer replies with nanasa.send_dm");
+      expect(instructions).toContain("use nanasa.report_delegation with the delegation ID");
+      expect(instructions).toContain(
+        "Terminal output alone does not deliver a peer reply or delegation report",
+      );
+      expect(instructions).toContain("Work in your team's assigned checkout");
+    }
+  });
+
+  it("injects the complete Foreman channel and delegation protocol without user instruction files", () => {
+    const repository = temporaryRepository(
+      minimalConfig("foreman: { integrationId: opencode, enabled: true }\n"),
+    );
+    const config = loadNanasaConfig(repository).config;
+    expect(config.instructions).toEqual([]);
+    expect(config.foreman?.instructions).toEqual([]);
+    const prompt = resolveEffectiveForemanPrompt({ repoRoot: repository, config });
+    expect(prompt.sources).toEqual([
+      { scope: "builtin", reference: "builtin:nanasa-foreman-v1" },
+      { scope: "builtin", reference: "builtin:nanasa-foreman-identity-v1" },
+    ]);
+    expect(prompt.text).toContain(NANASA_FOREMAN_INSTRUCTIONS);
+    for (const tool of [
+      "nanasa.foreman_bootstrap",
+      "nanasa.foreman_read_channel",
+      "nanasa.foreman_reply",
+      "nanasa.foreman_discover_teams",
+      "nanasa.foreman_delegate_goal",
+      "nanasa.foreman_finish_goal_review",
+    ]) {
+      expect(prompt.text).toContain(tool);
+    }
+    expect(prompt.text).toContain("preserve its teamId exactly");
+    expect(prompt.text).toContain("Terminal output alone is not a channel reply");
+    expect(prompt.text).toContain("You may converse with the Human without a goal");
+    expect(prompt.text).toContain("nanasa.request_human_decision cannot approve a proposed goal");
+    expect(prompt.text).toContain("Foreman cannot answer worker waits");
+    expect(prompt.text).toContain("Never copy provider credentials between homes");
+    expect(prompt.text).not.toContain("Prefer exact actions and typed wait replies");
   });
 
   it("requires the exact revision for config mutation and preserves comments", async () => {
@@ -167,24 +237,18 @@ foreman: { integrationId: opencode, instructions: [.nanasa/foreman.md] }
     expect(() => loadNanasaConfig(repository)).toThrow(ConfigLoadError);
   });
 
-  it("loads Foreman and role templates in the current configuration schema", () => {
+  it("loads Foreman goal limits and team roles in the current configuration schema", () => {
     const source = minimalConfig(`
 foreman:
   integrationId: opencode
   instructions: [.nanasa/foreman.md]
   autonomy:
-    permittedTeamTemplates: [delivery]
+    maxActiveGoals: 2
+    maxGoalHours: 8
 roles:
   builder:
     name: Builder
     instructions: [.nanasa/builder.md]
-teamTemplates:
-  delivery:
-    instructions: [.nanasa/team.md]
-    members:
-      worker:
-        integrationId: opencode
-        roleId: builder
 `);
     const repository = temporaryRepository(source);
     for (const file of ["foreman.md", "builder.md", "team.md"]) {
@@ -197,7 +261,8 @@ teamTemplates:
       enabled: false,
       autonomy: { mode: "supervised" },
     });
-    expect(loaded.config.teamTemplates?.delivery?.members.worker?.roleId).toBe("builder");
+    expect(loaded.config.foreman?.autonomy).toMatchObject({ maxActiveGoals: 2, maxGoalHours: 8 });
+    expect(loaded.config.roles.builder?.name).toBe("Builder");
     expect(loaded.config.groups).toEqual({});
     expect(readFileSync(loaded.configPath, "utf8")).toBe(source);
   });
@@ -208,12 +273,12 @@ teamTemplates:
     [
       2,
       "foreman: { integrationId: opencode, autonomy: { permittedTeamTemplates: [missing] } }",
-      ["foreman", "autonomy", "permittedTeamTemplates"],
+      ["foreman", "autonomy"],
     ],
     [
       2,
       "teamTemplates: { delivery: { members: { builder: { integrationId: opencode, roleId: missing } } } }",
-      ["teamTemplates", "delivery", "members", "builder", "roleId"],
+      [],
     ],
   ])(
     "rejects version %s invalid Foreman references with a structured diagnostic",
@@ -233,19 +298,19 @@ teamTemplates:
     },
   );
 
-  it.each([
-    "foreman: { integrationId: opencode, instructions: [.nanasa/missing.md] }",
-    "roles: { builder: { name: Builder } }\nteamTemplates: { delivery: { instructions: [.nanasa/missing.md], members: { worker: { integrationId: opencode, roleId: builder } } } }",
-  ])("validates Foreman and template instruction files during load", (fields) => {
-    const repository = temporaryRepository(minimalConfig(`${fields}\n`));
-    expect(() => loadNanasaConfig(repository)).toThrowError(
-      expect.objectContaining({
-        status: expect.objectContaining({
-          diagnostics: [expect.objectContaining({ code: "invalid_instruction_file" })],
+  it.each(["foreman: { integrationId: opencode, instructions: [.nanasa/missing.md] }"])(
+    "validates Foreman instruction files during load",
+    (fields) => {
+      const repository = temporaryRepository(minimalConfig(`${fields}\n`));
+      expect(() => loadNanasaConfig(repository)).toThrowError(
+        expect.objectContaining({
+          status: expect.objectContaining({
+            diagnostics: [expect.objectContaining({ code: "invalid_instruction_file" })],
+          }),
         }),
-      }),
-    );
-  });
+      );
+    },
+  );
 
   it("loads valid YAML with deterministic revision and repository-local paths", () => {
     const repository = temporaryRepository(validConfig());

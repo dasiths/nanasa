@@ -7,7 +7,7 @@ import type { TerminalInputArbiter } from "./terminal/terminal-input-arbiter.js"
 interface TerminalDeliveryRuntime {
   readonly serverName: string;
   observeRun(run: AgentRun): Promise<RuntimeObservation>;
-  pasteToRun(run: AgentRun, text: string): Promise<void>;
+  pasteToRun(run: AgentRun, text: string, assertCurrent?: () => void): Promise<void>;
 }
 
 export function formatTerminalDelivery(claim: DeliveryClaim): string {
@@ -22,7 +22,11 @@ export class TmuxTerminalDelivery {
   readonly #runtime: TerminalDeliveryRuntime;
   readonly #arbiter: TerminalInputArbiter;
 
-  public constructor(runtime: TerminalDeliveryRuntime, arbiter: TerminalInputArbiter) {
+  public constructor(
+    runtime: TerminalDeliveryRuntime,
+    arbiter: TerminalInputArbiter,
+    private readonly authorize?: (claim: DeliveryClaim) => void,
+  ) {
     this.#runtime = runtime;
     this.#arbiter = arbiter;
   }
@@ -39,8 +43,13 @@ export class TmuxTerminalDelivery {
     if (claim.run === undefined || !(await this.isAvailable(claim.run))) {
       throw new Error("terminal_run_unavailable");
     }
-    await this.#arbiter.dispatchAutomated(claim.run.id, () =>
-      this.#runtime.pasteToRun(claim.run as AgentRun, formatTerminalDelivery(claim)),
-    );
+    await this.#arbiter.dispatchAutomated(claim.run.id, () => {
+      this.authorize?.(claim);
+      return this.authorize === undefined
+        ? this.#runtime.pasteToRun(claim.run as AgentRun, formatTerminalDelivery(claim))
+        : this.#runtime.pasteToRun(claim.run as AgentRun, formatTerminalDelivery(claim), () =>
+            this.authorize?.(claim),
+          );
+    });
   }
 }

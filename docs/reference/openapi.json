@@ -6,12 +6,228 @@
   },
   "x-generator-version": 1,
   "paths": {
-    "/api/v1/mission-approvals/:approvalId": {
-      "post": {
-        "operationId": "missions.decide",
-        "summary": "Decide an exact supervised mission operation",
+    "/api/v1/foreman/connectors": {
+      "get": {
+        "operationId": "foreman.connectors",
+        "summary": "List scoped external connectors without their credentials",
         "tags": [
-          "mission"
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      },
+      "post": {
+        "operationId": "foreman.createConnector",
+        "summary": "Issue a revocable scoped connector credential once",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/connectors/:connectorId": {
+      "delete": {
+        "operationId": "foreman.revokeConnector",
+        "summary": "Revoke an external connector",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/goals": {
+      "get": {
+        "operationId": "goals.list",
+        "summary": "List outcome goals",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      },
+      "post": {
+        "operationId": "goals.propose",
+        "summary": "Propose a high-level goal",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/goals/:goalId": {
+      "get": {
+        "operationId": "goals.get",
+        "summary": "Read goal delegations and decisions",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/goals/control": {
+      "post": {
+        "operationId": "goals.control",
+        "summary": "Apply exact human goal control without waiting for the model",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/decisions/resolve": {
+      "post": {
+        "operationId": "goals.resolve",
+        "summary": "Resolve a current human decision",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/notifications": {
+      "get": {
+        "operationId": "foreman.notifications",
+        "summary": "Catch up durable coordination notifications",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/notifications/cursor": {
+      "get": {
+        "operationId": "foreman.notificationCursor",
+        "summary": "Read this authenticated consumer's acknowledged cursor",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/notifications/ack": {
+      "post": {
+        "operationId": "foreman.ackNotifications",
+        "summary": "Persist this consumer's notification cursor",
+        "tags": [
+          "foreman"
         ],
         "security": [
           {
@@ -34,92 +250,6 @@
         "summary": "Resolve an inspected Foreman input without replaying it",
         "tags": [
           "foreman"
-        ],
-        "security": [
-          {
-            "operatorSession": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Validated response"
-          }
-        },
-        "x-body-limit": 65536,
-        "x-idempotency": "forbidden",
-        "x-errors": []
-      }
-    },
-    "/api/v1/missions": {
-      "get": {
-        "operationId": "missions.list",
-        "summary": "List durable repository missions",
-        "tags": [
-          "mission"
-        ],
-        "security": [
-          {
-            "operatorSession": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Validated response"
-          }
-        },
-        "x-body-limit": 65536,
-        "x-idempotency": "forbidden",
-        "x-errors": []
-      },
-      "post": {
-        "operationId": "missions.create",
-        "summary": "Create an operator-authorized mission with immutable acceptance and budgets",
-        "tags": [
-          "mission"
-        ],
-        "security": [
-          {
-            "operatorSession": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Validated response"
-          }
-        },
-        "x-body-limit": 65536,
-        "x-idempotency": "forbidden",
-        "x-errors": []
-      }
-    },
-    "/api/v1/missions/:missionId": {
-      "get": {
-        "operationId": "missions.get",
-        "summary": "Read a mission and its tasks",
-        "tags": [
-          "mission"
-        ],
-        "security": [
-          {
-            "operatorSession": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Validated response"
-          }
-        },
-        "x-body-limit": 65536,
-        "x-idempotency": "forbidden",
-        "x-errors": []
-      }
-    },
-    "/api/v1/missions/:missionId/control": {
-      "post": {
-        "operationId": "missions.control",
-        "summary": "Control an exact mission revision",
-        "tags": [
-          "mission"
         ],
         "security": [
           {

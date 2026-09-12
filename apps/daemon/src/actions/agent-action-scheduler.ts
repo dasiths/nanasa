@@ -85,7 +85,7 @@ export class AgentActionScheduler {
     private readonly arbiter: TerminalInputArbiter,
     private readonly now: () => Date = () => new Date(),
     private readonly pollIntervalMs = 1_000,
-    private readonly authorizeMissionAction?: (action: AgentAction) => void,
+    private readonly authorizeDelegatedAction?: (action: AgentAction) => void,
   ) {}
 
   public start(): void {
@@ -157,20 +157,20 @@ export class AgentActionScheduler {
   }
 
   async #consider(action: AgentAction, now: Date): Promise<void> {
-    if (action.principal.kind === "foreman") {
+    if (action.principal.kind === "foreman" || this.authorizeDelegatedAction !== undefined) {
       try {
-        if (this.authorizeMissionAction === undefined)
+        if (this.authorizeDelegatedAction === undefined)
           throw new DomainError(
-            "mission_dispatch_forbidden",
-            "Mission authorization is unavailable",
+            "goal_dispatch_forbidden",
+            "Goal authorization is unavailable",
             403,
           );
-        this.authorizeMissionAction(action);
+        this.authorizeDelegatedAction(action);
       } catch (error) {
         this.store.transitionAgentAction(action.id, [action.state], "cancelled", {
           error: {
-            code: error instanceof DomainError ? error.code : "mission_dispatch_forbidden",
-            message: "Mission no longer authorizes this action",
+            code: error instanceof DomainError ? error.code : "goal_dispatch_forbidden",
+            message: "Goal no longer authorizes this action",
             retryable: false,
           },
         });
@@ -324,10 +324,10 @@ export class AgentActionScheduler {
             409,
           );
         }
-        if (action.principal.kind === "foreman") {
-          this.authorizeMissionAction!(action);
+        if (this.authorizeDelegatedAction !== undefined) {
+          this.authorizeDelegatedAction!(action);
           await this.runtime.pasteToRun(run, actionPrompt(action), () =>
-            this.authorizeMissionAction!(action),
+            this.authorizeDelegatedAction!(action),
           );
         } else {
           await this.runtime.pasteToRun(run, actionPrompt(action));

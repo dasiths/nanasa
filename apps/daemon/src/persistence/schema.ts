@@ -134,6 +134,45 @@ export const DATABASE_MIGRATION_10_TO_11_SQL = `
 
 export const DATABASE_BASELINE_SQL = `
   ${URL_OPEN_SCHEMA_SQL}
+  CREATE TABLE foreman_coordination_records (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('goal', 'delegation', 'report', 'decision')),
+    goal_id TEXT,
+    group_id TEXT,
+    request_key TEXT UNIQUE,
+    request_digest TEXT,
+    data_json TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX foreman_coordination_goal ON foreman_coordination_records(goal_id, kind);
+  CREATE INDEX foreman_coordination_group ON foreman_coordination_records(group_id, kind);
+  CREATE TABLE foreman_notifications (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    dedupe_key TEXT NOT NULL UNIQUE,
+    data_json TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE foreman_notification_cursors (
+    consumer_id TEXT PRIMARY KEY,
+    after_sequence INTEGER NOT NULL CHECK (after_sequence >= 0),
+    updated_at TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE foreman_connectors (
+    id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    data_json TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE delegation_actions (
+    action_id TEXT PRIMARY KEY REFERENCES actions(id),
+    delegation_id TEXT NOT NULL REFERENCES foreman_coordination_records(id)
+  ) STRICT;
+  CREATE TABLE delegation_recovery (
+    delegation_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    attempts INTEGER NOT NULL,
+    last_run_id TEXT NOT NULL,
+    next_allowed_at TEXT NOT NULL,
+    PRIMARY KEY (delegation_id, member_id)
+  ) STRICT;
   CREATE TABLE schema_metadata (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     schema_version INTEGER NOT NULL,
@@ -298,171 +337,9 @@ export const DATABASE_BASELINE_SQL = `
     UNIQUE(sender_key, request_id)
   ) STRICT;
 
-  CREATE TABLE missions (
-    id TEXT PRIMARY KEY,
-    foreman_id TEXT NOT NULL,
-    operator_id TEXT NOT NULL,
-    request_id TEXT NOT NULL,
-    request_digest TEXT NOT NULL,
-    title TEXT NOT NULL,
-    objective TEXT NOT NULL,
-    acceptance_json TEXT NOT NULL,
-    grant_json TEXT NOT NULL,
-    template_digests_json TEXT NOT NULL,
-    verification_json TEXT NOT NULL,
-    grant_revision INTEGER NOT NULL CHECK (grant_revision > 0),
-    revision INTEGER NOT NULL CHECK (revision >= 0),
-    state TEXT NOT NULL CHECK (state IN ('planning', 'running', 'paused', 'blocked', 'verifying', 'awaiting-acceptance', 'completed', 'cancelled', 'revoked', 'failed')),
-    turns_used INTEGER NOT NULL DEFAULT 0 CHECK (turns_used >= 0),
-    recovery_attempts INTEGER NOT NULL DEFAULT 0 CHECK (recovery_attempts >= 0),
-    next_review_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(operator_id, request_id)
-  ) STRICT;
-
-  CREATE INDEX missions_due ON missions(state, next_review_at);
-
-  CREATE TABLE mission_tasks (
-    id TEXT PRIMARY KEY,
-    mission_id TEXT NOT NULL REFERENCES missions(id),
-    request_id TEXT NOT NULL,
-    request_digest TEXT NOT NULL,
-    title TEXT NOT NULL,
-    instructions TEXT NOT NULL,
-    role_id TEXT NOT NULL,
-    template_id TEXT NOT NULL,
-    dependencies_json TEXT NOT NULL,
-    acceptance_indexes_json TEXT NOT NULL,
-    action_id TEXT UNIQUE REFERENCES actions(id),
-    group_id TEXT,
-    member_id TEXT,
-    run_id TEXT REFERENCES runs(id),
-    generation INTEGER,
-    state TEXT NOT NULL CHECK (state IN ('queued', 'assigned', 'running', 'blocked', 'verifying', 'accepted', 'failed', 'cancelled')),
-    revision INTEGER NOT NULL CHECK (revision >= 0),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(mission_id, request_id)
-  ) STRICT;
-
-  CREATE UNIQUE INDEX mission_tasks_worker_capacity ON mission_tasks(group_id, member_id)
-    WHERE state IN ('assigned', 'running', 'blocked', 'verifying');
-
-  CREATE TABLE mission_audits (
-    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-    mission_id TEXT NOT NULL REFERENCES missions(id),
-    kind TEXT NOT NULL,
-    principal_id TEXT NOT NULL,
-    revision INTEGER NOT NULL,
-    occurred_at TEXT NOT NULL
-  ) STRICT;
-
-  CREATE TABLE mission_approvals (
-    id TEXT PRIMARY KEY,
-    mission_id TEXT NOT NULL REFERENCES missions(id),
-    grant_revision INTEGER NOT NULL,
-    operation TEXT NOT NULL CHECK (operation IN ('provision', 'task', 'verification', 'intervention')),
-    operation_key TEXT NOT NULL,
-    summary TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'denied', 'stale')),
-    created_at TEXT NOT NULL,
-    decided_at TEXT,
-    decided_by TEXT,
-    UNIQUE(mission_id, grant_revision, operation, operation_key)
-  ) STRICT;
-
-  CREATE TABLE mission_evidence (
-    id TEXT PRIMARY KEY,
-    mission_id TEXT NOT NULL REFERENCES missions(id),
-    task_id TEXT NOT NULL REFERENCES mission_tasks(id),
-    checkout_id TEXT NOT NULL REFERENCES checkouts(id),
-    candidate_commit TEXT NOT NULL,
-    recipe_id TEXT NOT NULL,
-    recipe_digest TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('running', 'passed', 'failed', 'ambiguous')),
-    output_digest TEXT,
-    exit_code INTEGER,
-    created_at TEXT NOT NULL,
-    completed_at TEXT,
-    UNIQUE(task_id, candidate_commit, recipe_id)
-  ) STRICT;
-
-  CREATE TABLE mission_candidates (
-    id TEXT PRIMARY KEY,
-    mission_id TEXT NOT NULL UNIQUE REFERENCES missions(id),
-    request_id TEXT NOT NULL,
-    branch TEXT NOT NULL UNIQUE,
-    checkout_id TEXT REFERENCES checkouts(id),
-    worktree_id TEXT REFERENCES worktrees(id),
-    candidate_commit TEXT,
-    state TEXT NOT NULL CHECK (state IN ('creating', 'verifying', 'passed', 'blocked')),
-    task_commits_json TEXT NOT NULL,
-    checks_json TEXT NOT NULL DEFAULT '[]',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  ) STRICT;
-
-  CREATE TABLE mission_observations (
-    id TEXT PRIMARY KEY,
-    mission_id TEXT NOT NULL REFERENCES missions(id),
-    task_id TEXT NOT NULL REFERENCES mission_tasks(id),
-    target_json TEXT NOT NULL,
-    content_digest TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    created_at TEXT NOT NULL
-  ) STRICT;
-
-  CREATE TABLE mission_interventions (
-    id TEXT PRIMARY KEY,
-    mission_id TEXT NOT NULL REFERENCES missions(id),
-    task_id TEXT NOT NULL REFERENCES mission_tasks(id),
-    observation_id TEXT NOT NULL UNIQUE REFERENCES mission_observations(id),
-    request_id TEXT NOT NULL,
-    request_digest TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('writing', 'submitted', 'ambiguous')),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(mission_id, request_id)
-  ) STRICT;
-
-  CREATE TABLE mission_recovery_incidents (
-    id TEXT PRIMARY KEY,
-    mission_id TEXT NOT NULL REFERENCES missions(id),
-    group_id TEXT NOT NULL,
-    member_id TEXT NOT NULL,
-    attempts INTEGER NOT NULL CHECK (attempts >= 0),
-    previous_run_id TEXT REFERENCES runs(id),
-    next_allowed_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(mission_id, group_id, member_id)
-  ) STRICT;
-
-  CREATE TABLE mission_team_allocations (
-    id TEXT PRIMARY KEY,
-    mission_id TEXT NOT NULL REFERENCES missions(id),
-    request_id TEXT NOT NULL,
-    request_digest TEXT NOT NULL,
-    group_id TEXT NOT NULL UNIQUE,
-    template_id TEXT NOT NULL,
-    template_digest TEXT NOT NULL,
-    group_json TEXT NOT NULL,
-    source_checkout_id TEXT NOT NULL REFERENCES checkouts(id),
-    base_commit TEXT NOT NULL,
-    branch TEXT NOT NULL UNIQUE,
-    checkout_id TEXT UNIQUE REFERENCES checkouts(id),
-    worktree_id TEXT UNIQUE REFERENCES worktrees(id),
-    state TEXT NOT NULL CHECK (state IN ('prepared', 'creating', 'ready', 'blocked')),
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(mission_id, request_id)
-  ) STRICT;
-
   CREATE TABLE foreman_inbox (
     id TEXT PRIMARY KEY,
     message_id TEXT UNIQUE REFERENCES foreman_messages(id),
-    mission_id TEXT REFERENCES missions(id),
     dedupe_key TEXT NOT NULL UNIQUE,
     prompt TEXT NOT NULL,
     state TEXT NOT NULL CHECK (state IN ('queued', 'writing', 'submitted', 'answered', 'ambiguous', 'cancelled')),

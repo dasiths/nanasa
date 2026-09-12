@@ -213,22 +213,4 @@ export function validateInstructionFiles(repoRoot: string, config: NanasaConfig)
     seen.add(path);
     readInstruction(repoRoot, path);
   }
-  for (const template of Object.values(config.teamTemplates ?? {})) {
-    for (const member of Object.values(template.members)) {
-      const paths = [
-        ...config.instructions,
-        ...template.instructions,
-        ...(config.roles[member.roleId]?.instructions ?? []),
-        ...member.instructions,
-      ];
-      const templateSeen = new Set<string>();
-      for (const path of paths) {
-        if (templateSeen.has(path)) {
-          throw new Error(`Instruction file is referenced more than once: ${path}`);
-        }
-        templateSeen.add(path);
-        readInstruction(repoRoot, path);
-      }
-    }
-  }
 }

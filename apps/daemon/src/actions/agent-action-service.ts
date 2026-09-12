@@ -33,6 +33,7 @@ export class AgentActionService {
     private readonly daemonEpoch: number,
     private readonly policy = new PeerCapabilityPolicy(),
     private readonly now: () => Date = () => new Date(),
+    private readonly onCreated?: (action: AgentAction) => void,
   ) {}
 
   public create(
@@ -110,45 +111,49 @@ export class AgentActionService {
     }
     const createdAt = this.now();
     const requestDigest = digest({ principal, input });
-    return this.store.createAgentAction(
-      AgentActionSchema.parse({
-        version: 1,
-        id: `action_${randomUUID()}`,
-        kind: input.kind,
-        principal,
-        target: {
-          groupId: input.groupId,
-          memberId: input.memberId,
-          runId: run.id,
-          generation: run.generation,
-          daemonEpoch: this.daemonEpoch,
-          reporterSessionId: reporter.id,
-          reporterId: reporter.reporterId,
-          reporterEpoch: reporter.reporterEpoch,
-          nativeSessionId: reporter.nativeSessionId,
-          baselineStatusRevision: status.statusRevision,
-          baselineCompletionRevision: status.completionRevision,
-        },
-        messageId: input.messageId,
-        conversationId,
-        replyToActionId: input.replyToActionId,
-        causationId: input.causationId,
-        idempotencyKey,
-        requestDigest,
-        prompt: input.prompt,
-        allowWorking: input.allowWorking,
-        state: "created",
-        queueDeadlineAt: new Date(createdAt.getTime() + input.queueTimeoutMs).toISOString(),
-        acceptanceDeadlineAt: new Date(
-          createdAt.getTime() + input.queueTimeoutMs + input.acceptanceTimeoutMs,
-        ).toISOString(),
-        completionDeadlineAt: new Date(
-          createdAt.getTime() + input.queueTimeoutMs + input.completionTimeoutMs,
-        ).toISOString(),
-        createdAt: createdAt.toISOString(),
-        updatedAt: createdAt.toISOString(),
-      }),
-    );
+    return this.store.atomic(() => {
+      const action = this.store.createAgentAction(
+        AgentActionSchema.parse({
+          version: 1,
+          id: `action_${randomUUID()}`,
+          kind: input.kind,
+          principal,
+          target: {
+            groupId: input.groupId,
+            memberId: input.memberId,
+            runId: run.id,
+            generation: run.generation,
+            daemonEpoch: this.daemonEpoch,
+            reporterSessionId: reporter.id,
+            reporterId: reporter.reporterId,
+            reporterEpoch: reporter.reporterEpoch,
+            nativeSessionId: reporter.nativeSessionId,
+            baselineStatusRevision: status.statusRevision,
+            baselineCompletionRevision: status.completionRevision,
+          },
+          messageId: input.messageId,
+          conversationId,
+          replyToActionId: input.replyToActionId,
+          causationId: input.causationId,
+          idempotencyKey,
+          requestDigest,
+          prompt: input.prompt,
+          allowWorking: input.allowWorking,
+          state: "created",
+          queueDeadlineAt: new Date(createdAt.getTime() + input.queueTimeoutMs).toISOString(),
+          acceptanceDeadlineAt: new Date(
+            createdAt.getTime() + input.queueTimeoutMs + input.acceptanceTimeoutMs,
+          ).toISOString(),
+          completionDeadlineAt: new Date(
+            createdAt.getTime() + input.queueTimeoutMs + input.completionTimeoutMs,
+          ).toISOString(),
+          createdAt: createdAt.toISOString(),
+          updatedAt: createdAt.toISOString(),
+        }),
+      );
+      this.onCreated?.(action);
+      return action;
+    });
   }
 
   public get(principal: AgentActionPrincipal, actionId: string): AgentAction {
