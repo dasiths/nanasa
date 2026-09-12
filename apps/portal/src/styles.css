@@ -304,15 +304,15 @@ h2 {
 
 .repository-navigation {
   border-bottom: 1px solid var(--line);
-  padding: 12px 8px 10px;
+  padding: 16px 8px 12px;
 }
 
 .rail-section-label {
   display: block;
-  margin: 0 8px 5px;
+  margin: 0 10px 8px;
   color: var(--text-muted);
-  font-size: 0.62rem;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 600;
   letter-spacing: 0;
   text-transform: uppercase;
 }
@@ -326,16 +326,17 @@ h2 {
 .portal-nav-link,
 .portal-navigation-disclosure > summary {
   display: grid;
-  min-height: 34px;
-  grid-template-columns: 19px minmax(0, 1fr) auto;
+  min-height: 40px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 7px;
+  gap: 10px;
   border-radius: 5px;
-  padding: 6px 8px;
-  color: var(--text-muted);
+  padding: 8px 10px;
+  color: var(--text);
   cursor: pointer;
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
   text-decoration: none;
 }
 
@@ -355,7 +356,7 @@ button.portal-nav-link {
   border: 0;
   background: transparent;
   color: var(--text-muted);
-  font: inherit;
+  font-family: inherit;
   text-align: left;
 }
 
@@ -398,7 +399,7 @@ button.portal-nav-link {
   place-items: center;
   border-radius: 9px;
   padding-inline: 4px;
-  font-size: 0.6rem;
+  font-size: 11px;
   font-weight: 700;
 }
 
@@ -418,9 +419,9 @@ button.portal-nav-link {
 
 .tree-group-row {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) 32px;
+  grid-template-columns: 38px minmax(0, 1fr) 32px;
   align-items: stretch;
-  min-height: 36px;
+  min-height: 40px;
   border-radius: 5px;
 }
 
@@ -439,8 +440,8 @@ button.portal-nav-link {
 
 .tree-toggle {
   display: grid;
-  width: 30px;
-  flex: 0 0 30px;
+  width: 38px;
+  flex: 0 0 38px;
   place-items: center;
   padding: 0;
 }
@@ -453,7 +454,9 @@ button.portal-nav-link {
   align-items: center;
   gap: 6px;
   overflow: hidden;
-  padding: 6px 7px 6px 1px;
+  padding: 8px 8px 8px 0;
+  font-size: 14px;
+  line-height: 20px;
   font-weight: 600;
 }
 
@@ -574,7 +577,8 @@ button.portal-nav-link {
 
 .tree-count {
   margin-left: auto;
-  background: rgb(24 33 30 / 8%);
+  background: var(--surface-muted);
+  color: var(--text-muted);
 }
 
 .tree-members {
@@ -586,7 +590,7 @@ button.portal-nav-link {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 15px;
+  left: 19px;
   width: 1px;
   background: var(--line);
   content: "";
@@ -596,10 +600,10 @@ button.portal-nav-link {
 .member-row {
   display: grid;
   grid-template-columns: 7px minmax(0, 1fr) auto 28px 32px;
-  min-height: 58px;
+  min-height: 54px;
   align-items: center;
   gap: 7px;
-  padding-left: 23px;
+  padding-left: 24px;
   border-radius: 4px;
 }
 
@@ -613,7 +617,56 @@ button.portal-nav-link {
   flex: 1;
   flex-direction: column;
   justify-content: center;
-  padding: 3px 0;
+  padding: 6px 0;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.group-tree .member-row > .status-dot {
+  align-self: start;
+  margin-top: 14px;
+}
+.group-tree .member-secondary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  white-space: normal;
+  line-height: 16px;
+}
+.group-tree .member-secondary .role-identity {
+  font-size: 12px;
+  font-weight: 400;
+}
+.group-tree .member-secondary small {
+  font-size: 12px;
+  line-height: 16px;
+}
+.group-tree .member-select > span:first-child,
+.group-tree .tree-select > span:first-child {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  overflow: visible;
+}
+.group-tree .member-info-button,
+.group-tree .member-row > .action-menu-anchor {
+  align-self: start;
+  margin-top: 4px;
+}
+.group-tree > .rail-section-label {
+  margin-top: 6px;
+}
+.portal-nav-link > svg {
+  width: 17px;
+  height: 17px;
+  color: var(--text-muted);
+}
+.portal-nav-link[aria-current="page"] > svg {
+  color: var(--selected-text);
+}
+.portal-nav-link > span:not(.navigation-badge) {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .member-select small {
@@ -918,6 +971,14 @@ button.portal-nav-link {
 
 .rail-footer > .compact-button {
   width: 100%;
+}
+.rail-footer .compact-button {
+  font-size: 13px;
+  min-height: 36px;
+  font-weight: 500;
+}
+.mobile-navigation-dialog .portal-nav-link {
+  min-height: 44px;
 }
 
 .portal-utilities-menu {
@@ -3641,7 +3702,7 @@ textarea {
   overflow: hidden;
   border: 0;
   border-right: 1px solid var(--line-strong);
-  background: var(--rail);
+  background: var(--surface);
   padding: 0;
   color: var(--text);
   box-shadow: 14px 0 42px var(--panel-shadow);
@@ -3671,6 +3732,69 @@ textarea {
   align-items: center;
   gap: 6px;
 }
+.mobile-navigation-heading .icon-button,
+.mobile-navigation-heading .compact-button {
+  min-height: 44px;
+  min-width: 44px;
+  font-size: 13px;
+}
+.mobile-navigation-footer .utility-theme-switch button {
+  min-height: 44px;
+  font-size: 12px;
+}
+.mobile-team-heading {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+}
+.mobile-team-heading > .icon-button {
+  width: 38px;
+  height: 44px;
+  border: 0;
+  background: transparent;
+}
+.mobile-team-heading > .portal-nav-link {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-left: 0;
+}
+.mobile-team-heading .navigation-badge {
+  background: var(--surface-muted);
+}
+.mobile-team-members {
+  margin-left: 18px;
+  border-left: 1px solid var(--line);
+  padding: 2px 0 6px 12px;
+}
+.mobile-member-link {
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  min-height: 48px;
+  padding: 8px 6px;
+  color: var(--text);
+  text-decoration: none;
+}
+.mobile-member-link:hover {
+  background: var(--surface-muted);
+}
+.mobile-member-link > .status-dot {
+  margin-top: 7px;
+}
+.mobile-member-link strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.mobile-member-link small {
+  display: block;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
 
 .mobile-navigation-scroll {
   min-height: 0;
@@ -3681,6 +3805,14 @@ textarea {
 
 .mobile-groups {
   margin-top: 19px;
+}
+.mobile-utility-links {
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.mobile-navigation-scroll {
+  scrollbar-gutter: stable;
 }
 
 .mobile-navigation-footer {

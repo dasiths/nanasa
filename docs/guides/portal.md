@@ -6,9 +6,18 @@ messages from Nanasa's local web portal.
 ## Open an authenticated session
 
 Start Nanasa, then run `npx nanasa auth portal` in another terminal. Open the
-one-use URL. The portal has repository operations, group navigation, system
-views, and utility controls. On narrow screens, the application menu exposes
-the same destinations.
+one-use URL. The portal opens **Foreman** by default. Explicit links to a team,
+terminal, or another page still open that destination.
+
+The left menu lists **Foreman**, **Team workspaces**, **All agents**, and
+**Attention**, followed by the expandable **Teams** tree. The current page is
+highlighted; a remembered team is not highlighted while a repository-wide page
+is open. **Console** and **More** provide utility access.
+
+On narrow screens, the application menu keeps the same primary order. Expand a
+team to see its members, roles, and run statuses. Utility links scroll with the
+menu while theme controls remain at the bottom. **Commands** opens the command
+palette, and **Console** is available under Utilities.
 
 ## Manage groups and agents
 
@@ -88,7 +97,7 @@ messages and delivery outcomes for all portal sessions.
 
 ## Coordinate repository goals
 
-Choose **Coordination > Foreman** for the repository-owned channel, native
+Choose **Foreman** for the repository-owned channel, native
 terminal, goals, and settings. Foreman is outside team broadcasts.
 See [Foreman and goals](foreman.md) for private authentication, team delegation,
 human decisions, recovery limits, and outcome acceptance.

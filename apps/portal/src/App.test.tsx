@@ -704,13 +704,35 @@ async function chooseRowAction(
 
 describe("portal application", () => {
   beforeEach(() => {
-    window.history.replaceState({}, "", "/");
+    window.history.replaceState({}, "", "/groups/group-backend/terminals");
     window.localStorage.clear();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("lands on Foreman by default and places it directly before team workspaces", async () => {
+    await import("./routes/portal-route-panels.js");
+    window.history.replaceState({}, "", "/");
+    window.localStorage.setItem(
+      PORTAL_PREFERENCES_KEY,
+      JSON.stringify({ ...defaultPortalPreferences, selectedGroupId: "group-review" }),
+    );
+    render(<App client={createClient()} />);
+    await screen.findByRole("textbox", { name: "Message Foreman" });
+    expect(window.location.pathname).toBe("/foreman");
+    const links = within(screen.getByRole("navigation", { name: "Operations" })).getAllByRole(
+      "link",
+    );
+    expect(links.map((link) => link.getAttribute("href"))).toEqual([
+      "/foreman",
+      "/checkouts",
+      "/agents",
+      "/attention",
+    ]);
+    expect(links[0]).toHaveAttribute("aria-current", "page");
   });
 
   it("opens Foreman separately and preserves channel retry identity after failure", async () => {
@@ -729,7 +751,7 @@ describe("portal application", () => {
     render(<App client={client} />);
     const user = userEvent.setup();
     const field = await screen.findByRole("textbox", { name: "Message Foreman" });
-    expect(screen.getByRole("navigation", { name: "Coordination" })).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "Operations" })).toBeTruthy();
     await user.type(field, "A long-running goal");
     await user.click(screen.getByRole("button", { name: "Send" }));
     await screen.findByText("Foreman operation failed");
@@ -3173,10 +3195,13 @@ describe("portal application", () => {
       within(drawer).getByRole("button", { name: "Open command palette" }),
     ).toBeInTheDocument();
     expect(
-      within(within(drawer).getByRole("navigation", { name: "Portal utilities" })).queryByRole(
+      within(within(drawer).getByRole("navigation", { name: "Portal utilities" })).getByRole(
         "button",
+        { name: "Console" },
       ),
-    ).toBeNull();
+    ).toBeInTheDocument();
+    await user.click(within(drawer).getByRole("button", { name: "Expand Backend members" }));
+    expect(within(drawer).getByRole("link", { name: /Builder/ })).toBeInTheDocument();
     expect(
       within(drawer).queryByRole("button", { name: "Role presentation" }),
     ).not.toBeInTheDocument();
@@ -3277,7 +3302,7 @@ describe("portal application", () => {
         },
       ],
     });
-    window.history.replaceState({}, "", "/");
+    window.history.replaceState({}, "", "/groups/group-backend/terminals");
     render(<App client={client} />);
 
     expect(await screen.findByLabelText("1 unread messages in Backend")).toBeInTheDocument();

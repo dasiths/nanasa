@@ -531,7 +531,7 @@ export function App({ client = api }: AppProps) {
     if (snapshot === undefined) return;
     const fallback = snapshot.groups[0];
     if (route.kind === "home" || route.kind === "invalid") {
-      if (fallback !== undefined) navigate(groupRoute(fallback.id), { replace: true });
+      navigate("/foreman", { replace: true });
       return;
     }
     if (route.kind !== "group") return;
@@ -905,7 +905,7 @@ export function App({ client = api }: AppProps) {
               />
             }
             unreadCounts={unreadCounts}
-            {...(selectedGroupId === undefined ? {} : { selectedGroupId })}
+            {...(route.kind === "group" ? { selectedGroupId: route.groupId } : {})}
             {...(busyAction === undefined ? {} : { busyAction })}
             onSelectGroup={(groupId) => {
               const section = preferences.lastSectionByGroup[groupId] ?? "terminals";
@@ -1369,7 +1369,9 @@ export function App({ client = api }: AppProps) {
         open={mobileNavigationOpen}
         route={route}
         groups={snapshot.groups}
-        {...(selectedGroupId === undefined ? {} : { selectedGroupId })}
+        config={config}
+        snapshot={snapshot}
+        {...(route.kind === "group" ? { selectedGroupId: route.groupId } : {})}
         lastSectionByGroup={preferences.lastSectionByGroup}
         attentionCount={globalAttentionCount}
         theme={preferences.theme}
@@ -1380,6 +1382,7 @@ export function App({ client = api }: AppProps) {
           navigate(groupRoute(groupId, section));
         }}
         onOpenCommandPalette={() => setPaletteOpen(true)}
+        onOpenConsole={() => setConsoleOpen(true)}
         onClose={() => setMobileNavigationOpen(false)}
       />
       {roleSettingsOpen && (

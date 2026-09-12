@@ -1,7 +1,9 @@
-import type { Group } from "@nanasa/contracts";
+import type { Group, NanasaConfig, PortalSnapshot } from "@nanasa/contracts";
 import {
   Bell,
   Bot,
+  ChevronDown,
+  ChevronRight,
   CircleHelp,
   Command,
   GitBranch,
@@ -13,13 +15,15 @@ import {
   PackageCheck,
   ServerCog,
   Settings,
+  SquareTerminal,
   Stethoscope,
   Sun,
   X,
 } from "lucide-react";
-import { type MouseEvent, type ReactNode, useRef } from "react";
+import { type MouseEvent, type ReactNode, useRef, useState } from "react";
 import { Dialog } from "../a11y/primitives.js";
 import type { ThemePreference, WorkspaceSection } from "../hooks/use-portal-preferences.js";
+import { memberStatusView } from "../member-status.js";
 import {
   type GlobalDestination,
   type GlobalDestinationDefinition,
@@ -47,6 +51,10 @@ const destinationIcons: Record<GlobalDestination, ReactNode> = {
 function displayCount(count: number): string {
   return count > 99 ? "99+" : String(count);
 }
+
+const primaryDestinations = ["foreman", "checkouts", "agents", "attention"].map(
+  (id) => globalDestinationDefinitions.find((destination) => destination.id === id)!,
+);
 
 function DestinationLink({
   destination,
@@ -101,28 +109,13 @@ export function RepositoryNavigation({
   attentionCount: number;
   onLink: PortalLinkHandler;
 }) {
-  const operations = globalDestinationDefinitions.filter(({ group }) => group === "operations");
   return (
     <section className="repository-navigation" aria-labelledby="repository-navigation-title">
-      <span className="rail-section-label">Coordination</span>
-      <nav className="portal-navigation-list" aria-label="Coordination">
-        {globalDestinationDefinitions
-          .filter(({ group }) => group === "coordination")
-          .map((destination) => (
-            <DestinationLink
-              key={destination.id}
-              destination={destination}
-              currentDestination={currentDestination}
-              attentionCount={0}
-              onLink={onLink}
-            />
-          ))}
-      </nav>
       <span id="repository-navigation-title" className="rail-section-label">
-        Operations
+        Workspace
       </span>
       <nav className="portal-navigation-list" aria-label="Operations">
-        {operations.map((destination) => (
+        {primaryDestinations.map((destination) => (
           <DestinationLink
             key={destination.id}
             destination={destination}
@@ -265,6 +258,8 @@ export function MobileNavigationDialog({
   open,
   route,
   groups,
+  config,
+  snapshot,
   selectedGroupId,
   lastSectionByGroup,
   attentionCount,
@@ -273,11 +268,14 @@ export function MobileNavigationDialog({
   onLink,
   onSelectGroup,
   onOpenCommandPalette,
+  onOpenConsole,
   onClose,
 }: {
   open: boolean;
   route: PortalRoute;
   groups: Group[];
+  config: NanasaConfig;
+  snapshot: PortalSnapshot;
   selectedGroupId?: string;
   lastSectionByGroup: Record<string, WorkspaceSection>;
   attentionCount: number;
@@ -286,10 +284,11 @@ export function MobileNavigationDialog({
   onLink: PortalLinkHandler;
   onSelectGroup(groupId: string, section: WorkspaceSection): void;
   onOpenCommandPalette(): void;
+  onOpenConsole(): void;
   onClose(): void;
 }) {
+  const [expandedTeams, setExpandedTeams] = useState<Set<string>>(new Set());
   const currentDestination = route.kind === "global" ? route.destination : undefined;
-  const operations = globalDestinationDefinitions.filter(({ group }) => group === "operations");
   const utilities = globalDestinationDefinitions.filter(({ group }) => group === "utilities");
   const closeAfterLink: PortalLinkHandler = (path) => (event) => {
     const handled =
@@ -314,7 +313,7 @@ export function MobileNavigationDialog({
           <div className="mobile-navigation-heading-actions">
             <button
               type="button"
-              className="icon-button"
+              className="compact-button mobile-command-button"
               aria-label="Open command palette"
               title="Open command palette"
               onClick={() => {
@@ -323,6 +322,7 @@ export function MobileNavigationDialog({
               }}
             >
               <Command aria-hidden="true" size={16} />
+              Commands
             </button>
             <button type="button" className="icon-button" aria-label="Close menu" onClick={onClose}>
               <X aria-hidden="true" size={16} />
@@ -330,28 +330,12 @@ export function MobileNavigationDialog({
           </div>
         </header>
         <div className="mobile-navigation-scroll">
-          <section aria-label="Coordination">
-            <span className="rail-section-label">Coordination</span>
-            <nav className="portal-navigation-list" aria-label="Coordination">
-              {globalDestinationDefinitions
-                .filter(({ group }) => group === "coordination")
-                .map((destination) => (
-                  <DestinationLink
-                    key={destination.id}
-                    destination={destination}
-                    currentDestination={currentDestination}
-                    attentionCount={0}
-                    onLink={closeAfterLink}
-                  />
-                ))}
-            </nav>
-          </section>
           <section aria-labelledby="mobile-operations-title">
             <span id="mobile-operations-title" className="rail-section-label">
-              Operations
+              Workspace
             </span>
             <nav className="portal-navigation-list" aria-label="Operations">
-              {operations.map((destination) => (
+              {primaryDestinations.map((destination) => (
                 <DestinationLink
                   key={destination.id}
                   destination={destination}
@@ -364,36 +348,119 @@ export function MobileNavigationDialog({
           </section>
           <section className="mobile-groups" aria-labelledby="mobile-groups-title">
             <span id="mobile-groups-title" className="rail-section-label">
-              Switch group
+              Teams
             </span>
             <nav className="portal-navigation-list" aria-label="Groups">
               {groups.map((group) => {
                 const section = lastSectionByGroup[group.id] ?? "terminals";
                 const path = groupRoute(group.id, section);
+                const members = Object.values(config.groups[group.id]?.agents ?? {});
+                const expanded = expandedTeams.has(group.id);
                 return (
-                  <a
-                    key={group.id}
-                    className="portal-nav-link"
-                    href={path}
-                    aria-current={selectedGroupId === group.id ? "page" : undefined}
-                    onClick={(event) => {
-                      const handled =
-                        event.button === 0 &&
-                        !event.metaKey &&
-                        !event.ctrlKey &&
-                        !event.shiftKey &&
-                        !event.altKey;
-                      if (!handled) return;
-                      event.preventDefault();
-                      onSelectGroup(group.id, section);
-                      onClose();
-                    }}
-                  >
-                    <Bot aria-hidden="true" size={15} />
-                    <span>{group.name}</span>
-                  </a>
+                  <div className="mobile-team" key={group.id}>
+                    <div className="mobile-team-heading">
+                      <button
+                        className="icon-button"
+                        aria-label={`${expanded ? "Collapse" : "Expand"} ${group.name} members`}
+                        aria-expanded={expanded}
+                        onClick={() =>
+                          setExpandedTeams((current) => {
+                            const next = new Set(current);
+                            if (expanded) next.delete(group.id);
+                            else next.add(group.id);
+                            return next;
+                          })
+                        }
+                      >
+                        {expanded ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
+                      </button>
+                      <a
+                        className="portal-nav-link"
+                        href={path}
+                        aria-label={group.name}
+                        aria-current={selectedGroupId === group.id ? "page" : undefined}
+                        onClick={(event) => {
+                          const handled =
+                            event.button === 0 &&
+                            !event.metaKey &&
+                            !event.ctrlKey &&
+                            !event.shiftKey &&
+                            !event.altKey;
+                          if (!handled) return;
+                          event.preventDefault();
+                          onSelectGroup(group.id, section);
+                          onClose();
+                        }}
+                      >
+                        <span>{group.name}</span>
+                        <span className="navigation-badge">{members.length}</span>
+                      </a>
+                    </div>
+                    {expanded && (
+                      <div className="mobile-team-members">
+                        {members.map((agent) => {
+                          const membership = snapshot.memberships.find(
+                            (member) =>
+                              member.groupId === group.id && member.memberId === agent.memberId,
+                          );
+                          const status =
+                            membership === undefined
+                              ? undefined
+                              : memberStatusView(snapshot.agentStatuses, snapshot.runs, membership);
+                          const destination = groupRoute(group.id, "terminals", status?.run?.id);
+                          return (
+                            <a
+                              key={agent.memberId}
+                              className="mobile-member-link"
+                              href={destination}
+                              onClick={closeAfterLink(destination)}
+                            >
+                              <span
+                                className={`status-dot status-${status?.key ?? "idle"}`}
+                                aria-hidden="true"
+                              />
+                              <span>
+                                <strong>{agent.name}</strong>
+                                <small>
+                                  {agent.roleId
+                                    ? (config.roles[agent.roleId]?.name ?? agent.roleId)
+                                    : "Unassigned"}{" "}
+                                  · {status?.label ?? "Not started"}
+                                </small>
+                              </span>
+                            </a>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 );
               })}
+            </nav>
+          </section>
+          <section className="mobile-utility-links" aria-label="Utilities">
+            <span className="rail-section-label">Utilities</span>
+            <nav className="portal-navigation-list" aria-label="Portal utilities">
+              <button
+                type="button"
+                className="portal-nav-link"
+                onClick={() => {
+                  onClose();
+                  onOpenConsole();
+                }}
+              >
+                <SquareTerminal size={17} aria-hidden="true" />
+                <span>Console</span>
+              </button>
+              {utilities.map((destination) => (
+                <DestinationLink
+                  key={destination.id}
+                  destination={destination}
+                  currentDestination={currentDestination}
+                  attentionCount={0}
+                  onLink={closeAfterLink}
+                />
+              ))}
             </nav>
           </section>
         </div>
@@ -427,17 +494,6 @@ export function MobileNavigationDialog({
               Dark
             </button>
           </div>
-          <nav className="portal-navigation-list" aria-label="Portal utilities">
-            {utilities.map((destination) => (
-              <DestinationLink
-                key={destination.id}
-                destination={destination}
-                currentDestination={currentDestination}
-                attentionCount={0}
-                onLink={closeAfterLink}
-              />
-            ))}
-          </nav>
         </footer>
       </div>
     </Dialog>

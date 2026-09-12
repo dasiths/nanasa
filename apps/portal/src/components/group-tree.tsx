@@ -1197,6 +1197,7 @@ export function GroupTree({
       {showCreateGroup && <CreateGroupForm onCreate={onCreateGroup} />}
       {repositoryNavigation}
       <nav className="group-tree" aria-label="Group tree">
+        <span className="rail-section-label">Teams</span>
         {snapshot.groups.length === 0 && (
           <div className="empty-state compact-empty">
             <p>No groups yet.</p>
@@ -1258,7 +1259,7 @@ export function GroupTree({
                   <button
                     type="button"
                     className="tree-select"
-                    title={teamWorking ? `${group.name} has agents working` : undefined}
+                    title={teamWorking ? `${group.name} has agents working` : group.name}
                     aria-current={selectedGroupId === group.id ? "page" : undefined}
                     onClick={() => {
                       onSelectGroup(group.id);
@@ -1440,6 +1441,7 @@ export function GroupTree({
                           <button
                             type="button"
                             className="member-select"
+                            title={agent.name}
                             aria-label={`Open terminal for ${agent.name}, status ${statusLabel}`}
                             onClick={() =>
                               onSelectTerminal === undefined
@@ -1448,12 +1450,14 @@ export function GroupTree({
                             }
                           >
                             <span>{agent.name}</span>
-                            <RoleIdentity role={role} />
-                            <small title={statusTitle || undefined}>
-                              {statusLabel}
-                              {recoveryRetryAt !== undefined &&
-                                ` · retry ${new Date(recoveryRetryAt).toLocaleTimeString()}`}
-                            </small>
+                            <span className="member-secondary">
+                              <RoleIdentity role={role} />
+                              <small title={statusTitle || undefined}>
+                                {statusLabel}
+                                {recoveryRetryAt !== undefined &&
+                                  ` · retry ${new Date(recoveryRetryAt).toLocaleTimeString()}`}
+                              </small>
+                            </span>
                           </button>
                         )}
                         <button
