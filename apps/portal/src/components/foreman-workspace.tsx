@@ -20,6 +20,7 @@ import {
   Settings,
   Square,
   Terminal,
+  Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -156,6 +157,30 @@ function ForemanSettings({
       </fieldset>
       <fieldset disabled={busy}>
         <legend>Goal Limits</legend>
+        <label className="foreman-wide">
+          Coordination approvals
+          <select
+            value={draft.autonomy.approvalMode}
+            onChange={(event) =>
+              setDraft({
+                ...draft,
+                autonomy: {
+                  ...draft.autonomy,
+                  approvalMode: event.target.value as "human" | "autonomous",
+                },
+              })
+            }
+          >
+            <option value="human">Human approval for each goal and team</option>
+            <option value="autonomous">Autonomous coordination within configured limits</option>
+          </select>
+        </label>
+        <p className="foreman-wide">
+          Autonomous coordination authorizes new goals, eligible team delegations and
+          evidence-checked completion without additional approval clicks. Human questions, provider
+          permissions, trust changes and destructive operations still require their existing
+          controls. Changing this policy does not expand existing goal grants.
+        </p>
         <label>
           Concurrent goals
           <input
@@ -330,6 +355,11 @@ export function ForemanWorkspace({
   const [error, setError] = useState<PortalError>();
   const [refresh, setRefresh] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  const [resetScope, setResetScope] = useState<"channel" | "finished-goals" | "all">(
+    "finished-goals",
+  );
+  const [resetConfirmation, setResetConfirmation] = useState("");
+  const [resetResult, setResetResult] = useState<string>();
   const cursor = useRef(0);
   const theme = useAppliedTheme(themePreference);
   const contextMissing = teamId !== "" && !groups.some((group) => group.id === teamId);
@@ -652,6 +682,70 @@ export function ForemanWorkspace({
       )}
       {tab === "settings" && (
         <div id="foreman-settings" role="tabpanel" aria-labelledby="foreman-tab-settings">
+          <section className="foreman-maintenance" aria-label="Clear Foreman history">
+            <h3>Clear Foreman history</h3>
+            <p>
+              Stop Foreman first. A full reset also requires delegated team runs to be stopped.
+              Source files, provider credentials, configuration and runtime audit history are
+              preserved.
+            </p>
+            <label>
+              History to clear
+              <select
+                value={resetScope}
+                onChange={(event) => {
+                  setResetScope(event.target.value as typeof resetScope);
+                  setResetConfirmation("");
+                  setResetResult(undefined);
+                }}
+              >
+                <option value="finished-goals">Completed and cancelled goals</option>
+                <option value="channel">Channel and member conversations</option>
+                <option value="all">All coordination state, including active goals</option>
+              </select>
+            </label>
+            <p>
+              {resetScope === "finished-goals"
+                ? "Remove finished goals and their delegation, decision and report history. Active goals remain."
+                : resetScope === "channel"
+                  ? "Permanently delete Foreman channel messages, member conversations and pending input. Goals must be cleared first."
+                  : "Permanently delete all goals, delegations, reports, decisions, notifications and Foreman conversations. This does not undo work already performed."}
+            </p>
+            <label>
+              Type RESET to confirm
+              <input
+                value={resetConfirmation}
+                onChange={(event) => setResetConfirmation(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <button
+              className="compact-button danger-button"
+              disabled={running || busy || resetConfirmation !== "RESET"}
+              onClick={() =>
+                void operate(async () => {
+                  const result = await client.resetForemanState({
+                    scope: resetScope,
+                    confirmation: "RESET",
+                  });
+                  if (resetScope !== "finished-goals") {
+                    cursor.current = 0;
+                    setMessages([]);
+                    setConversations([]);
+                  }
+                  setResetConfirmation("");
+                  setResetResult(
+                    `Removed ${result.goalsRemoved} goals, ${result.messagesRemoved} channel messages and ${result.conversationsRemoved} member conversations.`,
+                  );
+                })
+              }
+            >
+              <Trash2 size={15} aria-hidden="true" />
+              Clear selected history
+            </button>
+            {running && <p role="status">Stop Foreman to enable history cleanup.</p>}
+            {resetResult && <p role="status">{resetResult}</p>}
+          </section>
           {state !== undefined && (
             <ForemanSettings
               key={state.configRevision}

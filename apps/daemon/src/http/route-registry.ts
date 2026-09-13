@@ -144,6 +144,8 @@ export interface ControlRouteDeclaration {
   readonly transport?: "http" | "websocket";
 }
 
+import { ResetForemanStateCommandSchema, ResetForemanStateResultSchema } from "@nanasa/contracts";
+
 const KiB = 1_024;
 const EmptySchema = z.undefined();
 const EmptyObjectSchema = z.object({}).strict();
@@ -211,6 +213,16 @@ function route(input: RouteInput): ControlRouteDeclaration {
 }
 
 export const CONTROL_ROUTE_REGISTRY = Object.freeze([
+  route({
+    id: "foreman.resetState",
+    family: "foreman",
+    method: "POST",
+    path: "/api/v1/foreman/state/reset",
+    body: ResetForemanStateCommandSchema,
+    response: ResetForemanStateResultSchema,
+    idempotency: "forbidden",
+    summary: "Clear selected Foreman coordination history after stopping affected runtimes",
+  }),
   route({
     id: "foreman.conversations",
     family: "foreman",

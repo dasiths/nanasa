@@ -122,6 +122,14 @@
               "bounded"
             ]
           },
+          "approvalMode": {
+            "default": "human",
+            "type": "string",
+            "enum": [
+              "human",
+              "autonomous"
+            ]
+          },
           "maxActiveGoals": {
             "default": 1,
             "type": "integer",
@@ -364,6 +372,14 @@
                   "bounded"
                 ]
               },
+              "approvalMode": {
+                "default": "human",
+                "type": "string",
+                "enum": [
+                  "human",
+                  "autonomous"
+                ]
+              },
               "maxActiveGoals": {
                 "default": 1,
                 "type": "integer",
@@ -479,6 +495,7 @@
             },
             "required": [
               "mode",
+              "approvalMode",
               "maxActiveGoals",
               "maxTeamsPerGoal",
               "maxConcurrentActions",
@@ -1163,6 +1180,14 @@
                   "bounded"
                 ]
               },
+              "approvalMode": {
+                "default": "human",
+                "type": "string",
+                "enum": [
+                  "human",
+                  "autonomous"
+                ]
+              },
               "maxActiveGoals": {
                 "default": 1,
                 "type": "integer",
@@ -1278,6 +1303,7 @@
             },
             "required": [
               "mode",
+              "approvalMode",
               "maxActiveGoals",
               "maxTeamsPerGoal",
               "maxConcurrentActions",
@@ -1508,11 +1534,20 @@
               "type": "string",
               "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
             },
+            "candidatePath": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
             "nextCheckSeconds": {
               "default": 900,
               "type": "integer",
               "minimum": 30,
               "maximum": 86400
+            },
+            "candidateDigest": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
             },
             "id": {
               "type": "string",
@@ -1881,6 +1916,14 @@
                   "enum": [
                     "supervised",
                     "bounded"
+                  ]
+                },
+                "approvalMode": {
+                  "default": "human",
+                  "type": "string",
+                  "enum": [
+                    "human",
+                    "autonomous"
                   ]
                 },
                 "maxActiveGoals": {
@@ -2380,6 +2423,11 @@
         "candidateHead": {
           "type": "string",
           "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+        },
+        "candidatePath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
         },
         "nextCheckSeconds": {
           "default": 900,

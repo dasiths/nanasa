@@ -2,6 +2,7 @@
   "generatorVersion": 1,
   "packageVersion": "0.1.0-next.12.0",
   "routeErrors": {
+    "foreman.resetState": [],
     "foreman.conversations": [],
     "foreman.cancelConversation": [],
     "foreman.connectors": [],
@@ -355,6 +356,7 @@
     ]
   },
   "requestBodyLimits": {
+    "foreman.resetState": 65536,
     "foreman.conversations": 65536,
     "foreman.cancelConversation": 65536,
     "foreman.connectors": 65536,

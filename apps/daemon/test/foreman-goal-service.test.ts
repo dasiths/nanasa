@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -49,9 +49,16 @@ function fixture() {
   return { store, config, service, command, path, root };
 }
 
-function teamFixture(recovery = false, approve = true) {
+function teamFixture(
+  recovery = false,
+  approve = true,
+  implicitCheckout = false,
+  staleConversation = false,
+  autonomous = false,
+) {
   const context = fixture();
   const { store, config, service, root } = context;
+  if (autonomous) config.foreman!.autonomy.approvalMode = "autonomous";
   if (recovery) {
     config.foreman!.autonomy.mode = "bounded";
     config.foreman!.autonomy.recovery.restartDelegatedAgents = true;
@@ -142,10 +149,20 @@ function teamFixture(recovery = false, approve = true) {
     },
     true,
   );
-  store.assignGroupCheckout(group.id, "checkout-one", 0);
+  if (!implicitCheckout) store.assignGroupCheckout(group.id, "checkout-one", 0);
   const goal = service.propose(context.command);
-  service.control("human", { id: goal.id, expectedRevision: 0, action: "approve" });
+  if (!autonomous)
+    service.control("human", { id: goal.id, expectedRevision: 0, action: "approve" });
   const team = service.discover()[0]!;
+  const actionListing = staleConversation
+    ? vi
+        .spyOn(store, "listAgentActions")
+        .mockReturnValue([
+          { state: "stalled", principal: { kind: "foreman-conversation" } } as ReturnType<
+            typeof store.listAgentActions
+          >[number],
+        ])
+    : undefined;
   const delegation = service.delegate(foreman, {
     requestId: "handoff",
     goalId: goal.id,
@@ -158,13 +175,14 @@ function teamFixture(recovery = false, approve = true) {
     brief: "Own the complete SDK conformance outcome",
   });
   const decision = service.workspace(goal.id).decisions[0]!;
-  if (approve)
+  if (approve && !autonomous)
     service.resolve("human", {
       id: decision.id,
       expectedRevision: 0,
       requestId: "approve-team",
       answer: "approve",
     });
+  actionListing?.mockRestore();
   const start = (memberId: string, groupId = group.id, checkoutId = "checkout-one"): AgentRun => {
     const run = store.createRun({
       id: `run_${memberId}`,
@@ -337,6 +355,248 @@ function multiTeamFixture(separateGoals = false) {
 }
 
 describe("Foreman outcome delegation", () => {
+  it("defaults to human approvals and snapshots an explicit autonomous approval grant", () => {
+    const { service, config, command, store } = fixture();
+    expect(config.foreman!.autonomy.approvalMode).toBe("human");
+    const humanGoal = service.propose(command);
+    expect(humanGoal.state).toBe("proposed");
+    config.foreman!.autonomy.maxActiveGoals = 2;
+    config.foreman!.autonomy.approvalMode = "autonomous";
+    const automatic = service.propose({ ...command, requestId: "automatic-goal" });
+    expect(automatic).toMatchObject({
+      state: "running",
+      revision: 1,
+      grant: { approvalMode: "autonomous" },
+    });
+    expect(service.propose({ ...command, requestId: "automatic-goal" })).toEqual(automatic);
+    expect(service.get(humanGoal.id).grant.approvalMode).toBe("human");
+    expect(
+      store.database
+        .prepare("SELECT action FROM audits WHERE action = 'foreman.auto-approve-goal'")
+        .all(),
+    ).toHaveLength(1);
+    config.foreman!.autonomy.approvalMode = "human";
+    expect(() =>
+      service.control("human", { id: automatic.id, expectedRevision: 1, action: "pause" }),
+    ).not.toThrow();
+    expect(() =>
+      service.control("human", { id: automatic.id, expectedRevision: 2, action: "resume" }),
+    ).toThrow("exceeds repository policy");
+  });
+
+  it("clears only finished goals and requires stopped runtimes for a full reset", async () => {
+    const context = teamFixture();
+    const { service, store, foreman } = context;
+    await service.tick(context.actions, {
+      startRun: async () => {
+        throw new Error("Unexpected run start");
+      },
+    });
+    service.report(context.lead, {
+      requestId: "reset-report",
+      delegationId: context.delegation.id,
+      kind: "accepted",
+      summary: "Accepted ownership",
+      evidence: [],
+      nextCheckSeconds: 900,
+    });
+    const handoff = store.getAgentAction(service.delegation(context.delegation.id).actionId!);
+    store.transitionAgentAction(handoff.id, [handoff.state], "stalled", {
+      result: { effectsUnknown: true },
+    });
+    expect(() => service.resetState("human", { scope: "all", confirmation: "RESET" })).toThrow(
+      "Stop Foreman",
+    );
+    store.updateRuntimeRunStatus(foreman.runId, "failed");
+    expect(() => service.resetState("human", { scope: "all", confirmation: "no" })).toThrow();
+    expect(
+      service.resetState("human", { scope: "finished-goals", confirmation: "RESET" }).goalsRemoved,
+    ).toBe(0);
+    expect(() => service.resetState("human", { scope: "channel", confirmation: "RESET" })).toThrow(
+      "Goals still reference",
+    );
+    expect(() => service.resetState("human", { scope: "all", confirmation: "RESET" })).toThrow(
+      "Stop delegated team runs",
+    );
+    const runs = store.getSnapshot().runs;
+    for (const run of runs)
+      if (["starting", "running", "stopping"].includes(run.status))
+        store.updateRuntimeRunStatus(run.id, "failed");
+    const message = store.sendForemanMessage(
+      { kind: "operator", operatorId: "human" },
+      { requestId: "reset-message", text: "Old channel context" },
+    );
+    const result = service.resetState("human", { scope: "all", confirmation: "RESET" });
+    expect(result).toMatchObject({ goalsRemoved: 1, messagesRemoved: 1 });
+    expect(service.list()).toEqual([]);
+    expect(store.getAgentAction(handoff.id)).toMatchObject({
+      state: "superseded",
+      result: { effectsUnknown: true },
+      error: { code: "foreman_state_reset" },
+    });
+    expect(store.readForemanChannel({ after: 0, limit: 100 }).messages).toEqual([]);
+    expect(store.listForemanInbox()).toEqual([]);
+    expect(store.getSnapshot().groups.length).toBeGreaterThan(0);
+    expect(store.getForeman(foreman.foremanId)).toBeDefined();
+    expect(
+      store.database.prepare("SELECT id FROM audits WHERE action = 'foreman.reset-state'").all(),
+    ).toHaveLength(2);
+    expect(
+      service.resetState("human", { scope: "channel", confirmation: "RESET" }).messagesRemoved,
+    ).toBe(0);
+    expect(
+      store.database
+        .prepare("SELECT id FROM foreman_coordination_records WHERE kind = 'report'")
+        .all(),
+    ).toHaveLength(0);
+    const nextGoal = service.propose({ ...context.command, requestId: "after-reset" });
+    expect(service.workspace(nextGoal.id).reports).toEqual([]);
+    expect(message.id).toBeDefined();
+  });
+
+  it("removes finished goal history without deleting an active goal or its channel", () => {
+    const { service, command, store } = fixture();
+    const finished = service.propose(command);
+    service.control("human", { id: finished.id, expectedRevision: 0, action: "cancel" });
+    const active = service.propose({ ...command, requestId: "remaining-goal" });
+    const message = store.sendForemanMessage(
+      { kind: "operator", operatorId: "human" },
+      { requestId: "keep-message", text: "Keep this context" },
+    );
+    expect(
+      service.resetState("human", { scope: "finished-goals", confirmation: "RESET" }),
+    ).toMatchObject({ goalsRemoved: 1, messagesRemoved: 0 });
+    expect(service.list().map((goal) => goal.id)).toEqual([active.id]);
+    expect(store.readForemanChannel({ after: 0, limit: 100 }).messages[0]?.id).toBe(message.id);
+  });
+
+  it("never lets autonomous acceptance bypass a human pause or missing evidence", () => {
+    const { service, goal, foreman } = teamFixture(false, true, false, false, true);
+    expect(() =>
+      service.acceptAutonomously(foreman, goal.id, service.get(goal.id).revision),
+    ).toThrow("not valid in this state");
+    const paused = service.control("human", {
+      id: goal.id,
+      expectedRevision: service.get(goal.id).revision,
+      action: "pause",
+    });
+    expect(() => service.acceptAutonomously(foreman, goal.id, paused.revision)).toThrow(
+      "not valid in this state",
+    );
+    expect(service.get(goal.id).state).toBe("paused");
+  });
+
+  it.each([false, true])(
+    "pins no-commit review and acceptance with autonomous=%s",
+    async (autonomous) => {
+      const { service, store, actions, goal, delegation, lead, reviewer, root, foreman, config } =
+        teamFixture(false, true, false, false, autonomous);
+      const decision = service.workspace(goal.id).decisions[0]!;
+      expect(decision.state).toBe("resolved");
+      expect(decision.decidedBy).toBe(autonomous ? `foreman-policy:${foreman.foremanId}` : "human");
+      await service.tick(actions, {
+        startRun: async () => {
+          throw new Error("Unexpected run start");
+        },
+      });
+      mkdirSync(join(root, "src"));
+      writeFileSync(join(root, "src", "game.js"), "export const game = 1;\n");
+      const report = {
+        requestId: "review-working-tree",
+        delegationId: delegation.id,
+        kind: "review" as const,
+        summary: "Reviewed game content",
+        evidence: ["src/game.js"],
+        candidatePath: "src",
+        nextCheckSeconds: 900,
+      };
+      expect(() => service.report(reviewer, { ...report, candidatePath: "../outside" })).toThrow(
+        "repository-relative",
+      );
+      symlinkSync(join(root, "src", "game.js"), join(root, "src", "linked.js"));
+      expect(() => service.report(reviewer, report)).toThrow("symlinks");
+      rmSync(join(root, "src", "linked.js"));
+      const review = service.report(reviewer, report);
+      expect(review.candidateDigest).toMatch(/^[a-f0-9]{64}$/);
+      writeFileSync(join(root, "src", "game.js"), "export const game = 2;\n");
+      expect(() => service.report(lead, { ...report, requestId: "ready", kind: "ready" })).toThrow(
+        "Independent review",
+      );
+      service.report(reviewer, { ...report, requestId: "review-new-content" });
+      for (const action of store.listAgentActions())
+        if (!["completed", "cancelled"].includes(action.state))
+          store.transitionAgentAction(action.id, [action.state], "completed");
+      service.report(lead, { ...report, requestId: "ready", kind: "ready" });
+      writeFileSync(join(root, "src", "game.js"), "export const game = 3;\n");
+      expect(() =>
+        service.control("human", {
+          id: goal.id,
+          expectedRevision: service.get(goal.id).revision,
+          action: "accept",
+        }),
+      ).toThrow("Completion evidence");
+      writeFileSync(join(root, "src", "game.js"), "export const game = 2;\n");
+      if (autonomous) {
+        expect(() => service.acceptAutonomously(foreman, goal.id, 0)).toThrow(
+          "Goal revision changed",
+        );
+        config.foreman!.autonomy.approvalMode = "human";
+        expect(() =>
+          service.acceptAutonomously(foreman, goal.id, service.get(goal.id).revision),
+        ).toThrow("must be authorized");
+        config.foreman!.autonomy.approvalMode = "autonomous";
+        expect(
+          service.acceptAutonomously(foreman, goal.id, service.get(goal.id).revision).state,
+        ).toBe("completed");
+      } else {
+        expect(() =>
+          service.acceptAutonomously(foreman, goal.id, service.get(goal.id).revision),
+        ).toThrow("must be authorized");
+        expect(
+          service.control("human", {
+            id: goal.id,
+            expectedRevision: service.get(goal.id).revision,
+            action: "accept",
+          }).state,
+        ).toBe("completed");
+      }
+    },
+  );
+
+  it("does not reserve a team for historical ad hoc conversation actions", () => {
+    const context = teamFixture(false, true, true, true);
+    expect(context.service.delegations()).toHaveLength(1);
+    expect(context.service.delegations()[0]?.state).toBe("queued");
+  });
+
+  it("delegates the effective primary checkout without requiring a redundant assignment", () => {
+    const context = teamFixture(false, false, true);
+    expect(context.store.getGroup(context.group.id).checkoutId).toBeUndefined();
+    expect(context.delegation).toMatchObject({
+      checkoutId: "checkout-one",
+      expectedCheckoutRevision: 0,
+      state: "proposed",
+    });
+    expect(() => context.service.assertAssignment(context.delegation)).not.toThrow();
+    const other = context.store.createGroup({ name: "Other primary-checkout team" });
+    context.store.addMembership(other.id, {
+      memberId: "other-owner",
+      agentProfileId: context.profile.id,
+      alias: "Other owner",
+    });
+    expect(context.service.discover().find((team) => team.id === other.id)).toMatchObject({
+      startupRequiredMemberIds: ["other-owner"],
+      effectiveCheckout: {
+        id: "checkout-one",
+        sharedWithActiveTeams: [{ id: context.group.id, name: "SDK team" }],
+      },
+    });
+    context.store.createRunForMembership(other.id, "other-owner");
+    expect(() => context.service.assertAssignment(context.delegation)).toThrow(
+      "Another active team shares this checkout",
+    );
+  });
+
   it("converses without goals, requires a tool reply, and persists context across restart", async () => {
     const context = teamFixture();
     const { store, service, foreman, lead, reviewer, config, path } = context;

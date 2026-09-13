@@ -37,6 +37,23 @@ export const ForemanWorkspaceSchema = z
   .strict();
 export type ForemanWorkspace = z.infer<typeof ForemanWorkspaceSchema>;
 
+export const ResetForemanStateCommandSchema = z
+  .object({
+    scope: z.enum(["channel", "finished-goals", "all"]),
+    confirmation: z.literal("RESET"),
+  })
+  .strict();
+export type ResetForemanStateCommand = z.infer<typeof ResetForemanStateCommandSchema>;
+export const ResetForemanStateResultSchema = z
+  .object({
+    scope: z.enum(["channel", "finished-goals", "all"]),
+    goalsRemoved: z.number().int().nonnegative(),
+    messagesRemoved: z.number().int().nonnegative(),
+    conversationsRemoved: z.number().int().nonnegative(),
+  })
+  .strict();
+export type ResetForemanStateResult = z.infer<typeof ResetForemanStateResultSchema>;
+
 export const ConfigureForemanCommandSchema = z
   .object({
     configuration: ForemanConfigSchema,

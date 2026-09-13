@@ -74,6 +74,7 @@ function client(): PortalClient {
     controlForemanGoal: vi.fn(),
     resolveHumanDecision: vi.fn(),
     resolveForemanInput: vi.fn(),
+    resetForemanState: vi.fn(),
     configureForeman: vi.fn(),
     startForeman: vi.fn(),
     stopForeman: vi.fn(),

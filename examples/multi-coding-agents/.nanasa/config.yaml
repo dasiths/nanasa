@@ -106,8 +106,8 @@ extensions: {}
 foreman:
   id: repository-foreman
   name: Foreman
-  integrationId: copilot
   enabled: true
+  integrationId: copilot
   instructions:
     - .nanasa/instructions/foreman.md
   supervision:
@@ -115,13 +115,27 @@ foreman:
     reviewIntervalSeconds: 300
     maxRecoveryAttempts: 3
     recoveryCooldownSeconds: 120
+    staleProgressSeconds: 900
   autonomy:
     mode: supervised
+    approvalMode: autonomous
     maxActiveGoals: 2
     maxTeamsPerGoal: 2
     maxConcurrentActions: 4
     maxGoalHours: 8
     maxForemanTurns: 100
+    transcript:
+      access: delegated-team
+      maxLines: 200
+      maxBytes: 65536
+    intervention:
+      idlePrompt: false
+      maxPerIncident: 2
+    recovery:
+      restartDelegatedAgents: false
+      maxAttemptsPerIncident: 2
+      maxAttemptsPerGoal: 6
+      cooldownSeconds: 120
 roles:
   project-manager:
     name: Project Manager
@@ -161,8 +175,8 @@ groups:
         memberId: nice-dijkstra
         name: Project Manager
         integrationId: copilot
-        desiredModel: gpt-5.6-terra
         roleId: project-manager
+        desiredModel: gpt-5.6-terra
         instructions: []
         attention:
           response-required: true
@@ -177,6 +191,7 @@ groups:
         integrationId: pi-backend
         roleId: implementor
         instructions: []
+        attention: {}
         order: 1
       agent_e0f1b592-5fb2-4fe2-93e4-ac9da40dedf1:
         memberId: musing-kilby
@@ -184,6 +199,7 @@ groups:
         integrationId: pi-backend
         roleId: implementor
         instructions: []
+        attention: {}
         order: 2
       agent_9e2cdefb-cc96-4b4e-865f-b4ac17f6c4f9:
         memberId: vibrant-mirzakhani
@@ -191,6 +207,7 @@ groups:
         integrationId: opencode
         roleId: reviewer
         instructions: []
+        attention: {}
         order: 3
   team-frontend:
     name: Frontend Team
@@ -217,6 +234,7 @@ groups:
         integrationId: opencode
         roleId: reviewer
         instructions: []
+        attention: {}
         order: 1
 messages:
   retentionPerGroup: 1000

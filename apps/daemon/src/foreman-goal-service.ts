@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
   type AgentAction,
   type AgentActionPrincipal,
@@ -27,6 +29,7 @@ import {
   RequestHumanDecisionCommandSchema,
   type ResolveHumanDecisionCommand,
   ResolveHumanDecisionCommandSchema,
+  ResetForemanStateCommandSchema,
   type TeamDelegation,
 } from "@nanasa/contracts";
 import type { AgentActionService } from "./actions/agent-action-service.js";
@@ -50,6 +53,7 @@ function assertGoalGrantWithin(grant: ForemanGoal["grant"], ceiling: ForemanGoal
   ] as const;
   if (
     numeric.some((key) => grant[key] > ceiling[key]) ||
+    (grant.approvalMode === "autonomous" && ceiling.approvalMode !== "autonomous") ||
     (grant.mode === "bounded" && ceiling.mode !== "bounded") ||
     grant.transcript.maxLines > ceiling.transcript.maxLines ||
     grant.transcript.maxBytes > ceiling.transcript.maxBytes ||
@@ -93,8 +97,226 @@ export class ForemanGoalService {
   #timestamp() {
     return this.now().toISOString();
   }
+  #automatic(goal: ForemanGoal): boolean {
+    return (
+      goal.grant.approvalMode === "autonomous" &&
+      this.config().foreman?.autonomy.approvalMode === "autonomous"
+    );
+  }
+  #recordAutomaticApproval(goal: ForemanGoal, action: string, resourceId: string) {
+    this.store.database
+      .prepare(
+        "INSERT INTO audits (id, principal_id, action, resource_type, resource_id, metadata_json, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        `audit_${randomUUID()}`,
+        `foreman-policy:${goal.foremanId}`,
+        `foreman.auto-${action}`,
+        "foreman",
+        resourceId,
+        JSON.stringify({
+          goalId: goal.id,
+          goalRevision: goal.revision,
+          approvalMode: "autonomous",
+        }),
+        this.#timestamp(),
+      );
+  }
+  resetState(operatorId: string, command: unknown) {
+    const input = ResetForemanStateCommandSchema.parse(command);
+    return this.store.atomic(() => {
+      if (
+        this.store.database
+          .prepare(
+            "SELECT id FROM runs WHERE foreman_id IS NOT NULL AND status IN ('starting', 'running', 'stopping')",
+          )
+          .get()
+      )
+        this.#fail("Stop Foreman before clearing coordination state");
+      const goals = this.list();
+      if (input.scope === "channel" && goals.length > 0)
+        this.#fail(
+          "Goals still reference channel history; clear finished goals or reset all coordination state first",
+        );
+      if (
+        input.scope === "all" &&
+        this.delegations().some((delegation) =>
+          this.store.database
+            .prepare(
+              "SELECT id FROM runs WHERE group_id = ? AND status IN ('starting', 'running', 'stopping')",
+            )
+            .get(delegation.groupId),
+        )
+      )
+        this.#fail("Stop delegated team runs before resetting their coordination state");
+      const removed =
+        input.scope === "channel"
+          ? []
+          : goals.filter((goal) => input.scope === "all" || inactive.has(goal.state));
+      const removedGoalIds = new Set(removed.map((goal) => goal.id));
+      const removedDelegationIds = new Set(
+        this.delegations()
+          .filter((delegation) => removedGoalIds.has(delegation.goalId))
+          .map((delegation) => delegation.id),
+      );
+      const linkedActionIds = new Set(
+        this.store.database
+          .prepare("SELECT action_id, delegation_id FROM delegation_actions")
+          .all()
+          .filter((row) => removedDelegationIds.has(String(row.delegation_id)))
+          .map((row) => String(row.action_id)),
+      );
+      const retiredActions = this.store
+        .listAgentActions()
+        .filter(
+          (action) =>
+            !settled.has(action.state) &&
+            (linkedActionIds.has(action.id) ||
+              (action.principal.kind === "foreman" &&
+                (input.scope === "all" || removedGoalIds.has(action.principal.goalId))) ||
+              (action.principal.kind === "foreman-conversation" &&
+                input.scope !== "finished-goals")),
+        );
+      if (
+        retiredActions.some((action) =>
+          this.store.database
+            .prepare(
+              "SELECT id FROM runs WHERE id = ? AND status IN ('starting', 'running', 'stopping')",
+            )
+            .get(action.target.runId),
+        )
+      )
+        this.#fail("Stop addressed team runs before clearing their coordination actions");
+      for (const action of retiredActions)
+        this.store.transitionAgentAction(action.id, [action.state], "superseded", {
+          ...(action.result === undefined ? {} : { result: action.result }),
+          error: {
+            code: "foreman_state_reset",
+            retryable: false,
+            message:
+              "Operator cleared coordination state after the addressed runtime stopped. Prior effects are not undone or certified complete.",
+          },
+        });
+      for (const goal of removed) {
+        const delegationIds = this.delegations()
+          .filter((delegation) => delegation.goalId === goal.id)
+          .map((delegation) => delegation.id);
+        for (const id of delegationIds) {
+          this.store.database
+            .prepare("DELETE FROM delegation_actions WHERE delegation_id = ?")
+            .run(id);
+          this.store.database
+            .prepare("DELETE FROM delegation_recovery WHERE delegation_id = ?")
+            .run(id);
+          this.store.database
+            .prepare(
+              "DELETE FROM foreman_coordination_records WHERE kind = 'report' AND json_extract(data_json, '$.delegationId') = ?",
+            )
+            .run(id);
+        }
+        this.store.database
+          .prepare("DELETE FROM foreman_inbox WHERE dedupe_key LIKE ?")
+          .run(`goal-review:${goal.id}:%`);
+        this.store.database
+          .prepare(
+            "DELETE FROM foreman_notifications WHERE json_extract(data_json, '$.goalId') = ?",
+          )
+          .run(goal.id);
+        this.store.database
+          .prepare("DELETE FROM foreman_coordination_records WHERE goal_id = ? OR id = ?")
+          .run(goal.id, goal.id);
+      }
+      let messagesRemoved = 0;
+      let conversationsRemoved = 0;
+      if (input.scope !== "finished-goals") {
+        this.store.database.prepare("DELETE FROM foreman_inbox").run();
+        messagesRemoved = Number(
+          this.store.database.prepare("DELETE FROM foreman_messages").run().changes,
+        );
+        conversationsRemoved = Number(
+          this.store.database.prepare("DELETE FROM foreman_conversations").run().changes,
+        );
+      }
+      if (input.scope === "all") {
+        this.store.database.prepare("DELETE FROM foreman_coordination_records").run();
+        this.store.database.prepare("DELETE FROM foreman_notifications").run();
+        this.store.database.prepare("DELETE FROM foreman_notification_cursors").run();
+        this.store.database.prepare("DELETE FROM foreman_recovery").run();
+      }
+      const result = {
+        scope: input.scope,
+        goalsRemoved: removed.length,
+        messagesRemoved,
+        conversationsRemoved,
+      };
+      this.store.database
+        .prepare(
+          "INSERT INTO audits (id, principal_id, action, resource_type, resource_id, metadata_json, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          `audit_${randomUUID()}`,
+          operatorId,
+          "foreman.reset-state",
+          "foreman",
+          this.config().foreman?.id ?? "repository",
+          JSON.stringify(result),
+          this.#timestamp(),
+        );
+      return result;
+    });
+  }
   #digest(input: unknown) {
     return createHash("sha256").update(canonicalJson(input)).digest("hex");
+  }
+  #candidateDigest(checkoutId: string, candidatePath: string): string {
+    const root = realpathSync(this.store.getCheckout(checkoutId).path);
+    if (
+      isAbsolute(candidatePath) ||
+      candidatePath.includes("\\") ||
+      candidatePath
+        .split("/")
+        .some(
+          (part) =>
+            !part || part === "." || part === ".." || part === ".git" || part === "node_modules",
+        )
+    )
+      this.#fail("Candidate path must name a bounded repository-relative file or directory");
+    const target = resolve(root, candidatePath);
+    if (!target.startsWith(`${root}${sep}`) || realpathSync(target) !== target)
+      this.#fail("Candidate path must remain inside the checkout without symlinks");
+    const hash = createHash("sha256");
+    let bytes = 0;
+    let files = 0;
+    let entries = 0;
+    const visit = (path: string) => {
+      if (++entries > 1024 || relative(target, path).split(sep).length > 32)
+        this.#fail("Candidate snapshot exceeds directory limits");
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) this.#fail("Candidate snapshots must not contain symlinks");
+      if (stat.isDirectory()) {
+        const children = readdirSync(path).sort();
+        if (children.length > 512) this.#fail("Candidate snapshot has too many entries");
+        for (const child of children) {
+          if (child === ".git" || child === "node_modules")
+            this.#fail("Candidate snapshot must exclude repository metadata and dependencies");
+          visit(resolve(path, child));
+        }
+      } else {
+        if (!stat.isFile() || ++files > 512 || (bytes += stat.size) > 16 * 1024 * 1024)
+          this.#fail("Candidate snapshot exceeds file or byte limits");
+        const content = readFileSync(path);
+        hash.update(
+          canonicalJson({
+            path: relative(root, path),
+            executable: Boolean(stat.mode & 0o111),
+            digest: createHash("sha256").update(content).digest("hex"),
+          }),
+        );
+      }
+    };
+    visit(target);
+    if (files === 0) this.#fail("Candidate snapshot must include files");
+    return hash.digest("hex");
   }
   #fail(message: string): never {
     throw new DomainError("foreman_goal_conflict", message, 409);
@@ -301,9 +523,36 @@ export class ForemanGoalService {
       this.notify(`goal:${goal.id}`, {
         kind: "goal",
         goalId: goal.id,
-        summary: `Goal requires human approval: ${goal.title}`,
+        summary: `${this.#automatic(goal) ? "Goal authorized by autonomous coordination policy" : "Goal requires human approval"}: ${goal.title}`,
       });
+      if (this.#automatic(goal)) {
+        const approved = this.control(`foreman-policy:${goal.foremanId}`, {
+          id: goal.id,
+          expectedRevision: goal.revision,
+          action: "approve",
+        });
+        this.#recordAutomaticApproval(approved, "approve-goal", goal.id);
+        return approved;
+      }
       return goal;
+    });
+  }
+  acceptAutonomously(principal: McpForemanPrincipal, goalId: string, expectedRevision: number) {
+    this.assertForeman(principal);
+    return this.store.atomic(() => {
+      const goal = this.get(goalId);
+      if (goal.foremanId !== principal.foremanId || !this.#automatic(goal))
+        this.#fail(
+          "Autonomous coordination must be authorized by both the goal grant and current policy",
+        );
+      this.#running({ ...goal, state: "running" });
+      const result = this.control(`foreman-policy:${principal.foremanId}`, {
+        id: goal.id,
+        expectedRevision,
+        action: "accept",
+      });
+      this.#recordAutomaticApproval(result, "accept-goal", goal.id);
+      return result;
     });
   }
   control(operatorId: string, command: unknown) {
@@ -339,8 +588,12 @@ export class ForemanGoalService {
               (report) => report.delegationId === delegation.id && report.kind === "ready",
             )
             .at(-1);
-          if (checkout.dirty || !checkout.head || checkout.head !== ready?.candidateHead)
-            this.#fail("Completion evidence no longer matches the clean checkout");
+          if (
+            ready?.candidatePath !== undefined
+              ? this.#candidateDigest(checkout.id, ready.candidatePath) !== ready.candidateDigest
+              : checkout.dirty || !checkout.head || checkout.head !== ready?.candidateHead
+          )
+            this.#fail("Completion evidence no longer matches the reviewed candidate");
           if (
             this.discover()
               .find((team) => team.id === delegation.groupId)
@@ -386,6 +639,32 @@ export class ForemanGoalService {
     const config = this.config();
     return snapshot.groups.map((group) => ({
       ...group,
+      startupRequiredMemberIds: this.store
+        .listActiveMemberships(group.id)
+        .filter((member) => this.store.getActiveRun(group.id, member.memberId) === undefined)
+        .map((member) => member.memberId),
+      effectiveCheckout: (() => {
+        const checkout = this.store.getEffectiveGroupCheckout(group.id);
+        return checkout === undefined
+          ? undefined
+          : {
+              id: checkout.id,
+              kind: checkout.kind,
+              sharedWithActiveTeams: snapshot.groups
+                .filter(
+                  (other) =>
+                    other.id !== group.id &&
+                    this.store.getEffectiveGroupCheckout(other.id)?.id === checkout.id &&
+                    this.store
+                      .listActiveMemberships(other.id)
+                      .some(
+                        (member) =>
+                          this.store.getActiveRun(other.id, member.memberId) !== undefined,
+                      ),
+                )
+                .map((other) => ({ id: other.id, name: other.name })),
+            };
+      })(),
       reservation: this.delegations().find(
         (item) => item.groupId === group.id && !inactive.has(item.state),
       ),
@@ -416,16 +695,17 @@ export class ForemanGoalService {
       !group ||
       group.membershipRevision !== delegation.expectedMembershipRevision ||
       group.checkoutRevision !== delegation.expectedCheckoutRevision ||
-      group.checkoutId !== delegation.checkoutId ||
+      this.store.getEffectiveGroupCheckout(group.id)?.id !== delegation.checkoutId ||
       !members.some((member) => member.memberId === delegation.memberId)
     )
       this.#fail("Team membership or checkout changed; a new delegation is required");
     if (
       this.store
-        .listGroupsBoundToCheckout(delegation.checkoutId)
-        .some(
+        .getSnapshot()
+        .groups.some(
           (other) =>
             other.id !== delegation.groupId &&
+            this.store.getEffectiveGroupCheckout(other.id)?.id === delegation.checkoutId &&
             this.store
               .listActiveMemberships(other.id)
               .some((member) => this.store.getActiveRun(other.id, member.memberId) !== undefined),
@@ -466,10 +746,12 @@ export class ForemanGoalService {
       )
         this.#fail("Team is already reserved");
       const group = this.store.getSnapshot().groups.find((item) => item.id === input.groupId);
-      if (group?.checkoutId === undefined) this.#fail("Assign a team checkout before delegation");
+      if (group === undefined) this.#fail("Team is no longer available");
+      const checkout = this.store.getEffectiveGroupCheckout(group.id);
+      if (checkout === undefined) this.#fail("Assign a team checkout before delegation");
       if (
         this.delegations().some(
-          (item) => item.checkoutId === group.checkoutId && !inactive.has(item.state),
+          (item) => item.checkoutId === checkout.id && !inactive.has(item.state),
         )
       )
         this.#fail("Checkout is already reserved by another delegation");
@@ -479,13 +761,20 @@ export class ForemanGoalService {
         id: `delegation_${randomUUID()}`,
         state: "proposed",
         revision: 0,
-        checkoutId: group.checkoutId,
+        checkoutId: checkout.id,
         nextCheckAt: timestamp,
         createdAt: timestamp,
         updatedAt: timestamp,
       };
       this.assertAssignment(delegation);
-      if (this.store.listAgentActions(input.groupId).some((action) => !settled.has(action.state)))
+      if (
+        this.store
+          .listAgentActions(input.groupId)
+          .some(
+            (action) =>
+              action.principal.kind !== "foreman-conversation" && !settled.has(action.state),
+          )
+      )
         this.#fail("Team has unsettled work");
       if (
         this.discover()
@@ -505,7 +794,7 @@ export class ForemanGoalService {
           requestId: delegation.id,
           goalId: goal.id,
           delegationId: delegation.id,
-          question: `Authorize ${group.name} / ${input.memberId} to own this outcome, its team peer work, and checkout ${group.checkoutId}? ${input.rationale}`,
+          question: `Authorize ${group.name} / ${input.memberId} to own this outcome, its team peer work, and checkout ${checkout.id}? ${input.rationale}`,
           options: ["approve", "deny"],
           blocking: true,
         },
@@ -518,6 +807,16 @@ export class ForemanGoalService {
         decisionId: decision.id,
         summary: decision.question.slice(0, 2000),
       });
+      if (this.#automatic(goal)) {
+        this.resolve(`foreman-policy:${goal.foremanId}`, {
+          id: decision.id,
+          expectedRevision: decision.revision,
+          requestId: `auto:${decision.id}`,
+          answer: "approve",
+        });
+        this.#recordAutomaticApproval(goal, "approve-delegation", delegation.id);
+        return this.delegation(delegation.id);
+      }
       return delegation;
     });
   }
@@ -569,6 +868,12 @@ export class ForemanGoalService {
       if (["proposed", "queued", "cancelled", "completed"].includes(delegation.state))
         this.#fail("Delegation is not active");
       const lead = principal.memberId === delegation.memberId;
+      if (input.candidatePath && input.candidateHead)
+        this.#fail("Choose a working-tree candidate path or a clean candidate commit, not both");
+      const candidateDigest =
+        (input.kind === "ready" || input.kind === "review") && input.candidatePath
+          ? this.#candidateDigest(delegation.checkoutId, input.candidatePath)
+          : undefined;
       if (!lead && ["accepted", "plan", "ready"].includes(input.kind))
         this.#fail("Only the accountable member can accept, plan, or finish a delegation");
       if (input.kind === "ready") {
@@ -589,7 +894,10 @@ export class ForemanGoalService {
               report.delegationId === delegation.id &&
               report.kind === "review" &&
               report.memberId !== delegation.memberId &&
-              report.candidateHead === input.candidateHead &&
+              (candidateDigest === undefined
+                ? report.candidateHead === input.candidateHead && report.candidatePath === undefined
+                : report.candidatePath === input.candidatePath &&
+                  report.candidateDigest === candidateDigest) &&
               report.evidence.length,
           )
         )
@@ -598,9 +906,8 @@ export class ForemanGoalService {
       if (input.kind === "ready" || input.kind === "review") {
         const checkout = this.store.getCheckout(delegation.checkoutId);
         if (
-          !input.candidateHead ||
-          checkout.head !== input.candidateHead ||
-          checkout.dirty ||
+          (candidateDigest === undefined &&
+            (!input.candidateHead || checkout.head !== input.candidateHead || checkout.dirty)) ||
           !input.evidence.length
         )
           this.#fail("Evidence must reference the current clean candidate commit");
@@ -610,6 +917,7 @@ export class ForemanGoalService {
       const timestamp = this.#timestamp();
       const report: DelegationReport = {
         ...input,
+        ...(candidateDigest === undefined ? {} : { candidateDigest }),
         id: `report_${randomUUID()}`,
         memberId: principal.memberId,
         runId: principal.runId,
@@ -725,7 +1033,10 @@ export class ForemanGoalService {
           if (
             this.store
               .listAgentActions(delegation.groupId)
-              .some((action) => !settled.has(action.state)) ||
+              .some(
+                (action) =>
+                  action.principal.kind !== "foreman-conversation" && !settled.has(action.state),
+              ) ||
             team?.members.some(
               (member) =>
                 member.runId !== undefined &&

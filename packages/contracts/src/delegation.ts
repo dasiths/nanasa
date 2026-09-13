@@ -95,11 +95,16 @@ export const ReportDelegationCommandSchema = z
       .string()
       .regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/)
       .optional(),
+    candidatePath: z.string().trim().min(1).max(1024).optional(),
     nextCheckSeconds: z.number().int().min(30).max(86400).default(900),
   })
   .strict();
 export type ReportDelegationCommand = z.infer<typeof ReportDelegationCommandSchema>;
 export const DelegationReportSchema = ReportDelegationCommandSchema.extend({
+  candidateDigest: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
   id: IdentifierSchema,
   memberId: IdentifierSchema,
   runId: IdentifierSchema,

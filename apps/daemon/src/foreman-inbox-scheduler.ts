@@ -66,6 +66,7 @@ export class ForemanInboxScheduler {
       current.desiredState === "running" &&
       !this.hasController(run.id) &&
       state.state === "idle" &&
+      now - Date.parse(state.stateChangedAt) >= 2000 &&
       state.interactiveReady &&
       !state.staleAuthority &&
       state.processState === "present" &&

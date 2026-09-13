@@ -323,6 +323,111 @@ describe("version-pinned status reporter traces", () => {
     }
   });
 
+  it("correlates OpenCode native prompts and settles only the exact marked action", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "nanasa-opencode-actions-"));
+    temporaryDirectories.push(directory);
+    const modulePath = join(directory, "plugin.mjs");
+    writeFileSync(modulePath, OPENCODE_STATUS_REPORTER_SOURCE);
+    const events: AgentStatusEventInput[] = [];
+    const acknowledgements: Array<{
+      kind: string;
+      sourceSequence: number;
+      providerTurnId: string;
+      completionRevision: number;
+    }> = [];
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(chunk));
+      request.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString());
+        response.writeHead(202, { "content-type": "application/json" });
+        if (request.url?.includes("/action-acks/")) {
+          acknowledgements.push(body);
+          response.end(JSON.stringify({ state: body.kind }));
+        } else {
+          events.push(AgentStatusEventInputSchema.parse(body));
+          response.end(
+            JSON.stringify({
+              accepted: true,
+              status: {
+                state: "idle",
+                phase: "settled",
+                completionRevision: body.event === "turn.settled" ? 1 : 0,
+              },
+            }),
+          );
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as { port: number };
+    const previousUrl = process.env.NANASA_STATUS_URL;
+    const previousToken = process.env.NANASA_MCP_TOKEN;
+    process.env.NANASA_STATUS_URL = `http://127.0.0.1:${address.port}/events`;
+    process.env.NANASA_MCP_TOKEN = "fixture-token";
+    setReporterEnvironment("opencode");
+    let disposeTui = () => {};
+    try {
+      const plugin = await (await import(pathToFileURL(modulePath).href)).default();
+      disposeTui = await selectOpenCodeRoot(directory, "action-root");
+      const prompt = async (text: string, id = "native-turn") =>
+        plugin["chat.message"](
+          { sessionID: "action-root" },
+          { message: { id }, parts: [{ type: "text", text }] },
+        );
+      const turn = async (type: string) =>
+        plugin.event({
+          event: {
+            type: "session.status",
+            properties: { sessionID: "action-root", status: { type } },
+          },
+        });
+      await prompt("[Nanasa Action: action-review | Exact Run: wrong-run | Generation: 1]\nReview");
+      await turn("busy");
+      await turn("idle");
+      await prompt(
+        "[Nanasa Action: action-review | Exact Run: run-golden | Generation: 1]\nReview",
+      );
+      await prompt(
+        "[Nanasa Action: action-review | Exact Run: run-golden | Generation: 1]\nReview",
+      );
+      await plugin["chat.message"](
+        { sessionID: "child-session" },
+        { message: { id: "child-turn" }, parts: [{ type: "text", text: "Child prompt" }] },
+      );
+      await turn("busy");
+      await turn("idle");
+      await turn("idle");
+      await prompt("Ordinary human prompt", "ordinary-turn");
+      await turn("busy");
+      await turn("idle");
+      await expect.poll(() => events.length).toBe(9);
+      expect(acknowledgements).toHaveLength(2);
+      expect(acknowledgements.map((item) => item.kind)).toEqual(["accepted", "completed"]);
+      expect(acknowledgements[1]).toMatchObject({
+        providerTurnId: "native-turn",
+        completionRevision: 1,
+      });
+      const sequences = [
+        ...events.map((item) => item.sourceSequence),
+        ...acknowledgements.map((item) => item.sourceSequence),
+      ].sort((left, right) => left - right);
+      expect(sequences).toEqual(Array.from({ length: 11 }, (_, index) => index + 1));
+      await plugin.event({
+        event: { type: "session.deleted", properties: { sessionID: "action-root" } },
+      });
+    } finally {
+      disposeTui();
+      Reflect.deleteProperty(globalThis, Symbol.for("nanasa.opencode.root-session.v1"));
+      if (previousUrl === undefined) delete process.env.NANASA_STATUS_URL;
+      else process.env.NANASA_STATUS_URL = previousUrl;
+      if (previousToken === undefined) delete process.env.NANASA_MCP_TOKEN;
+      else process.env.NANASA_MCP_TOKEN = previousToken;
+      clearReporterEnvironment();
+      await closeServer(server);
+    }
+  });
+
   it("replays OpenCode 1.18.15 plugin lifecycle", async () => {
     const directory = "opencode-1.18.15";
     const temporaryDirectory = mkdtempSync(join(tmpdir(), "nanasa-opencode-golden-"));

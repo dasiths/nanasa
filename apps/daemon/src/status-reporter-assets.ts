@@ -205,6 +205,7 @@ export const NanasaStatusPlugin = async () => {
   const childParents = new Map();
   let sourceSequence = 0;
   let reportedRootSessionId;
+  let currentAction;
   let heartbeat;
   let disabled = false;
   let delivery = Promise.resolve();
@@ -224,15 +225,37 @@ export const NanasaStatusPlugin = async () => {
           const body = await response.json().catch(() => undefined);
           if (body?.code === "status_reporter_identity_fenced" || body?.code === "status_native_session_fenced") { disable(); return; }
         }
-        if (response.ok) return;
+        if (response.ok) return await response.json().catch(() => undefined);
       } catch {}
       finally { clearTimeout(timeout); }
     }
   };
+  const acknowledge = async (action, kind, status) => {
+    const body = { kind, sourceSequence: ++sourceSequence, providerTurnId: action.turnId, completionRevision: status.completionRevision, data: { source: "native-turn" } };
+    for (const retryDelay of retryDelays) {
+      if (disabled) return false;
+      if (retryDelay > 0) await delay(retryDelay);
+      try {
+        const response = await fetch(new URL("/api/v1/agent-status/action-acks/" + encodeURIComponent(action.actionId), url), { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(1000) });
+        if (response.ok) return true;
+        if (response.status === 401 || response.status === 403) return false;
+      } catch {}
+    }
+    return false;
+  };
   const send = (event, sessionId, fields = {}) => {
     if (!url || !token || disabled || !sessionId) return Promise.resolve();
-    const envelope = { version: 2, eventId: crypto.randomUUID(), providerId: process.env.NANASA_REPORTER_PROVIDER_ID, adapterId: process.env.NANASA_REPORTER_ADAPTER_ID, reporterId: process.env.NANASA_REPORTER_ID, source: process.env.NANASA_REPORTER_SOURCE, protocolVersion: Number(process.env.NANASA_REPORTER_PROTOCOL_VERSION), reporterVersion: process.env.NANASA_REPORTER_VERSION, runId: process.env.NANASA_REPORTER_RUN_ID, generation: Number(process.env.NANASA_REPORTER_GENERATION), reporterEpoch: process.env.NANASA_REPORTER_EPOCH, sourceSequence: ++sourceSequence, event, occurredAt: new Date().toISOString(), nativeSessionId: sessionId, ...fields };
-    delivery = delivery.then(() => deliver(envelope));
+    const action = sessionId === reportedRootSessionId ? currentAction : undefined;
+    const envelope = { version: 2, eventId: crypto.randomUUID(), providerId: process.env.NANASA_REPORTER_PROVIDER_ID, adapterId: process.env.NANASA_REPORTER_ADAPTER_ID, reporterId: process.env.NANASA_REPORTER_ID, source: process.env.NANASA_REPORTER_SOURCE, protocolVersion: Number(process.env.NANASA_REPORTER_PROTOCOL_VERSION), reporterVersion: process.env.NANASA_REPORTER_VERSION, runId: process.env.NANASA_REPORTER_RUN_ID, generation: Number(process.env.NANASA_REPORTER_GENERATION), reporterEpoch: process.env.NANASA_REPORTER_EPOCH, event, occurredAt: new Date().toISOString(), nativeSessionId: sessionId, ...(action ? { actionId: action.actionId, turnId: action.turnId } : {}), ...fields };
+    delivery = delivery.then(async () => {
+      envelope.sourceSequence = ++sourceSequence;
+      const result = await deliver(envelope);
+      if (!action || !result?.status || action.completed) return;
+      if (!action.accepted && (event === "turn.started" || event === "tool.started"))
+        action.accepted = await acknowledge(action, "accepted", result.status);
+      if (action.accepted && event === "turn.settled" && result.status.state === "idle" && result.status.phase === "settled")
+        action.completed = await acknowledge(action, "completed", result.status);
+    });
     return delivery;
   };
   const selectRoot = (sessionId) => {
@@ -245,6 +268,17 @@ export const NanasaStatusPlugin = async () => {
   heartbeat = setInterval(() => send("heartbeat", reportedRootSessionId), heartbeatMs);
   heartbeat.unref?.();
   return {
+    "chat.message": async (input, output) => {
+      if (input.sessionID !== reportedRootSessionId) return;
+      const text = (output.parts ?? []).filter(part => part.type === "text").map(part => part.text).join("\n");
+      const marker = /^\[(?:From: Repository Foreman \| )?Nanasa Action: ([^|\]\s]+) \| Exact Run: ([^|\]\s]+) \| Generation: (\d+)\]\r?\n/.exec(text);
+      const turnId = output.message?.id ?? input.messageID;
+      if (marker && currentAction?.actionId === marker[1] && currentAction.turnId === turnId) return;
+      currentAction = marker && marker[2] === process.env.NANASA_REPORTER_RUN_ID && Number(marker[3]) === Number(process.env.NANASA_REPORTER_GENERATION) && turnId
+        ? { actionId: marker[1], turnId, accepted: false, completed: false }
+        : undefined;
+      if (currentAction) await send("turn.started", input.sessionID);
+    },
     event: async ({ event }) => {
       if (disabled) return;
       const properties = event.properties || {};

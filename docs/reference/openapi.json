@@ -6,6 +6,28 @@
   },
   "x-generator-version": 1,
   "paths": {
+    "/api/v1/foreman/state/reset": {
+      "post": {
+        "operationId": "foreman.resetState",
+        "summary": "Clear selected Foreman coordination history after stopping affected runtimes",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
     "/api/v1/foreman/conversations": {
       "get": {
         "operationId": "foreman.conversations",

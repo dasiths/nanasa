@@ -1,8 +1,153 @@
 import { join } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import type { ForemanConversationRequest, ForemanWorkspace } from "@nanasa/contracts";
 import { expect, test } from "@playwright/test";
 import { PackageAcceptanceService } from "./fixtures/package-fixture.js";
+
+test("portal approval mode starts new goals automatically but preserves human pause", async ({
+  page,
+  browserName,
+}, testInfo) => {
+  const nanasa = await PackageAcceptanceService.create(browserName, { foreman: true });
+  try {
+    await page.goto(`${nanasa.baseUrl}/foreman${new URL(nanasa.portalUrl).hash}`);
+    await page.getByRole("tab", { name: "Goals", exact: true }).click();
+    await page.getByRole("button", { name: "New goal", exact: true }).click();
+    await page
+      .getByRole("textbox", { name: "Title", exact: true })
+      .fill("Human-reviewed objective");
+    await page
+      .getByRole("textbox", { name: "Goal", exact: true })
+      .fill("Validate human approval mode");
+    await page.getByRole("button", { name: "Propose goal", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Approve goal", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await page.getByRole("button", { name: "Start", exact: true }).waitFor();
+    await page.getByRole("tab", { name: "Settings", exact: true }).click();
+    await page
+      .getByRole("combobox", { name: "Coordination approvals", exact: true })
+      .selectOption("autonomous");
+    await page.getByRole("spinbutton", { name: "Concurrent goals", exact: true }).fill("2");
+    await page.getByRole("button", { name: "Save settings", exact: true }).click();
+    await expect
+      .poll(
+        async () =>
+          (await nanasa.request<ForemanWorkspace>("/api/v1/foreman")).configuration?.autonomy
+            .approvalMode,
+      )
+      .toBe("autonomous");
+    await page.getByRole("tab", { name: "Goals", exact: true }).click();
+    await page.getByRole("button", { name: "New goal", exact: true }).click();
+    await page.getByRole("textbox", { name: "Title", exact: true }).fill("Autonomous objective");
+    await page
+      .getByRole("textbox", { name: "Goal", exact: true })
+      .fill("Validate preauthorized coordination");
+    await page.getByRole("button", { name: "Propose goal", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Pause", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeVisible();
+    const goals =
+      await nanasa.request<
+        Array<{ title: string; state: string; grant: { approvalMode: string } }>
+      >("/api/v1/foreman/goals");
+    expect(goals.find((goal) => goal.title === "Human-reviewed objective")).toMatchObject({
+      state: "proposed",
+      grant: { approvalMode: "human" },
+    });
+    expect(goals.find((goal) => goal.title === "Autonomous objective")).toMatchObject({
+      state: "paused",
+      grant: { approvalMode: "autonomous" },
+    });
+    await page.getByRole("tab", { name: "Settings", exact: true }).click();
+    await page
+      .getByRole("combobox", { name: "Coordination approvals", exact: true })
+      .selectOption("human");
+    await page.getByRole("button", { name: "Save settings", exact: true }).click();
+    await expect
+      .poll(
+        async () =>
+          (await nanasa.request<ForemanWorkspace>("/api/v1/foreman")).configuration?.autonomy
+            .approvalMode,
+      )
+      .toBe("human");
+    await page.getByRole("tab", { name: "Goals", exact: true }).click();
+    await page.getByRole("button", { name: /Autonomous objective/ }).click();
+    await page.getByRole("button", { name: "Resume", exact: true }).click();
+    await expect(
+      page.getByRole("alert").filter({ hasText: "exceeds repository policy" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Cancel goal", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(0);
+    await page.getByRole("tab", { name: "Settings", exact: true }).click();
+    await page.screenshot({
+      path: testInfo.outputPath("autonomous-coordination-settings.png"),
+      fullPage: true,
+    });
+  } finally {
+    await nanasa.close();
+  }
+});
+
+test("Foreman cleanup requires confirmation and clears only selected coordination data", async ({
+  page,
+  browserName,
+}, testInfo) => {
+  const nanasa = await PackageAcceptanceService.create(browserName, { foreman: true });
+  try {
+    const secretPath = join(nanasa.configRoot, ".nanasa", "runtime", "operator-secret");
+    const secret = readFileSync(secretPath);
+    await nanasa.request("/api/v1/foreman/channel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requestId: "cleanup-message", text: "Cleanup fixture message" }),
+    });
+    await nanasa.request("/api/v1/foreman/goals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requestId: "cleanup-goal",
+        title: "Disposable test goal",
+        objective: "Exercise reset controls",
+        constraints: [],
+      }),
+    });
+    await page.goto(`${nanasa.baseUrl}/foreman${new URL(nanasa.portalUrl).hash}`);
+    await page.getByRole("tab", { name: "Settings", exact: true }).click();
+    await page.getByRole("textbox", { name: "Type RESET to confirm", exact: true }).fill("RESET");
+    await expect(
+      page.getByRole("button", { name: "Clear selected history", exact: true }),
+    ).toBeDisabled();
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await page.getByRole("button", { name: "Start", exact: true }).waitFor();
+    await page
+      .getByRole("combobox", { name: "History to clear", exact: true })
+      .selectOption("channel");
+    await page.getByRole("textbox", { name: "Type RESET to confirm", exact: true }).fill("RESET");
+    await page.getByRole("button", { name: "Clear selected history", exact: true }).click();
+    await expect(
+      page.getByRole("alert").filter({ hasText: "Goals still reference channel history" }),
+    ).toBeVisible();
+    await page.getByRole("combobox", { name: "History to clear", exact: true }).selectOption("all");
+    await page.getByRole("textbox", { name: "Type RESET to confirm", exact: true }).fill("RESET");
+    await page.getByRole("button", { name: "Clear selected history", exact: true }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Removed 1 goals" })).toBeVisible();
+    expect(await nanasa.request("/api/v1/foreman/goals")).toEqual([]);
+    expect(
+      (await nanasa.request<{ messages: unknown[] }>("/api/v1/foreman/channel")).messages,
+    ).toEqual([]);
+    expect(readFileSync(secretPath)).toEqual(secret);
+    expect(existsSync(join(nanasa.configRoot, "packages", "api", "README.md"))).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath("foreman-reset-settings.png"),
+      fullPage: true,
+    });
+    await page.getByRole("tab", { name: "Channel", exact: true }).click();
+    await expect(page.getByText("Cleanup fixture message", { exact: true })).toHaveCount(0);
+  } finally {
+    await nanasa.close();
+  }
+});
 
 test("Foreman blocked input explains its source and resolution on desktop and mobile", async ({
   page,

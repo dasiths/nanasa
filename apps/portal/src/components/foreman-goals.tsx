@@ -326,6 +326,13 @@ export function ForemanGoals({
                 {report.kind} / {report.memberId}
               </strong>
               <p>{report.summary}</p>
+              {report.candidatePath && (
+                <p>
+                  Working-tree candidate: <code>{report.candidatePath}</code>
+                  <br />
+                  <code>{report.candidateDigest}</code>
+                </p>
+              )}
               {report.evidence.length > 0 && (
                 <ul>
                   {report.evidence.map((evidence) => (

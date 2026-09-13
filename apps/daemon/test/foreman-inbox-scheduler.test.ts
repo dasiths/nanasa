@@ -96,6 +96,7 @@ function fixture(withPreviousRun = false) {
     { requestId: "message", text: "Review the repository" },
   );
   let controlled = false;
+  let clockOffset = 3000;
   const runtime = {
     pasteToRun: vi.fn(async (_run, _text, assertCurrent) => {
       assertCurrent?.();
@@ -116,6 +117,7 @@ function fixture(withPreviousRun = false) {
     runtime,
     { dispatchAutomated: async (_id, operation) => operation() },
     () => controlled,
+    () => new Date(Date.now() + clockOffset),
   );
   return {
     store,
@@ -130,6 +132,9 @@ function fixture(withPreviousRun = false) {
     control: (value: boolean) => {
       controlled = value;
     },
+    clockOffset: (value: number) => {
+      clockOffset = value;
+    },
     state: () =>
       store.database.prepare("SELECT state FROM foreman_inbox WHERE message_id = ?").get(message.id)
         ?.state,
@@ -137,6 +142,18 @@ function fixture(withPreviousRun = false) {
 }
 
 describe("Foreman durable input dispatch", () => {
+  it("waits for a stable idle interval between provider autopilot turns", async () => {
+    const context = fixture();
+    context.clockOffset(0);
+    context.ready();
+    await context.scheduler.tick();
+    expect(context.runtime.pasteToRun).not.toHaveBeenCalled();
+    context.clockOffset(3000);
+    await context.scheduler.tick();
+    expect(context.state()).toBe("submitted");
+    expect(context.runtime.pasteToRun).toHaveBeenCalledOnce();
+    await context.scheduler.close();
+  });
   it.each(["writing", "submitted", "ambiguous"])(
     "recovers a %s conversation-result wakeup from a stopped Foreman run",
     async (state) => {

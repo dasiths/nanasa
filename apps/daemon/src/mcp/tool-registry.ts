@@ -20,6 +20,13 @@ export const McpIdentifierSchema = z.string().trim().min(1).max(128);
 export const McpForemanBootstrapSchema = z.object({}).strict();
 export const McpConversationReferenceSchema = z.object({ id: McpIdentifierSchema }).strict();
 export const McpGoalReferenceSchema = z.object({ goalId: McpIdentifierSchema }).strict();
+export const McpReportDelegationSchema = ReportDelegationCommandSchema.extend({
+  candidateHead: ReportDelegationCommandSchema.shape.candidateHead.nullable(),
+  candidatePath: ReportDelegationCommandSchema.shape.candidatePath.nullable(),
+});
+export const McpAcceptGoalSchema = McpGoalReferenceSchema.extend({
+  expectedRevision: z.number().int().nonnegative(),
+});
 export const McpObserveTeamSchema = z
   .object({ delegationId: McpIdentifierSchema, memberId: McpIdentifierSchema.optional() })
   .strict();
@@ -58,9 +65,9 @@ export const McpPromptPeerSchema = z
     memberId: McpIdentifierSchema,
     prompt: z.string().trim().min(1),
     idempotencyKey: z.string().trim().min(1).max(256),
-    expectedRunId: McpIdentifierSchema.optional(),
-    expectedGeneration: z.number().int().positive().optional(),
-    expectedStatusRevision: z.number().int().nonnegative().optional(),
+    expectedRunId: McpIdentifierSchema.nullish(),
+    expectedGeneration: z.number().int().positive().nullish(),
+    expectedStatusRevision: z.number().int().nonnegative().nullish(),
   })
   .strict();
 export const McpActionReferenceSchema = z.object({ actionId: McpIdentifierSchema }).strict();
@@ -79,8 +86,8 @@ export const McpVisibleHistorySchema = z
   .object({
     groupId: McpIdentifierSchema.optional(),
     limit: z.number().int().min(1).max(50).default(20),
-    before: z.number().int().positive().optional(),
-    after: z.number().int().positive().optional(),
+    before: z.number().int().positive().nullish(),
+    after: z.number().int().positive().nullish(),
   })
   .strict();
 
@@ -98,6 +105,15 @@ function tool(input: McpToolDeclaration): McpToolDeclaration {
 }
 
 export const MCP_TOOL_REGISTRY = Object.freeze([
+  tool({
+    name: "nanasa.foreman_accept_goal",
+    description:
+      "Accept an independently reviewed ready goal only under an operator-enabled autonomous coordination grant; rechecks candidate evidence and settled team state, and never overrides Human pause",
+    inputSchema: McpAcceptGoalSchema,
+    principals: ["foreman"],
+    scope: "foreman:goals:accept",
+    authority: "self-write",
+  }),
   tool({
     name: "nanasa.foreman_ask_member",
     description:
@@ -215,8 +231,8 @@ export const MCP_TOOL_REGISTRY = Object.freeze([
   tool({
     name: "nanasa.report_delegation",
     description:
-      "Report acceptance, a plan, progress, blockers or readiness with evidence; only the accountable member can accept or finish",
-    inputSchema: ReportDelegationCommandSchema,
+      "Report acceptance, plan, progress, blockers or readiness with evidence. For progress reports omit both candidate fields or set both null. For uncommitted review/ready set candidatePath and candidateHead:null; for a clean commit set candidateHead and candidatePath:null. Never invent placeholder hashes. Only the accountable member can accept or finish",
+    inputSchema: McpReportDelegationSchema,
     principals: ["agent"],
     scope: "team:delegations:report",
     authority: "self-write",
@@ -314,7 +330,8 @@ export const MCP_TOOL_REGISTRY = Object.freeze([
   }),
   tool({
     name: "nanasa.prompt_peer",
-    description: "Create a safe exact-target peer prompt action",
+    description:
+      "Create a safe exact-target peer prompt action. Optional expectedRunId, expectedGeneration and expectedStatusRevision may be null to bind the current target server-side; never guess revisions. Dispatch still rechecks exact runtime and reporter readiness",
     inputSchema: McpPromptPeerSchema,
     principals: ["agent", "operator"],
     scope: "actions:prompt:peer",
@@ -354,7 +371,8 @@ export const MCP_TOOL_REGISTRY = Object.freeze([
   }),
   tool({
     name: "nanasa.list_visible_history",
-    description: "Read bounded message history visible to the caller",
+    description:
+      "Read bounded message history visible to the caller. Use before or after, never both. Set both null for the latest page; null means no cursor",
     inputSchema: McpVisibleHistorySchema,
     principals: ["agent", "operator"],
     scope: "history:read:visible",

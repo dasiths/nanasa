@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ForemanConfigSchema } from "@nanasa/contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { loadNanasaConfig } from "../src/config-loader.js";
 import {
@@ -133,6 +133,108 @@ async function callTool(
 }
 
 describe("Streamable HTTP MCP", () => {
+  it("omits null peer fences before binding the current target", async () => {
+    const { daemon, agentToken, group } = await createFixture();
+    try {
+      const create = vi.spyOn(daemon.actions, "create").mockImplementation(() => {
+        throw new Error("Fixture action reached");
+      });
+      await callTool(daemon, agentToken, "nanasa.prompt_peer", {
+        groupId: group.id,
+        memberId: "alpha",
+        prompt: "Review the candidate",
+        idempotencyKey: "null-fences",
+        expectedRunId: null,
+        expectedGeneration: null,
+        expectedStatusRevision: null,
+      });
+      expect(create).toHaveBeenCalledOnce();
+      const command = create.mock.calls[0]![1];
+      expect(command).not.toHaveProperty("expectedRunId");
+      expect(command).not.toHaveProperty("expectedGeneration");
+      expect(command).not.toHaveProperty("expectedStatusRevision");
+      expect(command).toMatchObject({
+        kind: "prompt",
+        groupId: group.id,
+        memberId: "alpha",
+        allowWorking: false,
+      });
+    } finally {
+      await daemon.app.close();
+    }
+  });
+
+  it("treats null history cursors as absent but rejects two real cursors", async () => {
+    const { daemon, agentToken, group } = await createFixture();
+    try {
+      const latest = await callTool(daemon, agentToken, "nanasa.list_visible_history", {
+        groupId: group.id,
+        before: null,
+        after: null,
+      });
+      expect(latest.json().result.isError).not.toBe(true);
+      const conflicting = await callTool(daemon, agentToken, "nanasa.list_visible_history", {
+        groupId: group.id,
+        before: 1,
+        after: 2,
+      });
+      expect(conflicting.json().result.isError).toBe(true);
+      expect(conflicting.json().result.content[0].text).toContain("mutually exclusive");
+    } finally {
+      await daemon.app.close();
+    }
+  });
+
+  it("omits null candidate properties before canonical report serialization", async () => {
+    const { daemon, agentToken, group } = await createFixture();
+    try {
+      vi.spyOn(daemon.goals, "own").mockReturnValue([
+        { delegations: [{ id: "owned", groupId: group.id }] },
+      ] as ReturnType<typeof daemon.goals.own>);
+      const report = vi.spyOn(daemon.goals, "report").mockImplementation(() => {
+        throw new Error("Fixture report reached");
+      });
+      await callTool(daemon, agentToken, "nanasa.report_delegation", {
+        requestId: "nullable-owned",
+        delegationId: "owned",
+        kind: "accepted",
+        summary: "Accept ownership",
+        evidence: [],
+        candidateHead: null,
+        candidatePath: null,
+      });
+      expect(report).toHaveBeenCalledOnce();
+      expect(report.mock.calls[0]![1]).toStrictEqual({
+        requestId: "nullable-owned",
+        delegationId: "owned",
+        kind: "accepted",
+        summary: "Accept ownership",
+        evidence: [],
+        nextCheckSeconds: 900,
+      });
+    } finally {
+      await daemon.app.close();
+    }
+  });
+
+  it("accepts null candidate fields from strict tool callers before enforcing report ownership", async () => {
+    const { daemon, agentToken } = await createFixture();
+    try {
+      const response = await callTool(daemon, agentToken, "nanasa.report_delegation", {
+        requestId: "nullable-report",
+        delegationId: "not-owned",
+        kind: "accepted",
+        summary: "Accept ownership",
+        evidence: [],
+        candidateHead: null,
+        candidatePath: null,
+      });
+      expect(response.json().result.content[0].text).toBe("Delegation is not owned by this team");
+    } finally {
+      await daemon.app.close();
+    }
+  });
+
   it("scopes persistent external connectors and keeps notification cursors independent", async () => {
     const { daemon } = await createFixture();
     try {
@@ -355,6 +457,7 @@ describe("Streamable HTTP MCP", () => {
         "nanasa.foreman_get_goal",
         "nanasa.foreman_delegate_goal",
         "nanasa.foreman_finish_goal_review",
+        "nanasa.foreman_accept_goal",
         "nanasa.request_human_decision",
         "nanasa.foreman_observe_team",
       ]);

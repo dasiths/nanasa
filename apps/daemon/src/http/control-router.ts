@@ -394,6 +394,12 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     );
     return services.foreman.status();
   });
+  register("foreman.resetState", (request) =>
+    services.goals.resetState(
+      operatorPrincipal(services, request).operatorId,
+      routeBody(controlRoute("foreman.resetState"), request),
+    ),
+  );
   register("foreman.channel", (request) => {
     const query = record(request.query);
     return services.store.readForemanChannel(

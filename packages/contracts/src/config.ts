@@ -226,6 +226,7 @@ export type ConfiguredAgent = z.infer<typeof ConfiguredAgentSchema>;
 export const ForemanAutonomySchema = z
   .object({
     mode: z.enum(["supervised", "bounded"]).default("supervised"),
+    approvalMode: z.enum(["human", "autonomous"]).default("human"),
     maxActiveGoals: z.number().int().min(1).max(16).default(1),
     maxTeamsPerGoal: z.number().int().min(1).max(16).default(3),
     maxConcurrentActions: z.number().int().min(1).max(32).default(4),

@@ -43,6 +43,8 @@ import {
   McpConversationReferenceSchema,
   McpDeliverySchema,
   McpForemanBootstrapSchema,
+  McpAcceptGoalSchema,
+  McpReportDelegationSchema,
   McpGoalReferenceSchema,
   McpObserveTeamSchema,
   McpOwnWaitsSchema,
@@ -471,6 +473,23 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
       async (input) => actionToolResult(() => options.goals.finishReview(principal, input.goalId)),
     );
     server.registerTool(
+      "nanasa.foreman_accept_goal",
+      {
+        description: mcpTool("nanasa.foreman_accept_goal").description,
+        inputSchema: McpAcceptGoalSchema,
+      },
+      async (input) =>
+        actionToolResult(async () => {
+          options.goals.assertForeman(principal);
+          const workspace = options.goals.workspace(input.goalId);
+          if (workspace.goal.foremanId !== principal.foremanId)
+            throw new DomainError("forbidden", "Goal belongs to another Foreman", 403);
+          for (const delegation of workspace.delegations.filter((item) => item.state === "ready"))
+            await options.checkouts.refresh(delegation.checkoutId);
+          return options.goals.acceptAutonomously(principal, input.goalId, input.expectedRevision);
+        }),
+    );
+    server.registerTool(
       "nanasa.request_human_decision",
       {
         description: mcpTool("nanasa.request_human_decision").description,
@@ -609,10 +628,16 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
       "nanasa.report_delegation",
       {
         description: mcpTool("nanasa.report_delegation").description,
-        inputSchema: ReportDelegationCommandSchema,
+        inputSchema: McpReportDelegationSchema,
       },
       async (input) => {
         try {
+          const { candidateHead, candidatePath, ...fields } = input;
+          const report = ReportDelegationCommandSchema.parse({
+            ...fields,
+            ...(candidateHead == null ? {} : { candidateHead }),
+            ...(candidatePath == null ? {} : { candidatePath }),
+          });
           const own = options.goals.own(principal);
           const delegation = own
             .flatMap((workspace) => workspace.delegations)
@@ -625,7 +650,7 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
             );
           if (input.kind === "ready" || input.kind === "review")
             await options.checkouts.refresh(delegation.checkoutId);
-          return actionToolResult(() => options.goals.report(principal, input));
+          return actionToolResult(() => options.goals.report(principal, report));
         } catch (error) {
           return {
             isError: true,
@@ -742,8 +767,7 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
   server.registerTool(
     "nanasa.prompt_peer",
     {
-      description:
-        "Create a durable prompt action for one exact current peer; dispatch waits for safe readiness",
+      description: mcpTool("nanasa.prompt_peer").description,
       inputSchema: PromptPeerSchema,
     },
     async (input) =>
@@ -756,9 +780,13 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
             memberId: input.memberId,
             prompt: input.prompt,
             allowWorking: false,
-            expectedRunId: input.expectedRunId,
-            expectedGeneration: input.expectedGeneration,
-            expectedStatusRevision: input.expectedStatusRevision,
+            ...(input.expectedRunId == null ? {} : { expectedRunId: input.expectedRunId }),
+            ...(input.expectedGeneration == null
+              ? {}
+              : { expectedGeneration: input.expectedGeneration }),
+            ...(input.expectedStatusRevision == null
+              ? {}
+              : { expectedStatusRevision: input.expectedStatusRevision }),
           }),
           input.idempotencyKey,
         ),
@@ -840,8 +868,8 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
         const groupId = targetGroup(principal, input.groupId);
         const page = options.messageHistory.page(groupId, {
           limit: input.limit,
-          ...(input.before === undefined ? {} : { before: input.before }),
-          ...(input.after === undefined ? {} : { after: input.after }),
+          ...(input.before == null ? {} : { before: input.before }),
+          ...(input.after == null ? {} : { after: input.after }),
         });
         const messages = page.messages.filter((message) => messageVisibleTo(principal, message));
         const visibleIds = new Set(messages.map((message) => message.id));

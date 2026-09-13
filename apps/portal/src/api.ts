@@ -172,7 +172,15 @@ import {
   type ResolveHumanDecisionCommand,
 } from "@nanasa/contracts";
 
+import {
+  type ResetForemanStateCommand,
+  ResetForemanStateCommandSchema,
+  type ResetForemanStateResult,
+  ResetForemanStateResultSchema,
+} from "@nanasa/contracts";
+
 export interface PortalClient {
+  resetForemanState(command: ResetForemanStateCommand): Promise<ResetForemanStateResult>;
   loadForemanConversations(): Promise<ForemanConversationRequest[]>;
   cancelForemanConversation(id: string): Promise<ForemanConversationRequest>;
   listForemanGoals(): Promise<ForemanGoal[]>;
@@ -645,6 +653,12 @@ export const api: PortalClient = {
       `${CONTROL_API_PREFIX}/trust/${encodeURIComponent(receiptId)}/revoke`,
       CustomLaunchConsentDecisionSchema,
       commandInit("POST", RevokeCustomLaunchConsentCommandSchema.parse(command)),
+    ),
+  resetForemanState: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/state/reset`,
+      ResetForemanStateResultSchema,
+      commandInit("POST", ResetForemanStateCommandSchema.parse(command)),
     ),
   submitMessage: (groupId, command, idempotencyKey) =>
     request(

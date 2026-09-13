@@ -3,6 +3,36 @@
   "packageVersion": "0.1.0-next.12.0",
   "tools": [
     {
+      "name": "nanasa.foreman_accept_goal",
+      "description": "Accept an independently reviewed ready goal only under an operator-enabled autonomous coordination grant; rechecks candidate evidence and settled team state, and never overrides Human pause",
+      "principals": [
+        "foreman"
+      ],
+      "scope": "foreman:goals:accept",
+      "authority": "self-write",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "goalId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "goalId",
+          "expectedRevision"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "nanasa.foreman_ask_member",
       "description": "Ask a selected team member a bounded question without creating a goal or reserving a team; delivery waits for idle readiness, and only a correlated reply counts as answered",
       "principals": [
@@ -477,7 +507,7 @@
     },
     {
       "name": "nanasa.report_delegation",
-      "description": "Report acceptance, a plan, progress, blockers or readiness with evidence; only the accountable member can accept or finish",
+      "description": "Report acceptance, plan, progress, blockers or readiness with evidence. For progress reports omit both candidate fields or set both null. For uncommitted review/ready set candidatePath and candidateHead:null; for a clean commit set candidateHead and candidatePath:null. Never invent placeholder hashes. Only the accountable member can accept or finish",
       "principals": [
         "agent"
       ],
@@ -524,8 +554,27 @@
             }
           },
           "candidateHead": {
-            "type": "string",
-            "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "candidatePath": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "nextCheckSeconds": {
             "default": 900,
@@ -1015,7 +1064,7 @@
     },
     {
       "name": "nanasa.prompt_peer",
-      "description": "Create a safe exact-target peer prompt action",
+      "description": "Create a safe exact-target peer prompt action. Optional expectedRunId, expectedGeneration and expectedStatusRevision may be null to bind the current target server-side; never guess revisions. Dispatch still rechecks exact runtime and reporter readiness",
       "principals": [
         "agent",
         "operator"
@@ -1046,19 +1095,40 @@
             "maxLength": 256
           },
           "expectedRunId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "expectedGeneration": {
-            "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "expectedStatusRevision": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1209,7 +1279,7 @@
     },
     {
       "name": "nanasa.list_visible_history",
-      "description": "Read bounded message history visible to the caller",
+      "description": "Read bounded message history visible to the caller. Use before or after, never both. Set both null for the latest page; null means no cursor",
       "principals": [
         "agent",
         "operator"
@@ -1232,14 +1302,28 @@
             "maximum": 50
           },
           "before": {
-            "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "after": {
-            "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [

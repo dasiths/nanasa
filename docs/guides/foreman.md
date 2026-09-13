@@ -48,19 +48,39 @@ the Human channel, and acknowledges each result with
 When discussion becomes substantial, Foreman suggests a goal. With your agreement,
 it proposes the objective and constraints and retains relevant request IDs in
 `sourceConversationIds`. The conversation remains available; the goal remains
-unapproved until you approve it through operator controls. A casual "yes" is not
-an unrestricted execution grant.
+unapproved in human approval mode until you approve it through operator controls.
+A casual "yes" is not an unrestricted execution grant.
+
+## Choose an approval mode
+
+Stop Foreman and select **Settings > Coordination approvals**. The default,
+`autonomy.approvalMode: human`, requires approval for each goal and delegation.
+Select `autonomous` to preauthorize new goals and eligible team selections within
+the configured limits. Foreman can then accept completed goals with
+`nanasa.foreman_accept_goal` after independent review, ready reports, current
+candidate verification and settled team work. Automatic decisions retain policy
+provenance in the audit history.
+
+New goals capture the approval mode. Enabling autonomous mode does not upgrade
+existing human-granted goals. Disabling it fences further autonomous coordination;
+Human pause and cancellation remain available. Neither setting forcibly interrupts
+work already submitted to a provider.
+
+Approval mode is separate from supervised or bounded runtime intervention. It
+does not answer scope questions, override a Human pause, approve provider
+permissions or trust prompts, clear history, or grant permission to commit.
 
 ## Delegate an outcome
 
 Give Foreman a high-level goal through Channel, or open **Goals > New goal**.
 Research documents and implementation plans are optional. Foreman proposes an
-outcome; approve its objective, constraints and policy limits in Goals. Approval
+outcome; in human mode, approve its objective, constraints and policy limits in Goals. Approval
 does not authorize arbitrary teams or change provider permissions.
 
 Foreman discovers live teams, role descriptions, permissions, readiness and
 reservations, then proposes a specific accountable member with a rationale.
-Approve that team and its current checkout through the resulting decision.
+In human mode, approve that team and its current checkout through the resulting decision.
+An autonomous goal resolves this approval through the current policy instead.
 Nanasa reserves the team and checkout and dispatches one exact-runtime handoff.
 It can start never-launched members after approval, but does not undo a Human's
 explicit stop. Existing unsettled work, changed membership, shared active
@@ -80,10 +100,18 @@ needed. After cancellation, restart old team runtimes or authorize a new
 delegation before reusing their peer-action authority.
 
 Completion requires evidence from the accountable member and an independent
-reviewer for the same clean committed checkout. Nanasa refreshes checkout state
-before accepting review or ready reports and rechecks it at Human acceptance.
+reviewer for the same clean commit or scoped working-tree snapshot. Nanasa refreshes
+checkout state before accepting review or ready reports and rechecks candidate
+evidence at either Human or autonomous acceptance.
 Evidence is still an agent report, not proof of specification conformance.
 Inspect test results, review references and residual risks before accepting.
+
+Peer-action completion is separate from a review report. The built-in OpenCode
+reporter correlates scheduler-marked root prompts with native message IDs and
+acknowledges acceptance and settled completion using durable status revisions.
+Unmarked prompts, mismatched runtimes and child sessions cannot settle an action.
+A stalled or uncertain peer action still blocks readiness; do not replace its
+acknowledgement with a claim that the terminal looks idle.
 
 ## Supervise multiple teams
 
@@ -101,7 +129,7 @@ settings does not rewrite existing goal grants.
 A team and its checkout can be reserved by only one unfinished delegation.
 Paused and ready delegations keep their reservation. Use separate available teams
 and checkouts for concurrent goals; teams cannot silently switch between goals.
-Each proposed delegation still needs Human approval.
+Each proposed delegation needs per-delegation approval or an autonomous goal grant.
 
 Team-specific decisions and progress reports stay scoped to that team. A pending
 question from one team does not prevent another from making progress or reporting
@@ -117,6 +145,17 @@ stop already-running team work. Large-scale throughput and overnight model
 judgment are not certified by the deterministic multi-team tests.
 
 ## Supervise across sessions
+
+### Review without committing
+
+When commits are prohibited, reviewers and accountable members can submit
+`review` and `ready` reports with `candidatePath` instead of `candidateHead`.
+Use a checkout-root-relative directory containing the complete deliverable.
+Nanasa records a SHA-256 content snapshot and requires the same path and content
+for independent review and readiness. Acceptance rechecks the files; any
+change requires a fresh review. The limit is 512 files and 16 MiB, with no
+symlinks, dependency directories, or Git metadata. Existing clean-commit evidence
+remains supported. Neither evidence mode permits self-review.
 
 Goals, owners, reports, decisions, notifications and peer-action links survive
 daemon restarts. Team members discover their delegation on launch or recovery.
@@ -301,12 +340,32 @@ Neither action resends input, undoes work, or stops provider work that may alrea
 have started. Unresolved Human commands from older runs still require this
 explicit inspection; they are not replayed automatically.
 
+A cold provider can show an idle terminal before emitting reporter-backed
+readiness. Channel input stays queued in that case. In the portal Terminal,
+submit a bounded request to read the pending Human Channel message, then return
+to Channel. Do not resend the objective or approve a provider permission prompt
+as a substitute for readiness. This prerequisite was observed with Copilot CLI
+before its first native turn.
+
 ## Set goal limits
+
+History cleanup is available in **Settings > Clear Foreman history**. Stop
+Foreman before clearing anything and type `RESET` to confirm. Choose finished
+goals only, channel and member conversations, or all coordination state. Channel
+cleanup requires goals to be removed first so goal context is not silently lost.
+A full reset also requires delegated team runs to be stopped. Source files,
+configuration, provider credentials, runtime history and audit records are
+preserved. Team message history remains visible in the unified Channel. Reset
+removes dependent reports and supersedes reset-scoped actions only after their
+addressed runtimes stop. Prior action results and attempt history remain; the
+retirement record does not certify completion or undo effects. Reset does not
+stop agents. Reload other open portal sessions after cleanup.
 
 Goals provides sustained supervision in addition to ad hoc conversations.
 Team templates and the legacy Missions API,
 CLI and portal view have been removed. Existing teams and role descriptions are
-discovered dynamically; each delegation still requires Human approval.
+discovered dynamically; each delegation requires per-delegation Human approval
+or an autonomous coordination grant.
 
 | Configuration field | Limit |
 |---------------------|-------|

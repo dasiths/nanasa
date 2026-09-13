@@ -55,6 +55,7 @@ groups: {}
         ["PUT", "/api/v1/foreman/configuration"],
         ["POST", "/api/v1/foreman/run/start"],
         ["POST", "/api/v1/foreman/run/stop"],
+        ["POST", "/api/v1/foreman/state/reset"],
       ] as const) {
         expect(
           (await daemon.app.inject({ method, url, ...(method === "GET" ? {} : { payload: {} }) }))
@@ -137,6 +138,31 @@ groups: {}
       });
       expect(stopped.statusCode).toBe(200);
       expect(stopped.json().run).toMatchObject({ status: "stopped", desiredState: "stopped" });
+      const connector = await daemon.app.inject({
+        method: "POST",
+        url: "/api/v1/foreman/connectors",
+        headers,
+        payload: {
+          principalId: "external-human",
+          name: "External connector",
+          scopes: ["notifications", "conversation", "goals", "decisions", "control"],
+        },
+      });
+      expect(connector.statusCode).toBe(200);
+      const reset = {
+        method: "POST" as const,
+        url: "/api/v1/foreman/state/reset",
+        payload: { scope: "all", confirmation: "RESET" },
+      };
+      expect(
+        (
+          await daemon.app.inject({
+            ...reset,
+            headers: { authorization: `Bearer ${connector.json().token}` },
+          })
+        ).statusCode,
+      ).toBe(403);
+      expect((await daemon.app.inject({ ...reset, headers })).statusCode).toBe(200);
     } finally {
       await daemon.app.close();
       spawnSync("tmux", ["-L", daemon.runtime.serverName, "kill-server"]);

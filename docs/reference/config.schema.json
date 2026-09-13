@@ -130,6 +130,14 @@
                   "bounded"
                 ]
               },
+              "approvalMode": {
+                "default": "human",
+                "type": "string",
+                "enum": [
+                  "human",
+                  "autonomous"
+                ]
+              },
               "maxActiveGoals": {
                 "default": 1,
                 "type": "integer",
