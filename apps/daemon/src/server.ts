@@ -31,6 +31,7 @@ import { ProviderCatalogService } from "./extensions/provider-catalog-service.js
 import { ProviderExtensionPlanner } from "./extensions/provider-extension-planner.js";
 import { ProviderExtensionService } from "./extensions/provider-extension-service.js";
 import { ProviderHealthService } from "./extensions/provider-health-service.js";
+import { foremanTurnContext } from "./foreman-context.js";
 import { ForemanConversationService } from "./foreman-conversation-service.js";
 import { ForemanGoalService } from "./foreman-goal-service.js";
 import { ForemanInboxScheduler } from "./foreman-inbox-scheduler.js";
@@ -486,6 +487,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       (runId) => terminalControl.hasController(runId),
     );
     const goalService = goals;
+    const foremanContext = () => foremanTurnContext(goals, configRepository.load().config);
     const conversations = new ForemanConversationService(store, goals, (runId) =>
       terminalControl.hasController(runId),
     );
@@ -515,6 +517,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       allowProviderFiles: options.providerPolicy?.allowProviderFiles === true,
       onRunAvailable: (run) => terminalGateway.start(run),
       onRunUnavailable: (runId) => terminalControl.unregister(runId),
+      contextSnapshot: foremanContext,
     });
     const terminalDelivery = new TmuxTerminalDelivery(runtime, terminalInput, (claim) =>
       goalService.authorizeMessage(claim.message.groupId, claim.message),
@@ -531,6 +534,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         goalService.authorizeInbox(inboxId);
         conversations.authorizeInbox(inboxId, foreman.status().configuration?.id);
       },
+      foremanContext,
     );
     const deliveries = new DeliveryRepository(store);
     const messages = new MessageRepository(store);

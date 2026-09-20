@@ -27,9 +27,9 @@ import {
   ReportDelegationCommandSchema,
   type RequestHumanDecisionCommand,
   RequestHumanDecisionCommandSchema,
+  ResetForemanStateCommandSchema,
   type ResolveHumanDecisionCommand,
   ResolveHumanDecisionCommandSchema,
-  ResetForemanStateCommandSchema,
   type TeamDelegation,
 } from "@nanasa/contracts";
 import type { AgentActionService } from "./actions/agent-action-service.js";
@@ -639,6 +639,7 @@ export class ForemanGoalService {
     const config = this.config();
     return snapshot.groups.map((group) => ({
       ...group,
+      eligibility: this.assessTeam(group.id),
       startupRequiredMemberIds: this.store
         .listActiveMemberships(group.id)
         .filter((member) => this.store.getActiveRun(group.id, member.memberId) === undefined)
@@ -699,29 +700,88 @@ export class ForemanGoalService {
       !members.some((member) => member.memberId === delegation.memberId)
     )
       this.#fail("Team membership or checkout changed; a new delegation is required");
+    const blocker = this.#assignmentBlockers(delegation.groupId, delegation.checkoutId)[0];
+    if (blocker) this.#fail(blocker.message);
+  }
+  #assignmentBlockers(groupId: string, checkoutId: string) {
+    const blockers: Array<{ code: string; message: string }> = [];
     if (
       this.store
         .getSnapshot()
         .groups.some(
           (other) =>
-            other.id !== delegation.groupId &&
-            this.store.getEffectiveGroupCheckout(other.id)?.id === delegation.checkoutId &&
+            other.id !== groupId &&
+            this.store.getEffectiveGroupCheckout(other.id)?.id === checkoutId &&
             this.store
               .listActiveMemberships(other.id)
               .some((member) => this.store.getActiveRun(other.id, member.memberId) !== undefined),
         )
     )
-      this.#fail("Another active team shares this checkout");
+      blockers.push({
+        code: "shared_active_checkout",
+        message: "Another active team shares this checkout",
+      });
+    const runs = this.store.listActiveMemberships(groupId).flatMap((member) => {
+      const run = this.store.getActiveRun(groupId, member.memberId);
+      return run === undefined ? [] : [run];
+    });
+    if (runs.some((run) => run.checkoutId !== checkoutId))
+      blockers.push({
+        code: "runtime_checkout_changed",
+        message: "Team checkout or human control prevents delegated work",
+      });
+    if (runs.some((run) => this.hasController(run.id)))
+      blockers.push({
+        code: "human_controlled",
+        message: "Team checkout or human control prevents delegated work",
+      });
+    return blockers;
+  }
+  assessTeam(groupId: string) {
+    const blockers: Array<{ code: string; message: string }> = [];
+    const members = this.store.listActiveMemberships(groupId);
+    const checkout = this.store.getEffectiveGroupCheckout(groupId);
+    const reservations = this.delegations().filter((item) => !inactive.has(item.state));
+    if (reservations.some((item) => item.groupId === groupId))
+      blockers.push({ code: "team_reserved", message: "Team is already reserved" });
+    if (checkout === undefined)
+      blockers.push({
+        code: "missing_checkout",
+        message: "Assign a team checkout before delegation",
+      });
+    else {
+      if (reservations.some((item) => item.checkoutId === checkout.id))
+        blockers.push({
+          code: "checkout_reserved",
+          message: "Checkout is already reserved by another delegation",
+        });
+      blockers.push(...this.#assignmentBlockers(groupId, checkout.id));
+    }
+    if (members.length === 0)
+      blockers.push({ code: "no_members", message: "Team has no accountable member" });
+    if (
+      this.store
+        .listAgentActions(groupId)
+        .some(
+          (action) =>
+            action.principal.kind !== "foreman-conversation" && !settled.has(action.state),
+        )
+    )
+      blockers.push({ code: "unsettled_work", message: "Team has unsettled work" });
     if (
       members.some((member) => {
-        const run = this.store.getActiveRun(group.id, member.memberId);
-        return (
-          run !== undefined &&
-          (run.checkoutId !== delegation.checkoutId || this.hasController(run.id))
-        );
+        if (this.store.getActiveRun(groupId, member.memberId) === undefined) return false;
+        const status = this.store.getAgentStatus(groupId, member.memberId);
+        return status.state !== "idle" || status.staleAuthority || !status.interactiveReady;
       })
     )
-      this.#fail("Team checkout or human control prevents delegated work");
+      blockers.push({ code: "runtime_not_ready", message: "Team is not currently available" });
+    return {
+      scope: "team" as const,
+      eligible: blockers.length === 0,
+      goalAuthorization: "not-evaluated" as const,
+      blockers,
+    };
   }
   delegate(principal: McpForemanPrincipal, command: DelegateForemanGoalCommand): TeamDelegation {
     this.assertForeman(principal);
@@ -739,22 +799,12 @@ export class ForemanGoalService {
         goal.grant.maxTeamsPerGoal
       )
         this.#fail("Goal team budget exhausted");
-      if (
-        this.delegations().some(
-          (item) => item.groupId === input.groupId && !inactive.has(item.state),
-        )
-      )
-        this.#fail("Team is already reserved");
       const group = this.store.getSnapshot().groups.find((item) => item.id === input.groupId);
       if (group === undefined) this.#fail("Team is no longer available");
+      const blocker = this.assessTeam(group.id).blockers[0];
+      if (blocker) this.#fail(blocker.message);
       const checkout = this.store.getEffectiveGroupCheckout(group.id);
       if (checkout === undefined) this.#fail("Assign a team checkout before delegation");
-      if (
-        this.delegations().some(
-          (item) => item.checkoutId === checkout.id && !inactive.has(item.state),
-        )
-      )
-        this.#fail("Checkout is already reserved by another delegation");
       const timestamp = this.#timestamp();
       const delegation: TeamDelegation = {
         ...input,
@@ -767,27 +817,6 @@ export class ForemanGoalService {
         updatedAt: timestamp,
       };
       this.assertAssignment(delegation);
-      if (
-        this.store
-          .listAgentActions(input.groupId)
-          .some(
-            (action) =>
-              action.principal.kind !== "foreman-conversation" && !settled.has(action.state),
-          )
-      )
-        this.#fail("Team has unsettled work");
-      if (
-        this.discover()
-          .find((item) => item.id === input.groupId)
-          ?.members.some(
-            (member) =>
-              member.runId !== undefined &&
-              (member.status.state !== "idle" ||
-                member.status.staleAuthority ||
-                !member.status.interactiveReady),
-          )
-      )
-        this.#fail("Team is not currently available");
       this.#save("delegation", delegation, key, input);
       const decision = this.#question(
         {

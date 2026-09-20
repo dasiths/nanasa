@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   type AgentStatusEventInput,
-  type AgentStatusEventKind,
   AgentStatusEventInputSchema,
+  type AgentStatusEventKind,
 } from "@nanasa/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {

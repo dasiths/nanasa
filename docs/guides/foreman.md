@@ -51,6 +51,41 @@ it proposes the objective and constraints and retains relevant request IDs in
 unapproved in human approval mode until you approve it through operator controls.
 A casual "yes" is not an unrestricted execution grant.
 
+## Automatic coordination context
+
+Nanasa supplies a bounded policy, team, and goal snapshot in Foreman's generated
+launch prompt, including recovery launches, and refreshes it before automated
+Channel or supervision turns. Worker status changes do not restart Foreman.
+Native-terminal conversations use the same core role instructions and can refresh
+context through MCP; a launch snapshot is not current execution authority.
+
+Planning questions such as "How will you delegate?" should use actual team members
+and explain resource blockers without starting implementation. An explicit request
+to execute should proceed within the current goal grant and approval policy without
+an additional delegation reminder. Status questions do not create goals or start
+stopped members. Scope ambiguity and missing authority still require Human input.
+
+`nanasa.foreman_bootstrap` and `nanasa.foreman_discover_teams` return compact text
+and structured summaries, capped at 8 KiB for the complete tool result and 2 KiB
+for text. Reporter evidence and transition history are excluded. The bootstrap
+prioritizes active goals; use `nanasa.foreman_get_goal` for full grants, constraints,
+decisions, and evidence.
+
+Bootstrap pages use `teamOffset` and `goalOffset`. Discovery returns a `teams`
+array with `nextOffset`; member pages use `groupId` and `memberOffset`. Follow
+`memberPage.nextOffset` to inspect additional members. Reuse the revision returned
+by the same tool when continuing its pages. Changed context rejects stale paging;
+restart without a revision to read a fresh snapshot. Names and descriptions may
+be shortened, but identifiers are exact. An incomplete page does not mean other
+configured teams are absent.
+
+Discovery reports `eligibility.blockers` from the same team assessment used by
+delegation. Eligibility is team-level, not goal authorization: the daemon rechecks
+owner, membership, checkout, policy, and budgets when work is delegated. Idle teams
+sharing an active checkout are blocked; agreeing on file ownership does not remove
+that restriction. Context delivery and passing transport tests do not prove that
+a particular provider model has read or followed the instructions.
+
 ## Choose an approval mode
 
 Stop Foreman and select **Settings > Coordination approvals**. The default,

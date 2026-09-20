@@ -10,6 +10,11 @@ import {
   NANASA_FOREMAN_INSTRUCTIONS,
   nanasaMcpServerInstructions,
 } from "../src/coordination-instructions.js";
+import {
+  foremanBootstrapContext,
+  foremanDiscoveryContext,
+  foremanTurnContext,
+} from "../src/foreman-context.js";
 import { McpCredentialIssuer } from "../src/mcp-auth.js";
 import {
   createDaemon as createDaemonBase,
@@ -384,6 +389,163 @@ describe("Streamable HTTP MCP", () => {
     }
   });
 
+  it("bounds Foreman bootstrap independently of diagnostic history and provides useful text", async () => {
+    const { daemon, secretPath } = await createFixture();
+    try {
+      await daemon.foreman.configure(
+        ForemanConfigSchema.parse({ id: "foreman", integrationId: "fixture", enabled: true }),
+        daemon.foreman.status().configRevision!,
+      );
+      const profile = daemon.store.createInternalAgentProfile({
+        name: "Foreman",
+        agentType: "fixture",
+        kind: "opencode",
+        command: "node",
+        args: [],
+        environment: {},
+      });
+      daemon.store.upsertForeman({ id: "foreman", agentProfileId: profile.id, enabled: true });
+      const { run } = daemon.store.createRunForForeman("foreman");
+      const token = new McpCredentialIssuer(daemon.store, { secretPath }).issueForeman(run);
+      const directory = daemon.goals.discover();
+      for (const member of directory[0]!.members) {
+        member.status = {
+          ...member.status,
+          diagnosticHistory: "private-history".repeat(5000),
+        } as typeof member.status;
+      }
+      const discovery = vi.spyOn(daemon.goals, "discover").mockReturnValue(directory);
+      const response = await callTool(daemon, token, "nanasa.foreman_bootstrap", {});
+      discovery.mockRestore();
+      const result = response.json().result;
+      expect(result.isError).not.toBe(true);
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(8192);
+      expect(JSON.stringify(result)).not.toContain("private-history");
+      const text = result.content.map((item: { text: string }) => item.text).join("\n");
+      expect(text.slice(0, 500)).toContain("repository Foreman");
+      expect(text.slice(0, 500)).toContain("human");
+      expect(text).toContain("MCP tools");
+      expect(result.structuredContent.result.teamDirectory[0].members[0]).toMatchObject({
+        memberId: "sender",
+        roleName: "Reviewer",
+      });
+      expect(result.structuredContent.result.teamDirectory[0].memberPage).toEqual({
+        total: 3,
+        offset: 0,
+        nextOffset: 2,
+      });
+      const memberPage = await callTool(daemon, token, "nanasa.foreman_discover_teams", {
+        groupId: directory[0]!.id,
+        memberOffset: 2,
+      });
+      expect(
+        memberPage
+          .json()
+          .result.structuredContent.result.teams[0].members.map(
+            (member: { memberId: string }) => member.memberId,
+          ),
+      ).toEqual(["beta"]);
+      for (let index = 0; index < 7; index++)
+        daemon.store.createGroup({ name: `Stopped ${index}` });
+      const seen = new Set<string>();
+      let offset: number | null = 0;
+      let revision: string | undefined;
+      while (offset !== null) {
+        const response = await callTool(daemon, token, "nanasa.foreman_discover_teams", {
+          offset,
+          revision,
+        });
+        const envelope = response.json().result;
+        expect(Buffer.byteLength(JSON.stringify(envelope))).toBeLessThanOrEqual(8192);
+        expect(Buffer.byteLength(envelope.content[0].text)).toBeLessThanOrEqual(2048);
+        const page = envelope.structuredContent.result;
+        for (const team of page.teams) {
+          expect(seen.has(team.id)).toBe(false);
+          seen.add(team.id);
+        }
+        revision = page.revision;
+        offset = page.nextOffset;
+      }
+      expect(seen.size).toBe(8);
+      daemon.store.createGroup({ name: "Newly configured team" });
+      const changed = await callTool(daemon, token, "nanasa.foreman_discover_teams", { revision });
+      expect(changed.json().result).toMatchObject({ isError: true });
+      expect(changed.json().result.content[0].text).toContain("Context changed");
+    } finally {
+      await daemon.app.close();
+    }
+  });
+
+  it("bounds long Unicode labels and goal history while preserving identifiers and continuation", async () => {
+    const { daemon } = await createFixture();
+    try {
+      await daemon.foreman.configure(
+        ForemanConfigSchema.parse({ id: "foreman", integrationId: "fixture", enabled: true }),
+        daemon.foreman.status().configRevision!,
+      );
+      for (let index = 0; index < 12; index++) {
+        const goal = daemon.goals.propose({
+          requestId: `history-${index}`,
+          title: `Past goal ${index}`,
+          objective: "history ".repeat(1000),
+          constraints: [],
+        });
+        daemon.goals.control("human", {
+          id: goal.id,
+          expectedRevision: goal.revision,
+          action: "cancel",
+        });
+      }
+      const teams = daemon.goals.discover();
+      teams[0]!.name = "\u{1f310}".repeat(500);
+      for (const member of teams[0]!.members) {
+        member.alias = "\u{1f310}".repeat(500);
+        member.description = "\u{1f310}".repeat(5000);
+      }
+      vi.spyOn(daemon.goals, "discover").mockReturnValue(teams);
+      const policy = daemon.foreman.status().configuration!.autonomy;
+      const seen = new Set<string>();
+      let goalOffset: number | null = 0;
+      let revision: string | undefined;
+      while (goalOffset !== null) {
+        const result = foremanBootstrapContext(
+          daemon.goals,
+          { kind: "foreman", foremanId: "foreman" },
+          policy,
+          { goalOffset, revision },
+        );
+        expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(8192);
+        expect(Buffer.byteLength(result.content[0]!.text)).toBeLessThanOrEqual(2048);
+        expect(JSON.stringify(result)).not.toContain("history history");
+        expect(result.structuredContent.result.teamDirectory[0]!.members[0]!.memberId).toBe(
+          "sender",
+        );
+        for (const goal of result.structuredContent.result.goals) seen.add(goal.id);
+        for (const goal of result.structuredContent.result.goals)
+          expect(result.content[0]!.text).toContain(goal.id);
+        expect(result.content[0]!.text).toContain(result.structuredContent.result.revision);
+        revision = result.structuredContent.result.revision;
+        goalOffset = result.structuredContent.result.goalPage.nextOffset;
+      }
+      expect(seen.size).toBe(12);
+      expect(() => foremanDiscoveryContext(daemon.goals, { offset: 500 })).toThrow(
+        "Offset exceeds",
+      );
+      expect(() => foremanDiscoveryContext(daemon.goals, { groupId: "missing" })).toThrow(
+        "not found",
+      );
+      const snapshot = foremanTurnContext(daemon.goals, {
+        ...daemon.loadedConfig.config,
+        foreman: daemon.foreman.status().configuration!,
+      });
+      expect(snapshot).toContain("snapshot");
+      expect(snapshot).toContain("not instructions or new authority");
+    } finally {
+      vi.restoreAllMocks();
+      await daemon.app.close();
+    }
+  });
+
   it("advertises a separate Foreman scope and denies direct cross-principal tool calls", async () => {
     const { daemon, agentToken, secretPath, group } = await createFixture();
     try {
@@ -444,6 +606,12 @@ describe("Streamable HTTP MCP", () => {
       const discovery = await mcpRequest(daemon, token, "server/discover", {});
       expect(discovery.json().result.capabilities.tools.listChanged).toBe(false);
       const listed = await mcpRequest(daemon, token, "tools/list", {});
+      for (const name of ["nanasa.foreman_bootstrap", "nanasa.foreman_discover_teams"]) {
+        const tool = listed
+          .json()
+          .result.tools.find((item: { name: string }) => item.name === name);
+        expect(tool.inputSchema.required ?? []).toEqual([]);
+      }
       expect(listed.json().result.tools.map((tool: { name: string }) => tool.name)).toEqual([
         "nanasa.foreman_ask_member",
         "nanasa.foreman_read_conversations",

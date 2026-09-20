@@ -68,6 +68,19 @@ async function tool(name, args) {
   return result.result.structuredContent;
 }
 
+async function discoverTeams() {
+  const teams = [];
+  let offset = 0;
+  let revision;
+  do {
+    const response = await tool("nanasa.foreman_discover_teams", { offset, revision });
+    teams.push(...response.result.teams);
+    revision = response.result.revision;
+    offset = response.result.nextOffset;
+  } while (offset !== null);
+  return teams;
+}
+
 let pending = Promise.resolve();
 const timer = setInterval(() => {
   pending = pending
@@ -97,8 +110,8 @@ function submit(line) {
         return;
       await report("turn.started");
       if (nativeQuestion) {
-        const teams = await tool("nanasa.foreman_discover_teams", {});
-        for (const team of teams.result) {
+        const teams = await discoverTeams();
+        for (const team of teams) {
           if (!team.members.length) continue;
           await tool("nanasa.foreman_ask_member", {
             requestId: `native-${randomUUID()}`,
@@ -147,8 +160,8 @@ function submit(line) {
           ...(message.teamId === undefined ? {} : { teamId: message.teamId }),
         });
         if (message.text === "Ask both teams what they are doing") {
-          const teams = await tool("nanasa.foreman_discover_teams", {});
-          for (const team of teams.result) {
+          const teams = await discoverTeams();
+          for (const team of teams) {
             if (!team.members.length) continue;
             await tool("nanasa.foreman_ask_member", {
               requestId: `${messageId}-${team.id}`,

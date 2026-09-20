@@ -8,7 +8,7 @@ afterEach(() => {
   for (const store of stores.splice(0)) store.close();
 });
 
-function fixture(withPreviousRun = false) {
+function fixture(withPreviousRun = false, contextSnapshot?: () => string) {
   const store = new NanasaStore(":memory:");
   stores.push(store);
   const profile = store.createInternalAgentProfile({
@@ -118,6 +118,8 @@ function fixture(withPreviousRun = false) {
     { dispatchAutomated: async (_id, operation) => operation() },
     () => controlled,
     () => new Date(Date.now() + clockOffset),
+    undefined,
+    contextSnapshot,
   );
   return {
     store,
@@ -142,6 +144,25 @@ function fixture(withPreviousRun = false) {
 }
 
 describe("Foreman durable input dispatch", () => {
+  it("delivers current context once after readiness without bypassing Human control", async () => {
+    const snapshot = vi.fn(() => "Current bounded roster revision one");
+    const context = fixture(false, snapshot);
+    await context.scheduler.tick();
+    expect(snapshot).not.toHaveBeenCalled();
+    context.ready();
+    context.control(true);
+    await context.scheduler.tick();
+    expect(snapshot).not.toHaveBeenCalled();
+    context.control(false);
+    await context.scheduler.tick();
+    await context.scheduler.tick();
+    expect(snapshot).toHaveBeenCalledOnce();
+    expect(context.runtime.pasteToRun).toHaveBeenCalledOnce();
+    expect(vi.mocked(context.runtime.pasteToRun).mock.calls[0]![1]).toContain(
+      "Current bounded roster revision one",
+    );
+    await context.scheduler.close();
+  });
   it("waits for a stable idle interval between provider autopilot turns", async () => {
     const context = fixture();
     context.clockOffset(0);

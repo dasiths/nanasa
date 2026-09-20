@@ -21,6 +21,7 @@ export class ForemanInboxScheduler {
     private readonly hasController: (runId: string) => boolean,
     private readonly now: () => Date = () => new Date(),
     private readonly authorizeGoalInput?: (inboxId: string) => void,
+    private readonly contextSnapshot?: () => string,
   ) {}
 
   public start(): void {
@@ -118,6 +119,8 @@ export class ForemanInboxScheduler {
     await this.arbiter.dispatchAutomated(run.id, async () => {
       await this.foreman.observeReporterProcess(run);
       if (!this.#ready(run)) return;
+      const context = this.contextSnapshot?.();
+      const prompt = context === undefined ? item.prompt : `${item.prompt}\n\n${context}`;
       const initial = this.store.getRuntimeStatusState(run.id);
       const actor = this.store.getForeman(run.foremanId);
       const target = {
@@ -138,7 +141,7 @@ export class ForemanInboxScheduler {
           .run(JSON.stringify(target), this.now().toISOString(), item.id).changes === 1;
       if (!claimed) return;
       try {
-        await this.runtime.pasteToRun(run, item.prompt, () => {
+        await this.runtime.pasteToRun(run, prompt, () => {
           this.authorizeGoalInput?.(item.id);
           const state = this.store.getRuntimeStatusState(run.id);
           const view = this.foreman.status();

@@ -18,6 +18,27 @@ import { DomainError } from "../store.js";
 
 export const McpIdentifierSchema = z.string().trim().min(1).max(128);
 export const McpForemanBootstrapSchema = z.object({}).strict();
+export const McpForemanContextSchema = z
+  .object({
+    teamOffset: z.number().int().nonnegative().optional(),
+    goalOffset: z.number().int().nonnegative().optional(),
+    revision: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
+  })
+  .strict();
+export const McpForemanDiscoverySchema = z
+  .object({
+    offset: z.number().int().nonnegative().optional(),
+    groupId: McpIdentifierSchema.optional(),
+    memberOffset: z.number().int().nonnegative().optional(),
+    revision: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
+  })
+  .strict();
 export const McpConversationReferenceSchema = z.object({ id: McpIdentifierSchema }).strict();
 export const McpGoalReferenceSchema = z.object({ goalId: McpIdentifierSchema }).strict();
 export const McpReportDelegationSchema = ReportDelegationCommandSchema.extend({
@@ -171,8 +192,8 @@ export const MCP_TOOL_REGISTRY = Object.freeze([
   tool({
     name: "nanasa.foreman_discover_teams",
     description:
-      "Discover current teams, role descriptions, permissions, readiness and reservations; discovery does not grant authority",
-    inputSchema: McpForemanBootstrapSchema,
+      "Read bounded teams and member pages with role descriptions, team eligibility blockers and reservations. Continue with offset/revision or groupId/memberOffset. Goal authorization is not evaluated; discovery grants no authority",
+    inputSchema: McpForemanDiscoverySchema,
     principals: ["foreman"],
     scope: "foreman:teams:discover",
     authority: "read",
@@ -180,7 +201,7 @@ export const MCP_TOOL_REGISTRY = Object.freeze([
   tool({
     name: "nanasa.foreman_propose_goal",
     description:
-      "Propose a high-level outcome for human approval without requiring an implementation plan",
+      "Propose a high-level outcome without requiring an implementation plan. Starts within ceilings under autonomous approval; otherwise awaits Human approval. Inspect returned state and grant",
     inputSchema: ProposeForemanGoalCommandSchema,
     principals: ["foreman"],
     scope: "foreman:goals:propose",
@@ -197,7 +218,7 @@ export const MCP_TOOL_REGISTRY = Object.freeze([
   tool({
     name: "nanasa.foreman_delegate_goal",
     description:
-      "Propose a specific team and accountable member to own research, planning, implementation and review; requires explicit human authorization",
+      "Delegate an outcome to a real team and accountable member. Requires per-delegation Human approval or an existing autonomous goal grant under current policy; always rechecks readiness, checkout isolation and budgets",
     inputSchema: DelegateForemanGoalCommandSchema,
     principals: ["foreman"],
     scope: "foreman:goals:delegate",
@@ -266,8 +287,9 @@ export const MCP_TOOL_REGISTRY = Object.freeze([
   }),
   tool({
     name: "nanasa.foreman_bootstrap",
-    description: "Read repository Foreman identity, policy ceilings, goals, and live team metadata",
-    inputSchema: McpForemanBootstrapSchema,
+    description:
+      "Read bounded repository Foreman identity, effective policy, team and goal summaries before planning or delegation. Continue with teamOffset/goalOffset and revision; use foreman_discover_teams for member pages and foreman_get_goal for full constraints",
+    inputSchema: McpForemanContextSchema,
     principals: ["foreman"],
     scope: "foreman:bootstrap",
     authority: "read",

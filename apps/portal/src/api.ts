@@ -169,14 +169,11 @@ import {
   type HumanDecision,
   HumanDecisionSchema,
   type ProposeForemanGoalCommand,
-  type ResolveHumanDecisionCommand,
-} from "@nanasa/contracts";
-
-import {
   type ResetForemanStateCommand,
   ResetForemanStateCommandSchema,
   type ResetForemanStateResult,
   ResetForemanStateResultSchema,
+  type ResolveHumanDecisionCommand,
 } from "@nanasa/contracts";
 
 export interface PortalClient {

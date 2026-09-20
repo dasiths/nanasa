@@ -140,6 +140,11 @@ groups:
     expect(prompt.text).toContain("end your turn so result wakeups can be delivered");
     expect(prompt.text).toContain("Do not use shell waits, sleep commands, or repeated polling");
     expect(prompt.text).toContain("nanasa.request_human_decision cannot approve a proposed goal");
+    expect(prompt.text).toContain("do not invent specialist staff");
+    expect(prompt.text).toContain("without waiting for a separate reminder to delegate");
+    expect(prompt.text).toContain("file ownership agreements cannot bypass checkout isolation");
+    expect(prompt.text).toContain("policy changes do not upgrade old grants");
+    expect(prompt.text).toContain("a successful call or a truncated preview is not evidence");
     expect(prompt.text).toContain("Foreman cannot answer worker waits");
     expect(prompt.text).toContain("Never copy provider credentials between homes");
     expect(prompt.text).not.toContain("Prefer exact actions and typed wait replies");

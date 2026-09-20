@@ -36,6 +36,7 @@ export interface ForemanRuntimeServiceOptions {
   readonly now?: () => Date;
   readonly onRunAvailable?: (run: ForemanRun) => void;
   readonly onRunUnavailable?: (runId: string) => void;
+  readonly contextSnapshot?: () => string;
 }
 
 export class ForemanRuntimeService {
@@ -172,7 +173,21 @@ export class ForemanRuntimeService {
       if (actor.id !== foreman.id && actor.enabled)
         store.upsertForeman({ ...actor, enabled: false });
     }
-    const { prompt, providerPolicy } = this.#launchContext(loaded);
+    const { prompt: basePrompt, providerPolicy } = this.#launchContext(loaded);
+    const context = this.#options.contextSnapshot?.();
+    const text = context === undefined ? basePrompt.text : `${basePrompt.text}\n${context}\n`;
+    const prompt = {
+      ...basePrompt,
+      text,
+      revision: createHash("sha256").update(text).digest("hex"),
+      sources:
+        context === undefined
+          ? basePrompt.sources
+          : [
+              ...basePrompt.sources,
+              { scope: "builtin" as const, reference: "builtin:nanasa-foreman-context-v1" },
+            ],
+    };
     const profileInput = {
       name: foreman.name,
       agentType: foreman.integrationId,

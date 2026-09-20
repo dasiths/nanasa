@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -585,6 +585,14 @@ describe("Foreman outcome delegation", () => {
       alias: "Other owner",
     });
     expect(context.service.discover().find((team) => team.id === other.id)).toMatchObject({
+      eligibility: {
+        scope: "team",
+        eligible: false,
+        goalAuthorization: "not-evaluated",
+        blockers: expect.arrayContaining([
+          { code: "shared_active_checkout", message: "Another active team shares this checkout" },
+        ]),
+      },
       startupRequiredMemberIds: ["other-owner"],
       effectiveCheckout: {
         id: "checkout-one",
@@ -592,10 +600,115 @@ describe("Foreman outcome delegation", () => {
       },
     });
     context.store.createRunForMembership(other.id, "other-owner");
+    expect(
+      context.service.assessTeam(context.group.id).blockers.map((blocker) => blocker.code),
+    ).toContain("shared_active_checkout");
     expect(() => context.service.assertAssignment(context.delegation)).toThrow(
       "Another active team shares this checkout",
     );
   });
+
+  it("rechecks an eligible team when another team starts on its checkout", () => {
+    const context = teamFixture();
+    const { service, store, group, profile, foreman } = context;
+    service.control("human", {
+      id: context.goal.id,
+      expectedRevision: service.get(context.goal.id).revision,
+      action: "cancel",
+    });
+    expect(service.assessTeam(group.id)).toMatchObject({
+      eligible: true,
+      goalAuthorization: "not-evaluated",
+      blockers: [],
+    });
+    const goal = service.propose({ ...context.command, requestId: "second-goal" });
+    service.control("human", { id: goal.id, expectedRevision: goal.revision, action: "approve" });
+    const observed = service.discover().find((team) => team.id === group.id)!;
+    const other = store.createGroup({ name: "Independent team" });
+    store.addMembership(other.id, {
+      memberId: "other",
+      alias: "Other",
+      agentProfileId: profile.id,
+    });
+    store.createRunForMembership(other.id, "other");
+    expect(service.assessTeam(group.id).blockers.map((blocker) => blocker.code)).toContain(
+      "shared_active_checkout",
+    );
+    expect(() =>
+      service.delegate(foreman, {
+        requestId: "stale-observation",
+        goalId: goal.id,
+        expectedRevision: service.get(goal.id).revision,
+        groupId: group.id,
+        memberId: "alex",
+        expectedMembershipRevision: observed.membershipRevision,
+        expectedCheckoutRevision: observed.checkoutRevision,
+        rationale: "Observed idle team",
+        brief: "Deliver the outcome",
+      }),
+    ).toThrow("Another active team shares this checkout");
+    expect(service.workspace(goal.id).delegations).toEqual([]);
+  });
+
+  it.each(["human_controlled", "runtime_not_ready", "unsettled_work"])(
+    "uses the same %s blocker in discovery and delegation",
+    (code) => {
+      const context = teamFixture();
+      const { store, group, foreman } = context;
+      context.service.control("human", {
+        id: context.goal.id,
+        expectedRevision: context.service.get(context.goal.id).revision,
+        action: "cancel",
+      });
+      const service = new ForemanGoalService(
+        store,
+        () => context.config,
+        () => code === "human_controlled",
+      );
+      const goal = service.propose({ ...context.command, requestId: "blocked-goal" });
+      service.control("human", { id: goal.id, expectedRevision: goal.revision, action: "approve" });
+      const status = store.getAgentStatus(group.id, "alex");
+      const statusSpy =
+        code === "runtime_not_ready"
+          ? vi
+              .spyOn(store, "getAgentStatus")
+              .mockReturnValue({ ...status, interactiveReady: false })
+          : undefined;
+      const actionsSpy =
+        code === "unsettled_work"
+          ? vi
+              .spyOn(store, "listAgentActions")
+              .mockReturnValue([
+                { state: "queued", principal: { kind: "agent" } } as ReturnType<
+                  typeof store.listAgentActions
+                >[number],
+              ])
+          : undefined;
+      try {
+        const observed = service.discover().find((team) => team.id === group.id)!;
+        const blocker = observed.eligibility.blockers.find((item) => item.code === code)!;
+        expect(observed.eligibility.eligible).toBe(false);
+        expect(blocker).toBeDefined();
+        expect(() =>
+          service.delegate(foreman, {
+            requestId: "blocked-handoff",
+            goalId: goal.id,
+            expectedRevision: service.get(goal.id).revision,
+            groupId: group.id,
+            memberId: "alex",
+            expectedMembershipRevision: observed.membershipRevision,
+            expectedCheckoutRevision: observed.checkoutRevision,
+            rationale: "Select real owner",
+            brief: "Deliver the outcome",
+          }),
+        ).toThrow(blocker.message);
+        expect(service.workspace(goal.id).delegations).toEqual([]);
+      } finally {
+        statusSpy?.mockRestore();
+        actionsSpy?.mockRestore();
+      }
+    },
+  );
 
   it("converses without goals, requires a tool reply, and persists context across restart", async () => {
     const context = teamFixture();

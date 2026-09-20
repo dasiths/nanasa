@@ -29,6 +29,7 @@ import {
   nanasaMcpServerInstructions,
 } from "./coordination-instructions.js";
 import { DeliveryRepository } from "./delivery-repository.js";
+import { foremanBootstrapContext, foremanDiscoveryContext } from "./foreman-context.js";
 import type { ForemanConversationService } from "./foreman-conversation-service.js";
 import type { ForemanGoalService } from "./foreman-goal-service.js";
 import type { CheckoutService } from "./git/checkout-service.js";
@@ -40,14 +41,16 @@ import {
   McpListAgentStatusesSchema as ListAgentStatusesSchema,
   McpListMembersSchema as ListMembersSchema,
   MCP_TOOL_REGISTRY,
+  McpAcceptGoalSchema,
   McpConversationReferenceSchema,
   McpDeliverySchema,
   McpForemanBootstrapSchema,
-  McpAcceptGoalSchema,
-  McpReportDelegationSchema,
+  McpForemanContextSchema,
+  McpForemanDiscoverySchema,
   McpGoalReferenceSchema,
   McpObserveTeamSchema,
   McpOwnWaitsSchema,
+  McpReportDelegationSchema,
   McpVisibleHistorySchema,
   McpMessageFieldsSchema as MessageFieldsSchema,
   McpMulticastMessageSchema as MulticastMessageSchema,
@@ -164,9 +167,10 @@ function actionPrincipal(principal: TeamMcpPrincipal) {
     : { kind: "operator" as const, operatorId: principal.operatorId };
 }
 
-function actionToolResult(operation: () => unknown) {
+function actionToolResult(operation: () => unknown, formatted = false) {
   try {
     const result = operation();
+    if (formatted) return result as ReturnType<typeof foremanBootstrapContext>;
     return {
       content: [{ type: "text" as const, text: "Durable action state returned." }],
       structuredContent: { result },
@@ -371,31 +375,19 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
       "nanasa.foreman_bootstrap",
       {
         description: mcpTool("nanasa.foreman_bootstrap").description,
-        inputSchema: McpForemanBootstrapSchema,
+        inputSchema: McpForemanContextSchema,
       },
-      async () =>
+      async (input) =>
         actionToolResult(() => {
           assertMcpToolPrincipal("nanasa.foreman_bootstrap", principal);
-          const snapshot = options.store.getSnapshot();
-          const config = options.foremanConfig?.() ?? snapshot.config;
-          const foreman = config?.foreman;
-          return {
+          const config = options.foremanConfig?.() ?? options.store.getSnapshot().config;
+          return foremanBootstrapContext(
+            options.goals,
             principal,
-            policyCeilings: foreman?.autonomy,
-            teams: snapshot.groups.map((group) => ({ id: group.id, name: group.name })),
-            teamDirectory: options.goals.discover(),
-            goals: options.goals.list(),
-            sourceCheckouts: snapshot.checkouts.map((checkout) => ({
-              id: checkout.id,
-              repositoryId: checkout.repositoryId,
-              kind: checkout.kind,
-              head: checkout.head,
-            })),
-            capabilities: MCP_TOOL_REGISTRY.filter((tool) =>
-              tool.principals.includes("foreman"),
-            ).map((tool) => tool.name),
-          };
-        }),
+            config?.foreman?.autonomy,
+            input,
+          );
+        }, true),
     );
     server.registerTool(
       "nanasa.foreman_read_channel",
@@ -426,9 +418,9 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
       "nanasa.foreman_discover_teams",
       {
         description: mcpTool("nanasa.foreman_discover_teams").description,
-        inputSchema: McpForemanBootstrapSchema,
+        inputSchema: McpForemanDiscoverySchema,
       },
-      async () => actionToolResult(() => options.goals.discover()),
+      async (input) => actionToolResult(() => foremanDiscoveryContext(options.goals, input), true),
     );
     server.registerTool(
       "nanasa.foreman_propose_goal",

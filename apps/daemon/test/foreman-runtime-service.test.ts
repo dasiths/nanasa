@@ -90,6 +90,32 @@ async function fixture() {
 }
 
 describe("Foreman runtime service", () => {
+  it("delivers fresh launch context without making worker changes a restart trigger", async () => {
+    const context = await fixture();
+    let snapshot = "Initial team snapshot";
+    const service = new ForemanRuntimeService({
+      ...context.options,
+      contextSnapshot: () => snapshot,
+    });
+    await service.start(context.revision);
+    const first = vi.mocked(context.runtime.startForemanRun).mock.calls[0]![0];
+    expect(first.prompt?.text).toContain(snapshot);
+    expect(first.prompt?.sources).toContainEqual({
+      scope: "builtin",
+      reference: "builtin:nanasa-foreman-context-v1",
+    });
+    snapshot = "Changed team snapshot";
+    await service.reconcile();
+    expect(context.runtime.stopForemanRun).not.toHaveBeenCalled();
+    expect(context.runtime.startForemanRun).toHaveBeenCalledTimes(1);
+    await service.stop();
+    await service.start(context.revision);
+    const second = vi.mocked(context.runtime.startForemanRun).mock.calls[1]![0];
+    expect(second.prompt?.text).toContain(snapshot);
+    expect(second.prompt?.revision).not.toBe(first.prompt?.revision);
+    expect(second.providerPolicy.configRevision).toBe(first.providerPolicy.configRevision);
+    await service.close();
+  });
   it("keeps Foreman alive across unrelated team changes but fences changed Foreman instructions", async () => {
     const context = await fixture();
     const run = await context.service.start(context.revision);

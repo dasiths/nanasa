@@ -35,7 +35,9 @@ Its **Stop** control lasts for the current daemon session; disable it to keep it
 off across restarts. With both teams and Foreman running, there are
 seven processes. Foreman discovers these teams and their roles dynamically; no
 static template or additional team is needed. Existing team IDs and workspaces
-are unchanged, and delegation requires Human approval.
+are unchanged. This example preauthorizes eligible coordination with
+`autonomy.approvalMode: autonomous`; checkout, readiness, and budget checks still
+apply. Goals created under human approval retain their original grants.
 
 The configuration retains direct Claude Code and Claude-through-LiteLLM
 integrations for optional use. Engineer 2 currently uses Pi with its own
@@ -53,9 +55,9 @@ Every integration selects the checked-in `autonomous` execution profile. The
 provider adapters translate that profile into native continuation, question,
 and approval controls. The reviewer remains read-only because its role denial
 floor wins over autonomous grants. This provider execution profile is separate
-from Foreman's `autonomy.mode: supervised`: Nanasa still requires exact operator
-approval of the goal and team delegation. Provider permission controls are not a
-substitute for goal grants or an OS sandbox.
+from Foreman's `autonomy.mode: supervised`, which limits intervention and recovery,
+and from `autonomy.approvalMode`, which governs goal and delegation approval.
+Provider permission controls are not a substitute for goal grants or an OS sandbox.
 
 Foreman uses the built-in `copilot` integration, not the `claude-copilot` gateway.
 No model is pinned for Foreman; it uses the provider default until a model is
