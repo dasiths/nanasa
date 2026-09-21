@@ -40,6 +40,7 @@ export const ForemanGoalRequestOriginSchema = z
   .strict();
 
 export const ForemanGoalSchema = ProposeForemanGoalCommandSchema.extend({
+  removedAt: TimestampSchema.optional(),
   id: IdentifierSchema,
   foremanId: IdentifierSchema,
   requestOrigin: ForemanGoalRequestOriginSchema.optional(),

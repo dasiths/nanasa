@@ -26,7 +26,6 @@ import {
   Copy,
   EllipsisVertical,
   Info,
-  MailWarning,
   MoveRight,
   Pencil,
   Play,
@@ -48,7 +47,6 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-
 import { copyToClipboard } from "../copy-to-clipboard.js";
 import { ErrorNotice, type PortalError, portalErrorFromCode, toPortalError } from "../errors.js";
 import { memberStatusView } from "../member-status.js";
@@ -75,7 +73,6 @@ interface GroupTreeProps {
   busyAction?: string;
   onSelectGroup(groupId: string): void;
   onSelectTerminal?(groupId: string, runId?: string): void;
-  onOpenMessages?(groupId: string): void;
   onCreateGroup(name: string, instructions: string[]): Promise<void>;
   onRenameGroup(groupId: string, name: string): Promise<void>;
   onUpdateGroup?(groupId: string, command: UpdateGroupCommand): Promise<void>;
@@ -1066,7 +1063,6 @@ export function GroupTree({
   busyAction,
   onSelectGroup,
   onSelectTerminal,
-  onOpenMessages,
   onCreateGroup,
   onRenameGroup,
   onUpdateGroup,
@@ -1104,11 +1100,6 @@ export function GroupTree({
     left: number;
     top: number;
   }>();
-  const failedRecipientsByGroup = new Map(
-    (snapshot.messageGroups ?? []).map(
-      (state) => [state.groupId, new Set(state.failedRecipientMemberIds)] as const,
-    ),
-  );
   const settingsAgent =
     settingsTarget === undefined
       ? undefined
@@ -1388,8 +1379,6 @@ export function GroupTree({
                       key: statusKey,
                       label: statusLabel,
                     } = memberStatusView(snapshot.agentStatuses, snapshot.runs, member);
-                    const deliveryFailed =
-                      failedRecipientsByGroup.get(group.id)?.has(member.memberId) === true;
                     const action = runAction(run);
                     const recoveryRetryAt =
                       run?.recoveryNotBefore !== undefined &&
@@ -1655,21 +1644,6 @@ export function GroupTree({
                             </div>,
                             document.body,
                           )}
-                        {deliveryFailed && (
-                          <button
-                            type="button"
-                            className="delivery-warning-button"
-                            aria-label={`Open failed delivery for ${agent.name} in ${group.name}`}
-                            title={`Open ${group.name} Messages for failed delivery to ${agent.name}`}
-                            onClick={() =>
-                              onOpenMessages === undefined
-                                ? onSelectGroup(group.id)
-                                : onOpenMessages(group.id)
-                            }
-                          >
-                            <MailWarning aria-hidden="true" size={15} />
-                          </button>
-                        )}
                         {editTarget?.kind !== "agent" && (
                           <ActionMenu
                             label={`Actions for agent ${agent.name}`}

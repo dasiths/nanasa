@@ -832,12 +832,17 @@ describe("everyday Foreman cleanup", () => {
       expect(result.pendingEffects).toEqual([
         {
           goalId: goal.id,
+          goalTitle: goal.title,
           actionIds: expect.arrayContaining([handoff.id, peer.id]),
           runIds: expect.arrayContaining([lead.runId, reviewer.runId]),
         },
       ]);
       expect(result.pendingEffects[0]!.actionIds).toHaveLength(2);
       expect(result.pendingEffects[0]!.runIds).toHaveLength(2);
+      expect(cleanup.listGoals()).toEqual([]);
+      expect(cleanup.listGoals(true)).toEqual([
+        expect.objectContaining({ id: goal.id, title: goal.title, removedAt: expect.any(String) }),
+      ]);
       expect(store.listAgentActions()).toEqual(beforeActions);
       expect(store.getAgentAction(unrelated.id)).toEqual(unrelated);
       for (const action of [handoff, peer])

@@ -700,8 +700,31 @@ describe("NanasaStore persistence", () => {
       );
 
     const first = send("one", "one");
-    send("two", "two");
-    send("three", "three");
+    const second = send("two", "two");
+    const third = send("three", "three");
+    store.database
+      .prepare("UPDATE deliveries SET status = 'failed' WHERE message_id = ?")
+      .run(second.message.id);
+    store.database
+      .prepare("UPDATE deliveries SET status = 'terminal_injected' WHERE message_id = ?")
+      .run(third.message.id);
+    const failure = store.getGroupMessageState(group.id).failedDeliveries!;
+    expect(failure).toHaveLength(1);
+    expect(failure[0]).toMatchObject({
+      messageId: second.message.id,
+      recipientMemberId: "reviewer",
+      status: "failed",
+      attempts: 0,
+    });
+    expect(store.getGroupMessageState(group.id).failedRecipientMemberIds).toEqual(["reviewer"]);
+    store.database
+      .prepare("UPDATE deliveries SET status = 'dead-letter', attempts = 2 WHERE message_id = ?")
+      .run(second.message.id);
+    expect(store.getGroupMessageState(group.id).failedDeliveries![0]).toMatchObject({
+      messageId: second.message.id,
+      status: "dead-letter",
+      attempts: 2,
+    });
 
     expect(store.getGroupMessageState(group.id)).toMatchObject({
       latestGroupSeq: 3,
@@ -728,6 +751,8 @@ describe("NanasaStore persistence", () => {
     expect(store.getGroupMessageState(group.id)).toMatchObject({
       latestGroupSeq: 3,
       retainedMessageCount: 0,
+      failedDeliveries: [],
+      failedRecipientMemberIds: [],
     });
     expect(store.clearMessageHistory(group.id, "clear")).toEqual(cleared);
     expect(send("four", "four").message.groupSeq).toBe(4);

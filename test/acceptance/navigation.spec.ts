@@ -1,5 +1,96 @@
+import { join } from "node:path";
 import { expect, test } from "@playwright/test";
+import { NanasaStore } from "../../apps/daemon/src/store.js";
 import { PackageAcceptanceService } from "./fixtures/package-fixture.js";
+
+test("delivery failures use Attention without duplicate member warnings", async ({
+  page,
+  browserName,
+}, testInfo) => {
+  const nanasa = await PackageAcceptanceService.create(browserName);
+  try {
+    const { group } = await nanasa.seedGroup("Frontend Team", ["Frontend Reviewer"]);
+    const store = new NanasaStore(join(nanasa.configRoot, ".nanasa", "state", "nanasa.sqlite"));
+    try {
+      const member = store.listActiveMemberships(group.id)[0]!;
+      const failDelivery = (requestId: string) => {
+        const result = store.submitMessage(
+          group.id,
+          {
+            intent: "request",
+            sender: { kind: "operator", operatorId: "fixture" },
+            audience: { kind: "dm", memberId: member.memberId },
+            body: { contentType: "text/plain", text: `Review request ${requestId}` },
+            delivery: {},
+          },
+          requestId,
+        );
+        store.database
+          .prepare(
+            "UPDATE deliveries SET status = 'failed', reason = 'fixture_failure' WHERE message_id = ?",
+          )
+          .run(result.message.id);
+        return result;
+      };
+      const first = failDelivery("first-failure");
+      expect(store.getGroupMessageState(group.id).failedDeliveries).toHaveLength(1);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto(nanasa.portalUrl);
+      await page.getByRole("button", { name: "Expand Frontend Team", exact: true }).click();
+      const warning = page.getByRole("button", {
+        name: "Open failed delivery for Frontend Reviewer in Frontend Team",
+        exact: true,
+      });
+      await expect(warning).toHaveCount(0);
+      const infoBounds = (await page
+        .getByRole("button", { name: /^View details for Frontend Reviewer/ })
+        .boundingBox())!;
+      const menuBounds = (await page
+        .getByRole("button", { name: "Actions for agent Frontend Reviewer", exact: true })
+        .boundingBox())!;
+      expect(Math.abs(menuBounds.y - infoBounds.y)).toBeLessThanOrEqual(1);
+      expect(infoBounds.x + infoBounds.width).toBeLessThanOrEqual(menuBounds.x);
+      await page.getByRole("complementary", { name: "Groups and agents" }).screenshot({
+        path: testInfo.outputPath("delivery-attention-sidebar.png"),
+      });
+      await page
+        .getByRole("navigation", { name: "Operations" })
+        .getByRole("link", { name: /Attention/ })
+        .click();
+      await expect(page).toHaveURL(/\/attention$/);
+      const dismiss = page.getByRole("button", {
+        name: "Dismiss Frontend Reviewer · Delivery failed",
+        exact: true,
+      });
+      await dismiss.click();
+      await expect(warning).toHaveCount(0);
+      await expect(dismiss).toHaveCount(0);
+      await page.reload();
+      await expect(
+        page.getByRole("heading", { level: 1, name: "Attention", exact: true }),
+      ).toBeVisible();
+      const expand = page.getByRole("button", { name: "Expand Frontend Team", exact: true });
+      if (await expand.count()) await expand.click();
+      await expect(dismiss).toHaveCount(0);
+      await expect(warning).toHaveCount(0);
+      expect(store.getGroupMessageState(group.id).failedDeliveries![0]!.messageId).toBe(
+        first.message.id,
+      );
+      failDelivery("second-failure");
+      await page.reload();
+      await expect(dismiss).toHaveCount(1);
+      if (await expand.count()) await expand.click();
+      await expect(warning).toHaveCount(0);
+      expect(store.getGroupMessageState(group.id).failedDeliveries).toHaveLength(2);
+      await dismiss.click();
+      await expect(warning).toHaveCount(0);
+    } finally {
+      store.close();
+    }
+  } finally {
+    await nanasa.close();
+  }
+});
 
 test("navigation opens Foreman by default and keeps desktop and mobile destinations consistent", async ({
   page,

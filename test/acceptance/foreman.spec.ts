@@ -167,11 +167,24 @@ for (const viewport of [
       expect(goals.get(active.id).state).toBe("running");
       expect(store.getActiveForemanRun(config.foreman!.id)?.id).toBe(run.id);
       await page.getByRole("tab", { name: "Goals", exact: true }).click();
+      await expect(page.getByRole("button", { name: /Active peer/ })).toBeVisible();
+      await expect(page.getByRole("button", { name: /Finished cleanup target/ })).toHaveCount(0);
+      await page.screenshot({ path: testInfo.outputPath("active-goals.png"), fullPage: true });
+      await page.getByRole("tab", { name: /History/ }).click();
+      await page.screenshot({ path: testInfo.outputPath("goal-history.png"), fullPage: true });
       await page.getByRole("button", { name: /Finished cleanup target/ }).click();
       await page.getByRole("button", { name: "Remove goal", exact: true }).click();
       await expect(page.getByRole("dialog")).toContainText("Finished cleanup target");
       await page.getByRole("button", { name: "Confirm cleanup", exact: true }).click();
       await expect(page.getByRole("button", { name: /Finished cleanup target/ })).toHaveCount(0);
+      await page.getByRole("checkbox", { name: "Show removed" }).check();
+      await page.getByRole("searchbox", { name: "Search goals" }).fill("Finished cleanup");
+      await page.getByRole("button", { name: /Finished cleanup target/ }).click();
+      await expect(page.getByRole("button", { name: "Remove goal", exact: true })).toHaveCount(0);
+      await expect(page.getByText("Technical details")).toBeVisible();
+      await page.getByRole("button", { name: "Back to goals", exact: true }).click();
+      await page.getByRole("searchbox", { name: "Search goals" }).fill("");
+      await page.getByRole("checkbox", { name: "Show removed" }).uncheck();
       expect(goals.propose(proposal).id).toBe(finished.id);
       const another = goals.propose({
         ...proposal,
@@ -184,6 +197,7 @@ for (const viewport of [
       await expect(page.getByRole("dialog")).toContainText("Clear 1 finished goals?");
       await page.getByRole("button", { name: "Confirm cleanup", exact: true }).click();
       await expect(page.getByRole("button", { name: /Another finished goal/ })).toHaveCount(0);
+      await page.getByRole("tab", { name: /Active/ }).click();
       await page.getByRole("button", { name: /Active peer/ }).click();
       await page.getByRole("button", { name: "Cancel and remove", exact: true }).click();
       await expect(page.getByRole("dialog")).toContainText("not forcibly interrupted");
@@ -192,7 +206,7 @@ for (const viewport of [
         fullPage: true,
       });
       await page.getByRole("button", { name: "Confirm cleanup", exact: true }).click();
-      await expect(page.getByText("No goals", { exact: true })).toBeVisible();
+      await expect(page.getByText("No active goals", { exact: true })).toBeVisible();
       expect(goals.get(active.id).state).toBe("cancelled");
       expect(store.getActiveForemanRun(config.foreman!.id)?.id).toBe(run.id);
       expect(
@@ -583,14 +597,14 @@ test("Foreman goals accept high-level outcomes and retain human control across r
     await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Back to goals", exact: true }).click();
     await expect(
-      page.getByRole("button", { name: "SDK draft-10 conformance running" }),
+      page.getByRole("button", { name: "SDK draft-10 conformance Working" }),
     ).toBeVisible();
-    await expect(page.getByRole("button", { name: "Frontend delivery running" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Frontend delivery Working" })).toBeVisible();
     await page.screenshot({
       path: testInfo.outputPath("foreman-concurrent-goals-desktop.png"),
       fullPage: true,
     });
-    await page.getByRole("button", { name: "SDK draft-10 conformance running" }).click();
+    await page.getByRole("button", { name: "SDK draft-10 conformance Working" }).click();
     await page.screenshot({
       path: testInfo.outputPath("foreman-goal-desktop.png"),
       fullPage: true,
@@ -601,8 +615,8 @@ test("Foreman goals accept high-level outcomes and retain human control across r
     await page.goto(`${nanasa.baseUrl}/foreman${new URL(nanasa.portalUrl).hash}`);
     await page.reload();
     await page.getByRole("tab", { name: "Goals", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Frontend delivery running" })).toBeVisible();
-    await page.getByRole("button", { name: "SDK draft-10 conformance paused" }).click();
+    await expect(page.getByRole("button", { name: "Frontend delivery Working" })).toBeVisible();
+    await page.getByRole("button", { name: "SDK draft-10 conformance Paused" }).click();
     await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
@@ -610,7 +624,7 @@ test("Foreman goals accept high-level outcomes and retain human control across r
     );
     await page.screenshot({ path: testInfo.outputPath("foreman-goal-mobile.png"), fullPage: true });
     await page.getByRole("button", { name: "Cancel goal", exact: true }).click();
-    await expect(page.getByText("cancelled", { exact: true })).toBeVisible();
+    await expect(page.getByText("Cancelled", { exact: true })).toBeVisible();
   } finally {
     await nanasa.close();
   }

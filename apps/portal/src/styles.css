@@ -599,7 +599,7 @@ button.portal-nav-link {
 
 .member-row {
   display: grid;
-  grid-template-columns: 7px minmax(0, 1fr) auto 28px 32px;
+  grid-template-columns: 7px minmax(0, 1fr) 28px 32px;
   min-height: 54px;
   align-items: center;
   gap: 7px;
@@ -609,6 +609,10 @@ button.portal-nav-link {
 
 .member-row:hover {
   background: var(--surface-muted);
+}
+
+.member-row > * {
+  grid-row: 1;
 }
 
 .member-select {
@@ -683,7 +687,7 @@ button.portal-nav-link {
   display: inline-grid;
   width: 28px;
   height: 28px;
-  grid-column: 4;
+  grid-column: 3;
   place-items: center;
   border-color: transparent;
   background: transparent;
@@ -841,29 +845,13 @@ button.portal-nav-link {
   background: var(--text-muted);
 }
 
-.delivery-warning-button {
-  display: inline-grid;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 auto;
-  grid-column: 3;
-  place-items: center;
-  border-color: transparent;
-  background: transparent;
-  color: var(--danger-text);
-}
-
-.delivery-warning-button:hover {
-  background: var(--red-soft);
-}
-
 .action-menu-anchor {
   display: grid;
   place-items: center;
 }
 
 .member-row > .action-menu-anchor {
-  grid-column: 5;
+  grid-column: 4;
 }
 
 .row-action-trigger {

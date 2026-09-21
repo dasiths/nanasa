@@ -353,12 +353,7 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     services.conversations.cancel(record(request.params).requestId ?? ""),
   );
   register("goals.list", (request) =>
-    record(request.query).includeRemoved === "true"
-      ? services.store.database
-          .prepare("SELECT id FROM foreman_coordination_records WHERE kind = 'goal' ORDER BY rowid")
-          .all()
-          .map((row) => services.goals.get(String(row.id)))
-      : cleanup.listGoals(),
+    cleanup.listGoals(record(request.query).includeRemoved === "true"),
   );
   register("foreman.cleanup", (request) =>
     cleanup.execute(

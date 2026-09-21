@@ -114,8 +114,17 @@ export class ForemanCleanupService {
     );
   }
 
-  listGoals() {
-    return this.goals.list().filter((goal) => !this.isRemoved(goal.id));
+  listGoals(includeRemoved = false) {
+    const removed = new Map(
+      this.store.database
+        .prepare("SELECT goal_id, removed_at FROM foreman_removed_goals")
+        .all()
+        .map((row) => [String(row.goal_id), String(row.removed_at)]),
+    );
+    return this.goals.list(includeRemoved).map((goal) => {
+      const removedAt = removed.get(goal.id);
+      return removedAt === undefined ? goal : { ...goal, removedAt };
+    });
   }
 
   visibleConversations(conversations: ForemanConversationRequest[]) {
@@ -166,7 +175,14 @@ export class ForemanCleanupService {
               .get(id) !== undefined,
         );
         return actionIds.length || runIds.length
-          ? [{ goalId: recorded.goalId, actionIds, runIds }]
+          ? [
+              {
+                goalId: recorded.goalId,
+                goalTitle: this.goals.get(recorded.goalId).title,
+                actionIds,
+                runIds,
+              },
+            ]
           : [];
       });
   }

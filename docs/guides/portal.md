@@ -65,6 +65,13 @@ deliveries, health problems, and completion items. Reply to the exact wait or
 open the linked terminal. A settled provider event does not by itself prove task
 success.
 
+Failed deliveries appear as **Attention** items and contribute to its badge when
+delivery-failure subscriptions are enabled. There is no separate envelope warning
+beside the member. Dismiss the delivery item after reviewing it to clear the alert
+across reloads. Opening Attention alone does not acknowledge it. Dismissal does
+not retry the message or change its failed delivery history; a new failure or
+failed retry creates a fresh Attention item.
+
 ## Use terminal tabs and grid view
 
 Open an agent terminal from its group row. Tabs keep one terminal visible. Grid
@@ -99,6 +106,20 @@ messages and delivery outcomes for all portal sessions.
 
 Choose **Foreman** for the repository-owned channel, native
 terminal, goals, and settings. Foreman is outside team broadcasts.
+
+The Goals tab opens on **Active** work. **History** contains completed and
+cancelled goals, with title search and outcome filters. Select **Show removed**
+to inspect retained goals after cleanup. Removed goals cannot be resumed from
+this view. **Clear finished** removes only the non-removed finished goals named
+in its confirmation, not active work or goals that finish later.
+
+Associated processes that remain running after goal removal appear by goal
+title in global **Attention**. A running process may be idle; it does not prove
+goal work is still executing. Receipt-only leftovers appear in Attention's
+History without increasing its badge count. Dismissing an Attention item does
+not stop processes or erase receipts. Goal IDs and retained effect IDs remain
+available under **Technical details** in the goal.
+
 See [Foreman and goals](foreman.md) for private authentication, team delegation,
 human decisions, recovery limits, and outcome acceptance.
 

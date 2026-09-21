@@ -120,12 +120,18 @@ export function ForemanCleanupConfirmation({
 export function ForemanGoals({
   client,
   configuration,
+  initialGoalId,
 }: {
   client: PortalClient;
   configuration: ForemanConfig | undefined;
+  initialGoalId?: string;
 }) {
   const [goals, setGoals] = useState<ForemanGoal[]>([]);
-  const [selected, setSelected] = useState<string>();
+  const [view, setView] = useState<"active" | "history">("active");
+  const [selected, setSelected] = useState<string | undefined>(initialGoalId);
+  const [search, setSearch] = useState("");
+  const [outcome, setOutcome] = useState("all");
+  const [showRemoved, setShowRemoved] = useState(false);
   const [workspace, setWorkspace] = useState<ForemanGoalWorkspace>();
   const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState("");
@@ -150,7 +156,7 @@ export function ForemanGoals({
     const load = async () => {
       try {
         const [list, effects] = await Promise.all([
-          client.listForemanGoals(),
+          client.listForemanGoals(true),
           client.loadForemanCleanupEffects(),
         ]);
         const detail = selected ? await client.getForemanGoal(selected) : undefined;
@@ -204,7 +210,32 @@ export function ForemanGoals({
           action,
         });
     });
-  const finished = goals.filter((goal) => ["completed", "cancelled"].includes(goal.state));
+  const finished = goals.filter(
+    (goal) => !goal.removedAt && ["completed", "cancelled"].includes(goal.state),
+  );
+  const history = goals.filter(
+    (goal) => goal.removedAt || ["completed", "cancelled"].includes(goal.state),
+  );
+  const active = goals.filter(
+    (goal) => !goal.removedAt && !["completed", "cancelled"].includes(goal.state),
+  );
+  const visibleGoals = (view === "active" ? active : history).filter(
+    (goal) =>
+      (showRemoved || !goal.removedAt) &&
+      (view === "active" || outcome === "all" || goal.state === outcome) &&
+      goal.title.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()),
+  );
+  const selectedRemoved = goals.find((goal) => goal.id === workspace?.goal.id)?.removedAt;
+  const selectedEffects = pendingEffects.find((effect) => effect.goalId === workspace?.goal.id);
+  const labels: Record<ForemanGoal["state"], string> = {
+    proposed: "Awaiting approval",
+    running: "Working",
+    paused: "Paused",
+    blocked: "Needs input",
+    "awaiting-acceptance": "Ready for acceptance",
+    completed: "Completed",
+    cancelled: "Cancelled",
+  };
   return (
     <section className="foreman-goals" aria-label="Goals">
       {error && <ErrorNotice error={error} onDismiss={() => setError(undefined)} />}
@@ -225,43 +256,6 @@ export function ForemanGoals({
         />
       )}
       {cleanupResult && <p role="status">{cleanupResult}</p>}
-      {pendingEffects.length > 0 && (
-        <section className="foreman-inbox-notice" aria-label="Removed goals with live effects">
-          <h3>Removed goals with live effects</h3>
-          <p>
-            Future goal work is fenced. Existing provider work has not been forcibly stopped;
-            inspect the addressed runs before reusing their workspaces.
-          </p>
-          <ul className="foreman-goal-list">
-            {pendingEffects.map((effect) => (
-              <li key={effect.goalId}>
-                <button
-                  onClick={() => setSelected(effect.goalId)}
-                  title="Inspect retained goal details"
-                >
-                  <strong>{effect.goalId}</strong>
-                </button>
-                <span>
-                  {effect.actionIds.length} unsettled actions, {effect.runIds.length} live runs
-                </span>
-                <details>
-                  <summary>Retained effects</summary>
-                  {effect.actionIds.map((id) => (
-                    <p key={id}>
-                      Action: <code>{id}</code>
-                    </p>
-                  ))}
-                  {effect.runIds.map((id) => (
-                    <p key={id}>
-                      Run: <code>{id}</code>
-                    </p>
-                  ))}
-                </details>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
       {creating ? (
         <form
           className="foreman-settings"
@@ -345,7 +339,10 @@ export function ForemanGoals({
               <ArrowLeft size={16} />
             </button>
             <h3>{workspace.goal.title}</h3>
-            <span>{workspace.goal.state}</span>
+            <span>
+              {labels[workspace.goal.state]}
+              {selectedRemoved ? " · Removed" : ""}
+            </span>
           </div>
           <p className="foreman-goal-objective">{workspace.goal.objective}</p>
           {workspace.goal.constraints.length > 0 && (
@@ -375,81 +372,109 @@ export function ForemanGoals({
               </dd>
             </div>
           </dl>
-          <div className="foreman-toolbar-actions">
-            {workspace.goal.state === "proposed" && (
+          {!selectedRemoved && (
+            <div className="foreman-toolbar-actions">
+              {workspace.goal.state === "proposed" && (
+                <button
+                  className="compact-button"
+                  disabled={busy}
+                  onClick={() => void control("approve")}
+                >
+                  <Check size={16} />
+                  Approve goal
+                </button>
+              )}
+              {workspace.goal.state === "running" && (
+                <button
+                  className="compact-button"
+                  disabled={busy}
+                  onClick={() => void control("pause")}
+                >
+                  <Pause size={16} />
+                  Pause
+                </button>
+              )}
+              {["paused", "blocked"].includes(workspace.goal.state) && (
+                <button
+                  className="compact-button"
+                  disabled={busy}
+                  onClick={() => void control("resume")}
+                >
+                  <Play size={16} />
+                  Resume
+                </button>
+              )}
+              {workspace.goal.state === "awaiting-acceptance" && (
+                <button
+                  className="compact-button"
+                  disabled={busy}
+                  onClick={() => void control("accept")}
+                >
+                  <Check size={16} />
+                  Accept outcome
+                </button>
+              )}
+              {!["completed", "cancelled"].includes(workspace.goal.state) && (
+                <button
+                  className="compact-button"
+                  disabled={busy}
+                  onClick={() => void control("cancel")}
+                >
+                  <X size={16} />
+                  Cancel goal
+                </button>
+              )}
               <button
                 className="compact-button"
                 disabled={busy}
-                onClick={() => void control("approve")}
+                onClick={() => {
+                  const cancel = !["completed", "cancelled"].includes(workspace.goal.state);
+                  setCleanup({
+                    command: {
+                      scope: "goal",
+                      requestId: crypto.randomUUID(),
+                      confirmation: true,
+                      goal: { id: workspace.goal.id, expectedRevision: workspace.goal.revision },
+                      cancel,
+                    },
+                    title: cancel ? "Cancel and remove goal?" : "Remove goal?",
+                    detail: `${workspace.goal.title}. ${cancel ? "Future goal work will be cancelled. Existing provider work is not forcibly interrupted; unresolved effects remain in Attention." : "Remove this finished goal from the normal list."}`,
+                  });
+                }}
               >
-                <Check size={16} />
-                Approve goal
+                <Trash2 size={16} aria-hidden="true" />
+                {["completed", "cancelled"].includes(workspace.goal.state)
+                  ? "Remove goal"
+                  : "Cancel and remove"}
               </button>
+            </div>
+          )}
+          <details className="foreman-goal-technical">
+            <summary>Technical details</summary>
+            <p>
+              Goal ID: <code>{workspace.goal.id}</code>
+            </p>
+            {selectedRemoved && <p>Removed: {new Date(selectedRemoved).toLocaleString()}</p>}
+            {selectedEffects && (
+              <>
+                <p>
+                  {selectedEffects.runIds.length} associated processes still running;{" "}
+                  {selectedEffects.actionIds.length} unconfirmed action receipts. A running process
+                  may be idle.
+                </p>
+                {selectedEffects.runIds.map((id) => (
+                  <p key={id}>
+                    Run: <code>{id}</code>
+                  </p>
+                ))}
+                {selectedEffects.actionIds.map((id) => (
+                  <p key={id}>
+                    Action: <code>{id}</code>
+                  </p>
+                ))}
+              </>
             )}
-            {workspace.goal.state === "running" && (
-              <button
-                className="compact-button"
-                disabled={busy}
-                onClick={() => void control("pause")}
-              >
-                <Pause size={16} />
-                Pause
-              </button>
-            )}
-            {["paused", "blocked"].includes(workspace.goal.state) && (
-              <button
-                className="compact-button"
-                disabled={busy}
-                onClick={() => void control("resume")}
-              >
-                <Play size={16} />
-                Resume
-              </button>
-            )}
-            {workspace.goal.state === "awaiting-acceptance" && (
-              <button
-                className="compact-button"
-                disabled={busy}
-                onClick={() => void control("accept")}
-              >
-                <Check size={16} />
-                Accept outcome
-              </button>
-            )}
-            {!["completed", "cancelled"].includes(workspace.goal.state) && (
-              <button
-                className="compact-button"
-                disabled={busy}
-                onClick={() => void control("cancel")}
-              >
-                <X size={16} />
-                Cancel goal
-              </button>
-            )}
-            <button
-              className="compact-button"
-              disabled={busy}
-              onClick={() => {
-                const cancel = !["completed", "cancelled"].includes(workspace.goal.state);
-                setCleanup({
-                  command: {
-                    scope: "goal",
-                    requestId: crypto.randomUUID(),
-                    confirmation: true,
-                    goal: { id: workspace.goal.id, expectedRevision: workspace.goal.revision },
-                    cancel,
-                  },
-                  title: cancel ? "Cancel and remove goal?" : "Remove goal?",
-                  detail: `${workspace.goal.title}. ${cancel ? "Future goal work will be cancelled. Existing provider work is not forcibly interrupted and remains visible under live effects." : "Remove this finished goal from the normal list."}`,
-                });
-              }}
-            >
-              <Trash2 size={16} aria-hidden="true" />
-              {["completed", "cancelled"].includes(workspace.goal.state)
-                ? "Remove goal"
-                : "Cancel and remove"}
-            </button>
-          </div>
+          </details>
           <h4>Decisions</h4>
           {workspace.decisions.length === 0 && <p>No decisions pending</p>}
           {workspace.decisions.map((decision) => (
@@ -609,29 +634,31 @@ export function ForemanGoals({
         <>
           <div className="foreman-toolbar">
             <h3>Goals</h3>
-            <button
-              className="compact-button"
-              disabled={busy || finished.length === 0}
-              onClick={() =>
-                setCleanup({
-                  command: {
-                    scope: "finished-goals",
-                    requestId: crypto.randomUUID(),
-                    confirmation: true,
-                    goals: finished.map((goal) => ({
-                      id: goal.id,
-                      expectedRevision: goal.revision,
-                    })),
-                  },
-                  title: `Clear ${finished.length} finished goals?`,
-                  detail:
-                    "Only the selected completed and cancelled goals will be removed from the list. Active goals and goals that finish after this confirmation opens are unchanged.",
-                })
-              }
-            >
-              <Trash2 size={16} aria-hidden="true" />
-              Clear finished
-            </button>
+            {view === "history" && (
+              <button
+                className="compact-button"
+                disabled={busy || finished.length === 0}
+                onClick={() =>
+                  setCleanup({
+                    command: {
+                      scope: "finished-goals",
+                      requestId: crypto.randomUUID(),
+                      confirmation: true,
+                      goals: finished.map((goal) => ({
+                        id: goal.id,
+                        expectedRevision: goal.revision,
+                      })),
+                    },
+                    title: `Clear ${finished.length} finished goals?`,
+                    detail:
+                      "Only the selected completed and cancelled goals will be removed from the list. Active goals and goals that finish after this confirmation opens are unchanged.",
+                  })
+                }
+              >
+                <Trash2 size={16} aria-hidden="true" />
+                Clear finished
+              </button>
+            )}
             <button
               disabled={!configuration?.enabled}
               className="compact-button"
@@ -646,17 +673,95 @@ export function ForemanGoals({
               New goal
             </button>
           </div>
-          {goals.length === 0 && <p>No goals</p>}
-          <ul className="foreman-goal-list">
-            {goals.map((goal) => (
-              <li key={goal.id}>
-                <button onClick={() => setSelected(goal.id)}>
-                  <strong>{goal.title}</strong>
-                  <span>{goal.state}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
+          <div
+            className="foreman-toolbar foreman-goal-tabs"
+            role="tablist"
+            aria-label="Goal views"
+            onKeyDown={(event) => {
+              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+              event.preventDefault();
+              const next =
+                event.key === "Home"
+                  ? "active"
+                  : event.key === "End"
+                    ? "history"
+                    : view === "active"
+                      ? "history"
+                      : "active";
+              setView(next);
+              document.getElementById(`goal-tab-${next}`)?.focus();
+            }}
+          >
+            <button
+              id="goal-tab-active"
+              role="tab"
+              tabIndex={view === "active" ? 0 : -1}
+              aria-selected={view === "active"}
+              aria-controls="goal-list"
+              onClick={() => setView("active")}
+            >
+              Active ({active.length})
+            </button>
+            <button
+              id="goal-tab-history"
+              role="tab"
+              tabIndex={view === "history" ? 0 : -1}
+              aria-selected={view === "history"}
+              aria-controls="goal-list"
+              onClick={() => setView("history")}
+            >
+              History ({showRemoved ? history.length : finished.length})
+            </button>
+          </div>
+          <div className="foreman-goal-filters">
+            <label>
+              Search goals
+              <input
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </label>
+            {view === "history" && (
+              <>
+                <label>
+                  Outcome
+                  <select value={outcome} onChange={(event) => setOutcome(event.target.value)}>
+                    <option value="all">All outcomes</option>
+                    <option value="completed">Completed</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                </label>
+                <label className="foreman-check">
+                  <input
+                    type="checkbox"
+                    checked={showRemoved}
+                    onChange={(event) => setShowRemoved(event.target.checked)}
+                  />
+                  Show removed
+                </label>
+              </>
+            )}
+          </div>
+          <div id="goal-list" role="tabpanel" aria-labelledby={`goal-tab-${view}`}>
+            {visibleGoals.length === 0 && (
+              <p>{view === "active" ? "No active goals" : "No finished goals"}</p>
+            )}
+            <ul className="foreman-goal-list">
+              {visibleGoals.map((goal) => (
+                <li key={goal.id}>
+                  <button onClick={() => setSelected(goal.id)}>
+                    <strong>{goal.title}</strong>
+                    <span>
+                      {labels[goal.state]}
+                      {goal.removedAt ? " · Removed" : ""}
+                    </span>
+                  </button>
+                  <time dateTime={goal.updatedAt}>{new Date(goal.updatedAt).toLocaleString()}</time>
+                </li>
+              ))}
+            </ul>
+          </div>
         </>
       )}
     </section>

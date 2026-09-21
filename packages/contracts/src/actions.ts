@@ -538,6 +538,13 @@ export const GroupMessageStateSchema = z
     retainedMessageCount: z.number().int().nonnegative(),
     activeDeliveryCount: z.number().int().nonnegative(),
     failedRecipientMemberIds: z.array(IdentifierSchema),
+    failedDeliveries: z
+      .array(
+        DeliveryOutcomeSchema.extend({
+          status: z.enum(["failed", "dead-letter", "rejected"]),
+        }),
+      )
+      .optional(),
   })
   .strict();
 export type GroupMessageState = z.infer<typeof GroupMessageStateSchema>;

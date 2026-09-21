@@ -1,5 +1,6 @@
 import type {
   AttentionSubscriptionsSnapshot,
+  CleanupForemanResult,
   CustomLaunchConsentRequest,
   ProviderUpdateOutcome,
   ProviderUpdateRecoveryResult,
@@ -360,6 +361,33 @@ export function App({ client = api }: AppProps) {
     snapshot === undefined ? undefined : `${snapshot.instanceId}:${snapshot.daemonEpoch}`,
     snapshot?.sequence,
   );
+  const [foremanEffects, setForemanEffects] = useState<CleanupForemanResult["pendingEffects"]>([]);
+  const [foremanEffectsReady, setForemanEffectsReady] = useState(false);
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    setForemanEffects([]);
+    setForemanEffectsReady(false);
+    if (snapshot?.instanceId === undefined) return;
+    const load = async () => {
+      try {
+        const effects = await client.loadForemanCleanupEffects();
+        if (active) {
+          setForemanEffects(effects);
+          setForemanEffectsReady(true);
+        }
+      } catch (cause) {
+        if (active) setActionError(toPortalError(cause, "Unable to load retained goal effects"));
+      } finally {
+        if (active) timer = setTimeout(() => void load(), 3000);
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [client, snapshot?.instanceId, snapshot?.daemonEpoch]);
   useEffect(() => {
     let active = true;
     setAttentionDismissalsReady(false);
@@ -407,6 +435,7 @@ export function App({ client = api }: AppProps) {
       return [];
     }
     const candidates = deriveAttentionItems(snapshot, {
+      foremanEffects,
       workspaces: attentionWorkspaces.workspaces,
       unreadCounts,
       launchConsents: launchConsents.latestRequests,
@@ -417,6 +446,7 @@ export function App({ client = api }: AppProps) {
     );
   }, [
     attentionDismissalsReady,
+    foremanEffects,
     attentionWorkspaces.workspaces,
     attentionSubscriptions,
     dismissedAttentionItemIds,
@@ -460,6 +490,7 @@ export function App({ client = api }: AppProps) {
       attentionSubscriptionsReady &&
       attentionSubscriptions !== undefined &&
       attentionWorkspaces.ready &&
+      foremanEffectsReady &&
       attentionWorkspaces.errors.size === 0 &&
       !launchConsents.loading &&
       launchConsents.error === undefined &&
@@ -920,10 +951,6 @@ export function App({ client = api }: AppProps) {
               setSelectedGroup(groupId, "terminals");
               if (runId !== undefined) setActiveRun(groupId, runId);
               navigate(groupRoute(groupId, "terminals", runId));
-            }}
-            onOpenMessages={(groupId) => {
-              setSelectedGroup(groupId, "messages");
-              navigate(groupRoute(groupId, "messages"));
             }}
             onCreateGroup={createGroup}
             onRenameGroup={renameGroup}

@@ -3339,12 +3339,19 @@ export class NanasaStore {
     };
     const failedRows = this.#database
       .prepare(
-        `SELECT DISTINCT d.recipient_member_id
+        `SELECT d.message_id, d.recipient_member_id, d.status, d.attempts, d.updated_at, d.reason
          FROM deliveries d JOIN messages m ON m.id = d.message_id
          WHERE m.group_id = ? AND d.status IN ('failed','dead-letter','rejected')
-         ORDER BY d.recipient_member_id`,
+         ORDER BY d.recipient_member_id, m.group_seq`,
       )
-      .all(groupId) as Array<{ recipient_member_id: string }>;
+      .all(groupId) as Array<{
+      message_id: string;
+      recipient_member_id: string;
+      status: "failed" | "dead-letter" | "rejected";
+      attempts: number;
+      updated_at: string;
+      reason: string | null;
+    }>;
     return GroupMessageStateSchema.parse({
       groupId,
       latestGroupSeq: row.latest_group_seq,
@@ -3353,7 +3360,17 @@ export class NanasaStore {
         : { oldestRetainedGroupSeq: row.oldest_retained_group_seq }),
       retainedMessageCount: row.retained_message_count,
       activeDeliveryCount: row.active_delivery_count,
-      failedRecipientMemberIds: failedRows.map((failed) => failed.recipient_member_id),
+      failedRecipientMemberIds: [
+        ...new Set(failedRows.map((failed) => failed.recipient_member_id)),
+      ],
+      failedDeliveries: failedRows.map((failed) => ({
+        messageId: failed.message_id,
+        recipientMemberId: failed.recipient_member_id,
+        status: failed.status,
+        attempts: failed.attempts,
+        updatedAt: failed.updated_at,
+        ...(failed.reason === null ? {} : { reason: failed.reason }),
+      })),
     });
   }
 

@@ -184,7 +184,7 @@ export interface PortalClient {
   resetForemanState(command: ResetForemanStateCommand): Promise<ResetForemanStateResult>;
   loadForemanConversations(): Promise<ForemanConversationRequest[]>;
   cancelForemanConversation(id: string): Promise<ForemanConversationRequest>;
-  listForemanGoals(): Promise<ForemanGoal[]>;
+  listForemanGoals(includeRemoved?: boolean): Promise<ForemanGoal[]>;
   getForemanGoal(id: string): Promise<ForemanGoalWorkspace>;
   proposeForemanGoal(command: ProposeForemanGoalCommand): Promise<ForemanGoal>;
   controlForemanGoal(command: {
@@ -396,7 +396,11 @@ export const api: PortalClient = {
   loadForemanCleanupEffects: () => control.foremanCleanupEffects(),
   loadForemanCleanupRequests: () => control.foremanCleanupRequests(),
   approveForemanCleanup: (command) => control.approveForemanCleanup(command),
-  listForemanGoals: () => request(`${CONTROL_API_PREFIX}/foreman/goals`, ForemanGoalSchema.array()),
+  listForemanGoals: (includeRemoved = false) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/goals${includeRemoved ? "?includeRemoved=true" : ""}`,
+      ForemanGoalSchema.array(),
+    ),
   getForemanGoal: (id) =>
     request(
       `${CONTROL_API_PREFIX}/foreman/goals/${encodeURIComponent(id)}`,

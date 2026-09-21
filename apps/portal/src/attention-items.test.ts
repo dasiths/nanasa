@@ -284,6 +284,28 @@ function itemOfKind<Kind extends AttentionItem["kind"]>(
 }
 
 describe("deriveAttentionItems", () => {
+  it("routes removed-goal processes to global Attention and receipt-only effects to history", () => {
+    const foremanEffects = [
+      { goalId: "live", goalTitle: "Solar simulator", runIds: ["run-live"], actionIds: [] },
+      { goalId: "receipt", goalTitle: "Old goal", runIds: [], actionIds: ["unconfirmed"] },
+      { goalId: "settled", runIds: [], actionIds: [] },
+    ];
+    const items = deriveAttentionItems(snapshot({ groups: [] }), { foremanEffects });
+    expect(items).toHaveLength(2);
+    expect(items.find((item) => item.counted)).toMatchObject({
+      title: "Solar simulator",
+      scope: { kind: "repository" },
+      targetPath: "/foreman?goal=live",
+    });
+    expect(items.find((item) => !item.counted)).toMatchObject({
+      title: "Old goal",
+      category: "delivery",
+    });
+    expect(attentionReviewCount(items)).toBe(1);
+    expect(attentionReviewCountsByGroup(items).size).toBe(0);
+    expect(groupAttentionItems(items, "group-a")).toEqual([]);
+    expect(deriveAttentionItems(snapshot({ groups: [] }), { foremanEffects: [] })).toEqual([]);
+  });
   it("projects only the latest actionable launch consent per member", () => {
     const owner = member("builder", "group-a");
     const requests = [
@@ -648,6 +670,41 @@ describe("deriveAttentionItems", () => {
     ]);
     expect(attentionReviewCount(items)).toBe(0);
     expect(attentionActiveProgressCount(items)).toBe(1);
+  });
+
+  it("keeps dismissal identity per failed delivery and renews it only for a new failure", () => {
+    const failure = {
+      messageId: "failed-one",
+      recipientMemberId: "builder",
+      status: "failed" as const,
+      attempts: 1,
+      updatedAt: timestamp,
+    };
+    const input = snapshot({
+      messageGroups: [
+        {
+          groupId: "group-a",
+          latestGroupSeq: 1,
+          retainedMessageCount: 1,
+          activeDeliveryCount: 0,
+          failedRecipientMemberIds: ["builder"],
+          failedDeliveries: [failure],
+        },
+      ],
+    });
+    const first = itemOfKind(deriveAttentionItems(input), "delivery");
+    const state = input.messageGroups![0]!;
+    state.latestGroupSeq = 100;
+    expect(itemOfKind(deriveAttentionItems(input), "delivery").id).toBe(first.id);
+    state.failedDeliveries = [failure, { ...failure, messageId: "failed-two" }];
+    const items = deriveAttentionItems(input).filter((item) => item.kind === "delivery");
+    expect(items).toHaveLength(2);
+    expect(items[0]!.id).toBe(first.id);
+    expect(items[1]!.id).not.toBe(first.id);
+    state.failedDeliveries = [{ ...failure, attempts: 2 }];
+    expect(itemOfKind(deriveAttentionItems(input), "delivery").id).not.toBe(first.id);
+    state.failedDeliveries = [];
+    expect(deriveAttentionItems(input).filter((item) => item.kind === "delivery")).toEqual([]);
   });
 
   it("qualifies delivery identity by group and retains removed recipients by raw ID", () => {

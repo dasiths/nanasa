@@ -48,6 +48,7 @@ export function attentionNotificationTier(item: AttentionItem): AttentionNotific
     case "health":
       return item.healthType === "failed" ? "urgent" : "standard";
     case "delivery":
+    case "foreman-effect":
       return "standard";
     case "completion":
       return "quiet";
@@ -123,7 +124,7 @@ export async function deliverAttentionDesktopNotification(
   if (claim === "duplicate") return false;
   try {
     const notification = new Notification(item.title, {
-      body: `${item.group.name} · ${item.summary}`,
+      body: `${item.group?.name ?? "Foreman"} · ${item.summary}`,
       tag: notificationTag(item.id),
       silent: true,
     });

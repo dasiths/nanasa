@@ -1030,6 +1030,133 @@ describe("portal application", () => {
     expect(saved.autonomy).not.toHaveProperty("maxMissionHours");
   });
 
+  it("separates active goal work from searchable retained History", async () => {
+    window.history.replaceState({}, "", "/foreman");
+    const client = createClient();
+    const configuration = ForemanConfigSchema.parse({ integrationId: "copilot", enabled: true });
+    vi.mocked(client.loadForeman).mockResolvedValue({ configuration, inbox: [] });
+    const base = {
+      requestId: "request",
+      foremanId: configuration.id,
+      objective: "Build",
+      revision: 1,
+      grant: configuration.autonomy,
+      turnsUsed: 0,
+      expiresAt: "2099-01-01T00:00:00Z",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    const goals = [
+      ForemanGoalSchema.parse({
+        ...base,
+        id: "working",
+        title: "Current project",
+        state: "running",
+      }),
+      ForemanGoalSchema.parse({
+        ...base,
+        id: "done",
+        title: "Finished project",
+        state: "completed",
+      }),
+      ForemanGoalSchema.parse({
+        ...base,
+        id: "cancelled",
+        title: "Cancelled project",
+        state: "cancelled",
+      }),
+      ForemanGoalSchema.parse({
+        ...base,
+        id: "removed",
+        title: "Removed project",
+        state: "cancelled",
+        removedAt: timestamp,
+      }),
+    ];
+    vi.mocked(client.listForemanGoals).mockResolvedValue(goals);
+    vi.mocked(client.getForemanGoal).mockResolvedValue({
+      goal: goals[3]!,
+      delegations: [],
+      reports: [],
+      decisions: [],
+    });
+    const user = userEvent.setup();
+    render(<App client={client} />);
+    await user.click(await screen.findByRole("tab", { name: "Goals" }));
+    await screen.findByRole("button", { name: /Current project/ });
+    expect(client.listForemanGoals).toHaveBeenCalledWith(true);
+    expect(
+      screen.queryByRole("button", { name: /Finished project|Removed project|Clear finished/ }),
+    ).toBeNull();
+    await user.click(screen.getByRole("tab", { name: /History/ }));
+    expect(screen.getByRole("button", { name: /Finished project/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Current project|Removed project/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Clear finished" }));
+    expect(screen.getByRole("heading", { name: "Clear 2 finished goals?" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Keep items" }));
+    await user.click(screen.getByRole("checkbox", { name: "Show removed" }));
+    await user.selectOptions(screen.getByLabelText("Outcome"), "cancelled");
+    expect(screen.queryByRole("button", { name: /Finished project/ })).toBeNull();
+    await user.type(screen.getByRole("searchbox", { name: "Search goals" }), "Removed");
+    expect(screen.queryByRole("button", { name: /Cancelled project/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /Removed project/ }));
+    await screen.findByRole("heading", { name: "Removed project" });
+    expect(
+      screen.queryByRole("button", { name: /Remove goal|Cancel and remove|Resume/ }),
+    ).toBeNull();
+    expect(screen.getByText("Technical details").closest("details")).not.toHaveAttribute("open");
+  });
+
+  it("opens removed goals from Attention by title and dismisses their live effects", async () => {
+    window.history.replaceState({}, "", "/attention");
+    const client = createClient();
+    const configuration = ForemanConfigSchema.parse({ integrationId: "copilot", enabled: true });
+    vi.mocked(client.loadForeman).mockResolvedValue({ configuration, inbox: [] });
+    const goal = ForemanGoalSchema.parse({
+      id: "removed",
+      title: "Solar simulator",
+      state: "cancelled",
+      removedAt: timestamp,
+      requestId: "request",
+      foremanId: configuration.id,
+      objective: "Build",
+      revision: 1,
+      grant: configuration.autonomy,
+      turnsUsed: 0,
+      expiresAt: "2099-01-01T00:00:00Z",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    vi.mocked(client.listForemanGoals).mockResolvedValue([goal]);
+    vi.mocked(client.getForemanGoal).mockResolvedValue({
+      goal,
+      delegations: [],
+      reports: [],
+      decisions: [],
+    });
+    vi.mocked(client.loadForemanCleanupEffects).mockResolvedValue([
+      { goalId: goal.id, goalTitle: goal.title, runIds: ["live-run"], actionIds: [] },
+      { goalId: "receipt", goalTitle: "Past experiment", runIds: [], actionIds: ["old-receipt"] },
+    ]);
+    vi.mocked(client.dismissAttentionItems).mockImplementation(async ({ itemIds }) => ({
+      dismissals: itemIds.map((itemId) => ({ itemId, dismissedAt: timestamp })),
+    }));
+    const user = userEvent.setup();
+    render(<App client={client} />);
+    const row = (await screen.findByText("Solar simulator")).closest("li")!;
+    expect(screen.queryByText("Past experiment")).toBeNull();
+    await user.click(within(row).getByRole("button", { name: "Inspect goal" }));
+    await screen.findByRole("heading", { name: goal.title });
+    expect(window.location.search).toBe("?goal=removed");
+    expect(client.getForemanGoal).toHaveBeenCalledWith(goal.id);
+    await user.click(screen.getByRole("link", { name: /^Open Attention/ }));
+    await user.click(await screen.findByRole("button", { name: "Dismiss Solar simulator" }));
+    await waitFor(() => expect(screen.queryByText("Solar simulator")).toBeNull());
+    expect(client.dismissAttentionItems).toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: /History/ }));
+    expect(await screen.findByText("Past experiment")).toBeTruthy();
+  });
+
   it.each(["cancelled", "running"] as const)(
     "confirms %s goal removal and retains retry identity and live effects",
     async (state) => {
@@ -1076,6 +1203,8 @@ describe("portal application", () => {
       const user = userEvent.setup();
       render(<App client={client} />);
       await user.click(await screen.findByRole("tab", { name: "Goals" }));
+      if (state === "cancelled")
+        await user.click(await screen.findByRole("tab", { name: /History/ }));
       await user.click(await screen.findByRole("button", { name: /Cleanup target/ }));
       await user.click(
         await screen.findByRole("button", {
@@ -1090,7 +1219,8 @@ describe("portal application", () => {
         "Temporary cleanup failure",
       );
       await user.click(within(dialog).getByRole("button", { name: "Confirm cleanup" }));
-      await screen.findByRole("heading", { name: "Removed goals with live effects" });
+      await screen.findByText("1 goals removed from the list. Operational records retained.");
+      expect(screen.queryByRole("heading", { name: "Removed goals with live effects" })).toBeNull();
       expect(vi.mocked(client.cleanupForeman).mock.calls[0]![0]).toEqual(
         vi.mocked(client.cleanupForeman).mock.calls[1]![0],
       );
@@ -3030,8 +3160,7 @@ describe("portal application", () => {
     await waitFor(() => expect(memberButton).toHaveFocus());
   });
 
-  it("shows a group-qualified delivery-only Messages control", async () => {
-    const onOpenMessages = vi.fn();
+  it("does not duplicate delivery Attention with a member-row envelope", async () => {
     const renderTree = (failedGroupId: string) => (
       <GroupTree
         snapshot={{
@@ -3050,7 +3179,6 @@ describe("portal application", () => {
         selectedGroupId="group-backend"
         unreadCounts={new Map()}
         onSelectGroup={vi.fn()}
-        onOpenMessages={onOpenMessages}
         onCreateGroup={vi.fn()}
         onRenameGroup={vi.fn()}
         onDeleteGroup={vi.fn()}
@@ -3072,8 +3200,11 @@ describe("portal application", () => {
     ).toBeInTheDocument();
 
     view.rerender(renderTree("group-backend"));
-    screen.getByRole("button", { name: "Open failed delivery for Builder in Backend" }).click();
-    expect(onOpenMessages).toHaveBeenCalledWith("group-backend");
+    expect(
+      screen.queryByRole("button", {
+        name: "Open failed delivery for Builder in Backend",
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it("counts ordinary waiting as Working and explicit input as projected Attention", async () => {
@@ -3214,6 +3345,67 @@ describe("portal application", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open Attention" })).toBeInTheDocument();
     expect(window.localStorage.getItem(PORTAL_PREFERENCES_KEY)).toBeNull();
+  });
+
+  it("dismisses delivery Attention persistently without changing failed delivery history", async () => {
+    window.history.replaceState({}, "", "/groups/group-backend/terminals");
+    const user = userEvent.setup();
+    const client = createClient();
+    const failedSnapshot = {
+      ...snapshot,
+      messageGroups: [
+        {
+          groupId: "group-backend",
+          latestGroupSeq: 1,
+          retainedMessageCount: 1,
+          activeDeliveryCount: 0,
+          failedRecipientMemberIds: ["builder"],
+          failedDeliveries: [
+            {
+              messageId: "delivery-one",
+              recipientMemberId: "builder",
+              status: "failed" as const,
+              attempts: 1,
+              updatedAt: timestamp,
+            },
+          ],
+        },
+      ],
+    };
+    const item = deriveAttentionItems(failedSnapshot).find(
+      (candidate) => candidate.kind === "delivery",
+    )!;
+    vi.mocked(client.loadSnapshot).mockResolvedValue(failedSnapshot);
+    vi.mocked(client.dismissAttentionItems).mockResolvedValue({
+      dismissals: [{ itemId: item.id, dismissedAt: timestamp }],
+    });
+    const view = render(<App client={client} />);
+    const navigation = await screen.findByRole("navigation", { name: "Operations" });
+    await user.click(within(navigation).getByRole("link", { name: /Attention/ }));
+    await screen.findByRole("heading", { level: 1, name: "Attention" });
+    await user.click(
+      await screen.findByRole("button", { name: "Dismiss Builder · Delivery failed" }),
+    );
+    await waitFor(() =>
+      expect(client.dismissAttentionItems).toHaveBeenCalledWith({ itemIds: [item.id] }),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Open failed delivery for Builder in Backend" }),
+    ).not.toBeInTheDocument();
+    expect(failedSnapshot.messageGroups[0]!.failedDeliveries[0]!.status).toBe("failed");
+    view.unmount();
+    vi.mocked(client.listAttentionDismissals).mockResolvedValue({
+      dismissals: [{ itemId: item.id, dismissedAt: timestamp }],
+    });
+    render(<App client={client} />);
+    await screen.findByRole("heading", { level: 1, name: "Attention" });
+    await waitFor(() => expect(client.listAttentionDismissals).toHaveBeenCalledTimes(2));
+    expect(
+      screen.queryByRole("button", { name: "Dismiss Builder · Delivery failed" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Open failed delivery for Builder in Backend" }),
+    ).not.toBeInTheDocument();
   });
 
   it("persists an Attention dismissal before removing the item", async () => {

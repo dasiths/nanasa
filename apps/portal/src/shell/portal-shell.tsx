@@ -61,7 +61,7 @@ export function PortalShell({
               >
                 <div>
                   <strong>{toast.item.title}</strong>
-                  <span>{toast.item.group.name}</span>
+                  <span>{toast.item.group?.name ?? "Foreman"}</span>
                   <p>{toast.item.summary}</p>
                 </div>
                 <div className="attention-toast-actions">

@@ -339,6 +339,7 @@ export function ForemanWorkspace({
   groups,
   themePreference,
   initialTeamId = "",
+  initialGoalId,
   onNavigate,
 }: {
   client: PortalClient;
@@ -346,12 +347,15 @@ export function ForemanWorkspace({
   groups: Group[];
   themePreference: ThemePreference;
   initialTeamId?: string;
+  initialGoalId?: string | undefined;
   onNavigate(path: string): void;
 }) {
   const [state, setState] = useState<ForemanState>();
   const [messages, setMessages] = useState<ForemanChannelMessage[]>([]);
   const [conversations, setConversations] = useState<ForemanConversationRequest[]>([]);
-  const [tab, setTab] = useState<"channel" | "terminal" | "goals" | "settings">("channel");
+  const [tab, setTab] = useState<"channel" | "terminal" | "goals" | "settings">(
+    initialGoalId ? "goals" : "channel",
+  );
   const [teamId, setTeamId] = useState(initialTeamId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<PortalError>();
@@ -773,7 +777,11 @@ export function ForemanWorkspace({
       )}
       {tab === "goals" && (
         <div id="foreman-goals" role="tabpanel" aria-labelledby="foreman-tab-goals">
-          <ForemanGoals client={client} configuration={state?.configuration} />
+          <ForemanGoals
+            client={client}
+            configuration={state?.configuration}
+            {...(initialGoalId ? { initialGoalId } : {})}
+          />
         </div>
       )}
       {tab === "settings" && (

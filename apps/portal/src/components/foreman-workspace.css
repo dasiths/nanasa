@@ -12,6 +12,54 @@
   margin: 8px 0;
   overflow-wrap: anywhere;
 }
+.foreman-goal-tabs {
+  border-bottom: 1px solid var(--line);
+}
+.foreman-goal-tabs button {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 10px 12px;
+}
+.foreman-goal-tabs button[aria-selected="true"] {
+  border-bottom-color: var(--blue);
+  color: var(--blue);
+}
+.foreman-goal-filters {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.foreman-goal-filters label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  min-width: 0;
+  max-width: 100%;
+}
+.foreman-goal-filters input[type="search"] {
+  width: 280px;
+  max-width: 100%;
+}
+.foreman-goal-filters .foreman-check {
+  display: flex;
+  align-items: center;
+  padding: 8px 0;
+}
+.foreman-goal-filters input[type="checkbox"] {
+  width: auto;
+}
+.foreman-goal-list time,
+.foreman-goal-technical {
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.foreman-goal-list li > button:not(.compact-button) {
+  min-width: 0;
+}
 .foreman-budget {
   display: flex;
   gap: 20px;

@@ -95,6 +95,7 @@ export type ApproveForemanCleanupCommand = z.infer<typeof ApproveForemanCleanupC
 export const ForemanCleanupEffectsSchema = z
   .object({
     goalId: IdentifierSchema,
+    goalTitle: z.string().optional(),
     actionIds: z.array(IdentifierSchema),
     runIds: z.array(IdentifierSchema),
   })
