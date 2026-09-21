@@ -1,5 +1,8 @@
 # Nanasa
 
+[![CI](https://github.com/dasiths/nanasa/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/dasiths/nanasa/actions/workflows/ci.yml)
+[![npm next version](https://img.shields.io/npm/v/@dasiths/nanasa/next.svg)](https://www.npmjs.com/package/@dasiths/nanasa)
+
 ![Logo](logo.png)
 
 Nanasa (නැනස) is a local-first orchestrator for running and observing multiple

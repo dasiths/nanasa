@@ -133,7 +133,7 @@ jobs:
       - name: Publish with npm trusted publishing
         run: |
           source scripts/ci-registry-env.sh
-          npm publish release-artifacts/*.tgz \
+          npm publish ./release-artifacts/*.tgz \
             --access public \
             --tag "${{ needs.package.outputs.channel }}" \
             --provenance
