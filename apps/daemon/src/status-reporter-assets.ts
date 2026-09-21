@@ -6,19 +6,12 @@ import { dirname } from "node:path";
 
 const source = process.argv[2];
 const configuredEvent = process.argv[3];
-const chunks = [];
-let size = 0;
-for await (const chunk of process.stdin) {
-  size += chunk.length;
-  if (size > 1024 * 1024) process.exit(0);
-  chunks.push(chunk);
-}
 
 function stableId(...parts) {
   return createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 32);
 }
 
-function nextSequence() {
+function nextSequence(startupOnly = false) {
   const path = process.env.NANASA_REPORTER_SEQUENCE_FILE;
   const epoch = process.env.NANASA_REPORTER_EPOCH;
   if (!path || !epoch) return undefined;
@@ -32,17 +25,18 @@ function nextSequence() {
       const current = JSON.parse(readFileSync(path, "utf8"));
       if (current.epoch === epoch && Number.isSafeInteger(current.sequence)) sequence = current.sequence;
     } catch {}
+    if (startupOnly && sequence > 0) return undefined;
     sequence += 1;
     const temporary = path + "." + process.pid + ".tmp";
     writeFileSync(temporary, JSON.stringify({ epoch, sequence }), { mode: 0o600 });
     renameSync(temporary, path);
     return sequence;
   } catch { return undefined; }
-  finally { if (descriptor !== undefined) closeSync(descriptor); rmSync(lock, { force: true }); }
+  finally { if (descriptor !== undefined) { closeSync(descriptor); rmSync(lock, { force: true }); } }
 }
 
-function base(input, event, fields = {}) {
-  const sourceSequence = nextSequence();
+function base(input, event, fields = {}, startupOnly = false) {
+  const sourceSequence = nextSequence(startupOnly);
   if (sourceSequence === undefined) return undefined;
   return {
     version: 2,
@@ -113,24 +107,67 @@ function normalize(input) {
 async function send(event) {
   const url = process.env.NANASA_STATUS_URL;
   const token = process.env.NANASA_MCP_TOKEN;
-  if (!url || !token || !event) return;
+  if (!url || !token || !event) return true;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 500);
   try {
-    await fetch(url, {
+    const response = await fetch(url, {
       method: "POST",
       headers: { authorization: "Bearer " + token, "content-type": "application/json" },
       body: JSON.stringify(event),
       signal: controller.signal,
     });
+    if (response.ok) return true;
+    if (response.status === 409) {
+      const body = await response.json().catch(() => undefined);
+      if (["status_reporter_identity_fenced", "status_native_session_fenced", "status_sequence_reordered", "status_event_duplicate"].includes(body?.code)) return true;
+    }
+    if (response.status === 401 || response.status === 403) return true;
   } catch {}
   finally { clearTimeout(timeout); }
+  return false;
 }
 
-try {
-  const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  for (const event of normalize(input)) await send(event);
-} catch {}
+if (source === "copilot" && configuredEvent === "mcp-startup") {
+  const { createInterface } = await import("node:readline");
+  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  let initializing = false;
+  let initialized = false;
+  for await (const line of lines) {
+    if (Buffer.byteLength(line) > 1024 * 1024) break;
+    let message;
+    try { message = JSON.parse(line); } catch { continue; }
+    if (message?.jsonrpc !== "2.0") continue;
+    const reply = (result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }) + "\n");
+    if (message.method === "initialize" && message.id !== undefined) {
+      initializing = true;
+      reply({ protocolVersion: message.params?.protocolVersion ?? "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "nanasa-status-reporter", version: "2" } });
+    } else if (message.method === "notifications/initialized" && initializing && !initialized) {
+      initialized = true;
+      const event = base({}, "session.ready", {}, true);
+      for (const delay of [0, 100, 400]) {
+        if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+        if (await send(event)) break;
+      }
+    } else if (message.id !== undefined) {
+      if (message.method === "tools/list") reply({ tools: [] });
+      else if (message.method === "ping") reply({});
+      else process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } }) + "\n");
+    }
+  }
+} else {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    size += chunk.length;
+    if (size > 1024 * 1024) process.exit(0);
+    chunks.push(chunk);
+  }
+  try {
+    const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    for (const event of normalize(input)) await send(event);
+  } catch {}
+}
 `;
 
 export const PI_STATUS_REPORTER_SOURCE = String.raw`function reporter() {
@@ -193,15 +230,9 @@ export const PI_STATUS_REPORTER_SOURCE = String.raw`function reporter() {
 export default reporter();
 `;
 
-export const OPENCODE_STATUS_REPORTER_SOURCE = String.raw`const ROOT_SESSION_KEY = Symbol.for("nanasa.opencode.root-session.v1");
-function rootSessionState() {
-  if (!globalThis[ROOT_SESSION_KEY]) globalThis[ROOT_SESSION_KEY] = { sessionId: undefined, listeners: new Set() };
-  return globalThis[ROOT_SESSION_KEY];
-}
-export const NanasaStatusPlugin = async () => {
+export const OPENCODE_STATUS_REPORTER_SOURCE = String.raw`export const NanasaStatusPlugin = async () => {
   const url = process.env.NANASA_STATUS_URL;
   const token = process.env.NANASA_MCP_TOKEN;
-  const roots = rootSessionState();
   const childParents = new Map();
   let sourceSequence = 0;
   let reportedRootSessionId;
@@ -212,7 +243,7 @@ export const NanasaStatusPlugin = async () => {
   const heartbeatMs = Math.max(50, Number(process.env.NANASA_REPORTER_HEARTBEAT_MS) || 15000);
   const retryDelays = [0, 100, 400, 1000];
   const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-  const disable = () => { disabled = true; clearInterval(heartbeat); heartbeat = undefined; childParents.clear(); roots.listeners.delete(selectRoot); };
+  const disable = () => { disabled = true; clearInterval(heartbeat); heartbeat = undefined; childParents.clear(); };
   const deliver = async (envelope) => {
     for (const retryDelay of retryDelays) {
       if (disabled) return;
@@ -260,16 +291,16 @@ export const NanasaStatusPlugin = async () => {
   };
   const selectRoot = (sessionId) => {
     if (disabled || !sessionId || reportedRootSessionId === sessionId) return;
+    currentAction = undefined;
     reportedRootSessionId = sessionId;
     send("session.ready", sessionId);
   };
-  roots.listeners.add(selectRoot);
-  selectRoot(roots.sessionId);
   heartbeat = setInterval(() => send("heartbeat", reportedRootSessionId), heartbeatMs);
   heartbeat.unref?.();
   return {
+    dispose: disable,
     "chat.message": async (input, output) => {
-      if (input.sessionID !== reportedRootSessionId) return;
+      if (disabled || input.sessionID !== reportedRootSessionId) return;
       const text = (output.parts ?? []).filter(part => part.type === "text").map(part => part.text).join("\n");
       const marker = /^\[(?:From: Repository Foreman \| )?Nanasa Action: ([^|\]\s]+) \| Exact Run: ([^|\]\s]+) \| Generation: (\d+)\]\r?\n/.exec(text);
       const turnId = output.message?.id ?? input.messageID;
@@ -285,7 +316,12 @@ export const NanasaStatusPlugin = async () => {
       const sessionId = properties.sessionID || properties.sessionId || properties.info?.id || properties.part?.sessionID;
       if (event.type === "session.created" && properties.info?.id) {
         if (properties.info.parentID) childParents.set(properties.info.id, properties.info.parentID);
-        else selectRoot(properties.info.id);
+        return;
+      }
+      if (event.type === "session.updated" && properties.info?.id) {
+        const session = properties.info;
+        const selection = session.metadata?.nanasaReporter;
+        if (!session.parentID && selection?.runId === process.env.NANASA_REPORTER_RUN_ID && selection?.generation === Number(process.env.NANASA_REPORTER_GENERATION) && selection?.reporterEpoch === process.env.NANASA_REPORTER_EPOCH && selection?.reporterEpoch) selectRoot(session.id);
         return;
       }
       const childParent = sessionId ? childParents.get(sessionId) : undefined;
@@ -325,28 +361,48 @@ export const NanasaStatusPlugin = async () => {
 export default NanasaStatusPlugin;
 `;
 
-export const OPENCODE_TUI_STATUS_REPORTER_SOURCE = String.raw`const ROOT_SESSION_KEY = Symbol.for("nanasa.opencode.root-session.v1");
-function rootSessionState() {
-  if (!globalThis[ROOT_SESSION_KEY]) globalThis[ROOT_SESSION_KEY] = { sessionId: undefined, listeners: new Set() };
-  return globalThis[ROOT_SESSION_KEY];
-}
-export default {
+export const OPENCODE_TUI_STATUS_REPORTER_SOURCE = String.raw`export default {
   id: "nanasa.opencode.root-session",
   tui: async (api) => {
-    const roots = rootSessionState();
-    const syncSelectedSession = () => {
+    let startupChecked = false;
+    let disposed = false;
+    let selectedSessionId;
+    let selecting = false;
+    const syncSelectedSession = async () => {
+      if (disposed || selecting) return;
       const route = api.route.current;
       const sessionId = route?.name === "session" ? route.params?.sessionID : undefined;
       const session = typeof sessionId === "string" && sessionId ? api.state.session.get(sessionId) : undefined;
-      if (!session || session.parentID) return;
-      if (roots.sessionId === sessionId) return;
-      roots.sessionId = sessionId;
-      for (const listener of roots.listeners) listener(sessionId);
+      if (!session || session.id !== sessionId || session.parentID || selectedSessionId === sessionId) return;
+      const runId = process.env.NANASA_REPORTER_RUN_ID;
+      const generation = Number(process.env.NANASA_REPORTER_GENERATION);
+      const reporterEpoch = process.env.NANASA_REPORTER_EPOCH;
+      if (!runId || !Number.isInteger(generation) || generation < 1 || !reporterEpoch) return;
+      selecting = true;
+      try {
+        const result = await api.client.session.update({ sessionID: sessionId, metadata: { ...session.metadata, nanasaReporter: { runId, generation, reporterEpoch } } });
+        if (!disposed && !result.error && result.data?.id === sessionId) selectedSessionId = sessionId;
+      } catch {}
+      finally { selecting = false; }
     };
-    syncSelectedSession();
-    const routePoll = setInterval(syncSelectedSession, 100);
+    const initializeRoot = async () => {
+      if (disposed || startupChecked || !api.state.ready) return;
+      startupChecked = true;
+      if (process.env.NANASA_OPENCODE_CREATE_ROOT !== "1" || api.route.current?.name !== "home") return;
+      try {
+        const options = JSON.parse(process.env.NANASA_OPENCODE_SESSION_OPTIONS || "{}");
+        const result = await api.client.session.create(options);
+        const session = result.data;
+        if (disposed || result.error || !session || typeof session.id !== "string" || !session.id || session.parentID || api.route.current?.name !== "home") return;
+        api.route.navigate("session", { sessionID: session.id });
+        await syncSelectedSession();
+      } catch {}
+    };
+    await syncSelectedSession();
+    void initializeRoot();
+    const routePoll = setInterval(() => { syncSelectedSession(); void initializeRoot(); }, 100);
     routePoll.unref?.();
-    api.lifecycle.onDispose(() => clearInterval(routePoll));
+    api.lifecycle.onDispose(() => { disposed = true; clearInterval(routePoll); });
   },
 };
 `;

@@ -177,6 +177,10 @@ import {
 } from "@nanasa/contracts";
 
 export interface PortalClient {
+  cleanupForeman: NanasaControlClient["cleanupForeman"];
+  loadForemanCleanupEffects: NanasaControlClient["foremanCleanupEffects"];
+  loadForemanCleanupRequests: NanasaControlClient["foremanCleanupRequests"];
+  approveForemanCleanup: NanasaControlClient["approveForemanCleanup"];
   resetForemanState(command: ResetForemanStateCommand): Promise<ResetForemanStateResult>;
   loadForemanConversations(): Promise<ForemanConversationRequest[]>;
   cancelForemanConversation(id: string): Promise<ForemanConversationRequest>;
@@ -388,6 +392,10 @@ export const api: PortalClient = {
       ForemanConversationRequestSchema,
       commandInit("POST", {}),
     ),
+  cleanupForeman: (command) => control.cleanupForeman(command),
+  loadForemanCleanupEffects: () => control.foremanCleanupEffects(),
+  loadForemanCleanupRequests: () => control.foremanCleanupRequests(),
+  approveForemanCleanup: (command) => control.approveForemanCleanup(command),
   listForemanGoals: () => request(`${CONTROL_API_PREFIX}/foreman/goals`, ForemanGoalSchema.array()),
   getForemanGoal: (id) =>
     request(

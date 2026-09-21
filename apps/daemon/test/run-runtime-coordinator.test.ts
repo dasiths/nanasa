@@ -55,6 +55,94 @@ function consentRequest(memberId = "alpha", state: "pending" | "denied" = "pendi
 }
 
 describe("RunRuntimeCoordinator", () => {
+  it("rechecks the preparation fence after asynchronous launch consent", async () => {
+    let allowed = true;
+    const startRun = vi.fn();
+    const coordinator = new RunRuntimeCoordinator(
+      {} as never,
+      { startRun, close: vi.fn(async () => undefined) } as never,
+      { close: vi.fn(async () => undefined) } as never,
+      { close: vi.fn(async () => undefined) } as never,
+      {
+        reconcileIntervalMs: 60_000,
+        launchConsent: {
+          resolve: vi.fn(async () => {
+            allowed = false;
+            return { status: "trusted" as const };
+          }),
+        } as never,
+      },
+    );
+    try {
+      await expect(
+        coordinator.startRun("group-one", "alpha", { cols: 80, rows: 24 }, () => {
+          if (!allowed) throw new Error("preparation revoked");
+        }),
+      ).rejects.toThrow("preparation revoked");
+      expect(startRun).not.toHaveBeenCalled();
+    } finally {
+      await coordinator.close();
+    }
+  });
+
+  it("does not stop a replacement runtime after preparation view teardown", async () => {
+    let active = runningRun;
+    const runtimeStop = vi.fn();
+    const coordinator = new RunRuntimeCoordinator(
+      { getActiveRun: () => active, updateRunStatus: vi.fn() } as never,
+      {
+        stopRun: runtimeStop,
+        removeViewSession: async () => {
+          active = { ...runningRun, id: "replacement", generation: 2 };
+        },
+        close: vi.fn(async () => undefined),
+      } as never,
+      { stop: vi.fn(async () => undefined), close: vi.fn(async () => undefined) } as never,
+      { close: vi.fn(async () => undefined) } as never,
+      { reconcileIntervalMs: 60_000 },
+    );
+    try {
+      await expect(
+        coordinator.stopRun("group-one", "alpha", {
+          beforeEffect: () => {},
+          reason: "foreman-preparation:test",
+        }),
+      ).rejects.toMatchObject({ code: "run_replaced" });
+      expect(runtimeStop).not.toHaveBeenCalled();
+    } finally {
+      await coordinator.close();
+    }
+  });
+
+  it("checks preparation authority after checkout validation and before binding", async () => {
+    const assignGroupCheckout = vi.fn();
+    const coordinator = new RunRuntimeCoordinator(
+      { getEffectiveGroupCheckout: () => ({ id: "old" }), assignGroupCheckout } as never,
+      { close: vi.fn(async () => undefined) } as never,
+      { close: vi.fn(async () => undefined) } as never,
+      { close: vi.fn(async () => undefined) } as never,
+      { reconcileIntervalMs: 60_000, validateCheckout: async () => {} },
+    );
+    try {
+      await expect(
+        coordinator.assignGroupCheckout(
+          "group-one",
+          {
+            checkoutId: "new",
+            expectedCheckoutRevision: 0,
+            switchPolicy: "require-stopped",
+          },
+          () => {
+            throw new Error("preparation cancelled");
+          },
+        ),
+      ).rejects.toThrow("preparation cancelled");
+      expect(assignGroupCheckout).not.toHaveBeenCalled();
+    } finally {
+      await coordinator.close();
+    }
+  });
+
   it("requires custom launch approval before starting the runtime", async () => {
     const request = consentRequest();
     const startRun = vi.fn();

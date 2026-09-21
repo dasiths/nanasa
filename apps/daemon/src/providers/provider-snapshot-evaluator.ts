@@ -417,23 +417,40 @@ export class ProviderSnapshotEvaluator {
           ownerKind = "reporter";
           break;
         }
-        case "copilot.mcp.config":
-          if (context.mcpEndpointUrl === undefined) continue;
+        case "copilot.mcp.config": {
           if (asset.kind !== "copilot-mcp-config")
             throw new Error("Copilot MCP asset kind mismatch");
-          assertLoopbackEndpoint(context.mcpEndpointUrl);
+          const startupReporter =
+            (asset.payload as { startupReporter?: boolean }).startupReporter === true;
+          if (context.mcpEndpointUrl === undefined && !startupReporter) continue;
+          if (context.mcpEndpointUrl !== undefined) assertLoopbackEndpoint(context.mcpEndpointUrl);
           content = json({
             mcpServers: {
-              nanasa: {
-                type: "http",
-                url: context.mcpEndpointUrl,
-                headers: { Authorization: "Bearer ${NANASA_MCP_TOKEN}" },
-                tools: ["*"],
-              },
+              ...(startupReporter
+                ? {
+                    "nanasa-status-reporter": {
+                      type: "local",
+                      command: this.#nodeExecutable,
+                      args: [copilotReporterPath, reporter.sourceId, "mcp-startup"],
+                      tools: ["*"],
+                    },
+                  }
+                : {}),
+              ...(context.mcpEndpointUrl === undefined
+                ? {}
+                : {
+                    nanasa: {
+                      type: "http",
+                      url: context.mcpEndpointUrl,
+                      headers: { Authorization: "Bearer ${NANASA_MCP_TOKEN}" },
+                      tools: ["*"],
+                    },
+                  }),
             },
           });
           ownerKind = "mcp";
           break;
+        }
         case "copilot.prompt.agent":
           if (context.prompt === undefined) continue;
           if (asset.kind !== "copilot-prompt")
@@ -554,7 +571,7 @@ export class ProviderSnapshotEvaluator {
           );
         }
         commandArguments.push("--plugin-dir", join(context.overlayRoot, "copilot-status-plugin"));
-        if (context.mcpEndpointUrl !== undefined) {
+        if (files.some((file) => file.relativePath === "mcp/config.json")) {
           commandArguments.push(
             "--additional-mcp-config",
             `@${join(context.overlayRoot, "mcp", "config.json")}`,
@@ -661,6 +678,32 @@ export class ProviderSnapshotEvaluator {
       environment: Object.freeze({
         ...this.stateEnvironment(input.stateRoot),
         ...overlay.environment,
+        ...(this.#adapter.body.providerId === "opencode"
+          ? {
+              NANASA_OPENCODE_CREATE_ROOT: input.nativeSession === undefined ? "1" : "0",
+              NANASA_OPENCODE_SESSION_OPTIONS: JSON.stringify({
+                ...(input.prompt === undefined
+                  ? {}
+                  : { agent: generatedAgentName(input.membershipId) }),
+                ...(input.model === undefined || !input.model.includes("/")
+                  ? {}
+                  : {
+                      model: {
+                        providerID: input.model.slice(0, input.model.indexOf("/")),
+                        id: input.model.slice(input.model.indexOf("/") + 1),
+                      },
+                    }),
+                ...(input.readOnly
+                  ? {
+                      permission: [
+                        { permission: "edit", pattern: "*", action: "deny" },
+                        { permission: "bash", pattern: "*", action: "deny" },
+                      ],
+                    }
+                  : {}),
+              }),
+            }
+          : {}),
         ...this.providerArgumentEnvironment(argumentsList, input.providerArgumentStrategy),
       }),
       overlay,

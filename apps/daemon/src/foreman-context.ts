@@ -110,6 +110,15 @@ export function foremanBootstrapContext(
       state: goal.state,
       revision: goal.revision,
       approvalMode: goal.grant.approvalMode,
+      preparations: service
+        .workspace(goal.id)
+        .preparations?.slice(-2)
+        .map((item) => ({
+          id: item.id,
+          groupId: item.groupId,
+          phase: item.phase,
+          reason: item.reason,
+        })),
     }))
     .sort(
       (left, right) =>

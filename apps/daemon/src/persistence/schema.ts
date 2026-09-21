@@ -5,6 +5,44 @@ import {
 
 export const DATABASE_SCHEMA_VERSION = 16;
 
+export const FOREMAN_CLEANUP_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS foreman_cleanup_requests (
+    id TEXT PRIMARY KEY,
+    foreman_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    data_json TEXT NOT NULL,
+    UNIQUE(foreman_id, request_id)
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS foreman_removed_goals (
+    goal_id TEXT PRIMARY KEY,
+    operator_id TEXT NOT NULL,
+    removed_at TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS foreman_cleanup_effects (
+    goal_id TEXT PRIMARY KEY,
+    data_json TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS foreman_cleanup_receipts (
+    operator_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (operator_id, request_id)
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS foreman_channel_visibility (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    cleared_through INTEGER NOT NULL DEFAULT 0
+  ) STRICT;
+  INSERT OR IGNORE INTO foreman_channel_visibility VALUES (1, 0);
+  CREATE TABLE IF NOT EXISTS foreman_cleared_messages (
+    message_id TEXT PRIMARY KEY
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS foreman_cleared_conversations (
+    conversation_id TEXT PRIMARY KEY
+  ) STRICT;
+`;
+
 export const FOREMAN_CONVERSATIONS_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS foreman_conversations (
     id TEXT PRIMARY KEY,

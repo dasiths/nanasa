@@ -73,7 +73,7 @@ function fixture(withPreviousRun = false, contextSnapshot?: () => string) {
     event: "session.ready",
     data: {},
   };
-  const ready = () => {
+  const observeProcess = () => {
     store.recordRuntimeProcessStatus(run.id, {
       event: "process.alive",
       eventId: "alive",
@@ -89,6 +89,9 @@ function fixture(withPreviousRun = false, contextSnapshot?: () => string) {
         wrapperChain: ["copilot"],
       },
     });
+  };
+  const ready = () => {
+    observeProcess();
     store.ingestForemanStatusEvent(identity, event);
   };
   const message = store.sendForemanMessage(
@@ -127,8 +130,10 @@ function fixture(withPreviousRun = false, contextSnapshot?: () => string) {
     previousRun,
     event,
     identity,
+    observeProcess,
     ready,
     scheduler,
+    service,
     runtime,
     message,
     control: (value: boolean) => {
@@ -144,6 +149,32 @@ function fixture(withPreviousRun = false, contextSnapshot?: () => string) {
 }
 
 describe("Foreman durable input dispatch", () => {
+  it("refreshes observation before readiness while preserving Human control", async () => {
+    const context = fixture();
+    context.service.observeReporterProcess.mockImplementationOnce(async () => context.ready());
+    context.control(true);
+    await context.scheduler.tick();
+    expect(context.service.observeReporterProcess).toHaveBeenCalledWith(context.run);
+    expect(context.state()).toBe("queued");
+    expect(context.runtime.pasteToRun).not.toHaveBeenCalled();
+    context.control(false);
+    await context.scheduler.tick();
+    expect(context.state()).toBe("submitted");
+    expect(context.runtime.pasteToRun).toHaveBeenCalledOnce();
+    await context.scheduler.close();
+  });
+
+  it("does not treat process observation alone as reporter readiness", async () => {
+    const context = fixture();
+    context.service.observeReporterProcess.mockImplementation(async () => context.observeProcess());
+    await context.scheduler.tick();
+    expect(context.service.observeReporterProcess).toHaveBeenCalledWith(context.run);
+    expect(context.store.getRuntimeStatusState(context.run.id).authorityKind).toBe("process");
+    expect(context.state()).toBe("queued");
+    expect(context.runtime.pasteToRun).not.toHaveBeenCalled();
+    await context.scheduler.close();
+  });
+
   it("delivers current context once after readiness without bypassing Human control", async () => {
     const snapshot = vi.fn(() => "Current bounded roster revision one");
     const context = fixture(false, snapshot);

@@ -99,6 +99,7 @@ import type { EventLog } from "../event-log.js";
 import { EventStreamSession } from "../event-stream-session.js";
 import type { ProviderExtensionService } from "../extensions/provider-extension-service.js";
 import type { ProviderHealthService } from "../extensions/provider-health-service.js";
+import { ForemanCleanupService } from "../foreman-cleanup-service.js";
 import type { ForemanConversationService } from "../foreman-conversation-service.js";
 import type { ForemanGoalService } from "../foreman-goal-service.js";
 import type { ForemanRuntimeService } from "../foreman-runtime-service.js";
@@ -290,6 +291,7 @@ function parseAfterSequence(value: string | undefined): number {
 }
 
 export function registerControlRouter(app: FastifyInstance, services: ControlRouterServices): void {
+  const cleanup = new ForemanCleanupService(services.store, services.goals);
   const register = (id: string, handler: RouteHandler): void => {
     const declaration = controlRoute(id);
     if (declaration.transport === "websocket") {
@@ -344,11 +346,37 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
   });
   register("config.get", () => services.config.load().config);
   register("foreman.get", () => ForemanWorkspaceSchema.parse(services.foreman.status()));
-  register("foreman.conversations", () => services.conversations.list());
+  register("foreman.conversations", () =>
+    cleanup.visibleConversations(services.conversations.list()),
+  );
   register("foreman.cancelConversation", (request) =>
     services.conversations.cancel(record(request.params).requestId ?? ""),
   );
-  register("goals.list", () => services.goals.list());
+  register("goals.list", (request) =>
+    record(request.query).includeRemoved === "true"
+      ? services.store.database
+          .prepare("SELECT id FROM foreman_coordination_records WHERE kind = 'goal' ORDER BY rowid")
+          .all()
+          .map((row) => services.goals.get(String(row.id)))
+      : cleanup.listGoals(),
+  );
+  register("foreman.cleanup", (request) =>
+    cleanup.execute(
+      operatorPrincipal(services, request).operatorId,
+      routeBody(controlRoute("foreman.cleanup"), request),
+    ),
+  );
+  register("foreman.cleanupEffects", () => cleanup.pendingEffects());
+  register("foreman.cleanupRequests", (request) => {
+    operatorPrincipal(services, request);
+    return cleanup.requests();
+  });
+  register("foreman.approveCleanup", (request) =>
+    cleanup.approve(
+      operatorPrincipal(services, request).operatorId,
+      routeBody(controlRoute("foreman.approveCleanup"), request),
+    ),
+  );
   register("foreman.connectors", () => services.auth.listConnectors());
   register("foreman.createConnector", (request) => services.auth.createConnector(request.body));
   register("foreman.revokeConnector", (request) =>
@@ -406,6 +434,11 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
       ForemanChannelQuerySchema.parse({
         after: query.after === undefined ? 0 : Number(query.after),
         limit: query.limit === undefined ? 50 : Number(query.limit),
+        includeCleared:
+          query.includeCleared === undefined
+            ? undefined
+            : z.enum(["true", "false"]).parse(query.includeCleared) === "true",
+        messageId: query.messageId,
       }),
     );
   });

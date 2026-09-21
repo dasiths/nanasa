@@ -929,6 +929,9 @@
               "type": "string",
               "format": "date-time",
               "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "cleared": {
+              "type": "boolean"
             }
           },
           "required": [
@@ -948,6 +951,11 @@
       },
       "hasMore": {
         "type": "boolean"
+      },
+      "clearedThrough": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
       }
     },
     "required": [
@@ -1152,6 +1160,44 @@
             "minLength": 1,
             "maxLength": 128
           },
+          "requestOrigin": {
+            "type": "object",
+            "properties": {
+              "repositoryId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "checkoutId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "workingDirectory": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "foreman-run",
+                  "foreman-integration",
+                  "repository-root"
+                ]
+              }
+            },
+            "required": [
+              "repositoryId",
+              "checkoutId",
+              "workingDirectory",
+              "source"
+            ],
+            "additionalProperties": false
+          },
+          "sourceText": {
+            "type": "string"
+          },
           "state": {
             "type": "string",
             "enum": [
@@ -1353,6 +1399,9 @@
         ],
         "additionalProperties": false
       },
+      "requestContext": {
+        "type": "string"
+      },
       "delegations": {
         "type": "array",
         "items": {
@@ -1515,6 +1564,14 @@
                 "ready"
               ]
             },
+            "reviewOutcome": {
+              "type": "string",
+              "enum": [
+                "approved",
+                "changes-required"
+              ],
+              "description": "Required for review: approved or changes-required for the exact reported candidate"
+            },
             "summary": {
               "type": "string",
               "minLength": 1,
@@ -1644,7 +1701,8 @@
               "type": "string",
               "enum": [
                 "question",
-                "delegation"
+                "delegation",
+                "preparation"
               ]
             },
             "state": {
@@ -1698,6 +1756,156 @@
             "revision",
             "goalRevision",
             "createdAt"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "preparations": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "goalId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "groupId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "memberId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "brief": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            "workspace": {
+              "default": "auto",
+              "type": "string",
+              "enum": [
+                "auto",
+                "existing",
+                "new"
+              ]
+            },
+            "checkoutId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "sourceCheckoutId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "requestDigest": {
+              "type": "string"
+            },
+            "operation": {
+              "type": "string",
+              "enum": [
+                "assign",
+                "prepare"
+              ]
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "waiting",
+                "needs-approval",
+                "preparing",
+                "stopping",
+                "assigning",
+                "starting",
+                "ready",
+                "delegating",
+                "delegated",
+                "held",
+                "cancelled",
+                "expired"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            },
+            "decisionId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "delegationId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "sourceHead": {
+              "type": "string"
+            },
+            "sourceDirty": {
+              "type": "boolean"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "retryCount": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "nextAttemptAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "deadline": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            }
+          },
+          "required": [
+            "requestId",
+            "goalId",
+            "groupId",
+            "memberId",
+            "brief",
+            "workspace",
+            "id",
+            "requestDigest",
+            "operation",
+            "phase",
+            "branch",
+            "retryCount",
+            "nextAttemptAt",
+            "deadline",
+            "createdAt",
+            "updatedAt"
           ],
           "additionalProperties": false
         }
@@ -2404,6 +2612,14 @@
             "review",
             "ready"
           ]
+        },
+        "reviewOutcome": {
+          "type": "string",
+          "enum": [
+            "approved",
+            "changes-required"
+          ],
+          "description": "Required for review: approved or changes-required for the exact reported candidate"
         },
         "summary": {
           "type": "string",

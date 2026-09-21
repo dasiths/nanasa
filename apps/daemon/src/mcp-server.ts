@@ -3,6 +3,7 @@ import { type AuthInfo, createMcpHandler, McpServer } from "@modelcontextprotoco
 import {
   AgentProgressReportCommandSchema,
   AskForemanMemberCommandSchema,
+  AssignForemanOutcomeCommandSchema,
   CreateAgentActionCommandSchema,
   DelegateForemanGoalCommandSchema,
   ForemanChannelQuerySchema,
@@ -11,9 +12,9 @@ import {
   MAX_MESSAGE_REQUEST_BYTES,
   type MessageSubmissionResult,
   type NanasaConfig,
-  ProposeForemanGoalCommandSchema,
   ReplyForemanConversationCommandSchema,
   ReportDelegationCommandSchema,
+  RequestForemanCleanupCommandSchema,
   RequestHumanDecisionCommandSchema,
   SendForemanMessageCommandSchema,
   SubmitMessageCommandSchema,
@@ -25,13 +26,19 @@ import type { AgentActionService } from "./actions/agent-action-service.js";
 import type { AgentOpenWaitService } from "./actions/agent-open-wait-service.js";
 import type { AgentWaitService } from "./actions/agent-wait-service.js";
 import {
+  BrowserCandidateVerificationSchema,
+  verifyBrowserCandidate,
+} from "./browser-candidate-verifier.js";
+import {
   NANASA_FOREMAN_INSTRUCTIONS,
   nanasaMcpServerInstructions,
 } from "./coordination-instructions.js";
 import { DeliveryRepository } from "./delivery-repository.js";
 import { foremanBootstrapContext, foremanDiscoveryContext } from "./foreman-context.js";
 import type { ForemanConversationService } from "./foreman-conversation-service.js";
+import { ForemanCleanupService } from "./foreman-cleanup-service.js";
 import type { ForemanGoalService } from "./foreman-goal-service.js";
+import type { ForemanOrchestrationService } from "./foreman-orchestration-service.js";
 import type { CheckoutService } from "./git/checkout-service.js";
 import {
   McpActionReferenceSchema as ActionReferenceSchema,
@@ -42,6 +49,7 @@ import {
   McpListMembersSchema as ListMembersSchema,
   MCP_TOOL_REGISTRY,
   McpAcceptGoalSchema,
+  McpCleanupRequestQuerySchema,
   McpConversationReferenceSchema,
   McpDeliverySchema,
   McpForemanBootstrapSchema,
@@ -50,6 +58,7 @@ import {
   McpGoalReferenceSchema,
   McpObserveTeamSchema,
   McpOwnWaitsSchema,
+  McpProposeGoalSchema,
   McpReportDelegationSchema,
   McpVisibleHistorySchema,
   McpMessageFieldsSchema as MessageFieldsSchema,
@@ -78,6 +87,7 @@ export interface McpRouteOptions {
   openWaits: AgentOpenWaitService;
   foremanConfig?: () => NanasaConfig;
   goals: ForemanGoalService;
+  orchestration?: ForemanOrchestrationService;
   conversations: ForemanConversationService;
   terminalReads: TerminalReadService;
   checkouts: CheckoutService;
@@ -167,23 +177,50 @@ function actionPrincipal(principal: TeamMcpPrincipal) {
     : { kind: "operator" as const, operatorId: principal.operatorId };
 }
 
-function actionToolResult(operation: () => unknown, formatted = false) {
+async function actionToolResult(operation: () => unknown, formatted = false) {
   try {
-    const result = operation();
+    const result = await operation();
     if (formatted) return result as ReturnType<typeof foremanBootstrapContext>;
     return {
       content: [{ type: "text" as const, text: "Durable action state returned." }],
       structuredContent: { result },
     };
   } catch (error) {
+    const code = error instanceof DomainError ? error.code : "coordination_failed";
+    const message =
+      error instanceof DomainError
+        ? error.message
+        : "Coordination failed; inspect daemon diagnostics before retrying";
+    const details = error instanceof DomainError ? error.details : {};
+    const effect = details.effect === "none" ? "none" : "unconfirmed";
+    const retry =
+      effect === "none" && details.retry === "correct-input" ? "correct-input" : "inspect-first";
+    const nextAction =
+      effect === "none" && typeof details.nextAction === "string"
+        ? details.nextAction
+        : code === "foreman_context_changed"
+          ? "Restart the affected pagination without revision. Do not repeat mutations."
+          : code === "foreman_context_offset" || code === "foreman_context_group_required"
+            ? "Correct the paging arguments using the previous page's continuation fields."
+            : "Inspect current goal and operation state. Do not repeat a possibly submitted effect or change request identity to bypass a conflict.";
     return {
       content: [
         {
           type: "text" as const,
-          text: error instanceof Error ? error.message : "Agent action failed",
+          text: `${code}: ${message}\nEffect: ${effect}; retry: ${retry}\nNext: ${nextAction}`,
         },
       ],
       isError: true,
+      structuredContent: {
+        error: {
+          code,
+          message,
+          ...(error instanceof DomainError ? { statusCode: error.statusCode, details } : {}),
+          effect,
+          retry,
+          nextAction,
+        },
+      },
     };
   }
 }
@@ -347,6 +384,31 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
         capabilities: { tools: { listChanged: false } },
       },
     );
+    const cleanup = new ForemanCleanupService(options.store, options.goals);
+    server.registerTool(
+      "nanasa.foreman_request_cleanup",
+      {
+        description: mcpTool("nanasa.foreman_request_cleanup").description,
+        inputSchema: RequestForemanCleanupCommandSchema,
+      },
+      async (input) =>
+        actionToolResult(() => {
+          assertMcpToolPrincipal("nanasa.foreman_request_cleanup", principal);
+          return cleanup.request(principal.foremanId, input);
+        }),
+    );
+    server.registerTool(
+      "nanasa.foreman_read_cleanup_requests",
+      {
+        description: mcpTool("nanasa.foreman_read_cleanup_requests").description,
+        inputSchema: McpCleanupRequestQuerySchema,
+      },
+      async (input) =>
+        actionToolResult(() => {
+          assertMcpToolPrincipal("nanasa.foreman_read_cleanup_requests", principal);
+          return cleanup.requests(principal.foremanId, input.id);
+        }),
+    );
     server.registerTool(
       "nanasa.foreman_ask_member",
       {
@@ -361,7 +423,19 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
         description: mcpTool("nanasa.foreman_read_conversations").description,
         inputSchema: ForemanConversationQuerySchema,
       },
-      async (input) => actionToolResult(() => options.conversations.read(principal, input)),
+      async (input) =>
+        actionToolResult(() => {
+          const result = options.conversations.read(principal, input);
+          return input.id
+            ? result
+            : {
+                ...result,
+                requests: new ForemanCleanupService(
+                  options.store,
+                  options.goals,
+                ).visibleConversations(result.requests),
+              };
+        }),
     );
     server.registerTool(
       "nanasa.foreman_finish_conversation",
@@ -426,12 +500,20 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
       "nanasa.foreman_propose_goal",
       {
         description: mcpTool("nanasa.foreman_propose_goal").description,
-        inputSchema: ProposeForemanGoalCommandSchema,
+        inputSchema: McpProposeGoalSchema,
       },
       async (input) =>
         actionToolResult(() => {
           options.goals.assertForeman(principal);
-          return options.goals.propose(input);
+          const { sourceMessageId, sourceConversationIds, ...command } = input;
+          return options.goals.propose(
+            {
+              ...command,
+              ...(sourceMessageId == null ? {} : { sourceMessageId }),
+              ...(sourceConversationIds == null ? {} : { sourceConversationIds }),
+            },
+            principal,
+          );
         }),
     );
     server.registerTool(
@@ -456,6 +538,30 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
       },
       async (input) => actionToolResult(() => options.goals.delegate(principal, input)),
     );
+    for (const name of [
+      "nanasa.foreman_assign_outcome",
+      "nanasa.foreman_prepare_workspace",
+    ] as const) {
+      server.registerTool(
+        name,
+        {
+          description: mcpTool(name).description,
+          inputSchema: AssignForemanOutcomeCommandSchema,
+        },
+        async (input) =>
+          actionToolResult(() => {
+            if (!options.orchestration)
+              throw new DomainError(
+                "foreman_preparation_unavailable",
+                "Workspace preparation is unavailable on this server",
+                503,
+              );
+            return name === "nanasa.foreman_assign_outcome"
+              ? options.orchestration.assignOutcome(principal, input)
+              : options.orchestration.prepareWorkspace(principal, input);
+          }),
+      );
+    }
     server.registerTool(
       "nanasa.foreman_finish_goal_review",
       {
@@ -617,47 +723,88 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
       async () => actionToolResult(() => options.goals.own(principal)),
     );
     server.registerTool(
+      "nanasa.verify_browser_candidate",
+      {
+        description: mcpTool("nanasa.verify_browser_candidate").description,
+        inputSchema: BrowserCandidateVerificationSchema,
+      },
+      async (input) =>
+        actionToolResult(async () => {
+          try {
+            const result = await verifyBrowserCandidate(input, () =>
+              options.goals.browserCandidate(principal, input.delegationId, input.candidatePath),
+            );
+            return {
+              content: [{ type: "text" as const, text: JSON.stringify(result) }],
+              structuredContent: { result },
+            };
+          } catch (error) {
+            throw new DomainError(
+              error instanceof DomainError ? error.code : "browser_verification_failed",
+              error instanceof DomainError
+                ? error.message
+                : "Scoped browser verification could not complete",
+              error instanceof DomainError ? error.statusCode : 409,
+              {
+                ...(error instanceof DomainError ? error.details : {}),
+                effect: "none",
+                retry: "inspect-first",
+                nextAction:
+                  "No review was submitted and no candidate files were written. Inspect your current team delegation, checkout-root-relative candidatePath and installed browser capability. Missing or failed required checks prevent approval; report concrete blockers through the normal delegation report.",
+              },
+            );
+          }
+        }, true),
+    );
+    server.registerTool(
       "nanasa.report_delegation",
       {
         description: mcpTool("nanasa.report_delegation").description,
         inputSchema: McpReportDelegationSchema,
       },
-      async (input) => {
-        try {
-          const { candidateHead, candidatePath, ...fields } = input;
-          const report = ReportDelegationCommandSchema.parse({
-            ...fields,
-            ...(candidateHead == null ? {} : { candidateHead }),
-            ...(candidatePath == null ? {} : { candidatePath }),
-          });
-          const own = options.goals.own(principal);
-          const delegation = own
-            .flatMap((workspace) => workspace.delegations)
-            .find((item) => item.id === input.delegationId && item.groupId === principal.groupId);
-          if (delegation === undefined)
+      async (input) =>
+        actionToolResult(async () => {
+          let report: z.infer<typeof ReportDelegationCommandSchema>;
+          try {
+            const { candidateHead, candidatePath, reviewOutcome, ...fields } = input;
+            report = ReportDelegationCommandSchema.parse({
+              ...fields,
+              ...(reviewOutcome == null ? {} : { reviewOutcome }),
+              ...(candidateHead == null ? {} : { candidateHead }),
+              ...(candidatePath == null ? {} : { candidatePath }),
+            });
+            const own = options.goals.own(principal);
+            const delegation = own
+              .flatMap((workspace) => workspace.delegations)
+              .find((item) => item.id === input.delegationId && item.groupId === principal.groupId);
+            if (delegation === undefined)
+              throw new DomainError(
+                "delegation_forbidden",
+                "Delegation is not owned by this team",
+                403,
+              );
+            if (input.kind === "ready" || input.kind === "review")
+              await options.checkouts.refresh(delegation.checkoutId);
+          } catch (error) {
+            const invalid = error instanceof z.ZodError;
             throw new DomainError(
-              "delegation_forbidden",
-              "Delegation is not owned by this team",
-              403,
-            );
-          if (input.kind === "ready" || input.kind === "review")
-            await options.checkouts.refresh(delegation.checkoutId);
-          return actionToolResult(() => options.goals.report(principal, report));
-        } catch (error) {
-          return {
-            isError: true,
-            content: [
+              error instanceof DomainError ? error.code : "foreman_report_validation_failed",
+              error instanceof DomainError ? error.message : "Unable to validate report evidence",
+              error instanceof DomainError ? error.statusCode : invalid ? 400 : 409,
               {
-                type: "text" as const,
-                text:
-                  error instanceof DomainError
-                    ? error.message
-                    : "Unable to validate report evidence",
+                ...(error instanceof DomainError ? error.details : {}),
+                ...(invalid
+                  ? { issues: error.issues.map(({ code, path }) => ({ code, path })) }
+                  : {}),
+                effect: "none",
+                retry: invalid ? "correct-input" : "inspect-first",
+                nextAction:
+                  "No report was submitted by this call. For kind review, supply reviewOutcome approved or changes-required. Inspect the report fields, team delegation and assigned checkout before resubmitting with the same requestId. Do not broaden candidate scope or claim readiness to record negative review findings.",
               },
-            ],
-          };
-        }
-      },
+            );
+          }
+          return options.goals.report(principal, report);
+        }),
     );
     server.registerTool(
       "nanasa.request_human_decision",
@@ -672,7 +819,7 @@ function createMcpServer(principal: McpPrincipal, options: McpRouteOptions): Mcp
       "nanasa.report_progress",
       {
         description:
-          "Report the caller's current task stage, progress summary, next step, blocker, or final outcome",
+          "Report the caller's current task stage, progress summary, next step, blocker, or final outcome. Omit blocker when none; null, empty text or exact case-insensitive none also clears it",
         inputSchema: AgentProgressReportCommandSchema,
       },
       async (input) => {

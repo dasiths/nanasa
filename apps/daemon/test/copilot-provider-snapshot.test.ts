@@ -57,6 +57,39 @@ beforeAll(async () => {
 });
 
 describe("Copilot provider snapshot conformance", () => {
+  it("loads the startup reporter independently of the coordination MCP endpoint", () => {
+    const context = { ...overlayContext };
+    Reflect.deleteProperty(context, "mcpEndpointUrl");
+    const overlay = evaluator.planOverlay(context);
+    const config = overlay.files.find((file) => file.relativePath === "mcp/config.json");
+    expect(config).toBeDefined();
+    expect(JSON.parse(config!.content)).toEqual({
+      mcpServers: {
+        "nanasa-status-reporter": {
+          type: "local",
+          command: expect.any(String),
+          args: [
+            "/overlay/copilot/copilot-status-plugin/status-hook.mjs",
+            "copilot",
+            "mcp-startup",
+          ],
+          tools: ["*"],
+        },
+      },
+    });
+    expect(overlay.commandArguments).toEqual(
+      expect.arrayContaining(["--additional-mcp-config", "@/overlay/copilot/mcp/config.json"]),
+    );
+    const coordinated = evaluator.planOverlay(overlayContext);
+    const coordinatedConfig = coordinated.files.find(
+      (file) => file.relativePath === "mcp/config.json",
+    );
+    expect(JSON.parse(coordinatedConfig!.content).mcpServers).toMatchObject({
+      "nanasa-status-reporter": expect.any(Object),
+      nanasa: { type: "http", url: overlayContext.mcpEndpointUrl },
+    });
+  });
+
   it("builds byte-identical, function-free snapshots through public capability schemas", async () => {
     const repeated = await buildTrustedBuiltinCopilotPackage();
     expect(repeated.snapshot.digest).toBe(builtIn.snapshot.digest);

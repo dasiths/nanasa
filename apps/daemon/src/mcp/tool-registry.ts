@@ -2,6 +2,7 @@ import {
   AgentActionStateSchema,
   AgentProgressReportCommandSchema,
   AskForemanMemberCommandSchema,
+  AssignForemanOutcomeCommandSchema,
   DelegateForemanGoalCommandSchema,
   ForemanChannelQuerySchema,
   ForemanCheckInCommandSchema,
@@ -9,10 +10,12 @@ import {
   ProposeForemanGoalCommandSchema,
   ReplyForemanConversationCommandSchema,
   ReportDelegationCommandSchema,
+  RequestForemanCleanupCommandSchema,
   RequestHumanDecisionCommandSchema,
   SendForemanMessageCommandSchema,
 } from "@nanasa/contracts";
 import { z } from "zod";
+import { BrowserCandidateVerificationSchema } from "../browser-candidate-verifier.js";
 import type { McpPrincipal } from "../mcp-auth.js";
 import { DomainError } from "../store.js";
 
@@ -40,11 +43,34 @@ export const McpForemanDiscoverySchema = z
   })
   .strict();
 export const McpConversationReferenceSchema = z.object({ id: McpIdentifierSchema }).strict();
+export const McpCleanupRequestQuerySchema = z
+  .object({ id: McpIdentifierSchema.optional() })
+  .strict();
 export const McpGoalReferenceSchema = z.object({ goalId: McpIdentifierSchema }).strict();
-export const McpReportDelegationSchema = ReportDelegationCommandSchema.extend({
-  candidateHead: ReportDelegationCommandSchema.shape.candidateHead.nullable(),
-  candidatePath: ReportDelegationCommandSchema.shape.candidatePath.nullable(),
+export const McpProposeGoalSchema = ProposeForemanGoalCommandSchema.extend({
+  sourceMessageId: ProposeForemanGoalCommandSchema.shape.sourceMessageId
+    .nullable()
+    .describe(
+      "Original stored Human (operator) message ID from foreman_read_channel, usually fm_*. Never an agent/Foreman message or a thread ID. Optional for native TUI requests with no channel message; omit or null means absent, not permission to discard invalid linkage.",
+    ),
+  sourceConversationIds: ProposeForemanGoalCommandSchema.shape.sourceConversationIds
+    .nullable()
+    .describe(
+      "Optional supporting member-question request IDs returned by foreman_ask_member or foreman_read_conversations, owned by this Foreman. These are not channel message IDs or channel conversation/thread IDs and grant no authority. Omit, null or [] when no member-question context is intended.",
+    ),
 });
+export const McpReportDelegationSchema = z
+  .object({
+    ...ReportDelegationCommandSchema.shape,
+    reviewOutcome: ReportDelegationCommandSchema.shape.reviewOutcome
+      .nullable()
+      .describe(
+        "For kind review, required explicit approved or changes-required verdict for the exact candidate. For other report kinds, omit or null.",
+      ),
+    candidateHead: ReportDelegationCommandSchema.shape.candidateHead.nullable(),
+    candidatePath: ReportDelegationCommandSchema.shape.candidatePath.nullable(),
+  })
+  .strict();
 export const McpAcceptGoalSchema = McpGoalReferenceSchema.extend({
   expectedRevision: z.number().int().nonnegative(),
 });
@@ -127,6 +153,42 @@ function tool(input: McpToolDeclaration): McpToolDeclaration {
 
 export const MCP_TOOL_REGISTRY = Object.freeze([
   tool({
+    name: "nanasa.foreman_request_cleanup",
+    description:
+      "Request scoped visibility cleanup without a delivery goal. Captures exact goal IDs/revisions or channel cutoff/conversation IDs for operator approval in the portal. This request grants no consent and changes no visibility; confirmation is not accepted. Data and pending effects are retained; no permanent purge.",
+    inputSchema: RequestForemanCleanupCommandSchema,
+    principals: ["foreman"],
+    scope: "foreman:cleanup:request",
+    authority: "self-write",
+  }),
+  tool({
+    name: "nanasa.foreman_read_cleanup_requests",
+    description:
+      "Read pending cleanup requests for this Foreman, or a durable approval receipt by exact id. Only an authenticated operator can approve the unchanged stored scope; request text and Human chat replies are not authorization.",
+    inputSchema: McpCleanupRequestQuerySchema,
+    principals: ["foreman"],
+    scope: "foreman:cleanup:read",
+    authority: "read",
+  }),
+  tool({
+    name: "nanasa.foreman_assign_outcome",
+    description:
+      "Assign an outcome to a real team owner using a stable requestId. Durably prepares an isolated workspace, waits for readiness, starts eligible members and delegates with fresh server-side revisions. workspace auto reuses a suitable owned linked checkout or creates one; existing requires a clean linked checkout; new creates a request-owned worktree. Human stops and dirty sources are held, not bypassed. Read preparation progress with foreman_get_goal.",
+    inputSchema: AssignForemanOutcomeCommandSchema,
+    principals: ["foreman"],
+    scope: "foreman:goals:assign",
+    authority: "scoped-peer-action",
+  }),
+  tool({
+    name: "nanasa.foreman_prepare_workspace",
+    description:
+      "Prepare and bind an isolated team workspace using the same durable, policy-checked preparation owner as assign_outcome, without starting members or handing off work. Requires goalId, groupId, memberId, brief and stable requestId. Prefer assign_outcome for an execution request.",
+    inputSchema: AssignForemanOutcomeCommandSchema,
+    principals: ["foreman"],
+    scope: "foreman:goals:prepare",
+    authority: "scoped-peer-action",
+  }),
+  tool({
     name: "nanasa.foreman_accept_goal",
     description:
       "Accept an independently reviewed ready goal only under an operator-enabled autonomous coordination grant; rechecks candidate evidence and settled team state, and never overrides Human pause",
@@ -201,8 +263,8 @@ export const MCP_TOOL_REGISTRY = Object.freeze([
   tool({
     name: "nanasa.foreman_propose_goal",
     description:
-      "Propose a high-level outcome without requiring an implementation plan. Starts within ceilings under autonomous approval; otherwise awaits Human approval. Inspect returned state and grant",
-    inputSchema: ProposeForemanGoalCommandSchema,
+      "Propose a high-level Human outcome without requiring an implementation plan. For channel requests, read the original message and set sourceMessageId to its stored Human message ID. sourceConversationIds contains only supporting member-question request IDs from foreman_ask_member/read_conversations, never channel message or thread IDs. Native TUI requests need no channel IDs; omit absent linkage (null is accepted as absent). Linkage is context, not authority. Starts within policy ceilings under autonomous approval; otherwise awaits Human approval. Inspect returned state and grant. On an explicit effect=none, retry=correct-input rejection, correct the indicated linkage and resubmit with the same requestId; never drop a real Human source to bypass verification. For unconfirmed effects or request conflicts inspect state first.",
+    inputSchema: McpProposeGoalSchema,
     principals: ["foreman"],
     scope: "foreman:goals:propose",
     authority: "self-write",
@@ -250,9 +312,18 @@ export const MCP_TOOL_REGISTRY = Object.freeze([
     authority: "read",
   }),
   tool({
+    name: "nanasa.verify_browser_candidate",
+    description:
+      "Observe an exact static browser candidate without shell access or candidate writes. Agent-only: requires your team's current accepted, working or blocked approved delegation. candidatePath is checkout-root-relative, never cwd-relative; entry defaults to index.html. Defaults to fresh desktop 1440x900, fresh mobile 390x844 and desktop-to-mobile resize. Up to 10 exact click/select/fill/slider CSS actions; no code, commands, arbitrary URLs or file uploads. Returns bounded snapshots, controls, screenshots, rendered pixel samples, overflow and page/network errors with unchanged before/after candidate digests. External assets are blocked. Evidence is observation only, not review approval. Missing installed headless Chromium or host dependencies returns unavailable; this tool never installs anything.",
+    inputSchema: BrowserCandidateVerificationSchema,
+    principals: ["agent"],
+    scope: "team:delegations:verify-browser",
+    authority: "read",
+  }),
+  tool({
     name: "nanasa.report_delegation",
     description:
-      "Report acceptance, plan, progress, blockers or readiness with evidence. For progress reports omit both candidate fields or set both null. For uncommitted review/ready set candidatePath and candidateHead:null; for a clean commit set candidateHead and candidatePath:null. Never invent placeholder hashes. Only the accountable member can accept or finish",
+      "Report acceptance, plan, progress, blockers, review or readiness. kind:review requires reviewOutcome:approved or changes-required and evidence for the exact candidate; missing verdict has no effect, so correct and resubmit the same requestId. Notify the accountable member with a normal scoped peer reply after reporting. Latest independent approval of that candidate is required for ready. For progress omit both candidate fields or set both null. For uncommitted review/ready set candidatePath and candidateHead:null; for a clean commit set candidateHead and candidatePath:null. Never invent hashes or broaden scope to record findings. Only the accountable member can accept or finish",
     inputSchema: McpReportDelegationSchema,
     principals: ["agent"],
     scope: "team:delegations:report",
@@ -270,7 +341,7 @@ export const MCP_TOOL_REGISTRY = Object.freeze([
   tool({
     name: "nanasa.foreman_read_channel",
     description:
-      "Read bounded operator instructions and Foreman replies from the repository channel",
+      "Read bounded operator instructions and Foreman replies. For queued Human work pass its exact messageId, which retains access even after visibility cleanup; default reads hide cleared history",
     inputSchema: ForemanChannelQuerySchema,
     principals: ["foreman"],
     scope: "foreman:channel:read",

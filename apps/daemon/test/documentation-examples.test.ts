@@ -303,6 +303,11 @@ describe("tested documentation examples", () => {
         scope: "group",
         reference: ".nanasa/instructions/groups/frontend-team.md",
       });
+      expect(prompt.text).toContain(
+        "expertise, not permission to reinterpret an explicit requested path",
+      );
+      expect(prompt.text).toContain("not your launch cwd or a specialty directory");
+      expect(prompt.text).toContain("read-only roles");
       expect(prompt.sources).not.toContainEqual({
         scope: "group",
         reference: ".nanasa/instructions/groups/agent-team.md",

@@ -112,6 +112,23 @@ Research documents and implementation plans are optional. Foreman proposes an
 outcome; in human mode, approve its objective, constraints and policy limits in Goals. Approval
 does not authorize arbitrary teams or change provider permissions.
 
+Goals retain the original Human channel text when `sourceMessageId` is supplied.
+The daemon records `requestOrigin` from the authenticated Foreman run's resolved
+working directory, falling back to the configured integration cwd. Goals created
+through the portal use the configured repository root. This directory is stored
+relative to the actual source checkout, so nested configurations retain their
+scope when work moves into a managed linked checkout or resumes later.
+
+Goal reads, assignment prompts and `nanasa.team_delegations` include
+`requestContext`: the original text, mapped absolute working directory and
+repository-relative `./` anchor. For example, `./src` requested from
+`examples/multi-coding-agents` means `examples/multi-coding-agents/src` in the
+assigned checkout, not a team's usual application directory. Roles describe
+expertise, not permission to reinterpret explicit paths. Existing goals without
+origin metadata remain explicitly unknown; ambiguous paths require clarification.
+This does not relax read-only roles, provider permissions or filesystem containment.
+Evidence `candidatePath` remains checkout-root-relative.
+
 Foreman discovers live teams, role descriptions, permissions, readiness and
 reservations, then proposes a specific accountable member with a rationale.
 In human mode, approve that team and its current checkout through the resulting decision.
@@ -120,6 +137,17 @@ Nanasa reserves the team and checkout and dispatches one exact-runtime handoff.
 It can start never-launched members after approval, but does not undo a Human's
 explicit stop. Existing unsettled work, changed membership, shared active
 checkouts and Human terminal control prevent dispatch.
+
+Workspace preparation can create a linked checkout from a pinned committed base
+even when the source has local edits. `new` always creates an isolated checkout;
+`auto` creates one when the current managed checkout is dirty rather than reusing
+it. Uncommitted changes are **not copied**: source files and the index remain
+untouched, with no automatic stash or commit. The public preparation record exposes
+`sourceDirty`; **Goals > Workspace preparations** shows the source disposition,
+phase, reason, pinned base, checkout IDs and next actor. Later source commits do
+not move the pinned base. Reusing a dirty target remains held for Human resolution.
+If the outcome requires uncommitted source inputs, their disposition needs Human
+agreement; preparation does not import them or relax a no-commit constraint.
 
 The accountable member owns research, planning, implementation, peer assignment,
 independent review and validation. Foreman supervises health and progress rather
@@ -141,12 +169,67 @@ evidence at either Human or autonomous acceptance.
 Evidence is still an agent report, not proof of specification conformance.
 Inspect test results, review references and residual risks before accepting.
 
+Every new `kind: "review"` report requires `reviewOutcome: "approved"` or
+`"changes-required"`. The latest independent review of the exact candidate must
+explicitly approve it before readiness or acceptance; a later negative review
+overrides an earlier approval. Legacy reports without a verdict remain readable
+but do not approve completion. A missing verdict is a no-effect input rejection:
+correct it and resubmit with the same `requestId`, keeping candidate scope intact.
+Record findings in the durable report without changing reviewed files or metadata
+to make reporting succeed.
+
+New reviews queue a durable Foreman wakeup, coalesced with any pending goal review.
+Reviewers also notify the accountable member with a normal scoped peer reply,
+including the report reference and verdict. Foreman reads the report and
+coordinates continuation with that owner only through policy-authorized tools;
+the wakeup does not authorize a lead check-in or a new implementation owner.
+
 Peer-action completion is separate from a review report. The built-in OpenCode
 reporter correlates scheduler-marked root prompts with native message IDs and
 acknowledges acceptance and settled completion using durable status revisions.
 Unmarked prompts, mismatched runtimes and child sessions cannot settle an action.
 A stalled or uncertain peer action still blocks readiness; do not replace its
 acknowledgement with a claim that the terminal looks idle.
+
+### Browser validation evidence
+
+Core member and Foreman instructions require relevant validation expectations to
+be derived from the agreed outcome, without rewriting the original request or
+requiring additional Human coaching. Runnable browser outputs need real-browser
+checks on the actual candidate at desktop and mobile sizes, after desktop-to-mobile
+resize and on a fresh mobile load. Inspect overflow, rendered output (including
+screenshots and nonblank canvas pixels where applicable), and representative
+controls with observed state changes. Syntax checks, mocked browser tests and
+successful HTTP responses do not establish rendering or responsiveness. A static
+server can serve the candidate for browser testing; starting it is not the test.
+
+Independent reviewers must run relevant checks themselves. Failed or unavailable
+required checks prevent readiness in the instructions: report findings or missing
+evidence with `reviewOutcome: "changes-required"`, not approval. Record the exact
+candidate, browser/tool, commands or reproducible steps, viewport sizes, results,
+unrun checks and blockers in the existing report `summary` and `evidence` fields.
+Foreman inspects coverage before acceptance, not just the presence of an approval.
+These are prompt requirements, not a runtime browser-validation gate. There is no
+new typed `validation` field, automatic goal-text classifier or browser provisioning;
+existing candidate identity, review verdict and settled-work checks are unchanged.
+
+A linked checkout without dependencies may reuse permitted installed tooling from
+the repository's primary checkout, discovered through Git worktree metadata. For
+Node packages, `createRequire` anchored to that installation's package manifest can
+resolve a package that the linked checkout cannot resolve locally. This is tooling
+read/execution access only, not permission to read another checkout's application
+source or change its files. Serve and test the assigned checkout's candidate; keep
+artifacts there but outside any pinned candidate directory. Never copy credentials,
+secrets or private provider state, bypass permissions, or change provider isolation.
+Repository package-registry rules still apply to authorized package operations.
+
+Verify launch from the actual provider runtime. Integration environment settings
+and provider cache isolation can affect discovery (for example, OpenCode remaps
+`XDG_CACHE_HOME`). Where permitted, select a matching installed browser with an
+explicit `executablePath` or `PLAYWRIGHT_BROWSERS_PATH`. An installed package or
+binary alone does not prove launch capability. Report a concrete resolution,
+binary, launch or permission blocker when no permitted real-browser path works;
+do not substitute mock results or declare validated responsiveness.
 
 ## Supervise multiple teams
 
@@ -382,19 +465,73 @@ to Channel. Do not resend the objective or approve a provider permission prompt
 as a substitute for readiness. This prerequisite was observed with Copilot CLI
 before its first native turn.
 
-## Set goal limits
+## Everyday cleanup and retention
 
-History cleanup is available in **Settings > Clear Foreman history**. Stop
-Foreman before clearing anything and type `RESET` to confirm. Choose finished
-goals only, channel and member conversations, or all coordination state. Channel
-cleanup requires goals to be removed first so goal context is not silently lost.
+**Goals > Remove goal** hides one completed or cancelled goal. **Cancel and
+remove** first applies the existing goal cancellation fence, then hides the goal.
+**Clear finished** captures the displayed completed and cancelled goals with
+their revisions. Each operation needs one scoped confirmation, not a Foreman
+stop or typed `RESET`. Other goals continue unchanged.
+
+Cancellation does not stop provider processes, settle uncertain actions, delete
+checkouts or release live writers. **Removed goals with live effects** lists the
+captured action and run identities until those effects settle. Its retained goal
+details remain available for inspection.
+
+**Channel > Clear channel** hides messages through the captured sequence and the
+selected member conversations. New independent messages remain visible. Replies
+to cleared messages and conversation follow-ups remain in cleared history.
+Goal supervision, member-result processing, inbox work and team message history
+continue. Other portal sessions refresh their visible channel on the next poll.
+
+These operations are visibility cleanup, not permanent erasure. Goal objectives,
+decisions, evidence, source context, messages, conversations, runtime data and
+request receipts remain stored without automatic expiry. Replaying an old goal
+proposal returns its original retained goal; replaying a cleanup request returns
+its original result. A new cleanup request cannot reuse that ID with different
+content. Workspace files, branches, credentials and provider sessions are not
+deleted. Targeted permanent purge is not implemented; retention bounds and
+dependency checks must be agreed before adding it.
+
+Operator HTTP clients use `POST /api/v1/foreman/cleanup` with a request ID and
+`confirmation: true`. Scope `goal` takes `goal: {id, expectedRevision}` and
+`cancel`; scope `finished-goals` takes an exact `goals` array; scope `channel`
+takes `throughSequence` and optional `conversationIds`. Current pending effects
+are at `GET /api/v1/foreman/cleanup/effects`. The cleanup result is a receipt, not
+a continuously updated effect status. Normal HTTP goal/channel lists hide removed
+items; explicit goal-ID reads, `?includeRemoved=true`, and channel
+`?includeCleared=true` or `?messageId=ID` retain access to operational history.
+Cleared message responses carry `cleared: true`.
+
+Foreman can request the same scopes through `nanasa.foreman_request_cleanup`,
+without creating a delivery goal and without a `confirmation` field. A request
+does not hide or cancel anything. **Cleanup awaiting your approval > Review
+cleanup** displays the captured selection, revisions or cutoff, and scope digest.
+Only an authenticated operator can confirm that exact stored scope. Chat replies,
+autonomous goal policy and model-supplied `confirmation: true` do not authorize it.
+Changed goal revisions reject approval atomically; no partial selection is removed.
+
+Pending requests and approval receipts survive restart. Foreman reads its pending
+requests with `nanasa.foreman_read_cleanup_requests`, or supplies `id` to inspect
+an exact receipt. Operator clients use `GET /api/v1/foreman/cleanup/requests` and
+`POST /api/v1/foreman/cleanup/approve` with `{id, digest, confirmation: true}`.
+Approval cannot replace the stored command, and retries return the original result.
+For queued Human work, Foreman reads cleared input by its exact `messageId`;
+visibility cleanup does not invalidate an existing `sourceMessageId`.
+
+The older destructive operation remains separate in **Settings > Advanced
+Foreman reset**. Stop Foreman and type `RESET`. Choose finished goals only,
+channel and member conversations, or all coordination state. Channel reset
+requires goals to be removed first so goal context is not silently lost.
 A full reset also requires delegated team runs to be stopped. Source files,
 configuration, provider credentials, runtime history and audit records are
 preserved. Team message history remains visible in the unified Channel. Reset
 removes dependent reports and supersedes reset-scoped actions only after their
 addressed runtimes stop. Prior action results and attempt history remain; the
 retirement record does not certify completion or undo effects. Reset does not
-stop agents. Reload other open portal sessions after cleanup.
+stop agents. Reload other open portal sessions after this advanced reset.
+
+## Set goal limits
 
 Goals provides sustained supervision in addition to ad hoc conversations.
 Team templates and the legacy Missions API,
@@ -436,6 +573,9 @@ nanasa foreman send --body '{"requestId":"instruction-1","text":"Review current 
 nanasa goal list
 nanasa goal get GOAL_ID
 nanasa goal control --body '{"id":"GOAL_ID","expectedRevision":1,"action":"pause"}'
+nanasa foreman cleanup --body '{"scope":"goal","requestId":"cleanup-1","confirmation":true,"goal":{"id":"GOAL_ID","expectedRevision":2},"cancel":false}'
+nanasa foreman cleanup --body '{"scope":"channel","requestId":"cleanup-2","confirmation":true,"throughSequence":42}'
+nanasa foreman cleanup-effects
 ```
 
 Configuration, start, stop, and approval commands require the exact revision or

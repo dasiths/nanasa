@@ -15,7 +15,7 @@ dependency inventory is recorded in `dist/meta/sbom.spdx.json` inside the npm
 package.
 
 The primary runtime components include Fastify, Zod, YAML, ws, the Model Context
-Protocol TypeScript SDK, xterm, and node-pty. Review the installed package
+Protocol TypeScript SDK, xterm, node-pty, and Playwright (Apache-2.0). Review the installed package
 metadata and the generated SPDX document before redistribution.
 
 ## Host tools

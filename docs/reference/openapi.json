@@ -6,6 +6,103 @@
   },
   "x-generator-version": 1,
   "paths": {
+    "/api/v1/foreman/cleanup/requests": {
+      "get": {
+        "operationId": "foreman.cleanupRequests",
+        "summary": "Read pending scoped cleanup requests awaiting operator approval",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/cleanup/approve": {
+      "post": {
+        "operationId": "foreman.approveCleanup",
+        "summary": "Approve and execute the exact stored cleanup scope, retaining a durable receipt",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "foreman_cleanup_not_found",
+          "foreman_cleanup_conflict",
+          "foreman_cleanup_stale",
+          "foreman_cleanup_active"
+        ]
+      }
+    },
+    "/api/v1/foreman/cleanup": {
+      "post": {
+        "operationId": "foreman.cleanup",
+        "summary": "Remove selected goals or clear channel visibility, retaining operational data and request receipts",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "foreman_cleanup_conflict",
+          "foreman_cleanup_stale",
+          "foreman_cleanup_active"
+        ]
+      }
+    },
+    "/api/v1/foreman/cleanup/effects": {
+      "get": {
+        "operationId": "foreman.cleanupEffects",
+        "summary": "Read pending actions and live runs retained for removed goals",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
     "/api/v1/foreman/state/reset": {
       "post": {
         "operationId": "foreman.resetState",

@@ -43,6 +43,22 @@
       "summary": "Read bounded Foreman channel history"
     },
     {
+      "id": "foreman.cleanup",
+      "family": "foreman",
+      "command": "cleanup",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Remove a goal, clear selected finished goals or clear a channel cutoff; retain operational data"
+    },
+    {
+      "id": "foreman.cleanup-effects",
+      "family": "foreman",
+      "command": "cleanup-effects",
+      "mode": "control",
+      "positionals": [],
+      "summary": "Inspect pending actions and live runs for removed goals"
+    },
+    {
       "id": "foreman.send",
       "family": "foreman",
       "command": "send",

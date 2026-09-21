@@ -34,6 +34,7 @@ import { ProviderHealthService } from "./extensions/provider-health-service.js";
 import { foremanTurnContext } from "./foreman-context.js";
 import { ForemanConversationService } from "./foreman-conversation-service.js";
 import { ForemanGoalService } from "./foreman-goal-service.js";
+import { ForemanOrchestrationService } from "./foreman-orchestration-service.js";
 import { ForemanInboxScheduler } from "./foreman-inbox-scheduler.js";
 import { ForemanRuntimeService } from "./foreman-runtime-service.js";
 import { GeneratedOverlayTransaction } from "./generated-overlay-transaction.js";
@@ -158,6 +159,7 @@ export interface DaemonContext {
   loadedConfig: LoadedNanasaConfig;
   foreman: ForemanRuntimeService;
   goals: ForemanGoalService;
+  orchestration: ForemanOrchestrationService;
   conversations: ForemanConversationService;
   runtimePath: string;
   guard: DaemonInstanceGuard;
@@ -609,6 +611,13 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       nativeRecoveryPolicy,
     });
     coordinatorReference.current = coordinator;
+    const orchestration = new ForemanOrchestrationService(
+      store,
+      goalService,
+      checkouts,
+      worktrees,
+      coordinator,
+    );
     const topology = new TopologyService(configRepository, store, coordinator);
     const topologyOrder = new TopologyOrderService(configRepository, store);
     await topology.reconcile();
@@ -665,6 +674,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       await consoles.close();
       await actionScheduler.close();
       await goalService.close();
+      await orchestration.close();
       await conversations.close();
       await foremanInbox.close();
       await foreman.close();
@@ -756,6 +766,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         openWaits,
         foremanConfig: () => configRepository.load().config,
         goals: goalService,
+        orchestration,
         conversations,
         terminalReads,
         checkouts,
@@ -850,6 +861,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       loadedConfig,
       foreman,
       goals: goalService,
+      orchestration,
       runtimePath,
       conversations,
       guard,

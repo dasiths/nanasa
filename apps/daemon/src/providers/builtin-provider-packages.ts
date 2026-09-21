@@ -104,6 +104,7 @@ const COPILOT_ASSETS = Object.freeze([
   }),
   createAsset("builtin/copilot/mcp-config-v1", "application/json", "copilot-mcp-config", {
     serverId: "nanasa",
+    startupReporter: true,
     type: "http",
     authorization: "Bearer ${NANASA_MCP_TOKEN}",
     tools: ["*"],

@@ -2,6 +2,19 @@
   "generatorVersion": 1,
   "packageVersion": "0.1.0-next.12.0",
   "routeErrors": {
+    "foreman.cleanupRequests": [],
+    "foreman.approveCleanup": [
+      "foreman_cleanup_not_found",
+      "foreman_cleanup_conflict",
+      "foreman_cleanup_stale",
+      "foreman_cleanup_active"
+    ],
+    "foreman.cleanup": [
+      "foreman_cleanup_conflict",
+      "foreman_cleanup_stale",
+      "foreman_cleanup_active"
+    ],
+    "foreman.cleanupEffects": [],
     "foreman.resetState": [],
     "foreman.conversations": [],
     "foreman.cancelConversation": [],
@@ -356,6 +369,10 @@
     ]
   },
   "requestBodyLimits": {
+    "foreman.cleanupRequests": 65536,
+    "foreman.approveCleanup": 65536,
+    "foreman.cleanup": 65536,
+    "foreman.cleanupEffects": 65536,
     "foreman.resetState": 65536,
     "foreman.conversations": 65536,
     "foreman.cancelConversation": 65536,

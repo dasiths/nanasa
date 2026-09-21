@@ -234,6 +234,53 @@ describe("built-in provider snapshot conformance", () => {
     expect(overlay.commandArguments).toContain("--settings");
   });
 
+  it("creates OpenCode roots only on fresh launches with the configured model and read-only floor", () => {
+    const opencode = subjects.find((subject) => subject.id === "opencode")!;
+    const context = overlayContext("opencode");
+    const input = {
+      ...context,
+      configuredCommand: opencode.command,
+      model: "github-copilot/gpt-5.6-terra",
+      executionProfile: {
+        continuation: "autonomous",
+        questions: "disabled",
+        approvals: "unrestricted",
+      } as const,
+    };
+    const fresh = opencode.evaluator.launch(input);
+    expect(fresh.environment.NANASA_OPENCODE_CREATE_ROOT).toBe("1");
+    const options = JSON.parse(fresh.environment.NANASA_OPENCODE_SESSION_OPTIONS!);
+    expect(options).toEqual({
+      agent: fresh.command[fresh.command.indexOf("--agent") + 1],
+      model: { providerID: "github-copilot", id: "gpt-5.6-terra" },
+      permission: [
+        { permission: "edit", pattern: "*", action: "deny" },
+        { permission: "bash", pattern: "*", action: "deny" },
+      ],
+    });
+    expect(
+      JSON.parse(fresh.environment.OPENCODE_CONFIG_CONTENT!).agent[options.agent].permission,
+    ).toEqual({ question: "deny", edit: "deny", bash: "deny" });
+    const resumed = opencode.evaluator.launch({
+      ...input,
+      nativeSession: opencode.evaluator.normalizeNativeSession({
+        source: "opencode",
+        referenceKind: "id",
+        referenceValue: "native-resume-root",
+      }),
+    });
+    expect(resumed.environment.NANASA_OPENCODE_CREATE_ROOT).toBe("0");
+    expect(resumed.command).toEqual(expect.arrayContaining(["--session", "native-resume-root"]));
+    expect(
+      JSON.parse(
+        opencode.evaluator.launch({
+          ...overlayContext("opencode", { prompt: false, readOnly: false }),
+          configuredCommand: opencode.command,
+        }).environment.NANASA_OPENCODE_SESSION_OPTIONS!,
+      ),
+    ).toEqual({});
+  });
+
   it("translates autonomous profiles and composes provider-native MCP files", () => {
     const executionProfile = {
       continuation: "autonomous",

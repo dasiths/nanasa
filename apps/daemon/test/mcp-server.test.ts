@@ -2,9 +2,15 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ForemanConfigSchema } from "@nanasa/contracts";
+import {
+  ForemanCleanupRequestSchema,
+  ForemanConfigSchema,
+  NanasaConfigSchema,
+} from "@nanasa/contracts";
+import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import * as browserVerifier from "../src/browser-candidate-verifier.js";
 import { loadNanasaConfig } from "../src/config-loader.js";
 import {
   NANASA_FOREMAN_INSTRUCTIONS,
@@ -16,6 +22,13 @@ import {
   foremanTurnContext,
 } from "../src/foreman-context.js";
 import { McpCredentialIssuer } from "../src/mcp-auth.js";
+import type { McpPrincipal } from "../src/mcp-auth.js";
+import { ForemanCleanupService } from "../src/foreman-cleanup-service.js";
+import { ForemanGoalService } from "../src/foreman-goal-service.js";
+import { type ControlRouterServices, registerControlRouter } from "../src/http/control-router.js";
+import { MCP_TOOL_REGISTRY, mcpTool } from "../src/mcp/tool-registry.js";
+import { type McpRouteOptions, registerMcpRoutes } from "../src/mcp-server.js";
+import { DomainError, NanasaStore } from "../src/store.js";
 import {
   createDaemon as createDaemonBase,
   type DaemonContext,
@@ -91,7 +104,7 @@ async function createFixture() {
 }
 
 async function mcpRequest(
-  daemon: DaemonContext,
+  daemon: Pick<DaemonContext, "app">,
   token: string | undefined,
   method: string,
   params: Record<string, unknown>,
@@ -129,13 +142,490 @@ async function mcpRequest(
 }
 
 async function callTool(
-  daemon: DaemonContext,
+  daemon: Pick<DaemonContext, "app">,
   token: string,
   name: string,
   args: Record<string, unknown>,
 ) {
   return mcpRequest(daemon, token, "tools/call", { name, arguments: args }, { "mcp-name": name });
 }
+
+describe("scoped browser verification MCP", () => {
+  it("advertises only to agents and routes exact scoped observations without submitting a report", async () => {
+    const { daemon, agentToken, run, group } = await createFixture();
+    try {
+      const listed = (await mcpRequest(daemon, agentToken, "tools/list", {})).json().result.tools;
+      expect(listed.map((tool: { name: string }) => tool.name).sort()).toEqual(
+        MCP_TOOL_REGISTRY.filter((tool) => tool.principals.includes("agent"))
+          .map((tool) => tool.name)
+          .sort(),
+      );
+      const declaration = listed.find(
+        (tool: { name: string }) => tool.name === "nanasa.verify_browser_candidate",
+      );
+      expect(declaration.description).toBe(mcpTool("nanasa.verify_browser_candidate").description);
+      expect(declaration.inputSchema.additionalProperties).toBe(false);
+      expect(declaration.inputSchema.properties.actions.maxItems).toBe(10);
+      const report = vi.spyOn(daemon.goals, "report");
+      const scope = vi.spyOn(daemon.goals, "browserCandidate").mockReturnValue({
+        checkoutId: "checkout",
+        root: "/unserved-test-scope",
+        candidatePath: "examples/project/src",
+        candidateDigest: "digest",
+      });
+      const evidence = {
+        status: "observed",
+        unchanged: true,
+        beforeDigest: "digest",
+        afterDigest: "digest",
+        observations: [],
+      };
+      const verify = vi
+        .spyOn(browserVerifier, "verifyBrowserCandidate")
+        .mockImplementation(async (_input, authorize) => {
+          authorize();
+          return evidence as Awaited<ReturnType<typeof browserVerifier.verifyBrowserCandidate>>;
+        });
+      const input = { delegationId: "owned", candidatePath: "examples/project/src" };
+      const response = (
+        await callTool(daemon, agentToken, "nanasa.verify_browser_candidate", input)
+      ).json().result;
+      expect(response.isError).not.toBe(true);
+      expect(response.structuredContent.result).toEqual(evidence);
+      expect(JSON.parse(response.content[0].text)).toEqual(evidence);
+      expect(scope).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "agent",
+          groupId: group.id,
+          memberId: run.memberId,
+          runId: run.id,
+          generation: run.generation,
+        }),
+        "owned",
+        input.candidatePath,
+      );
+      expect(verify.mock.calls[0]![0]).toMatchObject({
+        entry: "index.html",
+        viewports: [
+          { width: 1440, height: 900 },
+          { width: 390, height: 844 },
+        ],
+        actions: [],
+      });
+      scope.mockImplementation(() => {
+        throw new DomainError("delegation_forbidden", "Wrong team", 403);
+      });
+      const denied = (
+        await callTool(daemon, agentToken, "nanasa.verify_browser_candidate", input)
+      ).json().result;
+      expect(denied).toMatchObject({
+        isError: true,
+        structuredContent: { error: { code: "delegation_forbidden", effect: "none" } },
+      });
+      const operator = await callTool(
+        daemon,
+        operatorToken,
+        "nanasa.verify_browser_candidate",
+        input,
+      );
+      expect(operator.json().error ?? operator.json().result?.isError).toBeTruthy();
+      expect(verify).toHaveBeenCalledTimes(2);
+      expect(report).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+      await daemon.app.close();
+    }
+  });
+});
+
+describe("Foreman goal proposal MCP contract", () => {
+  it("advertises source meanings, corrects rejected linkage and preserves uncertain async effects", async () => {
+    const { daemon, secretPath, group } = await createFixture();
+    try {
+      await daemon.foreman.configure(
+        ForemanConfigSchema.parse({
+          id: "foreman",
+          integrationId: "fixture",
+          enabled: true,
+          autonomy: { maxActiveGoals: 2 },
+        }),
+        daemon.foreman.status().configRevision!,
+      );
+      const sourceCheckout = daemon.store.getEffectiveGroupCheckout(group.id)!;
+      const requestDirectory = join(sourceCheckout.path, "examples/multi-coding-agents");
+      mkdirSync(requestDirectory, { recursive: true });
+      const profile = daemon.store.createInternalAgentProfile({
+        name: "Foreman",
+        agentType: "fixture",
+        kind: "opencode",
+        command: "node",
+        args: [],
+        environment: {},
+        workingDirectory: requestDirectory,
+      });
+      daemon.store.upsertForeman({ id: "foreman", agentProfileId: profile.id, enabled: true });
+      const { run } = daemon.store.createRunForForeman("foreman");
+      const token = new McpCredentialIssuer(daemon.store, { secretPath }).issueForeman(run);
+      const proposal = "nanasa.foreman_propose_goal";
+      const listed = (await mcpRequest(daemon, token, "tools/list", {})).json().result.tools;
+      const declaration = listed.find((tool: { name: string }) => tool.name === proposal);
+      expect(declaration.description).toBe(mcpTool(proposal).description);
+      expect(declaration.inputSchema.properties).not.toHaveProperty("requestOrigin");
+      expect(declaration.inputSchema.properties).not.toHaveProperty("sourceText");
+      expect(declaration.description).toContain("same requestId");
+      expect(declaration.inputSchema.properties.sourceMessageId.description).toContain(
+        "stored Human",
+      );
+      expect(declaration.inputSchema.properties.sourceConversationIds.description).toContain(
+        "not channel message IDs",
+      );
+      const source = daemon.store.sendForemanMessage(
+        { kind: "operator", operatorId: "human" },
+        {
+          requestId: "solar-source",
+          text: "create browser based solar system simulator in ./src dir",
+        },
+      );
+      const command = {
+        requestId: "solar-goal",
+        title: "Build browser solar system simulator",
+        objective: "Create browser based solar system simulator in ./src dir",
+        sourceMessageId: source.id,
+        sourceConversationIds: [source.id],
+      };
+      const rejected = (await callTool(daemon, token, proposal, command)).json().result;
+      expect(rejected).toMatchObject({
+        isError: true,
+        structuredContent: {
+          error: {
+            code: "foreman_goal_source_conversation_invalid",
+            statusCode: 400,
+            effect: "none",
+            retry: "correct-input",
+            details: { field: "sourceConversationIds", index: 0 },
+            nextAction: expect.stringContaining("same requestId"),
+          },
+        },
+      });
+      expect(rejected.content[0].text).toContain("Effect: none; retry: correct-input");
+      expect(rejected.content[0].text).toContain("Keep the verified Human sourceMessageId");
+      expect(daemon.goals.list()).toEqual([]);
+      const corrected = { ...command, sourceConversationIds: null };
+      const created = (await callTool(daemon, token, proposal, corrected)).json().result;
+      expect(created.isError).not.toBe(true);
+      const goal = created.structuredContent.result;
+      expect(goal.sourceMessageId).toBe(source.id);
+      expect(goal.sourceText).toBe(source.text);
+      expect(goal.requestOrigin).toEqual({
+        repositoryId: sourceCheckout.repositoryId,
+        checkoutId: sourceCheckout.id,
+        workingDirectory: "examples/multi-coding-agents",
+        source: "foreman-run",
+      });
+      const workspace = (
+        await callTool(daemon, token, "nanasa.foreman_get_goal", { goalId: goal.id })
+      ).json().result.structuredContent.result;
+      expect(workspace.requestContext).toContain(requestDirectory);
+      expect(workspace.requestContext).toContain(source.text);
+      expect(goal).not.toHaveProperty("sourceConversationIds");
+      const omitted = {
+        requestId: command.requestId,
+        title: command.title,
+        objective: command.objective,
+        sourceMessageId: command.sourceMessageId,
+      };
+      expect((await callTool(daemon, token, proposal, omitted)).json().result).toEqual(created);
+      const conflict = (
+        await callTool(daemon, token, proposal, { ...omitted, title: "Different goal" })
+      ).json().result;
+      expect(conflict.structuredContent.error).toMatchObject({
+        code: "foreman_goal_conflict",
+        effect: "unconfirmed",
+        retry: "inspect-first",
+      });
+      const reply = (
+        await callTool(daemon, token, "nanasa.foreman_reply", {
+          requestId: "source-reply",
+          replyTo: source.id,
+          text: "Acknowledged",
+        })
+      ).json().result.structuredContent.result;
+      for (const sourceMessageId of ["fm_missing", reply.id]) {
+        const invalid = (
+          await callTool(daemon, token, proposal, {
+            ...omitted,
+            requestId: "invalid-source",
+            sourceMessageId,
+          })
+        ).json().result;
+        expect(invalid.structuredContent.error).toMatchObject({
+          code: "foreman_goal_source_message_invalid",
+          effect: "none",
+          retry: "correct-input",
+          nextAction: expect.stringContaining("Do not fabricate a source or omit it"),
+        });
+      }
+      const tui = { requestId: "native-tui", title: "Native request", objective: "Native request" };
+      const native = (
+        await callTool(daemon, token, proposal, {
+          ...tui,
+          sourceMessageId: null,
+          sourceConversationIds: null,
+        })
+      ).json().result;
+      expect(native.isError).not.toBe(true);
+      expect(native.structuredContent.result).not.toHaveProperty("sourceMessageId");
+      expect(native.structuredContent.result).not.toHaveProperty("sourceText");
+      expect(native.structuredContent.result.requestOrigin).toEqual(goal.requestOrigin);
+      expect(native.structuredContent.result).not.toHaveProperty("sourceConversationIds");
+      expect((await callTool(daemon, token, proposal, tui)).json().result).toEqual(native);
+      expect(daemon.goals.list()).toHaveLength(2);
+      const assign = {
+        requestId: "async-assignment",
+        goalId: goal.id,
+        groupId: group.id,
+        memberId: "alpha",
+        brief: "Implement simulator",
+      };
+      const orchestration = vi.spyOn(daemon.orchestration, "assignOutcome");
+      try {
+        orchestration.mockRejectedValueOnce(
+          new DomainError("foreman_preparation_conflict", "Inspect persisted preparation", 409),
+        );
+        const uncertain = (
+          await callTool(daemon, token, "nanasa.foreman_assign_outcome", assign)
+        ).json().result;
+        expect(uncertain).toMatchObject({
+          isError: true,
+          structuredContent: {
+            error: {
+              code: "foreman_preparation_conflict",
+              effect: "unconfirmed",
+              retry: "inspect-first",
+            },
+          },
+        });
+        orchestration.mockRejectedValueOnce(new Error("private diagnostic"));
+        const unexpected = (
+          await callTool(daemon, token, "nanasa.foreman_assign_outcome", assign)
+        ).json().result;
+        expect(unexpected.structuredContent.error).toMatchObject({
+          code: "coordination_failed",
+          effect: "unconfirmed",
+          retry: "inspect-first",
+        });
+        expect(JSON.stringify(unexpected)).not.toContain("private diagnostic");
+      } finally {
+        orchestration.mockRestore();
+      }
+    } finally {
+      await daemon.app.close();
+    }
+  });
+});
+
+describe("isolated cleanup MCP consent", () => {
+  it("allows only requests from Foreman and exact approval from the operator", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "nanasa-cleanup-mcp-"));
+    temporaryDirectories.push(directory);
+    const store = new NanasaStore(join(directory, "state.sqlite"));
+    const app = Fastify();
+    const config = NanasaConfigSchema.parse({ version: 2, integrations: {}, groups: {} });
+    const goals = new ForemanGoalService(store, () => config);
+    const cleanup = new ForemanCleanupService(store, goals);
+    const principals: Record<string, McpPrincipal> = {
+      "Bearer test-foreman": {
+        kind: "foreman",
+        foremanId: "foreman",
+        runId: "run",
+        generation: 1,
+        authorityRevision: 0,
+      },
+      "Bearer test-agent": {
+        kind: "agent",
+        groupId: "team",
+        memberId: "member",
+        runId: "member-run",
+        generation: 1,
+      },
+      "Bearer test-operator": { kind: "operator", operatorId: "remote-operator" },
+    };
+    registerMcpRoutes(app, {
+      path: "/mcp",
+      endpointUrl: "http://127.0.0.1:3210/mcp",
+      allowedHostnames: ["127.0.0.1"],
+      store,
+      goals,
+      credentials: {
+        authenticate: (header: string) => {
+          const principal = principals[header];
+          if (!principal)
+            throw new DomainError("mcp_unauthorized", "Fixture principal required", 401);
+          return principal;
+        },
+      },
+    } as unknown as McpRouteOptions);
+    registerControlRouter(app, {
+      store,
+      goals,
+      auth: {
+        authenticate: (request: { headers: Record<string, string> }) => {
+          if (request.headers.authorization !== "Bearer test-human")
+            throw new DomainError("operator_unauthorized", "Operator required", 401);
+          return { operatorId: "human" };
+        },
+      },
+    } as unknown as ControlRouterServices);
+    try {
+      const message = store.sendForemanMessage(
+        { kind: "operator", operatorId: "human" },
+        { requestId: "source", text: "Original Human input" },
+      );
+      const command = {
+        requestId: "cleanup-one",
+        scope: "channel",
+        throughSequence: message.sequence,
+      };
+      for (const token of ["test-agent", "test-operator"]) {
+        const listed = (await mcpRequest({ app }, token, "tools/list", {})).json();
+        expect(listed.result.tools.map((tool: { name: string }) => tool.name)).not.toContain(
+          "nanasa.foreman_request_cleanup",
+        );
+        const forbidden = (
+          await callTool({ app }, token, "nanasa.foreman_request_cleanup", command)
+        ).json();
+        expect(forbidden.error ?? forbidden.result?.isError).toBeTruthy();
+      }
+      const listed = (await mcpRequest({ app }, "test-foreman", "tools/list", {})).json();
+      const declaration = listed.result.tools.find(
+        (tool: { name: string }) => tool.name === "nanasa.foreman_request_cleanup",
+      );
+      expect(declaration.inputSchema.type).toBe("object");
+      expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toContain(
+        "nanasa.foreman_read_cleanup_requests",
+      );
+      const invalid = (
+        await callTool({ app }, "test-foreman", "nanasa.foreman_request_cleanup", {
+          ...command,
+          confirmation: true,
+        })
+      ).json();
+      expect(invalid.error ?? invalid.result?.isError).toBeTruthy();
+      expect(cleanup.requests()).toEqual([]);
+      const submitted = (
+        await callTool({ app }, "test-foreman", "nanasa.foreman_request_cleanup", command)
+      ).json();
+      const pending = ForemanCleanupRequestSchema.parse(submitted.result.structuredContent.result);
+      expect(pending.state).toBe("pending");
+      expect(
+        (await callTool({ app }, "test-foreman", "nanasa.foreman_read_cleanup_requests", {})).json()
+          .result.structuredContent.result,
+      ).toEqual([pending]);
+      const approval = { id: pending.id, digest: pending.digest, confirmation: true };
+      const forbiddenTool = (
+        await callTool({ app }, "test-foreman", "nanasa.foreman_approve_cleanup", approval)
+      ).json();
+      expect(forbiddenTool.error ?? forbiddenTool.result?.isError).toBeTruthy();
+      for (const [url, payload] of [
+        ["/api/v1/foreman/cleanup/approve", approval],
+        ["/api/v1/foreman/cleanup", { ...command, confirmation: true }],
+      ] as const) {
+        const denied = await app.inject({
+          method: "POST",
+          url,
+          headers: { authorization: "Bearer test-foreman" },
+          payload,
+        });
+        expect(denied.statusCode).toBe(401);
+      }
+      expect(store.readForemanChannel({ after: 0, limit: 100 }).messages).toHaveLength(1);
+      expect(goals.list()).toEqual([]);
+      const headers = { authorization: "Bearer test-human" };
+      expect(
+        (
+          await app.inject({ method: "GET", url: "/api/v1/foreman/cleanup/requests", headers })
+        ).json(),
+      ).toEqual([pending]);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/v1/foreman/cleanup/approve",
+            headers,
+            payload: { ...approval, digest: "0".repeat(64) },
+          })
+        ).statusCode,
+      ).toBe(409);
+      const approved = await app.inject({
+        method: "POST",
+        url: "/api/v1/foreman/cleanup/approve",
+        headers,
+        payload: approval,
+      });
+      expect(approved.statusCode).toBe(200);
+      expect(approved.json()).toMatchObject({
+        state: "approved",
+        operatorId: "human",
+        result: { retained: true, messagesCleared: 1 },
+      });
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/v1/foreman/cleanup/approve",
+            headers,
+            payload: approval,
+          })
+        ).json(),
+      ).toEqual(approved.json());
+      expect(
+        (
+          await callTool({ app }, "test-foreman", "nanasa.foreman_read_cleanup_requests", {
+            id: pending.id,
+          })
+        ).json().result.structuredContent.result,
+      ).toEqual([approved.json()]);
+      expect(
+        (await callTool({ app }, "test-foreman", "nanasa.foreman_read_channel", {})).json().result
+          .structuredContent.result.messages,
+      ).toEqual([]);
+      expect(
+        (
+          await callTool({ app }, "test-foreman", "nanasa.foreman_read_channel", {
+            messageId: message.id,
+          })
+        ).json().result.structuredContent.result.messages[0],
+      ).toMatchObject({ id: message.id, cleared: true });
+    } finally {
+      await app.close();
+      store.close();
+    }
+  });
+
+  it("advertises strict scoped requests with no model-supplied consent or purge", () => {
+    const schema = mcpTool("nanasa.foreman_request_cleanup").inputSchema;
+    for (const command of [
+      { requestId: "channel", scope: "channel", throughSequence: 0 },
+      { requestId: "goal", scope: "goal", goal: { id: "one", expectedRevision: 1 }, cancel: true },
+      {
+        requestId: "finished",
+        scope: "finished-goals",
+        goals: [{ id: "one", expectedRevision: 1 }],
+      },
+    ]) {
+      expect(schema.safeParse(command).success).toBe(true);
+      for (const extra of [
+        { confirmation: true },
+        { operatorId: "human" },
+        { digest: "a".repeat(64) },
+        { purge: true },
+      ])
+        expect(schema.safeParse({ ...command, ...extra }).success).toBe(false);
+    }
+    expect(schema.safeParse({ requestId: "all", scope: "all" }).success).toBe(false);
+    expect(schema.safeParse({ requestId: "missing-cutoff", scope: "channel" }).success).toBe(false);
+  });
+});
 
 describe("Streamable HTTP MCP", () => {
   it("omits null peer fences before binding the current target", async () => {
@@ -190,6 +680,40 @@ describe("Streamable HTTP MCP", () => {
     }
   });
 
+  it("records explicit no-blocker progress without requiring input", async () => {
+    const { daemon, agentToken } = await createFixture();
+    try {
+      for (const blocker of [undefined, null, "", "none", " NoNe "]) {
+        const blocked = (
+          await callTool(daemon, agentToken, "nanasa.report_progress", {
+            stage: "validation",
+            summary: "Waiting for credentials",
+            blocker: "None of the providers are available",
+          })
+        ).json().result;
+        expect(blocked.structuredContent.status).toMatchObject({
+          attention: "input_required",
+          blocker: "None of the providers are available",
+        });
+        const cleared = (
+          await callTool(daemon, agentToken, "nanasa.report_progress", {
+            stage: "validation",
+            summary: "Tests running",
+            blocker,
+          })
+        ).json().result;
+        expect(cleared.isError).not.toBe(true);
+        expect(cleared.structuredContent.status).toMatchObject({
+          state: "working",
+          attention: "none",
+        });
+        expect(cleared.structuredContent.status.blocker).toBeUndefined();
+      }
+    } finally {
+      await daemon.app.close();
+    }
+  });
+
   it("omits null candidate properties before canonical report serialization", async () => {
     const { daemon, agentToken, group } = await createFixture();
     try {
@@ -205,6 +729,7 @@ describe("Streamable HTTP MCP", () => {
         kind: "accepted",
         summary: "Accept ownership",
         evidence: [],
+        reviewOutcome: null,
         candidateHead: null,
         candidatePath: null,
       });
@@ -234,7 +759,129 @@ describe("Streamable HTTP MCP", () => {
         candidateHead: null,
         candidatePath: null,
       });
-      expect(response.json().result.content[0].text).toBe("Delegation is not owned by this team");
+      expect(response.json().result).toMatchObject({
+        isError: true,
+        structuredContent: {
+          error: {
+            code: "delegation_forbidden",
+            statusCode: 403,
+            effect: "none",
+            retry: "inspect-first",
+            nextAction: expect.stringContaining("No report was submitted by this call"),
+          },
+        },
+      });
+      expect(response.json().result.content[0].text).toContain(
+        "Delegation is not owned by this team",
+      );
+    } finally {
+      await daemon.app.close();
+    }
+  });
+
+  it("preserves report rejection metadata but keeps unknown report effects unconfirmed", async () => {
+    const { daemon, agentToken, group } = await createFixture();
+    try {
+      vi.spyOn(daemon.goals, "own").mockReturnValue([
+        { delegations: [{ id: "owned", groupId: group.id, checkoutId: "checkout-owned" }] },
+      ] as ReturnType<typeof daemon.goals.own>);
+      const refresh = vi.spyOn(daemon.checkouts, "refresh").mockResolvedValue(undefined as never);
+      const report = vi.spyOn(daemon.goals, "report");
+      const input = {
+        requestId: "negative-review",
+        delegationId: "owned",
+        kind: "review",
+        reviewOutcome: "changes-required",
+        summary: "P1 findings; not ready",
+        evidence: ["src/index.html: missing controls"],
+        candidateHead: null,
+        candidatePath: "src",
+      };
+      for (const reviewOutcome of [undefined, null]) {
+        const missing = (
+          await callTool(daemon, agentToken, "nanasa.report_delegation", {
+            ...input,
+            reviewOutcome,
+          })
+        ).json().result;
+        expect(missing).toMatchObject({
+          isError: true,
+          structuredContent: {
+            error: {
+              effect: "none",
+              retry: "correct-input",
+              nextAction: expect.stringContaining("reviewOutcome approved or changes-required"),
+            },
+          },
+        });
+        expect(missing.structuredContent.error.nextAction).toContain("same requestId");
+      }
+      expect(refresh).not.toHaveBeenCalled();
+      expect(report).not.toHaveBeenCalled();
+      const details = {
+        candidatePath: "src",
+        fileSystemCode: "ENOENT",
+        expectedCandidatePath: "examples/multi-coding-agents/src",
+        effect: "none",
+        retry: "correct-input",
+        nextAction: "Verify the exact candidate and resubmit with the same requestId.",
+      };
+      report.mockImplementationOnce(() => {
+        throw new DomainError(
+          "foreman_candidate_unavailable",
+          "Candidate files unavailable",
+          409,
+          details,
+        );
+      });
+      const rejected = (
+        await callTool(daemon, agentToken, "nanasa.report_delegation", input)
+      ).json().result;
+      expect(rejected).toMatchObject({
+        isError: true,
+        structuredContent: {
+          error: {
+            code: "foreman_candidate_unavailable",
+            statusCode: 409,
+            effect: "none",
+            retry: "correct-input",
+            details,
+            nextAction: details.nextAction,
+          },
+        },
+      });
+      expect(rejected.content[0].text).toContain("Effect: none; retry: correct-input");
+      expect(rejected.content[0].text).toContain(details.nextAction);
+      expect(report.mock.calls[0]![1]).not.toHaveProperty("candidateHead");
+      expect(report.mock.calls[0]![1]).toMatchObject({
+        requestId: input.requestId,
+        candidatePath: input.candidatePath,
+        reviewOutcome: "changes-required",
+      });
+      expect(refresh).toHaveBeenCalledWith("checkout-owned");
+      report.mockImplementationOnce(() => {
+        throw new Error("private report diagnostic");
+      });
+      const unknown = (await callTool(daemon, agentToken, "nanasa.report_delegation", input)).json()
+        .result;
+      expect(unknown.structuredContent.error).toMatchObject({
+        code: "coordination_failed",
+        effect: "unconfirmed",
+        retry: "inspect-first",
+      });
+      expect(JSON.stringify(unknown)).not.toContain("private report diagnostic");
+      refresh.mockRejectedValueOnce(new Error("private checkout diagnostic"));
+      const preflight = (
+        await callTool(daemon, agentToken, "nanasa.report_delegation", input)
+      ).json().result;
+      expect(preflight.structuredContent.error).toMatchObject({
+        code: "foreman_report_validation_failed",
+        effect: "none",
+        retry: "inspect-first",
+        nextAction: expect.stringContaining("No report was submitted by this call"),
+      });
+      expect(report).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(preflight)).not.toContain("private checkout diagnostic");
     } finally {
       await daemon.app.close();
     }
@@ -470,6 +1117,11 @@ describe("Streamable HTTP MCP", () => {
       daemon.store.createGroup({ name: "Newly configured team" });
       const changed = await callTool(daemon, token, "nanasa.foreman_discover_teams", { revision });
       expect(changed.json().result).toMatchObject({ isError: true });
+      expect(changed.json().result.structuredContent.error).toMatchObject({
+        code: "foreman_context_changed",
+        retry: "inspect-first",
+        nextAction: expect.stringContaining("without revision"),
+      });
       expect(changed.json().result.content[0].text).toContain("Context changed");
     } finally {
       await daemon.app.close();
@@ -613,6 +1265,8 @@ describe("Streamable HTTP MCP", () => {
         expect(tool.inputSchema.required ?? []).toEqual([]);
       }
       expect(listed.json().result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+        "nanasa.foreman_request_cleanup",
+        "nanasa.foreman_read_cleanup_requests",
         "nanasa.foreman_ask_member",
         "nanasa.foreman_read_conversations",
         "nanasa.foreman_finish_conversation",
@@ -624,6 +1278,8 @@ describe("Streamable HTTP MCP", () => {
         "nanasa.foreman_propose_goal",
         "nanasa.foreman_get_goal",
         "nanasa.foreman_delegate_goal",
+        "nanasa.foreman_assign_outcome",
+        "nanasa.foreman_prepare_workspace",
         "nanasa.foreman_finish_goal_review",
         "nanasa.foreman_accept_goal",
         "nanasa.request_human_decision",

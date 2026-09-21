@@ -4,6 +4,9 @@
   gap: 14px;
   min-width: 0;
 }
+.foreman-cleanup-digest {
+  overflow-wrap: anywhere;
+}
 .foreman-goals h3,
 .foreman-goals h4 {
   margin: 8px 0;
@@ -58,6 +61,13 @@
 .foreman-goal-list code {
   overflow-wrap: anywhere;
   font-size: 12px;
+}
+.foreman-preparation-list li {
+  display: block;
+}
+.foreman-preparation-list .foreman-budget > div {
+  min-width: 0;
+  max-width: 100%;
 }
 @media (max-width: 640px) {
   .foreman-workspace > .foreman-toolbar .eyebrow {

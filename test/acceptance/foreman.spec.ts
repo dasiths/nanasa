@@ -5,6 +5,215 @@ import type { ForemanConversationRequest, ForemanWorkspace } from "@nanasa/contr
 import { expect, test } from "@playwright/test";
 import { PackageAcceptanceService } from "./fixtures/package-fixture.js";
 
+for (const viewport of [
+  { width: 1440, height: 1000 },
+  { width: 390, height: 844 },
+]) {
+  test(`everyday cleanup browser trial ${viewport.width}`, async ({ page }, testInfo) => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { createServer } = await import("node:http");
+    const { build } = await import("esbuild");
+    const { default: Fastify } = await import("fastify");
+    const { NanasaConfigSchema } = await import("../../packages/contracts/src/index.js");
+    const { NanasaStore } = await import("../../apps/daemon/src/store.js");
+    const { ForemanGoalService } = await import("../../apps/daemon/src/foreman-goal-service.js");
+    const { registerControlRouter } = await import("../../apps/daemon/src/http/control-router.js");
+    const root = mkdtempSync(join(tmpdir(), "nanasa-cleanup-browser-"));
+    const store = new NanasaStore(join(root, "state.sqlite"));
+    const config = NanasaConfigSchema.parse({
+      version: 2,
+      integrations: {
+        copilot: {
+          id: "copilot",
+          name: "Copilot",
+          kind: "copilot",
+          command: ["copilot"],
+          commandSource: "builtin",
+        },
+      },
+      groups: {},
+      foreman: { integrationId: "copilot", enabled: true, autonomy: { maxActiveGoals: 4 } },
+    });
+    const goals = new ForemanGoalService(store, () => config);
+    const app = Fastify();
+    const sender = { kind: "operator" as const, operatorId: "browser-trial" };
+    const old = store.sendForemanMessage(sender, { requestId: "old", text: "Old retained intent" });
+    const proposal = {
+      requestId: "finished",
+      title: "Finished cleanup target",
+      objective: "Retain receipt",
+      constraints: [],
+    };
+    const finished = goals.propose(proposal);
+    goals.control(sender.operatorId, { id: finished.id, expectedRevision: 0, action: "cancel" });
+    const active = goals.propose({ ...proposal, requestId: "active", title: "Active peer" });
+    goals.control(sender.operatorId, { id: active.id, expectedRevision: 0, action: "approve" });
+    const profile = store.createInternalAgentProfile({
+      name: "Fixture only",
+      agentType: "copilot",
+      kind: "copilot",
+      command: "copilot",
+      args: [],
+      environment: {},
+    });
+    store.upsertForeman({ id: config.foreman!.id, agentProfileId: profile.id, enabled: true });
+    const run = store.createRunForForeman(config.foreman!.id).run;
+    registerControlRouter(app, {
+      store,
+      goals,
+      foreman: {
+        status: () => ({
+          configuration: config.foreman,
+          configRevision: "fixture",
+          run,
+          inbox: store.listForemanInbox(),
+        }),
+      },
+      conversations: { list: () => [] },
+      auth: {
+        session: () => ({
+          operatorId: sender.operatorId,
+          csrfToken: "fixture-csrf".repeat(4),
+          expiresAt: "2099-01-01T00:00:00Z",
+        }),
+        authenticate: () => ({ operatorId: sender.operatorId }),
+      },
+    } as unknown as import("../../apps/daemon/src/http/control-router.js").ControlRouterServices);
+    let http: ReturnType<typeof createServer> | undefined;
+    try {
+      const bundle = await build({
+        stdin: {
+          contents: `
+          import React from 'react';
+          import { createRoot } from 'react-dom/client';
+          import { ForemanWorkspace } from './src/components/foreman-workspace';
+          import { api } from './src/api';
+          import './src/styles.css';
+          import '@fontsource/ibm-plex-sans-condensed/400.css';
+          createRoot(document.getElementById('root')).render(<ForemanWorkspace client={api} config={${JSON.stringify(config)}} groups={[]} initialTeamId="" themePreference="light" onNavigate={() => {}} />);
+        `,
+          resolveDir: join(process.cwd(), "apps/portal"),
+          loader: "tsx",
+        },
+        bundle: true,
+        write: false,
+        outdir: "cleanup-trial",
+        jsx: "automatic",
+        loader: { ".woff2": "dataurl", ".woff": "dataurl" },
+      });
+      http = createServer(async (request, response) => {
+        try {
+          if (request.url?.startsWith("/api/")) {
+            const chunks: Buffer[] = [];
+            for await (const chunk of request) chunks.push(Buffer.from(chunk));
+            const result = await app.inject({
+              method: request.method as "GET" | "POST",
+              url: request.url,
+              headers: request.headers,
+              ...(chunks.length ? { payload: Buffer.concat(chunks) } : {}),
+            });
+            response.writeHead(result.statusCode, { "Content-Type": "application/json" });
+            response.end(result.body);
+          } else if (request.url === "/trial.js" || request.url === "/trial.css") {
+            const extension = request.url.endsWith(".js") ? ".js" : ".css";
+            response.writeHead(200, {
+              "Content-Type": extension === ".js" ? "text/javascript" : "text/css",
+            });
+            response.end(
+              bundle.outputFiles.find((file) => file.path.endsWith(extension))!.contents,
+            );
+          } else {
+            response.writeHead(200, { "Content-Type": "text/html" });
+            response.end(
+              '<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/trial.css"></head><body><div id="root"></div><script src="/trial.js"></script></body></html>',
+            );
+          }
+        } catch (error) {
+          response.writeHead(500);
+          response.end(String(error));
+        }
+      });
+      await new Promise<void>((resolve) => http!.listen(0, "127.0.0.1", resolve));
+      const address = http.address();
+      if (address === null || typeof address === "string") throw new Error("Missing trial address");
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.setViewportSize(viewport);
+      await page.goto(`http://127.0.0.1:${address.port}`);
+      await expect(page.getByRole("button", { name: "Clear channel", exact: true })).toBeEnabled();
+      await expect(page.getByRole("alert")).toHaveCount(0);
+      await page.getByRole("button", { name: "Clear channel", exact: true }).click();
+      await expect(page.getByRole("dialog")).toContainText("not permanently erased");
+      await page.screenshot({
+        path: testInfo.outputPath("channel-confirmation.png"),
+        fullPage: true,
+      });
+      const newer = store.sendForemanMessage(sender, {
+        requestId: "new",
+        text: "New independent message",
+      });
+      await page.getByRole("button", { name: "Confirm cleanup", exact: true }).click();
+      store.sendForemanMessage(sender, {
+        requestId: "late",
+        text: "Hidden late reply",
+        replyTo: old.id,
+      });
+      await expect(page.getByText("New independent message", { exact: true })).toBeVisible();
+      await expect(page.getByText("Old retained intent", { exact: true })).toHaveCount(0);
+      expect(
+        store.readForemanChannel({ after: 0, limit: 100 }).messages.map((item) => item.id),
+      ).toEqual([newer.id]);
+      expect(goals.get(active.id).state).toBe("running");
+      expect(store.getActiveForemanRun(config.foreman!.id)?.id).toBe(run.id);
+      await page.getByRole("tab", { name: "Goals", exact: true }).click();
+      await page.getByRole("button", { name: /Finished cleanup target/ }).click();
+      await page.getByRole("button", { name: "Remove goal", exact: true }).click();
+      await expect(page.getByRole("dialog")).toContainText("Finished cleanup target");
+      await page.getByRole("button", { name: "Confirm cleanup", exact: true }).click();
+      await expect(page.getByRole("button", { name: /Finished cleanup target/ })).toHaveCount(0);
+      expect(goals.propose(proposal).id).toBe(finished.id);
+      const another = goals.propose({
+        ...proposal,
+        requestId: "another",
+        title: "Another finished goal",
+      });
+      goals.control(sender.operatorId, { id: another.id, expectedRevision: 0, action: "cancel" });
+      await expect(page.getByRole("button", { name: "Clear finished", exact: true })).toBeEnabled();
+      await page.getByRole("button", { name: "Clear finished", exact: true }).click();
+      await expect(page.getByRole("dialog")).toContainText("Clear 1 finished goals?");
+      await page.getByRole("button", { name: "Confirm cleanup", exact: true }).click();
+      await expect(page.getByRole("button", { name: /Another finished goal/ })).toHaveCount(0);
+      await page.getByRole("button", { name: /Active peer/ }).click();
+      await page.getByRole("button", { name: "Cancel and remove", exact: true }).click();
+      await expect(page.getByRole("dialog")).toContainText("not forcibly interrupted");
+      await page.screenshot({
+        path: testInfo.outputPath("active-goal-confirmation.png"),
+        fullPage: true,
+      });
+      await page.getByRole("button", { name: "Confirm cleanup", exact: true }).click();
+      await expect(page.getByText("No goals", { exact: true })).toBeVisible();
+      expect(goals.get(active.id).state).toBe("cancelled");
+      expect(store.getActiveForemanRun(config.foreman!.id)?.id).toBe(run.id);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+        ),
+      ).toBe(true);
+      expect(errors).toEqual([]);
+      await page.screenshot({ path: testInfo.outputPath("cleanup-complete.png"), fullPage: true });
+    } finally {
+      if (http)
+        await new Promise<void>((resolve, reject) =>
+          http!.close((error) => (error ? reject(error) : resolve())),
+        );
+      await app.close();
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test("portal approval mode starts new goals automatically but preserves human pause", async ({
   page,
   browserName,

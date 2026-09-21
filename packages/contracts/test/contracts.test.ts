@@ -26,6 +26,7 @@ import {
   CustomLaunchConsentRequestSchema,
   CustomLaunchConsentSubjectSchema,
   DeleteGroupResultSchema,
+  DelegationReportSchema,
   DeliveryOutcomeSchema,
   ErrorPayloadSchema,
   EventServerFrameSchema,
@@ -46,6 +47,7 @@ import {
   ReorderGroupAgentsCommandSchema,
   ReorderGroupAgentsResultSchema,
   ReplyOpenWaitCommandSchema,
+  ReportDelegationCommandSchema,
   RepositorySchema,
   StartAgentRunCommandSchema,
   StartAgentRunResultSchema,
@@ -72,6 +74,41 @@ const customLaunchSubject = {
   credentialReference: { kind: "provider-managed" },
   permissionFloor: "inherit",
 } as const;
+
+describe("delegation review contracts", () => {
+  it("requires a verdict only on new reviews and keeps legacy stored reviews readable", () => {
+    const report = {
+      requestId: "review-one",
+      delegationId: "delegation-one",
+      kind: "review",
+      summary: "Candidate inspected",
+      evidence: ["tests/results.md"],
+      candidateHead: "a".repeat(40),
+    };
+    expect(ReportDelegationCommandSchema.safeParse(report).success).toBe(false);
+    for (const reviewOutcome of ["approved", "changes-required"])
+      expect(ReportDelegationCommandSchema.parse({ ...report, reviewOutcome })).toMatchObject({
+        reviewOutcome,
+      });
+    expect(
+      ReportDelegationCommandSchema.safeParse({ ...report, reviewOutcome: "passed" }).success,
+    ).toBe(false);
+    for (const kind of ["accepted", "progress", "blocked", "plan", "ready"])
+      expect(ReportDelegationCommandSchema.safeParse({ ...report, kind }).success).toBe(true);
+    const legacy = {
+      ...report,
+      id: "report-one",
+      memberId: "reviewer",
+      runId: "run-one",
+      generation: 1,
+      createdAt: "2026-09-20T17:00:00.000Z",
+    };
+    expect(DelegationReportSchema.parse(legacy).reviewOutcome).toBeUndefined();
+    expect(
+      DelegationReportSchema.parse({ ...legacy, reviewOutcome: "changes-required" }).reviewOutcome,
+    ).toBe("changes-required");
+  });
+});
 
 describe("Foreman configuration contracts", () => {
   const base = {
@@ -932,6 +969,26 @@ describe("agent status contracts", () => {
         nextStep: "Run typecheck",
       }),
     ).toMatchObject({ stage: "validation" });
+    for (const blocker of [undefined, null, "", "  ", "none", " NoNe "])
+      expect(
+        AgentProgressReportCommandSchema.parse({
+          stage: "validation",
+          summary: "Tests pass",
+          blocker,
+        }).blocker,
+      ).toBeUndefined();
+    for (const blocker of [
+      "None of the providers are available",
+      "none yet: waiting for credentials",
+      "No approval",
+    ])
+      expect(
+        AgentProgressReportCommandSchema.parse({
+          stage: "validation",
+          summary: "Tests pending",
+          blocker,
+        }).blocker,
+      ).toBe(blocker);
     expect(
       AgentStatusDetailSchema.parse({
         groupId: "group_1",

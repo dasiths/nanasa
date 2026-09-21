@@ -15,6 +15,7 @@ import {
   ForemanConfigSchema,
   ForemanConversationRequestSchema,
   ForemanGoalSchema,
+  ForemanPreparationSchema,
 } from "@nanasa/contracts";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -314,6 +315,10 @@ function createClient(submission?: MessageSubmissionResult): PortalClient {
     resolveHumanDecision: vi.fn(),
     resolveForemanInput: vi.fn(),
     resetForemanState: vi.fn(),
+    cleanupForeman: vi.fn(),
+    loadForemanCleanupEffects: vi.fn().mockResolvedValue([]),
+    loadForemanCleanupRequests: vi.fn().mockResolvedValue([]),
+    approveForemanCleanup: vi.fn(),
     configureForeman: vi.fn(),
     startForeman: vi.fn(),
     stopForeman: vi.fn(),
@@ -1024,6 +1029,271 @@ describe("portal application", () => {
     expect(saved.autonomy).not.toHaveProperty("permittedTeamTemplates");
     expect(saved.autonomy).not.toHaveProperty("maxMissionHours");
   });
+
+  it.each(["cancelled", "running"] as const)(
+    "confirms %s goal removal and retains retry identity and live effects",
+    async (state) => {
+      window.history.replaceState({}, "", "/foreman");
+      const client = createClient();
+      const configuration = ForemanConfigSchema.parse({ integrationId: "copilot", enabled: true });
+      vi.mocked(client.loadForeman).mockResolvedValue({ configuration, inbox: [] });
+      const goal = ForemanGoalSchema.parse({
+        id: "cleanup-goal",
+        requestId: "goal-request",
+        foremanId: configuration.id,
+        title: "Cleanup target",
+        objective: "Scoped cleanup",
+        state,
+        revision: 3,
+        grant: configuration.autonomy,
+        turnsUsed: 0,
+        expiresAt: "2099-01-01T00:00:00Z",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      vi.mocked(client.listForemanGoals).mockResolvedValue([goal]);
+      vi.mocked(client.getForemanGoal).mockResolvedValue({
+        goal,
+        delegations: [],
+        reports: [],
+        decisions: [],
+      });
+      vi.mocked(client.cleanupForeman)
+        .mockRejectedValueOnce(new Error("Temporary cleanup failure"))
+        .mockImplementationOnce(async (command) => {
+          vi.mocked(client.listForemanGoals).mockResolvedValue([]);
+          vi.mocked(client.loadForemanCleanupEffects).mockResolvedValue([
+            { goalId: goal.id, actionIds: ["pending-write"], runIds: ["live-run"] },
+          ]);
+          return {
+            scope: command.scope,
+            removedGoalIds: [goal.id],
+            messagesCleared: 0,
+            retained: true,
+            pendingEffects: [],
+          };
+        });
+      const user = userEvent.setup();
+      render(<App client={client} />);
+      await user.click(await screen.findByRole("tab", { name: "Goals" }));
+      await user.click(await screen.findByRole("button", { name: /Cleanup target/ }));
+      await user.click(
+        await screen.findByRole("button", {
+          name: state === "cancelled" ? "Remove goal" : "Cancel and remove",
+        }),
+      );
+      const dialog = screen.getByRole("dialog");
+      expect(within(dialog).getByText(/not permanently erased/)).toBeTruthy();
+      expect(client.cleanupForeman).not.toHaveBeenCalled();
+      await user.click(within(dialog).getByRole("button", { name: "Confirm cleanup" }));
+      expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+        "Temporary cleanup failure",
+      );
+      await user.click(within(dialog).getByRole("button", { name: "Confirm cleanup" }));
+      await screen.findByRole("heading", { name: "Removed goals with live effects" });
+      expect(vi.mocked(client.cleanupForeman).mock.calls[0]![0]).toEqual(
+        vi.mocked(client.cleanupForeman).mock.calls[1]![0],
+      );
+      expect(client.cleanupForeman).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scope: "goal",
+          goal: { id: goal.id, expectedRevision: 3 },
+          cancel: state === "running",
+        }),
+      );
+      expect(client.stopForeman).not.toHaveBeenCalled();
+      expect(client.resetForemanState).not.toHaveBeenCalled();
+    },
+  );
+
+  it("approves only the captured Foreman cleanup scope and keeps it stable on retry", async () => {
+    window.history.replaceState({}, "", "/foreman");
+    const client = createClient();
+    const request = {
+      id: "cleanup-request",
+      foremanId: "foreman",
+      state: "pending" as const,
+      command: {
+        scope: "channel" as const,
+        requestId: "requested",
+        throughSequence: 7,
+        conversationIds: ["conversation-one"],
+      },
+      digest: "a".repeat(64),
+      createdAt: timestamp,
+    };
+    vi.mocked(client.loadForemanCleanupRequests).mockResolvedValue([request]);
+    vi.mocked(client.approveForemanCleanup)
+      .mockRejectedValueOnce(new Error("Temporary approval failure"))
+      .mockImplementationOnce(async () => {
+        vi.mocked(client.loadForemanCleanupRequests).mockResolvedValue([]);
+        return {
+          ...request,
+          state: "approved",
+          result: {
+            scope: "channel",
+            messagesCleared: 1,
+            removedGoalIds: [],
+            retained: true,
+            pendingEffects: [],
+          },
+        };
+      });
+    const user = userEvent.setup();
+    render(<App client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Review cleanup" }));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent("through sequence 7");
+    expect(dialog).toHaveTextContent("conversation-one");
+    expect(dialog).toHaveTextContent(request.digest);
+    expect(client.approveForemanCleanup).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "Confirm cleanup" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Temporary approval failure",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Confirm cleanup" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(client.approveForemanCleanup).toHaveBeenCalledTimes(2);
+    for (const [command] of vi.mocked(client.approveForemanCleanup).mock.calls)
+      expect(command).toEqual({ id: request.id, digest: request.digest, confirmation: true });
+    expect(client.cleanupForeman).not.toHaveBeenCalled();
+    expect(client.proposeForemanGoal).not.toHaveBeenCalled();
+  });
+
+  it("clears a captured channel scope without stopping Foreman or resetting retained data", async () => {
+    window.history.replaceState({}, "", "/foreman");
+    const client = createClient();
+    const message = {
+      id: "old-message",
+      sequence: 7,
+      sender: { kind: "operator" as const, operatorId: "human" },
+      text: "Old channel request",
+      createdAt: timestamp,
+    };
+    vi.mocked(client.loadForemanChannel).mockResolvedValue({
+      messages: [message],
+      nextAfter: 7,
+      hasMore: false,
+      clearedThrough: 0,
+    });
+    vi.mocked(client.cleanupForeman).mockImplementation(async (command) => {
+      vi.mocked(client.loadForemanChannel).mockResolvedValue({
+        messages: [],
+        nextAfter: 7,
+        hasMore: false,
+        clearedThrough: 7,
+      });
+      return {
+        scope: command.scope,
+        removedGoalIds: [],
+        messagesCleared: 1,
+        clearedThrough: 7,
+        retained: true,
+        pendingEffects: [],
+      };
+    });
+    const user = userEvent.setup();
+    render(<App client={client} />);
+    const clear = await screen.findByRole("button", { name: "Clear channel" });
+    await waitFor(() => expect(clear).toBeEnabled());
+    await user.click(clear);
+    expect(screen.getByRole("dialog").textContent).toContain("through sequence 7");
+    await user.click(screen.getByRole("button", { name: "Confirm cleanup" }));
+    await screen.findByText("Channel cleared from the feed. Operational history retained.");
+    expect(client.cleanupForeman).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "channel",
+        throughSequence: 7,
+        conversationIds: [],
+        confirmation: true,
+      }),
+    );
+    expect(client.stopForeman).not.toHaveBeenCalled();
+    expect(client.resetForemanState).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText("Old channel request")).toBeNull());
+  });
+
+  it.each([
+    { phase: "waiting", reason: "runtime_not_ready", state: "running", nextActor: "Daemon" },
+    { phase: "held", reason: "foreman_workspace_unsuitable", state: "running", nextActor: "Human" },
+    {
+      phase: "needs-approval",
+      reason: "scoped_plan_approval_required",
+      state: "running",
+      nextActor: "Human",
+    },
+    { phase: "waiting", reason: "goal_paused", state: "paused", nextActor: "Human" },
+    { phase: "delegated", reason: undefined, state: "running", nextActor: "None" },
+  ])(
+    "shows $phase workspace preparations and the $nextActor next actor",
+    async ({ phase, reason, state, nextActor }) => {
+      window.history.replaceState({}, "", "/foreman");
+      const client = createClient();
+      const configuration = ForemanConfigSchema.parse({ integrationId: "copilot", enabled: true });
+      vi.mocked(client.loadForeman).mockResolvedValue({ configuration, inbox: [] });
+      const goal = ForemanGoalSchema.parse({
+        id: "solar-goal",
+        requestId: "solar-request",
+        foremanId: configuration.id,
+        title: "Solar system",
+        objective: "Create browser based solar system simulator in ./src dir",
+        state,
+        revision: 1,
+        grant: configuration.autonomy,
+        turnsUsed: 0,
+        expiresAt: "2099-01-01T00:00:00Z",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      const preparation = ForemanPreparationSchema.parse({
+        id: "preparation-solar",
+        requestId: "prepare-solar",
+        requestDigest: "solar-digest",
+        goalId: goal.id,
+        groupId: "group-backend",
+        memberId: "builder",
+        brief: goal.objective,
+        operation: "assign",
+        phase,
+        reason,
+        sourceCheckoutId: "source-checkout",
+        checkoutId: "isolated-checkout",
+        sourceHead: "a".repeat(40),
+        sourceDirty: true,
+        branch: "foreman/solar",
+        retryCount: 0,
+        nextAttemptAt: timestamp,
+        deadline: goal.expiresAt,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      vi.mocked(client.listForemanGoals).mockResolvedValue([goal]);
+      vi.mocked(client.getForemanGoal).mockResolvedValue({
+        goal,
+        delegations: [],
+        reports: [],
+        decisions: [],
+        preparations: [preparation],
+      });
+      const user = userEvent.setup();
+      render(<App client={client} />);
+      await user.click(await screen.findByRole("tab", { name: "Goals" }));
+      await user.click(await screen.findByRole("button", { name: /Solar system/ }));
+      const preparations = await screen.findByRole("region", { name: "Workspace preparations" });
+      const row = within(preparations).getByRole("listitem", { name: "Preparation group-backend" });
+      expect(within(row).getByText(phase)).toBeTruthy();
+      expect(within(row).getByText(reason ?? "No blocker")).toBeTruthy();
+      expect(within(row).getByText(nextActor)).toBeTruthy();
+      expect(within(row).getByText(preparation.sourceHead!)).toBeTruthy();
+      expect(within(row).getByText("source-checkout")).toBeTruthy();
+      expect(within(row).getByText("isolated-checkout")).toBeTruthy();
+      expect(
+        within(row).getByText("Uncommitted changes are NOT copied. Source files are unchanged."),
+      ).toBeTruthy();
+      expect(client.controlForemanGoal).not.toHaveBeenCalled();
+      expect(client.startForeman).not.toHaveBeenCalled();
+    },
+  );
 
   it("creates a Foreman goal without an upfront plan and approves its exact revision", async () => {
     window.history.replaceState({}, "", "/foreman");

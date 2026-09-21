@@ -23,6 +23,7 @@
     "fastify": "^5.11.0",
     "node-pty": "1.1.0",
     "pi-mcp-adapter": "2.18.0",
+    "playwright": "1.62.1",
     "ws": "8.21.1",
     "yaml": "2.9.0",
     "zod": "4.4.3"

@@ -15,9 +15,11 @@ import {
   ForemanCheckInCommandSchema,
   ForemanConversationRequestSchema,
   type ForemanGoal,
+  ForemanGoalRequestOriginSchema,
   ForemanGoalSchema,
   type ForemanGoalWorkspace,
   type ForemanNotification,
+  type ForemanPreparation,
   ForemanNotificationQuerySchema,
   type HumanDecision,
   type NanasaConfig,
@@ -33,6 +35,7 @@ import {
   type TeamDelegation,
 } from "@nanasa/contracts";
 import type { AgentActionService } from "./actions/agent-action-service.js";
+import { ForemanCleanupService } from "./foreman-cleanup-service.js";
 import type { McpForemanPrincipal } from "./mcp-auth.js";
 import type { RunRuntimeCoordinator } from "./run-runtime-coordinator.js";
 import { DomainError, type NanasaStore } from "./store.js";
@@ -43,7 +46,11 @@ type RecordKind = "goal" | "delegation" | "report" | "decision";
 const inactive = new Set(["completed", "cancelled"]);
 const settled = new Set(["completed", "cancelled", "rejected", "expired", "superseded"]);
 
-function assertGoalGrantWithin(grant: ForemanGoal["grant"], ceiling: ForemanGoal["grant"]): void {
+function assertGoalGrantWithin(
+  grant: ForemanGoal["grant"],
+  ceiling: ForemanGoal["grant"],
+  operation: "coordination" | "intervention" | "recovery" = "coordination",
+): void {
   const numeric = [
     "maxActiveGoals",
     "maxTeamsPerGoal",
@@ -54,15 +61,16 @@ function assertGoalGrantWithin(grant: ForemanGoal["grant"], ceiling: ForemanGoal
   if (
     numeric.some((key) => grant[key] > ceiling[key]) ||
     (grant.approvalMode === "autonomous" && ceiling.approvalMode !== "autonomous") ||
-    (grant.mode === "bounded" && ceiling.mode !== "bounded") ||
-    grant.transcript.maxLines > ceiling.transcript.maxLines ||
-    grant.transcript.maxBytes > ceiling.transcript.maxBytes ||
-    (grant.intervention.idlePrompt && !ceiling.intervention.idlePrompt) ||
-    grant.intervention.maxPerIncident > ceiling.intervention.maxPerIncident ||
-    (grant.recovery.restartDelegatedAgents && !ceiling.recovery.restartDelegatedAgents) ||
-    grant.recovery.maxAttemptsPerIncident > ceiling.recovery.maxAttemptsPerIncident ||
-    grant.recovery.maxAttemptsPerGoal > ceiling.recovery.maxAttemptsPerGoal ||
-    grant.recovery.cooldownSeconds < ceiling.recovery.cooldownSeconds
+    (operation !== "coordination" && grant.mode === "bounded" && ceiling.mode !== "bounded") ||
+    (operation === "intervention" &&
+      ((grant.intervention.idlePrompt && !ceiling.intervention.idlePrompt) ||
+        grant.intervention.maxPerIncident > ceiling.intervention.maxPerIncident)) ||
+    (operation === "recovery" &&
+      ((grant.recovery.restartDelegatedAgents && !ceiling.recovery.restartDelegatedAgents) ||
+        grant.recovery.maxAttemptsPerIncident > ceiling.recovery.maxAttemptsPerIncident ||
+        grant.recovery.maxAttemptsPerGoal > ceiling.recovery.maxAttemptsPerGoal)) ||
+    (operation !== "coordination" &&
+      grant.recovery.cooldownSeconds < ceiling.recovery.cooldownSeconds)
   )
     throw new DomainError(
       "goal_grant_exceeds_policy",
@@ -74,6 +82,20 @@ function assertGoalGrantWithin(grant: ForemanGoal["grant"], ceiling: ForemanGoal
 export class ForemanGoalService {
   #timer: NodeJS.Timeout | undefined;
   #pending: Promise<void> | undefined;
+  #preparation:
+    | {
+        tick(): Promise<void>;
+        list(goalId: string): ForemanPreparation[];
+        authorizeRecovery(groupId: string, memberId: string): boolean | undefined;
+      }
+    | undefined;
+  attachPreparation(service: {
+    tick(): Promise<void>;
+    list(goalId: string): ForemanPreparation[];
+    authorizeRecovery(groupId: string, memberId: string): boolean | undefined;
+  }) {
+    this.#preparation = service;
+  }
   public constructor(
     private readonly store: NanasaStore,
     private readonly config: () => NanasaConfig,
@@ -133,7 +155,7 @@ export class ForemanGoalService {
           .get()
       )
         this.#fail("Stop Foreman before clearing coordination state");
-      const goals = this.list();
+      const goals = this.list(true);
       if (input.scope === "channel" && goals.length > 0)
         this.#fail(
           "Goals still reference channel history; clear finished goals or reset all coordination state first",
@@ -154,6 +176,14 @@ export class ForemanGoalService {
           ? []
           : goals.filter((goal) => input.scope === "all" || inactive.has(goal.state));
       const removedGoalIds = new Set(removed.map((goal) => goal.id));
+      if (
+        removed.some((goal) =>
+          this.#preparation
+            ?.list(goal.id)
+            .some((item) => this.store.listGroupRunsRequiringStop(item.groupId).length > 0),
+        )
+      )
+        this.#fail("Stop prepared team runs before clearing their retained coordination state");
       const removedDelegationIds = new Set(
         this.delegations()
           .filter((delegation) => removedGoalIds.has(delegation.goalId))
@@ -198,6 +228,13 @@ export class ForemanGoalService {
           },
         });
       for (const goal of removed) {
+        if (this.#preparation)
+          this.store.database
+            .prepare("DELETE FROM foreman_preparations WHERE goal_id = ?")
+            .run(goal.id);
+        this.store.database
+          .prepare("DELETE FROM foreman_removed_goals WHERE goal_id = ?")
+          .run(goal.id);
         const delegationIds = this.delegations()
           .filter((delegation) => delegation.goalId === goal.id)
           .map((delegation) => delegation.id);
@@ -268,55 +305,112 @@ export class ForemanGoalService {
   #digest(input: unknown) {
     return createHash("sha256").update(canonicalJson(input)).digest("hex");
   }
-  #candidateDigest(checkoutId: string, candidatePath: string): string {
-    const root = realpathSync(this.store.getCheckout(checkoutId).path);
-    if (
-      isAbsolute(candidatePath) ||
-      candidatePath.includes("\\") ||
-      candidatePath
-        .split("/")
-        .some(
-          (part) =>
-            !part || part === "." || part === ".." || part === ".git" || part === "node_modules",
-        )
-    )
-      this.#fail("Candidate path must name a bounded repository-relative file or directory");
-    const target = resolve(root, candidatePath);
-    if (!target.startsWith(`${root}${sep}`) || realpathSync(target) !== target)
-      this.#fail("Candidate path must remain inside the checkout without symlinks");
-    const hash = createHash("sha256");
-    let bytes = 0;
-    let files = 0;
-    let entries = 0;
-    const visit = (path: string) => {
-      if (++entries > 1024 || relative(target, path).split(sep).length > 32)
-        this.#fail("Candidate snapshot exceeds directory limits");
-      const stat = lstatSync(path);
-      if (stat.isSymbolicLink()) this.#fail("Candidate snapshots must not contain symlinks");
-      if (stat.isDirectory()) {
-        const children = readdirSync(path).sort();
-        if (children.length > 512) this.#fail("Candidate snapshot has too many entries");
-        for (const child of children) {
-          if (child === ".git" || child === "node_modules")
-            this.#fail("Candidate snapshot must exclude repository metadata and dependencies");
-          visit(resolve(path, child));
+  #candidateDigest(
+    checkoutId: string,
+    candidatePath: string,
+    requestOrigin?: ForemanGoal["requestOrigin"],
+  ): string {
+    try {
+      if (
+        isAbsolute(candidatePath) ||
+        candidatePath.includes("\\") ||
+        candidatePath.includes("\0") ||
+        candidatePath
+          .split("/")
+          .some(
+            (part) =>
+              !part || part === "." || part === ".." || part === ".git" || part === "node_modules",
+          )
+      )
+        this.#fail("Candidate path must name a bounded repository-relative file or directory");
+      const root = realpathSync(this.store.getCheckout(checkoutId).path);
+      const target = resolve(root, candidatePath);
+      if (!target.startsWith(`${root}${sep}`) || realpathSync(target) !== target)
+        this.#fail("Candidate path must remain inside the checkout without symlinks");
+      const hash = createHash("sha256");
+      let bytes = 0;
+      let files = 0;
+      let entries = 0;
+      const visit = (path: string) => {
+        if (++entries > 1024 || relative(target, path).split(sep).length > 32)
+          this.#fail("Candidate snapshot exceeds directory limits");
+        const stat = lstatSync(path);
+        if (stat.isSymbolicLink()) this.#fail("Candidate snapshots must not contain symlinks");
+        if (stat.isDirectory()) {
+          const children = readdirSync(path).sort();
+          if (children.length > 512) this.#fail("Candidate snapshot has too many entries");
+          for (const child of children) {
+            if (child === ".git" || child === "node_modules")
+              this.#fail("Candidate snapshot must exclude repository metadata and dependencies");
+            visit(resolve(path, child));
+          }
+        } else {
+          if (!stat.isFile() || ++files > 512 || (bytes += stat.size) > 16 * 1024 * 1024)
+            this.#fail("Candidate snapshot exceeds file or byte limits");
+          const content = readFileSync(path);
+          hash.update(
+            canonicalJson({
+              path: relative(root, path),
+              executable: Boolean(stat.mode & 0o111),
+              digest: createHash("sha256").update(content).digest("hex"),
+            }),
+          );
         }
-      } else {
-        if (!stat.isFile() || ++files > 512 || (bytes += stat.size) > 16 * 1024 * 1024)
-          this.#fail("Candidate snapshot exceeds file or byte limits");
-        const content = readFileSync(path);
-        hash.update(
-          canonicalJson({
-            path: relative(root, path),
-            executable: Boolean(stat.mode & 0o111),
-            digest: createHash("sha256").update(content).digest("hex"),
-          }),
-        );
+      };
+      visit(target);
+      if (files === 0) this.#fail("Candidate snapshot must include files");
+      return hash.digest("hex");
+    } catch (error) {
+      if (
+        error instanceof DomainError ||
+        !(error instanceof Error) ||
+        !("code" in error) ||
+        typeof error.code !== "string" ||
+        !("syscall" in error)
+      )
+        throw error;
+      const checkout = this.store.getCheckout(checkoutId);
+      let expectedCandidatePath: string | undefined;
+      let expectedCandidateAbsolutePath: string | undefined;
+      if (
+        (error.code === "ENOENT" || error.code === "ENOTDIR") &&
+        requestOrigin !== undefined &&
+        requestOrigin.repositoryId === checkout.repositoryId &&
+        requestOrigin.workingDirectory !== "." &&
+        checkout.kind !== "bare"
+      ) {
+        const mapped = `${requestOrigin.workingDirectory}/${candidatePath}`;
+        try {
+          this.#candidateDigest(checkoutId, mapped);
+          expectedCandidateAbsolutePath = resolve(realpathSync(checkout.path), mapped);
+          expectedCandidatePath = mapped;
+        } catch {
+          expectedCandidatePath = undefined;
+        }
       }
-    };
-    visit(target);
-    if (files === 0) this.#fail("Candidate snapshot must include files");
-    return hash.digest("hex");
+      throw new DomainError(
+        "foreman_candidate_unavailable",
+        "Candidate files could not be read from the assigned checkout",
+        409,
+        {
+          checkoutId,
+          candidatePath,
+          fileSystemCode: error.code,
+          ...(expectedCandidatePath === undefined
+            ? {}
+            : { expectedCandidatePath, expectedCandidateAbsolutePath }),
+          effect: "none",
+          retry:
+            error.code === "ENOENT" || error.code === "ENOTDIR" ? "correct-input" : "inspect-first",
+          nextAction:
+            "No report was recorded by this call. Inspect the assigned checkout and durable goal request origin. candidatePath must identify the exact reviewed files relative to the checkout root, not the request working directory. " +
+            (expectedCandidatePath === undefined
+              ? "No alternative candidate was validated. "
+              : `The request-origin-relative interpretation exists and passes snapshot checks at ${expectedCandidatePath} (${expectedCandidateAbsolutePath}); verify it is exactly the reviewed candidate before resubmitting with the same requestId. `) +
+            "Do not broaden the candidate or change request identity to bypass validation.",
+        },
+      );
+    }
   }
   #fail(message: string): never {
     throw new DomainError("foreman_goal_conflict", message, 409);
@@ -413,8 +507,16 @@ export class ForemanGoalService {
       ),
     };
   }
-  list() {
-    return this.#records<unknown>("goal").map((goal) => this.#validateGoal(goal));
+  list(includeRemoved = false) {
+    const removed = new Set(
+      this.store.database
+        .prepare("SELECT goal_id FROM foreman_removed_goals")
+        .all()
+        .map((row) => String(row.goal_id)),
+    );
+    return this.#records<unknown>("goal")
+      .map((goal) => this.#validateGoal(goal))
+      .filter((goal) => includeRemoved || !removed.has(goal.id));
   }
   get(id: string) {
     return this.#validateGoal(this.#get<unknown>("goal", id));
@@ -437,13 +539,16 @@ export class ForemanGoalService {
     return this.#get<TeamDelegation>("delegation", id);
   }
   workspace(id: string): ForemanGoalWorkspace {
+    const goal = this.get(id);
     return {
-      goal: this.get(id),
+      goal,
+      requestContext: this.requestContext(goal),
       delegations: this.delegations().filter((item) => item.goalId === id),
       reports: this.#records<DelegationReport>("report").filter(
         (item) => this.delegation(item.delegationId).goalId === id,
       ),
       decisions: this.#records<HumanDecision>("decision").filter((item) => item.goalId === id),
+      ...(this.#preparation ? { preparations: this.#preparation.list(id) } : {}),
     };
   }
   assertForeman(principal: McpForemanPrincipal) {
@@ -463,7 +568,10 @@ export class ForemanGoalService {
         403,
       );
   }
-  #running(goal: ForemanGoal) {
+  #running(
+    goal: ForemanGoal,
+    operation: "coordination" | "intervention" | "recovery" = "coordination",
+  ) {
     const foreman = this.config().foreman;
     if (
       goal.state !== "running" ||
@@ -472,10 +580,80 @@ export class ForemanGoalService {
       Date.parse(goal.expiresAt) <= this.now().getTime()
     )
       this.#fail("Goal is not running within its authorized time limit");
-    assertGoalGrantWithin(goal.grant, foreman.autonomy);
+    assertGoalGrantWithin(goal.grant, foreman.autonomy, operation);
   }
-  propose(command: ProposeForemanGoalCommand): ForemanGoal {
+  #requestOrigin(principal?: McpForemanPrincipal): ForemanGoal["requestOrigin"] {
+    const config = this.config();
+    const run =
+      principal === undefined ? undefined : this.store.getActiveForemanRun(principal.foremanId);
+    const workingDirectory =
+      principal === undefined
+        ? config.repository.path
+        : (run?.resolvedWorkingDirectory ??
+          config.integrations[config.foreman!.integrationId]?.cwd ??
+          config.repository.path);
+    if (!isAbsolute(workingDirectory)) return undefined;
+    const checkout = this.store
+      .listCheckouts()
+      .filter((item) => {
+        const path = relative(item.path, workingDirectory);
+        return (
+          item.kind !== "bare" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path)
+        );
+      })
+      .sort((left, right) => right.path.length - left.path.length)[0];
+    if (checkout === undefined) return undefined;
+    const path = relative(realpathSync(checkout.path), realpathSync(workingDirectory));
+    return ForemanGoalRequestOriginSchema.parse({
+      repositoryId: checkout.repositoryId,
+      checkoutId: checkout.id,
+      workingDirectory: path.split(sep).join("/") || ".",
+      source:
+        principal === undefined
+          ? "repository-root"
+          : run?.resolvedWorkingDirectory === undefined
+            ? "foreman-integration"
+            : "foreman-run",
+    });
+  }
+  requestContext(goal: ForemanGoal, checkoutId?: string): string {
+    const origin = goal.requestOrigin;
+    const context = [
+      "Human request scope: team roles and specialties describe expertise, not permission to reinterpret explicit requested paths. Preserve literal paths from the Human request; do not substitute a team's usual application subtree. Provider permissions, repository policy and read-only roles still apply; report conflicts instead of expanding scope.",
+      goal.sourceText === undefined
+        ? "Original Human source text: unavailable (no stored source text). Do not invent a quotation."
+        : `Original Human source text (verbatim request data):\n${goal.sourceText}`,
+    ];
+    if (origin === undefined) {
+      context.push(
+        "Request origin working directory: unknown (not recorded for this goal). Do not infer it from a team specialty or the current cwd; resolve ambiguous relative paths with the Human before implementation.",
+      );
+    } else {
+      const checkout = this.store.getCheckout(checkoutId ?? origin.checkoutId);
+      if (checkout.repositoryId !== origin.repositoryId || checkout.kind === "bare")
+        this.#fail(
+          "Request origin cannot be mapped to a checkout of another repository or a bare checkout",
+        );
+      const workingDirectory = resolve(checkout.path, origin.workingDirectory);
+      if (checkoutId !== undefined) {
+        const path = relative(realpathSync(checkout.path), realpathSync(workingDirectory));
+        if (path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path))
+          this.#fail("Request origin working directory escapes the assigned checkout");
+      }
+      context.push(
+        `Request origin repository: ${origin.repositoryId}; source checkout: ${origin.checkoutId}.`,
+        `Request working directory mapped into checkout ${checkout.id} (absolute): ${workingDirectory}`,
+        `Repository-relative expected ./ anchor: ${origin.workingDirectory === "." ? "./" : `${origin.workingDirectory}/`}. Resolve each literal Human-supplied ./ path from this anchor, not from an inferred application directory or the recipient's launch cwd.`,
+      );
+    }
+    context.push(
+      "Evidence candidatePath remains checkout-root-relative, not request-working-directory-relative. Request scope does not grant access outside the assigned checkout.",
+    );
+    return context.join("\n");
+  }
+  propose(command: ProposeForemanGoalCommand, principal?: McpForemanPrincipal): ForemanGoal {
     const input = ProposeForemanGoalCommandSchema.parse(command);
+    if (principal !== undefined) this.assertForeman(principal);
     return this.store.atomic(() => {
       const existing = this.#existing<ForemanGoal>(`goal:${input.requestId}`, input);
       if (existing) return existing;
@@ -486,16 +664,33 @@ export class ForemanGoalService {
         foreman.autonomy.maxActiveGoals
       )
         this.#fail("Goal capacity exhausted");
+      let sourceText: string | undefined;
       if (input.sourceMessageId !== undefined) {
         const parent = this.store.database
-          .prepare("SELECT sender_json FROM foreman_messages WHERE id = ?")
+          .prepare("SELECT sender_json, text FROM foreman_messages WHERE id = ?")
           .get(input.sourceMessageId);
         if (parent === undefined || JSON.parse(String(parent.sender_json)).kind !== "operator")
-          this.#fail("Goal source must be a human channel message");
+          throw new DomainError(
+            "foreman_goal_source_message_invalid",
+            "sourceMessageId must reference a stored Human channel message, not an agent or Foreman message",
+            400,
+            {
+              field: "sourceMessageId",
+              reason: "missing_or_non_human_message",
+              effect: "none",
+              retry: "correct-input",
+              nextAction:
+                "No goal or proposal receipt was created. Read the original request with nanasa.foreman_read_channel and use its stored Human message ID. Do not fabricate a source or omit it to bypass this check. Correct the linkage and resubmit with the same requestId.",
+            },
+          );
+        sourceText = String(parent.text);
       }
+      const requestOrigin = this.#requestOrigin(principal);
       const timestamp = this.#timestamp();
       const goal: ForemanGoal = {
         ...input,
+        ...(requestOrigin === undefined ? {} : { requestOrigin }),
+        ...(sourceText === undefined ? {} : { sourceText }),
         id: `goal_${randomUUID()}`,
         foremanId: foreman.id,
         state: "proposed",
@@ -508,7 +703,7 @@ export class ForemanGoalService {
           this.now().getTime() + foreman.autonomy.maxGoalHours * 3600000,
         ).toISOString(),
       };
-      for (const id of input.sourceConversationIds ?? []) {
+      for (const [index, id] of (input.sourceConversationIds ?? []).entries()) {
         const row = this.store.database
           .prepare("SELECT data_json FROM foreman_conversations WHERE id = ?")
           .get(id);
@@ -517,7 +712,20 @@ export class ForemanGoalService {
           ForemanConversationRequestSchema.parse(JSON.parse(String(row.data_json))).foremanId !==
             goal.foremanId
         )
-          this.#fail("Goal conversation context is unavailable or belongs to another Foreman");
+          throw new DomainError(
+            "foreman_goal_source_conversation_invalid",
+            "sourceConversationIds must reference member-question requests owned by this Foreman; the supplied reference is unavailable or belongs to another Foreman. Channel message/thread IDs are not question request IDs",
+            400,
+            {
+              field: "sourceConversationIds",
+              index,
+              reason: "unavailable_or_foreign_question_request",
+              effect: "none",
+              retry: "correct-input",
+              nextAction:
+                "No goal or proposal receipt was created. Keep the verified Human sourceMessageId. Use only relevant request IDs returned by nanasa.foreman_ask_member or nanasa.foreman_read_conversations. If no member-question context is intended, omit sourceConversationIds or use []. Correct the linkage and resubmit with the same requestId; do not invent or reinterpret IDs.",
+            },
+          );
       }
       this.#save("goal", goal, `goal:${input.requestId}`, input);
       this.notify(`goal:${goal.id}`, {
@@ -594,6 +802,8 @@ export class ForemanGoalService {
               : checkout.dirty || !checkout.head || checkout.head !== ready?.candidateHead
           )
             this.#fail("Completion evidence no longer matches the reviewed candidate");
+          if (!ready) this.#fail("Completion evidence is required");
+          this.#assertApprovedReview(delegation, ready);
           if (
             this.discover()
               .find((team) => team.id === delegation.groupId)
@@ -759,14 +969,7 @@ export class ForemanGoalService {
     }
     if (members.length === 0)
       blockers.push({ code: "no_members", message: "Team has no accountable member" });
-    if (
-      this.store
-        .listAgentActions(groupId)
-        .some(
-          (action) =>
-            action.principal.kind !== "foreman-conversation" && !settled.has(action.state),
-        )
-    )
+    if (this.blockingTeamActions(groupId).length)
       blockers.push({ code: "unsettled_work", message: "Team has unsettled work" });
     if (
       members.some((member) => {
@@ -784,6 +987,24 @@ export class ForemanGoalService {
     };
   }
   delegate(principal: McpForemanPrincipal, command: DelegateForemanGoalCommand): TeamDelegation {
+    return this.delegatePrepared(principal, command);
+  }
+  authorizePreparation(principal: McpForemanPrincipal, goalId: string) {
+    this.assertForeman(principal);
+    const goal = this.get(goalId);
+    this.#running(goal);
+    if (goal.foremanId !== principal.foremanId) this.#fail("Goal belongs to another Foreman");
+    return { goal, automatic: this.#automatic(goal) };
+  }
+  requestPreparationApproval(principal: McpForemanPrincipal, command: RequestHumanDecisionCommand) {
+    this.authorizePreparation(principal, command.goalId);
+    return this.store.atomic(() => this.#question(command, "preparation"));
+  }
+  delegatePrepared(
+    principal: McpForemanPrincipal,
+    command: DelegateForemanGoalCommand,
+    decisionId?: string,
+  ): TeamDelegation {
     this.assertForeman(principal);
     const input = DelegateForemanGoalCommandSchema.parse(command);
     return this.store.atomic(() => {
@@ -792,6 +1013,36 @@ export class ForemanGoalService {
       if (existing) return existing;
       const goal = this.get(input.goalId);
       this.#running(goal);
+      const approval =
+        decisionId === undefined ? undefined : this.#get<HumanDecision>("decision", decisionId);
+      if (
+        approval &&
+        (approval.kind !== "preparation" ||
+          approval.goalId !== goal.id ||
+          approval.state !== "resolved" ||
+          approval.answer !== "approve" ||
+          approval.goalRevision !== goal.revision ||
+          !approval.decidedBy ||
+          approval.decidedBy.startsWith("foreman-policy:"))
+      )
+        this.#fail("Preparation requires a current Human-approved scoped plan");
+      if (approval) {
+        const row = this.store.database
+          .prepare("SELECT data_json FROM foreman_preparations WHERE id = ?")
+          .get(input.requestId);
+        const plan = row ? (JSON.parse(String(row.data_json)) as ForemanPreparation) : undefined;
+        if (
+          !plan ||
+          plan.decisionId !== approval.id ||
+          plan.phase !== "delegating" ||
+          plan.goalId !== input.goalId ||
+          plan.groupId !== input.groupId ||
+          plan.memberId !== input.memberId ||
+          plan.brief !== input.brief ||
+          plan.checkoutId !== this.store.getEffectiveGroupCheckout(input.groupId)?.id
+        )
+          this.#fail("Approved preparation does not match this delegation scope");
+      }
       if (goal.foremanId !== principal.foremanId || goal.revision !== input.expectedRevision)
         this.#fail("Goal authority changed");
       if (
@@ -809,7 +1060,7 @@ export class ForemanGoalService {
       const delegation: TeamDelegation = {
         ...input,
         id: `delegation_${randomUUID()}`,
-        state: "proposed",
+        state: approval ? "queued" : "proposed",
         revision: 0,
         checkoutId: checkout.id,
         nextCheckAt: timestamp,
@@ -818,6 +1069,7 @@ export class ForemanGoalService {
       };
       this.assertAssignment(delegation);
       this.#save("delegation", delegation, key, input);
+      if (approval) return delegation;
       const decision = this.#question(
         {
           requestId: delegation.id,
@@ -864,6 +1116,28 @@ export class ForemanGoalService {
       );
     this.assertAssignment(delegation);
   }
+  browserCandidate(principal: MemberPrincipal, delegationId: string, candidatePath: string) {
+    const delegation = this.delegation(delegationId);
+    this.#member(principal, delegation);
+    const goal = this.get(delegation.goalId);
+    this.#running(goal);
+    if (!["accepted", "working", "blocked"].includes(delegation.state))
+      this.#fail("Browser verification requires an accepted, working or blocked delegation");
+    const checkout = this.store.getCheckout(delegation.checkoutId);
+    if (
+      checkout.kind === "bare" ||
+      (goal.requestOrigin !== undefined &&
+        goal.requestOrigin.repositoryId !== checkout.repositoryId)
+    )
+      this.#fail("Browser candidate must belong to the goal repository");
+    const candidateDigest = this.#candidateDigest(checkout.id, candidatePath, goal.requestOrigin);
+    return {
+      checkoutId: checkout.id,
+      candidatePath,
+      candidateDigest,
+      root: resolve(realpathSync(checkout.path), candidatePath),
+    };
+  }
   own(principal: MemberPrincipal) {
     return this.delegations()
       .filter((item) => item.groupId === principal.groupId && !inactive.has(item.state))
@@ -876,6 +1150,7 @@ export class ForemanGoalService {
         const ids = new Set(delegations.map((delegation) => delegation.id));
         return {
           ...workspace,
+          requestContext: this.requestContext(workspace.goal, item.checkoutId),
           delegations,
           reports: workspace.reports.filter((report) => ids.has(report.delegationId)),
           decisions: workspace.decisions.filter(
@@ -884,118 +1159,154 @@ export class ForemanGoalService {
         };
       });
   }
+  #assertApprovedReview(
+    delegation: TeamDelegation,
+    candidate: Pick<DelegationReport, "candidateHead" | "candidatePath" | "candidateDigest">,
+  ) {
+    const review = this.workspace(delegation.goalId)
+      .reports.filter(
+        (report) =>
+          report.delegationId === delegation.id &&
+          report.kind === "review" &&
+          report.memberId !== delegation.memberId &&
+          (candidate.candidateDigest === undefined
+            ? candidate.candidateHead !== undefined &&
+              report.candidateHead === candidate.candidateHead &&
+              report.candidatePath === undefined
+            : report.candidatePath === candidate.candidatePath &&
+              report.candidateDigest === candidate.candidateDigest),
+      )
+      .at(-1);
+    if (review?.reviewOutcome !== "approved" || !review.evidence.length)
+      this.#fail(
+        "Independent review of the same candidate must explicitly approve it in the latest review",
+      );
+  }
   report(principal: MemberPrincipal, command: ReportDelegationCommand) {
-    const input = ReportDelegationCommandSchema.parse(command);
-    return this.store.atomic(() => {
-      const delegation = this.delegation(input.delegationId);
-      this.#member(principal, delegation);
-      const key = `report:${delegation.id}:${principal.memberId}:${input.requestId}`;
-      const existing = this.#existing<DelegationReport>(key, input);
-      if (existing) return existing;
-      const goal = this.get(delegation.goalId);
-      this.#running(goal);
-      if (["proposed", "queued", "cancelled", "completed"].includes(delegation.state))
-        this.#fail("Delegation is not active");
-      const lead = principal.memberId === delegation.memberId;
-      if (input.candidatePath && input.candidateHead)
-        this.#fail("Choose a working-tree candidate path or a clean candidate commit, not both");
-      const candidateDigest =
-        (input.kind === "ready" || input.kind === "review") && input.candidatePath
-          ? this.#candidateDigest(delegation.checkoutId, input.candidatePath)
-          : undefined;
-      if (!lead && ["accepted", "plan", "ready"].includes(input.kind))
-        this.#fail("Only the accountable member can accept, plan, or finish a delegation");
-      if (input.kind === "ready") {
-        if (!input.evidence.length || this.unsettled(delegation).length)
-          this.#fail("Completion requires evidence and settled team work");
-        if (
-          this.workspace(goal.id).decisions.some(
-            (decision) =>
-              decision.state === "pending" &&
-              decision.blocking &&
-              (decision.delegationId === undefined || decision.delegationId === delegation.id),
-          )
-        )
-          this.#fail("Human decisions remain pending");
-        if (
-          !this.workspace(goal.id).reports.some(
-            (report) =>
-              report.delegationId === delegation.id &&
-              report.kind === "review" &&
-              report.memberId !== delegation.memberId &&
-              (candidateDigest === undefined
-                ? report.candidateHead === input.candidateHead && report.candidatePath === undefined
-                : report.candidatePath === input.candidatePath &&
-                  report.candidateDigest === candidateDigest) &&
-              report.evidence.length,
-          )
-        )
-          this.#fail("Independent review of the same candidate is required");
-      }
-      if (input.kind === "ready" || input.kind === "review") {
-        const checkout = this.store.getCheckout(delegation.checkoutId);
-        if (
-          (candidateDigest === undefined &&
-            (!input.candidateHead || checkout.head !== input.candidateHead || checkout.dirty)) ||
-          !input.evidence.length
-        )
-          this.#fail("Evidence must reference the current clean candidate commit");
-        if (input.kind === "review" && lead)
-          this.#fail("The accountable member cannot supply independent review");
-      }
-      const timestamp = this.#timestamp();
-      const report: DelegationReport = {
-        ...input,
-        ...(candidateDigest === undefined ? {} : { candidateDigest }),
-        id: `report_${randomUUID()}`,
-        memberId: principal.memberId,
-        runId: principal.runId,
-        generation: principal.generation,
-        createdAt: timestamp,
-      };
-      this.#save("report", report, key, input);
-      delegation.lastReportAt = timestamp;
-      delegation.nextCheckAt = new Date(
-        this.now().getTime() + input.nextCheckSeconds * 1000,
-      ).toISOString();
-      delegation.updatedAt = timestamp;
-      delegation.revision++;
-      if (lead)
-        delegation.state =
-          input.kind === "ready"
-            ? "ready"
-            : input.kind === "blocked"
-              ? "blocked"
-              : input.kind === "accepted"
-                ? "accepted"
-                : "working";
-      this.#save("delegation", delegation);
-      if (
-        this.workspace(goal.id)
-          .delegations.filter((item) => !inactive.has(item.state))
-          .every((item) => item.state === "ready")
-      ) {
-        goal.state = "awaiting-acceptance";
-        goal.revision++;
-        this.#save("goal", goal);
-        this.#wake(
-          goal,
-          "The team reports ready. Inspect independent review and pinned evidence, explain residual risks, and ask the Human to accept the outcome. Do not dispatch more work.",
-        );
-      }
-      this.notify(`report:${report.id}`, {
-        kind: "report",
-        goalId: goal.id,
-        delegationId: delegation.id,
-        summary: `${input.kind}: ${input.summary}`.slice(0, 2000),
+    const parsed = ReportDelegationCommandSchema.safeParse(command);
+    if (!parsed.success)
+      throw new DomainError("foreman_report_invalid", "Report fields are invalid", 400, {
+        effect: "none",
+        retry: "correct-input",
+        issues: parsed.error.issues.map(({ code, path }) => ({ code, path })),
+        nextAction:
+          "No report was recorded by this call. For kind review, supply reviewOutcome approved or changes-required. Correct the reported fields and resubmit with the same requestId. Do not change candidate scope or claim readiness to record negative review findings.",
       });
-      if (input.kind === "blocked" && goal.state === "running")
-        this.#wake(
-          goal,
-          "A team member reported a blocker. Inspect the durable report and let the accountable member retain orchestration ownership.",
-        );
-      return report;
-    });
+    const input = parsed.data;
+    try {
+      return this.store.atomic(() => {
+        const delegation = this.delegation(input.delegationId);
+        this.#member(principal, delegation);
+        const key = `report:${delegation.id}:${principal.memberId}:${input.requestId}`;
+        const existing = this.#existing<DelegationReport>(key, input);
+        if (existing) return existing;
+        const goal = this.get(delegation.goalId);
+        this.#running(goal);
+        if (["proposed", "queued", "cancelled", "completed"].includes(delegation.state))
+          this.#fail("Delegation is not active");
+        const lead = principal.memberId === delegation.memberId;
+        if (input.candidatePath && input.candidateHead)
+          this.#fail("Choose a working-tree candidate path or a clean candidate commit, not both");
+        const candidateDigest =
+          (input.kind === "ready" || input.kind === "review") && input.candidatePath
+            ? this.#candidateDigest(delegation.checkoutId, input.candidatePath, goal.requestOrigin)
+            : undefined;
+        if (!lead && ["accepted", "plan", "ready"].includes(input.kind))
+          this.#fail("Only the accountable member can accept, plan, or finish a delegation");
+        if (input.kind === "ready") {
+          if (!input.evidence.length || this.unsettled(delegation).length)
+            this.#fail("Completion requires evidence and settled team work");
+          if (
+            this.workspace(goal.id).decisions.some(
+              (decision) =>
+                decision.state === "pending" &&
+                decision.blocking &&
+                (decision.delegationId === undefined || decision.delegationId === delegation.id),
+            )
+          )
+            this.#fail("Human decisions remain pending");
+          this.#assertApprovedReview(delegation, { ...input, candidateDigest });
+        }
+        if (input.kind === "ready" || input.kind === "review") {
+          const checkout = this.store.getCheckout(delegation.checkoutId);
+          if (
+            (candidateDigest === undefined &&
+              (!input.candidateHead || checkout.head !== input.candidateHead || checkout.dirty)) ||
+            !input.evidence.length
+          )
+            this.#fail("Evidence must reference the current clean candidate commit");
+          if (input.kind === "review" && lead)
+            this.#fail("The accountable member cannot supply independent review");
+        }
+        const timestamp = this.#timestamp();
+        const report: DelegationReport = {
+          ...input,
+          ...(candidateDigest === undefined ? {} : { candidateDigest }),
+          id: `report_${randomUUID()}`,
+          memberId: principal.memberId,
+          runId: principal.runId,
+          generation: principal.generation,
+          createdAt: timestamp,
+        };
+        this.#save("report", report, key, input);
+        delegation.lastReportAt = timestamp;
+        delegation.nextCheckAt = new Date(
+          this.now().getTime() + input.nextCheckSeconds * 1000,
+        ).toISOString();
+        delegation.updatedAt = timestamp;
+        delegation.revision++;
+        if (lead)
+          delegation.state =
+            input.kind === "ready"
+              ? "ready"
+              : input.kind === "blocked"
+                ? "blocked"
+                : input.kind === "accepted"
+                  ? "accepted"
+                  : "working";
+        this.#save("delegation", delegation);
+        if (
+          this.workspace(goal.id)
+            .delegations.filter((item) => !inactive.has(item.state))
+            .every((item) => item.state === "ready")
+        ) {
+          goal.state = "awaiting-acceptance";
+          goal.revision++;
+          this.#save("goal", goal);
+          this.#wake(
+            goal,
+            "The team reports ready. Inspect independent review and pinned evidence, explain residual risks, and ask the Human to accept the outcome. Do not dispatch more work.",
+          );
+        }
+        this.notify(`report:${report.id}`, {
+          kind: "report",
+          goalId: goal.id,
+          delegationId: delegation.id,
+          summary: `${input.kind}: ${input.summary}`.slice(0, 2000),
+        });
+        if (input.kind === "blocked" && goal.state === "running")
+          this.#wake(
+            goal,
+            "A team member reported a blocker. Inspect the durable report and let the accountable member retain orchestration ownership.",
+          );
+        if (input.kind === "review" && goal.state === "running")
+          this.#wake(
+            goal,
+            "An independent review was recorded. Read the latest durable report, its reviewOutcome and candidate evidence. Coordinate continuation with the accountable member through the existing scoped tools and intervention policy. For changes-required, the accountable member owns remediation and re-review; do not assign a new implementation owner or treat findings as readiness.",
+          );
+        return report;
+      });
+    } catch (error) {
+      if (!(error instanceof DomainError)) throw error;
+      throw new DomainError(error.code, error.message, error.statusCode, {
+        ...error.details,
+        effect: "none",
+        retry: error.details.retry ?? "inspect-first",
+        nextAction:
+          error.details.nextAction ??
+          "No report was recorded by this call. Inspect the current delegation, reports and candidate before correcting the input. Preserve request identity; do not bypass independent review or report ready merely to record negative findings.",
+      });
+    }
   }
   #question(input: RequestHumanDecisionCommand, kind: HumanDecision["kind"]): HumanDecision {
     const key = `question:${input.goalId}:${input.delegationId ?? "goal"}:${input.requestId}`;
@@ -1060,12 +1371,7 @@ export class ForemanGoalService {
           this.assertAssignment(delegation);
           const team = this.discover().find((item) => item.id === delegation.groupId);
           if (
-            this.store
-              .listAgentActions(delegation.groupId)
-              .some(
-                (action) =>
-                  action.principal.kind !== "foreman-conversation" && !settled.has(action.state),
-              ) ||
+            this.blockingTeamActions(delegation.groupId).length ||
             team?.members.some(
               (member) =>
                 member.runId !== undefined &&
@@ -1100,15 +1406,45 @@ export class ForemanGoalService {
       return decision;
     });
   }
+  blockingTeamActions(groupId: string) {
+    const completedGoals = new Map(
+      this.list(true)
+        .filter((goal) => goal.state === "completed")
+        .map((goal) => [goal.id, goal]),
+    );
+    const completedHandoffs = new Map(
+      this.delegations()
+        .filter(
+          (delegation) =>
+            delegation.groupId === groupId &&
+            delegation.state === "completed" &&
+            delegation.actionId !== undefined &&
+            completedGoals.has(delegation.goalId),
+        )
+        .map((delegation) => [delegation.actionId, delegation]),
+    );
+    return this.store.listAgentActions(groupId).filter((action) => {
+      if (action.principal.kind === "foreman-conversation" || settled.has(action.state))
+        return false;
+      const delegation = completedHandoffs.get(action.id);
+      if (
+        !delegation ||
+        action.principal.kind !== "foreman" ||
+        action.principal.delegationId !== delegation.id ||
+        action.principal.goalId !== delegation.goalId ||
+        action.principal.foremanId !== completedGoals.get(delegation.goalId)?.foremanId ||
+        action.target.groupId !== delegation.groupId ||
+        action.target.memberId !== delegation.memberId
+      )
+        return true;
+      const active = this.store.getActiveRun(groupId, action.target.memberId);
+      return active?.id === action.target.runId && active.generation === action.target.generation;
+    });
+  }
   unsettled(delegation: TeamDelegation) {
-    return this.store
-      .listAgentActions(delegation.groupId)
-      .filter(
-        (action) =>
-          action.principal.kind !== "foreman-conversation" &&
-          action.id !== delegation.actionId &&
-          !settled.has(action.state),
-      );
+    return this.blockingTeamActions(delegation.groupId).filter(
+      (action) => action.id !== delegation.actionId,
+    );
   }
   authorizeTeamInput(principal: AgentActionPrincipal) {
     if (principal.kind !== "agent") return;
@@ -1250,7 +1586,7 @@ export class ForemanGoalService {
     return this.store.atomic(() => {
       const delegation = this.delegation(input.delegationId);
       const goal = this.get(delegation.goalId);
-      this.#running(goal);
+      this.#running(goal, "intervention");
       if (!goal.grant.intervention.idlePrompt || goal.grant.mode !== "bounded")
         this.#fail("Goal policy does not permit idle check-ins");
       const previous = this.store
@@ -1335,8 +1671,14 @@ export class ForemanGoalService {
         runId: member.runId,
         generation: member.generation,
         source: "history",
-        maxLines: goal.grant.transcript.maxLines,
-        maxBytes: goal.grant.transcript.maxBytes,
+        maxLines: Math.min(
+          goal.grant.transcript.maxLines,
+          this.config().foreman!.autonomy.transcript.maxLines,
+        ),
+        maxBytes: Math.min(
+          goal.grant.transcript.maxBytes,
+          this.config().foreman!.autonomy.transcript.maxBytes,
+        ),
       });
       this.assertForeman(principal);
       this.assertAssignment(delegation);
@@ -1355,7 +1697,14 @@ export class ForemanGoalService {
   pauseForTakeover(runId: string) {
     for (const goal of this.list().filter((item) => item.state === "running")) {
       const foreman = this.store.getActiveForemanRun(goal.foremanId);
-      const involved = this.workspace(goal.id).delegations.some((item) =>
+      const workspace = this.workspace(goal.id);
+      const owners = [
+        ...workspace.delegations,
+        ...(workspace.preparations ?? []).filter(
+          (item) => !["ready", "delegated", "cancelled", "expired", "held"].includes(item.phase),
+        ),
+      ];
+      const involved = owners.some((item) =>
         this.store
           .listActiveMemberships(item.groupId)
           .some((member) => this.store.getActiveRun(item.groupId, member.memberId)?.id === runId),
@@ -1384,6 +1733,8 @@ export class ForemanGoalService {
       (item) => item.groupId === groupId && item.state !== "proposed" && !inactive.has(item.state),
     );
     if (!delegation) {
+      const preparing = this.#preparation?.authorizeRecovery(groupId, memberId);
+      if (preparing !== undefined) return preparing;
       const run = this.store.getLatestRunForMembership(groupId, memberId);
       const cancelled = this.delegations()
         .filter((item) => item.groupId === groupId && item.state === "cancelled")
@@ -1396,7 +1747,7 @@ export class ForemanGoalService {
       const goal = this.get(delegation.goalId);
       const run = this.store.getLatestRunForMembership(groupId, memberId);
       try {
-        this.#running(goal);
+        this.#running(goal, "recovery");
         this.assertAssignment(delegation);
       } catch {
         return false;
@@ -1523,6 +1874,8 @@ export class ForemanGoalService {
     actions: AgentActionService,
     coordinator: Pick<RunRuntimeCoordinator, "startRun">,
   ) {
+    new ForemanCleanupService(this.store, this).reconcileRemovedEffects();
+    await this.#preparation?.tick();
     for (const current of this.list().filter((goal) => goal.state === "running")) {
       try {
         this.#running(current);
@@ -1605,7 +1958,7 @@ export class ForemanGoalService {
                   expectedRunId: target.id,
                   expectedGeneration: target.generation,
                   expectedStatusRevision: status.statusRevision,
-                  prompt: `Nanasa outcome delegation ${delegation.id}; goal ${goal.id}.\nObjective: ${goal.objective}\nConstraints: ${goal.constraints.join("; ")}\n${delegation.brief}\nYou are the accountable team lead. Own research, planning, implementation, independent review and evidence. Discover peers dynamically. Use nanasa.team_delegations to read durable context; nanasa.report_delegation to accept and report milestones; nanasa.request_human_decision for decisions beyond authority. Report ready only after team work and review finish. A model turn ending does not complete this delegation.`,
+                  prompt: `Nanasa outcome delegation ${delegation.id}; goal ${goal.id}.\nObjective: ${goal.objective}\nConstraints: ${goal.constraints.join("; ")}\n${delegation.brief}\n${this.requestContext(goal, delegation.checkoutId)}\nYou are the accountable team lead. Own research, planning, implementation, independent review and evidence. Discover peers dynamically. Use nanasa.team_delegations to read durable context; nanasa.report_delegation to accept and report milestones; nanasa.request_human_decision for decisions beyond authority. Report ready only after team work and review finish. A model turn ending does not complete this delegation.`,
                 }),
                 `delegation:${delegation.id}`,
               );

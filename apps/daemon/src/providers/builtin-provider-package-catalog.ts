@@ -900,6 +900,8 @@ function openCodeSpec(): BuiltInSpec {
         "OPENCODE_CONFIG_CONTENT",
         "OPENCODE_CONFIG_DIR",
         "OPENCODE_TUI_CONFIG",
+        "NANASA_OPENCODE_CREATE_ROOT",
+        "NANASA_OPENCODE_SESSION_OPTIONS",
       ],
       files: [
         {

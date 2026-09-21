@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AgentProgressReportCommandSchema } from "@nanasa/contracts";
 
 import {
   type AgentStatusReducerState,
@@ -49,6 +50,36 @@ function reporterEvent(
 }
 
 describe("agent status reducer", () => {
+  it.each([undefined, null, "", "  ", "none", " NoNe "])(
+    "does not require input for normalized no-blocker progress: %s",
+    (blocker) => {
+      let state = reporterEvent(
+        createAgentStatusReducerState("run_1", 1, startedAt),
+        "session.ready",
+      );
+      state = reduceAgentStatus(state, {
+        event: "progress.reported",
+        eventId: "blocked-progress",
+        observedAt: "2026-08-11T12:00:02.000Z",
+        report: { stage: "validation", summary: "Waiting", blocker: "Need credentials" },
+      });
+      expect(state.attention).toBe("input_required");
+      state = reduceAgentStatus(state, {
+        event: "progress.reported",
+        eventId: "unblocked-progress",
+        observedAt: "2026-08-11T12:00:03.000Z",
+        report: AgentProgressReportCommandSchema.parse({
+          stage: "validation",
+          summary: "Tests running",
+          blocker,
+        }),
+      });
+      expect(state.attention).toBe("none");
+      expect(state.blocker).toBeUndefined();
+      expect(state.state).toBe("working");
+    },
+  );
+
   it("tracks correlated tools and settles only after all work closes", () => {
     let state = createAgentStatusReducerState("run_1", 1, startedAt);
     state = reporterEvent(state, "session.ready");

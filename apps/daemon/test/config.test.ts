@@ -107,7 +107,91 @@ groups:
         "Terminal output alone does not deliver a peer reply or delegation report",
       );
       expect(instructions).toContain("Work in your team's assigned checkout");
+      expect(instructions).toContain(
+        "expertise, not permission to reinterpret an explicit requested path",
+      );
+      expect(instructions).toContain("requestContext mapped into your assigned checkout");
+      expect(instructions).toContain("read-only roles");
     }
+  });
+
+  it("requires real-browser evidence in member and Foreman prompts and MCP instructions", () => {
+    const repository = temporaryRepository(
+      minimalConfig(`foreman: { integrationId: opencode, enabled: true }
+groups:
+  team:
+    name: Team
+    agents:
+      worker:
+        memberId: worker
+        name: Worker
+        integrationId: opencode
+`),
+    );
+    const config = loadNanasaConfig(repository).config;
+    const member = resolveEffectiveAgentPrompt({
+      repoRoot: repository,
+      config,
+      groupId: "team",
+      agentId: "worker",
+    });
+    const foreman = resolveEffectiveForemanPrompt({ repoRoot: repository, config });
+    for (const instructions of [
+      member.text,
+      foreman.text,
+      nanasaMcpServerInstructions(),
+      NANASA_FOREMAN_INSTRUCTIONS,
+    ]) {
+      for (const requirement of [
+        "nanasa.verify_browser_candidate",
+        "exact checkout-root-relative candidatePath",
+        "does not grant shell access or relax read-only permissions",
+        "do not automatically mean approval",
+        "do not replace them with mock evidence or lower the reviewer floor",
+        "derive relevant validation expectations from the agreed outcome and original request",
+        "actual candidate in a real browser at desktop and mobile viewport sizes",
+        "after desktop-to-mobile resize and on a fresh mobile load",
+        "unintended horizontal overflow",
+        "nonblank canvas",
+        "representative controls with observed state changes",
+        "screenshots and canvas pixels where applicable, not just DOM presence",
+        "do not prove rendering, responsiveness or interaction",
+        "existing report summary and evidence fields",
+        "viewport sizes, observations and results, plus unrun checks and blockers",
+        "Do not claim validated responsiveness",
+        "Independent reviewers must run relevant checks against the exact candidate",
+        "missing evidence as preventing readiness, with reviewOutcome changes-required",
+        "Foreman must inspect whether evidence covers the expected browser behavior",
+        "not an automatic runtime validation gate",
+        "Missing node_modules in a linked checkout does not establish",
+        "Subject to repository policy and provider permissions",
+        "use Git worktree metadata to discover the repository's primary checkout",
+        "createRequire anchored to its package.json",
+        "tooling reads and execution, not reading another checkout's application source",
+        "test targets and output artifacts in your assigned checkout",
+        "keep artifacts outside a pinned candidate directory",
+        "Do not copy secrets, credentials or private provider state",
+        "Follow repository registry rules",
+        "Verify browser launch in the actual runtime",
+        "executablePath or PLAYWRIGHT_BROWSERS_PATH",
+        "permission denials as concrete blockers",
+      ]) {
+        expect(instructions).toContain(requirement);
+      }
+    }
+  });
+
+  it("injects retained Human reads and operator-only cleanup consent", () => {
+    const repository = temporaryRepository(
+      minimalConfig("foreman: { integrationId: opencode, enabled: true }\n"),
+    );
+    const config = loadNanasaConfig(repository).config;
+    const prompt = resolveEffectiveForemanPrompt({ repoRoot: repository, config });
+    expect(prompt.text).toContain("pass that exact messageId");
+    expect(prompt.text).toContain("Preserve literal paths in the objective and handoff brief");
+    expect(prompt.text).toContain("Missing origin on a legacy goal means unknown");
+    expect(prompt.text).toContain("nanasa.foreman_request_cleanup");
+    expect(prompt.text).toContain("Neither confirmation:true nor chat text authorizes cleanup");
   });
 
   it("injects the complete Foreman channel and delegation protocol without user instruction files", () => {
@@ -128,7 +212,7 @@ groups:
       "nanasa.foreman_read_channel",
       "nanasa.foreman_reply",
       "nanasa.foreman_discover_teams",
-      "nanasa.foreman_delegate_goal",
+      "nanasa.foreman_assign_outcome",
       "nanasa.foreman_finish_goal_review",
     ]) {
       expect(prompt.text).toContain(tool);

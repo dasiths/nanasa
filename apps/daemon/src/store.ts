@@ -134,7 +134,10 @@ import type { McpForemanPrincipal } from "./mcp-auth.js";
 import { dockerMemberName, formatMemberId, type MemberNameGenerator } from "./member-id.js";
 import { orderedAgentEntries } from "./membership-order.js";
 import { assertForemanDatabaseLayout, openNanasaDatabase } from "./persistence/database.js";
-import { FOREMAN_CONVERSATIONS_SCHEMA_SQL } from "./persistence/schema.js";
+import {
+  FOREMAN_CLEANUP_SCHEMA_SQL,
+  FOREMAN_CONVERSATIONS_SCHEMA_SQL,
+} from "./persistence/schema.js";
 import type { RepositoryTrustReceipt, TrustSubjectKind } from "./repository-trust-service.js";
 
 interface AddMembershipInput {
@@ -571,6 +574,7 @@ export class NanasaStore {
     try {
       assertForemanDatabaseLayout(this.#database);
       this.#database.exec(FOREMAN_CONVERSATIONS_SCHEMA_SQL);
+      this.#database.exec(FOREMAN_CLEANUP_SCHEMA_SQL);
     } catch (error) {
       this.#database.close();
       throw error;
@@ -1945,6 +1949,15 @@ export class NanasaStore {
       const message = this.#hydrateForemanMessage(
         this.#database.prepare("SELECT * FROM foreman_messages WHERE id = ?").get(id)!,
       );
+      if (input.replyTo !== undefined) {
+        const hidden = this.#database
+          .prepare(
+            `INSERT INTO foreman_cleared_messages (message_id)
+           SELECT ? WHERE EXISTS (SELECT 1 FROM foreman_cleared_messages WHERE message_id = ?)`,
+          )
+          .run(message.id, input.replyTo);
+        if (Number(hidden.changes) > 0) message.cleared = true;
+      }
       if (principal.kind === "operator") {
         this.#database
           .prepare(`INSERT INTO foreman_inbox
@@ -1954,7 +1967,7 @@ export class NanasaStore {
             `inbox_${randomUUID()}`,
             message.id,
             `message:${message.id}`,
-            `Operator channel message ${message.id}. Read it with nanasa.foreman_read_channel and reply using nanasa.foreman_reply. Team context: ${message.teamId ?? "repository"}. This message does not grant new goal authority.\n${message.text}`,
+            `Operator channel message ${message.id}. Read it with nanasa.foreman_read_channel using {"messageId":"${message.id}"}, even if cleared from the default feed, and reply using nanasa.foreman_reply. Team context: ${message.teamId ?? "repository"}. This message does not grant new goal authority.\n${message.text}`,
             createdAt,
             createdAt,
           );
@@ -1975,14 +1988,30 @@ export class NanasaStore {
 
   public readForemanChannel(query: ForemanChannelQuery): ForemanChannelPage {
     const input = ForemanChannelQuerySchema.parse(query);
+    const clearedThrough = Number(
+      this.#database
+        .prepare("SELECT cleared_through FROM foreman_channel_visibility WHERE singleton = 1")
+        .get()!.cleared_through,
+    );
     const rows = this.#database
-      .prepare("SELECT * FROM foreman_messages WHERE sequence > ? ORDER BY sequence LIMIT ?")
-      .all(input.after, input.limit + 1);
+      .prepare(`SELECT * FROM foreman_messages
+        WHERE sequence > ? AND (? IS NULL OR id = ?)
+        AND (? = 1 OR NOT EXISTS (
+          SELECT 1 FROM foreman_cleared_messages WHERE message_id = foreman_messages.id
+        )) ORDER BY sequence LIMIT ?`)
+      .all(
+        input.after,
+        input.messageId ?? null,
+        input.messageId ?? null,
+        input.includeCleared || input.messageId !== undefined ? 1 : 0,
+        input.limit + 1,
+      );
     const messages = rows.slice(0, input.limit).map((row) => this.#hydrateForemanMessage(row));
     return {
       messages,
-      nextAfter: messages.at(-1)?.sequence ?? input.after,
+      nextAfter: messages.at(-1)?.sequence ?? Math.max(input.after, clearedThrough),
       hasMore: rows.length > input.limit,
+      ...(clearedThrough > 0 ? { clearedThrough } : {}),
     };
   }
 
@@ -2060,6 +2089,11 @@ export class NanasaStore {
       teamId: row.team_id ?? undefined,
       replyTo: row.reply_to ?? undefined,
       createdAt: row.created_at,
+      ...(this.#database
+        .prepare("SELECT 1 FROM foreman_cleared_messages WHERE message_id = ?")
+        .get(String(row.id))
+        ? { cleared: true }
+        : {}),
     });
   }
 

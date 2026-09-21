@@ -54,6 +54,77 @@ export const ResetForemanStateResultSchema = z
   .strict();
 export type ResetForemanStateResult = z.infer<typeof ResetForemanStateResultSchema>;
 
+const CleanupGoalSelectionSchema = z
+  .object({ id: IdentifierSchema, expectedRevision: z.number().int().nonnegative() })
+  .strict();
+const CleanupConfirmationSchema = z.object({
+  requestId: IdentifierSchema,
+  confirmation: z.literal(true),
+});
+export const CleanupForemanCommandSchema = z.discriminatedUnion("scope", [
+  CleanupConfirmationSchema.extend({
+    scope: z.literal("goal"),
+    goal: CleanupGoalSelectionSchema,
+    cancel: z.boolean().default(false),
+  }).strict(),
+  CleanupConfirmationSchema.extend({
+    scope: z.literal("finished-goals"),
+    goals: z.array(CleanupGoalSelectionSchema).min(1).max(1000),
+  }).strict(),
+  CleanupConfirmationSchema.extend({
+    scope: z.literal("channel"),
+    throughSequence: z.number().int().nonnegative(),
+    conversationIds: z.array(IdentifierSchema).max(1000).optional(),
+  }).strict(),
+]);
+export type CleanupForemanCommand = z.infer<typeof CleanupForemanCommandSchema>;
+export const RequestForemanCleanupCommandSchema = z.discriminatedUnion("scope", [
+  CleanupForemanCommandSchema.options[0].omit({ confirmation: true }),
+  CleanupForemanCommandSchema.options[1].omit({ confirmation: true }),
+  CleanupForemanCommandSchema.options[2].omit({ confirmation: true }),
+]);
+export type RequestForemanCleanupCommand = z.infer<typeof RequestForemanCleanupCommandSchema>;
+export const ApproveForemanCleanupCommandSchema = z
+  .object({
+    id: IdentifierSchema,
+    digest: z.string().regex(/^[a-f0-9]{64}$/),
+    confirmation: z.literal(true),
+  })
+  .strict();
+export type ApproveForemanCleanupCommand = z.infer<typeof ApproveForemanCleanupCommandSchema>;
+export const ForemanCleanupEffectsSchema = z
+  .object({
+    goalId: IdentifierSchema,
+    actionIds: z.array(IdentifierSchema),
+    runIds: z.array(IdentifierSchema),
+  })
+  .strict();
+export const CleanupForemanResultSchema = z
+  .object({
+    scope: z.enum(["goal", "finished-goals", "channel"]),
+    removedGoalIds: z.array(IdentifierSchema),
+    messagesCleared: z.number().int().nonnegative(),
+    clearedThrough: z.number().int().nonnegative().optional(),
+    retained: z.literal(true),
+    pendingEffects: z.array(ForemanCleanupEffectsSchema),
+  })
+  .strict();
+export type CleanupForemanResult = z.infer<typeof CleanupForemanResultSchema>;
+export const ForemanCleanupRequestSchema = z
+  .object({
+    id: IdentifierSchema,
+    foremanId: IdentifierSchema,
+    command: RequestForemanCleanupCommandSchema,
+    digest: z.string().regex(/^[a-f0-9]{64}$/),
+    state: z.enum(["pending", "approved"]),
+    createdAt: TimestampSchema,
+    operatorId: IdentifierSchema.optional(),
+    approvedAt: TimestampSchema.optional(),
+    result: CleanupForemanResultSchema.optional(),
+  })
+  .strict();
+export type ForemanCleanupRequest = z.infer<typeof ForemanCleanupRequestSchema>;
+
 export const ConfigureForemanCommandSchema = z
   .object({
     configuration: ForemanConfigSchema,
@@ -92,6 +163,8 @@ export const ForemanChannelQuerySchema = z
   .object({
     after: z.number().int().nonnegative().default(0),
     limit: z.number().int().min(1).max(100).default(50),
+    includeCleared: z.boolean().optional(),
+    messageId: IdentifierSchema.optional(),
   })
   .strict();
 export type ForemanChannelQuery = z.infer<typeof ForemanChannelQuerySchema>;
@@ -137,6 +210,7 @@ export const ForemanChannelMessageSchema = z
     teamId: IdentifierSchema.optional(),
     replyTo: IdentifierSchema.optional(),
     createdAt: TimestampSchema,
+    cleared: z.boolean().optional(),
   })
   .strict();
 export type ForemanChannelMessage = z.infer<typeof ForemanChannelMessageSchema>;
@@ -146,6 +220,7 @@ export const ForemanChannelPageSchema = z
     messages: z.array(ForemanChannelMessageSchema).max(100),
     nextAfter: z.number().int().nonnegative(),
     hasMore: z.boolean(),
+    clearedThrough: z.number().int().nonnegative().optional(),
   })
   .strict();
 export type ForemanChannelPage = z.infer<typeof ForemanChannelPageSchema>;

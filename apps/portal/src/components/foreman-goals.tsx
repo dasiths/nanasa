@@ -1,13 +1,121 @@
 import type {
+  CleanupForemanCommand,
+  CleanupForemanResult,
+  ForemanCleanupRequest,
   ForemanConfig,
   ForemanGoal,
   ForemanGoalWorkspace,
   HumanDecision,
+  RequestForemanCleanupCommand,
 } from "@nanasa/contracts";
-import { ArrowLeft, Check, Pause, Play, Plus, Send, X } from "lucide-react";
+import { ArrowLeft, Check, Pause, Play, Plus, Send, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { PortalClient } from "../api.js";
 import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
+
+export function cleanupScopeDetail(command: RequestForemanCleanupCommand): string {
+  if (command.scope === "channel")
+    return `Clear messages through sequence ${command.throughSequence}, including reply threads, and selected member conversations: ${command.conversationIds?.join(", ") || "none"}. Later independent messages remain visible. Active goals and input processing continue.`;
+  if (command.scope === "goal")
+    return `${command.cancel ? "Cancel and remove" : "Remove"} goal ${command.goal.id} at revision ${command.goal.expectedRevision}. Existing provider work may continue; live effects are retained.`;
+  return `Remove only these finished goals: ${command.goals.map((goal) => `${goal.id} at revision ${goal.expectedRevision}`).join(", ")}.`;
+}
+
+export function ForemanCleanupConfirmation({
+  client,
+  command,
+  request,
+  title,
+  detail,
+  onDone,
+  onClose,
+}: {
+  client: PortalClient;
+  title: string;
+  detail: string;
+  onDone(result: CleanupForemanResult): void;
+  onClose(): void;
+} & (
+  | { command: CleanupForemanCommand; request?: never }
+  | { request: ForemanCleanupRequest; command?: never }
+)) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<PortalError>();
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    return () => {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+    };
+  }, []);
+  return (
+    <dialog
+      ref={dialogRef}
+      className="confirmation-dialog"
+      aria-labelledby="foreman-cleanup-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!busy) onClose();
+      }}
+    >
+      <div className="confirmation-dialog-body">
+        <h2 id="foreman-cleanup-title">{title}</h2>
+        <p className="foreman-goal-objective">{detail}</p>
+        {request && (
+          <p className="foreman-cleanup-digest">
+            Request: <code>{request.id}</code>
+            <br />
+            Scope digest: <code>{request.digest}</code>
+          </p>
+        )}
+        <p>
+          Items are hidden for all operators, not permanently erased. Operational records and
+          request receipts are retained with no automatic expiry. Workspace files and provider
+          sessions are unchanged.
+        </p>
+        {error && <ErrorNotice error={error} onDismiss={() => setError(undefined)} />}
+        <div className="confirmation-actions">
+          <button className="compact-button" disabled={busy} onClick={onClose}>
+            Keep items
+          </button>
+          <button
+            className="compact-button danger-button"
+            disabled={busy}
+            onClick={() => {
+              if (busy) return;
+              setBusy(true);
+              setError(undefined);
+              const operation = request
+                ? client
+                    .approveForemanCleanup({
+                      id: request.id,
+                      digest: request.digest,
+                      confirmation: true,
+                    })
+                    .then((receipt) => {
+                      if (!receipt.result) throw new Error("Cleanup approval returned no result");
+                      return receipt.result;
+                    })
+                : client.cleanupForeman(command);
+              void operation
+                .then(onDone)
+                .catch((cause: unknown) => {
+                  setError(toPortalError(cause, "Cleanup failed"));
+                })
+                .finally(() => setBusy(false));
+            }}
+          >
+            <Trash2 size={15} aria-hidden="true" />
+            {busy ? "Applying..." : "Confirm cleanup"}
+          </button>
+        </div>
+      </div>
+    </dialog>
+  );
+}
 
 export function ForemanGoals({
   client,
@@ -27,6 +135,13 @@ export function ForemanGoals({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<PortalError>();
   const [refresh, setRefresh] = useState(0);
+  const [cleanup, setCleanup] = useState<{
+    command: CleanupForemanCommand;
+    title: string;
+    detail: string;
+  }>();
+  const [cleanupResult, setCleanupResult] = useState<string>();
+  const [pendingEffects, setPendingEffects] = useState<CleanupForemanResult["pendingEffects"]>([]);
   const request = useRef<{ body: string; id: string } | undefined>(undefined);
   useEffect(() => {
     let cancelled = false;
@@ -34,11 +149,15 @@ export function ForemanGoals({
     setWorkspace(undefined);
     const load = async () => {
       try {
-        const list = await client.listForemanGoals();
+        const [list, effects] = await Promise.all([
+          client.listForemanGoals(),
+          client.loadForemanCleanupEffects(),
+        ]);
         const detail = selected ? await client.getForemanGoal(selected) : undefined;
         if (!cancelled) {
           setGoals(list);
           setWorkspace(detail);
+          setPendingEffects(effects);
         }
       } catch (cause) {
         if (!cancelled) setError(toPortalError(cause, "Unable to load goals"));
@@ -85,9 +204,64 @@ export function ForemanGoals({
           action,
         });
     });
+  const finished = goals.filter((goal) => ["completed", "cancelled"].includes(goal.state));
   return (
     <section className="foreman-goals" aria-label="Goals">
       {error && <ErrorNotice error={error} onDismiss={() => setError(undefined)} />}
+      {cleanup && (
+        <ForemanCleanupConfirmation
+          client={client}
+          {...cleanup}
+          onClose={() => setCleanup(undefined)}
+          onDone={(result) => {
+            setCleanup(undefined);
+            setSelected(undefined);
+            setWorkspace(undefined);
+            setCleanupResult(
+              `${result.removedGoalIds.length} goals removed from the list. Operational records retained.`,
+            );
+            setRefresh((value) => value + 1);
+          }}
+        />
+      )}
+      {cleanupResult && <p role="status">{cleanupResult}</p>}
+      {pendingEffects.length > 0 && (
+        <section className="foreman-inbox-notice" aria-label="Removed goals with live effects">
+          <h3>Removed goals with live effects</h3>
+          <p>
+            Future goal work is fenced. Existing provider work has not been forcibly stopped;
+            inspect the addressed runs before reusing their workspaces.
+          </p>
+          <ul className="foreman-goal-list">
+            {pendingEffects.map((effect) => (
+              <li key={effect.goalId}>
+                <button
+                  onClick={() => setSelected(effect.goalId)}
+                  title="Inspect retained goal details"
+                >
+                  <strong>{effect.goalId}</strong>
+                </button>
+                <span>
+                  {effect.actionIds.length} unsettled actions, {effect.runIds.length} live runs
+                </span>
+                <details>
+                  <summary>Retained effects</summary>
+                  {effect.actionIds.map((id) => (
+                    <p key={id}>
+                      Action: <code>{id}</code>
+                    </p>
+                  ))}
+                  {effect.runIds.map((id) => (
+                    <p key={id}>
+                      Run: <code>{id}</code>
+                    </p>
+                  ))}
+                </details>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {creating ? (
         <form
           className="foreman-settings"
@@ -252,6 +426,29 @@ export function ForemanGoals({
                 Cancel goal
               </button>
             )}
+            <button
+              className="compact-button"
+              disabled={busy}
+              onClick={() => {
+                const cancel = !["completed", "cancelled"].includes(workspace.goal.state);
+                setCleanup({
+                  command: {
+                    scope: "goal",
+                    requestId: crypto.randomUUID(),
+                    confirmation: true,
+                    goal: { id: workspace.goal.id, expectedRevision: workspace.goal.revision },
+                    cancel,
+                  },
+                  title: cancel ? "Cancel and remove goal?" : "Remove goal?",
+                  detail: `${workspace.goal.title}. ${cancel ? "Future goal work will be cancelled. Existing provider work is not forcibly interrupted and remains visible under live effects." : "Remove this finished goal from the normal list."}`,
+                });
+              }}
+            >
+              <Trash2 size={16} aria-hidden="true" />
+              {["completed", "cancelled"].includes(workspace.goal.state)
+                ? "Remove goal"
+                : "Cancel and remove"}
+            </button>
           </div>
           <h4>Decisions</h4>
           {workspace.decisions.length === 0 && <p>No decisions pending</p>}
@@ -308,6 +505,71 @@ export function ForemanGoals({
               )}
             </section>
           ))}
+          {(workspace.preparations?.length ?? 0) > 0 && (
+            <section aria-label="Workspace preparations">
+              <h4>Workspace preparations</h4>
+              <ul className="foreman-goal-list foreman-preparation-list">
+                {workspace.preparations?.map((preparation) => {
+                  const nextActor = ["cancelled", "ready", "delegated"].includes(preparation.phase)
+                    ? "None"
+                    : ["held", "expired", "needs-approval"].includes(preparation.phase) ||
+                        workspace.goal.state !== "running" ||
+                        workspace.decisions.some(
+                          (decision) => decision.blocking && decision.state === "pending",
+                        )
+                      ? "Human"
+                      : "Daemon";
+                  return (
+                    <li key={preparation.id} aria-label={`Preparation ${preparation.groupId}`}>
+                      <strong>Team: {preparation.groupId}</strong>
+                      <dl className="foreman-budget">
+                        <div>
+                          <dt>Phase</dt>
+                          <dd>{preparation.phase}</dd>
+                        </div>
+                        <div>
+                          <dt>Reason</dt>
+                          <dd>{preparation.reason ?? "No blocker"}</dd>
+                        </div>
+                        <div>
+                          <dt>Next actor</dt>
+                          <dd>{nextActor}</dd>
+                        </div>
+                        <div>
+                          <dt>Pinned base</dt>
+                          <dd>
+                            <code>{preparation.sourceHead ?? "Not yet resolved"}</code>
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Source checkout</dt>
+                          <dd>
+                            <code>{preparation.sourceCheckoutId ?? "Not yet resolved"}</code>
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Target checkout</dt>
+                          <dd>
+                            <code>{preparation.checkoutId ?? "Not yet prepared"}</code>
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Source disposition</dt>
+                          <dd>
+                            {preparation.sourceDirty === true
+                              ? "Uncommitted changes are NOT copied. Source files are unchanged."
+                              : preparation.sourceDirty === false
+                                ? "Clean at last check"
+                                : "Not recorded"}
+                          </dd>
+                        </div>
+                      </dl>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
           <h4>Team ownership</h4>
           <ul className="foreman-goal-list">
             {workspace.delegations.map((delegation) => (
@@ -347,6 +609,29 @@ export function ForemanGoals({
         <>
           <div className="foreman-toolbar">
             <h3>Goals</h3>
+            <button
+              className="compact-button"
+              disabled={busy || finished.length === 0}
+              onClick={() =>
+                setCleanup({
+                  command: {
+                    scope: "finished-goals",
+                    requestId: crypto.randomUUID(),
+                    confirmation: true,
+                    goals: finished.map((goal) => ({
+                      id: goal.id,
+                      expectedRevision: goal.revision,
+                    })),
+                  },
+                  title: `Clear ${finished.length} finished goals?`,
+                  detail:
+                    "Only the selected completed and cancelled goals will be removed from the list. Active goals and goals that finish after this confirmation opens are unchanged.",
+                })
+              }
+            >
+              <Trash2 size={16} aria-hidden="true" />
+              Clear finished
+            </button>
             <button
               disabled={!configuration?.enabled}
               className="compact-button"

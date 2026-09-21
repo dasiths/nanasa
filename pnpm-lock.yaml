@@ -32,6 +32,9 @@ importers:
       pi-mcp-adapter:
         specifier: 2.18.0
         version: 2.18.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.4.3)
+      playwright:
+        specifier: 1.62.1
+        version: 1.62.1
       ws:
         specifier: 8.21.1
         version: 8.21.1
@@ -108,6 +111,9 @@ importers:
       pi-mcp-adapter:
         specifier: 2.18.0
         version: 2.18.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.4.3)
+      playwright:
+        specifier: 1.62.1
+        version: 1.62.1
       ws:
         specifier: 8.21.1
         version: 8.21.1
@@ -2080,7 +2086,7 @@ packages:
     engines: {node: '>=16.20.0'}
 
   playwright-core@1.62.1:
-    resolution: {integrity: sha1-Eg9noZGBv9GDxg+pA8DZkzC1Z4U=, tarball: https://ms-feed-2.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/playwright-core/-/playwright-core-1.62.1.tgz}
+    resolution: {integrity: sha1-Eg9noZGBv9GDxg+pA8DZkzC1Z4U=, tarball: https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/playwright-core/-/playwright-core-1.62.1.tgz}
     engines: {node: '>=20'}
     hasBin: true
 

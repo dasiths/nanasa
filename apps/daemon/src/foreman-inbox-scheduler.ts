@@ -84,13 +84,10 @@ export class ForemanInboxScheduler {
   async #dispatch(): Promise<void> {
     const view = this.foreman.status();
     const run = view.run;
-    if (
-      run === undefined ||
-      view.configuration?.enabled !== true ||
-      run.status !== "running" ||
-      !this.#ready(run)
-    )
+    if (run === undefined || view.configuration?.enabled !== true || run.status !== "running")
       return;
+    await this.foreman.observeReporterProcess(run);
+    if (this.#closed || !this.#ready(run)) return;
     this.store.database
       .prepare(
         "UPDATE foreman_inbox SET state = 'queued', target_json = NULL, updated_at = ? WHERE dedupe_key LIKE 'conversation-result:%' AND state IN ('writing', 'submitted', 'ambiguous') AND json_extract(target_json, '$.runId') IN (SELECT id FROM runs WHERE foreman_id = ? AND id != ? AND status IN ('stopped', 'failed'))",

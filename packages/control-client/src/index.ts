@@ -1,10 +1,17 @@
 import {
+  type ApproveForemanCleanupCommand,
+  ApproveForemanCleanupCommandSchema,
+  type CleanupForemanCommand,
+  CleanupForemanCommandSchema,
+  CleanupForemanResultSchema,
   type ControlMetadata,
   ControlMetadataSchema,
   type ErrorPayload,
   ErrorPayloadSchema,
   type EventServerFrame,
   EventServerFrameSchema,
+  ForemanCleanupEffectsSchema,
+  ForemanCleanupRequestSchema,
   type OperatorSession,
   OperatorSessionSchema,
 } from "@nanasa/contracts";
@@ -107,6 +114,44 @@ export class NanasaControlClient {
     return this.request(`${CONTROL_API_PREFIX}/meta`, ControlMetadataSchema, {
       authenticate: false,
     });
+  }
+
+  public cleanupForeman(command: CleanupForemanCommand) {
+    return this.request(`${CONTROL_API_PREFIX}/foreman/cleanup`, CleanupForemanResultSchema, {
+      init: {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(CleanupForemanCommandSchema.parse(command)),
+      },
+    });
+  }
+
+  public foremanCleanupEffects() {
+    return this.request(
+      `${CONTROL_API_PREFIX}/foreman/cleanup/effects`,
+      ForemanCleanupEffectsSchema.array(),
+    );
+  }
+
+  public foremanCleanupRequests() {
+    return this.request(
+      `${CONTROL_API_PREFIX}/foreman/cleanup/requests`,
+      ForemanCleanupRequestSchema.array(),
+    );
+  }
+
+  public approveForemanCleanup(command: ApproveForemanCleanupCommand) {
+    return this.request(
+      `${CONTROL_API_PREFIX}/foreman/cleanup/approve`,
+      ForemanCleanupRequestSchema,
+      {
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(ApproveForemanCleanupCommandSchema.parse(command)),
+        },
+      },
+    );
   }
 
   public ensureSession(): Promise<OperatorSession> {

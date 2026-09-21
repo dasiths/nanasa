@@ -1,5 +1,7 @@
 import {
+  type CleanupForemanCommand,
   type ForemanChannelMessage,
+  type ForemanCleanupRequest,
   type ForemanConfig,
   ForemanConfigSchema,
   type ForemanConversationRequest,
@@ -30,7 +32,7 @@ import { type ThemePreference, useAppliedTheme } from "../hooks/use-portal-prefe
 import { useTerminalEndpoint } from "../hooks/use-terminal-endpoint.js";
 import { TerminalConsole } from "../terminal/terminal-console.js";
 import { CommunicationWorkspace } from "./communication-workspace.js";
-import { ForemanGoals } from "./foreman-goals.js";
+import { cleanupScopeDetail, ForemanCleanupConfirmation, ForemanGoals } from "./foreman-goals.js";
 import "./foreman-workspace.css";
 
 function ForemanTerminal({
@@ -360,7 +362,12 @@ export function ForemanWorkspace({
   );
   const [resetConfirmation, setResetConfirmation] = useState("");
   const [resetResult, setResetResult] = useState<string>();
+  const [cleanup, setCleanup] = useState<CleanupForemanCommand>();
+  const [cleanupResult, setCleanupResult] = useState<string>();
+  const [cleanupRequests, setCleanupRequests] = useState<ForemanCleanupRequest[]>([]);
+  const [cleanupRequest, setCleanupRequest] = useState<ForemanCleanupRequest>();
   const cursor = useRef(0);
+  const visibility = useRef(0);
   const theme = useAppliedTheme(themePreference);
   const contextMissing = teamId !== "" && !groups.some((group) => group.id === teamId);
   useEffect(() => {
@@ -368,18 +375,26 @@ export function ForemanWorkspace({
     let timer: ReturnType<typeof setTimeout>;
     const load = async () => {
       try {
-        const [next, page, requests] = await Promise.all([
+        const [next, initialPage, requests, pendingCleanup] = await Promise.all([
           client.loadForeman(),
           client.loadForemanChannel(cursor.current),
           client.loadForemanConversations(),
+          client.loadForemanCleanupRequests(),
         ]);
+        const replace = (initialPage.clearedThrough ?? 0) !== visibility.current;
+        const page = replace ? await client.loadForemanChannel(0) : initialPage;
         if (cancelled) return;
+        visibility.current = page.clearedThrough ?? 0;
         setState(next);
         setConversations(requests);
+        setCleanupRequests(pendingCleanup);
         setMessages((current) =>
           [
             ...new Map(
-              [...current, ...page.messages].map((message) => [message.id, message]),
+              [...(replace ? [] : current), ...page.messages].map((message) => [
+                message.id,
+                message,
+              ]),
             ).values(),
           ]
             .sort((left, right) => left.sequence - right.sequence)
@@ -415,7 +430,14 @@ export function ForemanWorkspace({
   const send = async (command: SendForemanMessageCommand) => {
     const message = await client.sendForemanMessage(command);
     setMessages((current) =>
-      [...new Map([...current, message].map((entry) => [entry.id, entry])).values()]
+      [
+        ...new Map(
+          [
+            ...current.filter((entry) => entry.id !== message.id),
+            ...(message.cleared ? [] : [message]),
+          ].map((entry) => [entry.id, entry]),
+        ).values(),
+      ]
         .sort((left, right) => left.sequence - right.sequence)
         .slice(-500),
     );
@@ -536,6 +558,43 @@ export function ForemanWorkspace({
       </div>
       {error !== undefined && <ErrorNotice error={error} onDismiss={() => setError(undefined)} />}
       {state?.problem !== undefined && <p role="alert">{state.problem}</p>}
+      {cleanupRequests.length > 0 && (
+        <section className="foreman-inbox-notice" aria-label="Pending cleanup approval">
+          <h3>Cleanup awaiting your approval</h3>
+          <ul className="foreman-goal-list">
+            {cleanupRequests.map((request) => (
+              <li key={request.id}>
+                <span>{cleanupScopeDetail(request.command)}</span>
+                <button
+                  className="compact-button"
+                  disabled={cleanup !== undefined || cleanupRequest !== undefined}
+                  onClick={() => setCleanupRequest(request)}
+                >
+                  <Check size={15} aria-hidden="true" /> Review cleanup
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {cleanupRequest && (
+        <ForemanCleanupConfirmation
+          client={client}
+          request={cleanupRequest}
+          title="Approve Foreman cleanup request?"
+          detail={cleanupScopeDetail(cleanupRequest.command)}
+          onClose={() => setCleanupRequest(undefined)}
+          onDone={() => {
+            setCleanupRequests((requests) =>
+              requests.filter((request) => request.id !== cleanupRequest.id),
+            );
+            setCleanupRequest(undefined);
+            cursor.current = 0;
+            setMessages([]);
+            setRefresh((value) => value + 1);
+          }}
+        />
+      )}
       {state?.inbox
         ?.filter(
           (item) =>
@@ -644,6 +703,43 @@ export function ForemanWorkspace({
           aria-labelledby="foreman-tab-channel"
           className="foreman-channel"
         >
+          <div className="foreman-toolbar">
+            <button
+              className="compact-button"
+              disabled={busy || (!messages.length && !conversations.length)}
+              onClick={() =>
+                setCleanup({
+                  scope: "channel",
+                  requestId: crypto.randomUUID(),
+                  confirmation: true,
+                  throughSequence: cursor.current,
+                  conversationIds: conversations.map((conversation) => conversation.id),
+                })
+              }
+            >
+              <Trash2 size={15} aria-hidden="true" />
+              Clear channel
+            </button>
+            {cleanupResult && <span role="status">{cleanupResult}</span>}
+          </div>
+          {cleanup?.scope === "channel" && (
+            <ForemanCleanupConfirmation
+              client={client}
+              command={cleanup}
+              title="Clear channel?"
+              detail={`Clear messages through sequence ${cleanup.throughSequence} and ${cleanup.conversationIds?.length ?? 0} selected member conversations. Later independent messages remain visible. Active goals and input processing continue.`}
+              onClose={() => setCleanup(undefined)}
+              onDone={(result) => {
+                setCleanup(undefined);
+                setMessages([]);
+                setConversations([]);
+                cursor.current = 0;
+                visibility.current = result.clearedThrough ?? 0;
+                setCleanupResult("Channel cleared from the feed. Operational history retained.");
+                setRefresh((value) => value + 1);
+              }}
+            />
+          )}
           <CommunicationWorkspace
             client={client}
             config={config}
@@ -682,8 +778,8 @@ export function ForemanWorkspace({
       )}
       {tab === "settings" && (
         <div id="foreman-settings" role="tabpanel" aria-labelledby="foreman-tab-settings">
-          <section className="foreman-maintenance" aria-label="Clear Foreman history">
-            <h3>Clear Foreman history</h3>
+          <section className="foreman-maintenance" aria-label="Advanced Foreman reset">
+            <h3>Advanced Foreman reset</h3>
             <p>
               Stop Foreman first. A full reset also requires delegated team runs to be stopped.
               Source files, provider credentials, configuration and runtime audit history are
@@ -743,7 +839,7 @@ export function ForemanWorkspace({
               <Trash2 size={15} aria-hidden="true" />
               Clear selected history
             </button>
-            {running && <p role="status">Stop Foreman to enable history cleanup.</p>}
+            {running && <p role="status">Stop Foreman to enable the advanced reset.</p>}
             {resetResult && <p role="status">{resetResult}</p>}
           </section>
           {state !== undefined && (

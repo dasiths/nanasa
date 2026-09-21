@@ -35,7 +35,7 @@ function publicPackageRoot(start: string): string {
     const manifest = join(current, "package.json");
     if (existsSync(manifest)) {
       const value = JSON.parse(readFileSync(manifest, "utf8")) as { name?: string };
-      if (value.name === "nanasa") return current;
+      if (value.name === "@dasiths/nanasa" || value.name === "nanasa") return current;
     }
     const parent = resolve(current, "..");
     if (parent === current) throw new Error("Unable to discover the Nanasa package root");
