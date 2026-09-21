@@ -402,6 +402,7 @@ describe("Foreman repository orchestration", () => {
     expect(result.pendingEffects).toEqual([
       {
         goalId: context.goal.id,
+        goalTitle: context.goal.title,
         actionIds: [],
         runIds: expect.arrayContaining(capturedRuns.map((run) => run.id)),
       },
@@ -452,7 +453,7 @@ describe("Foreman repository orchestration", () => {
         goal: { id: goal.id, expectedRevision: goals.get(goal.id).revision },
       });
       expect(result.pendingEffects).toEqual([
-        { goalId: goal.id, actionIds: [], runIds: [target.id] },
+        { goalId: goal.id, goalTitle: goal.title, actionIds: [], runIds: [target.id] },
       ]);
       expect(cleanup.pendingEffects()).toEqual(result.pendingEffects);
       expect(store.getActiveRun(group.id, "reviewer")).toBeDefined();
@@ -485,7 +486,9 @@ describe("Foreman repository orchestration", () => {
         goal: { id: goal.id, expectedRevision: goals.get(goal.id).revision },
       });
       expect(result.pendingEffects).toEqual(
-        target ? [{ goalId: goal.id, actionIds: [], runIds: [target.id] }] : [],
+        target
+          ? [{ goalId: goal.id, goalTitle: goal.title, actionIds: [], runIds: [target.id] }]
+          : [],
       );
       const reopened = new NanasaStore(join(context.root, "state.sqlite"));
       try {
