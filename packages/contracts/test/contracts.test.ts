@@ -26,6 +26,7 @@ import {
   CustomLaunchConsentRequestSchema,
   CustomLaunchConsentSubjectSchema,
   DeleteGroupResultSchema,
+  DelegationReportSchema,
   DeliveryOutcomeSchema,
   ErrorPayloadSchema,
   EventServerFrameSchema,
@@ -46,6 +47,7 @@ import {
   ReorderGroupAgentsCommandSchema,
   ReorderGroupAgentsResultSchema,
   ReplyOpenWaitCommandSchema,
+  ReportDelegationCommandSchema,
   RepositorySchema,
   StartAgentRunCommandSchema,
   StartAgentRunResultSchema,
@@ -72,6 +74,130 @@ const customLaunchSubject = {
   credentialReference: { kind: "provider-managed" },
   permissionFloor: "inherit",
 } as const;
+
+describe("delegation review contracts", () => {
+  it("requires a verdict only on new reviews and keeps legacy stored reviews readable", () => {
+    const report = {
+      requestId: "review-one",
+      delegationId: "delegation-one",
+      kind: "review",
+      summary: "Candidate inspected",
+      evidence: ["tests/results.md"],
+      candidateHead: "a".repeat(40),
+    };
+    expect(ReportDelegationCommandSchema.safeParse(report).success).toBe(false);
+    for (const reviewOutcome of ["approved", "changes-required"])
+      expect(ReportDelegationCommandSchema.parse({ ...report, reviewOutcome })).toMatchObject({
+        reviewOutcome,
+      });
+    expect(
+      ReportDelegationCommandSchema.safeParse({ ...report, reviewOutcome: "passed" }).success,
+    ).toBe(false);
+    for (const kind of ["accepted", "progress", "blocked", "plan", "ready"])
+      expect(ReportDelegationCommandSchema.safeParse({ ...report, kind }).success).toBe(true);
+    const legacy = {
+      ...report,
+      id: "report-one",
+      memberId: "reviewer",
+      runId: "run-one",
+      generation: 1,
+      createdAt: "2026-09-20T17:00:00.000Z",
+    };
+    expect(DelegationReportSchema.parse(legacy).reviewOutcome).toBeUndefined();
+    expect(
+      DelegationReportSchema.parse({ ...legacy, reviewOutcome: "changes-required" }).reviewOutcome,
+    ).toBe("changes-required");
+  });
+});
+
+describe("Foreman configuration contracts", () => {
+  const base = {
+    version: 2,
+    integrations: {
+      copilot: {
+        id: "copilot",
+        name: "Copilot",
+        kind: "copilot",
+        command: ["copilot"],
+        commandSource: "builtin",
+      },
+    },
+    roles: { builder: { name: "Builder" } },
+  };
+
+  it("does not implicitly configure a Foreman and retains the current schema version", () => {
+    const config = NanasaConfigSchema.parse({ ...base, version: 2 });
+    expect(config.version).toBe(2);
+    expect(config.foreman).toBeUndefined();
+    expect(config).not.toHaveProperty("teamTemplates");
+  });
+
+  it("defaults to disabled supervised coordination with bounded policy", () => {
+    const config = NanasaConfigSchema.parse({ ...base, foreman: { integrationId: "copilot" } });
+    expect(config.foreman).toMatchObject({
+      enabled: false,
+      autonomy: {
+        mode: "supervised",
+        maxGoalHours: 24,
+        intervention: { idlePrompt: false },
+        recovery: { restartDelegatedAgents: false },
+      },
+    });
+    expect(config.groups).toEqual({});
+  });
+
+  it("validates goal policy and rejects the removed mission and template settings", () => {
+    const input = {
+      ...base,
+      foreman: { integrationId: "copilot", autonomy: { maxActiveGoals: 2 } },
+    };
+    expect(NanasaConfigSchema.parse(input).groups).toEqual({});
+    for (const invalid of [
+      { ...input, version: 3 },
+      { ...input, teamTemplates: {} },
+      { ...input, integrations: {} },
+      { ...input, foreman: { integrationId: "missing" } },
+      {
+        ...input,
+        foreman: {
+          integrationId: "copilot",
+          autonomy: { permittedTeamTemplates: ["delivery", "delivery"] },
+        },
+      },
+      { ...base, teamTemplates: { empty: { members: {} } } },
+      { ...base, foreman: { integrationId: "copilot", autonomy: { maxActiveMissions: 1 } } },
+      {
+        ...base,
+        foreman: { integrationId: "copilot", autonomy: { workspacePolicy: "managed-only" } },
+      },
+      {
+        ...base,
+        foreman: {
+          integrationId: "copilot",
+          autonomy: { intervention: { routineWaitReply: true } },
+        },
+      },
+    ])
+      expect(NanasaConfigSchema.safeParse(invalid).success).toBe(false);
+  });
+
+  it("rejects unbounded budgets, arbitrary controls, and instruction traversal", () => {
+    for (const invalid of [
+      { autonomy: { maxForemanTurns: 0 } },
+      { autonomy: { maxGoalHours: 169 } },
+      { autonomy: { transcript: { maxBytes: 65_537 } } },
+      { autonomy: { allowAnything: true } },
+      { instructions: ["../outside.md"] },
+    ]) {
+      expect(
+        NanasaConfigSchema.safeParse({
+          ...base,
+          foreman: { integrationId: "copilot", ...invalid },
+        }).success,
+      ).toBe(false);
+    }
+  });
+});
 
 describe("custom launch consent contracts", () => {
   it("accepts redacted stable subjects and rejects duplicate set members or runtime data", () => {
@@ -843,6 +969,26 @@ describe("agent status contracts", () => {
         nextStep: "Run typecheck",
       }),
     ).toMatchObject({ stage: "validation" });
+    for (const blocker of [undefined, null, "", "  ", "none", " NoNe "])
+      expect(
+        AgentProgressReportCommandSchema.parse({
+          stage: "validation",
+          summary: "Tests pass",
+          blocker,
+        }).blocker,
+      ).toBeUndefined();
+    for (const blocker of [
+      "None of the providers are available",
+      "none yet: waiting for credentials",
+      "No approval",
+    ])
+      expect(
+        AgentProgressReportCommandSchema.parse({
+          stage: "validation",
+          summary: "Tests pending",
+          blocker,
+        }).blocker,
+      ).toBe(blocker);
     expect(
       AgentStatusDetailSchema.parse({
         groupId: "group_1",

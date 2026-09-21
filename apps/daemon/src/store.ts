@@ -40,6 +40,7 @@ import {
   CreateGroupCommandSchema,
   type CustomLaunchConsentRequest,
   CustomLaunchConsentRequestSchema,
+  canonicalJson,
   DEFAULT_MESSAGE_PAGE_SIZE,
   type DeleteGroupResult,
   DeleteGroupResultSchema,
@@ -50,6 +51,17 @@ import {
   DomainEventSchema,
   type DurableNativeSession,
   DurableNativeSessionSchema,
+  type ForemanActor,
+  ForemanActorSchema,
+  type ForemanChannelMessage,
+  ForemanChannelMessageSchema,
+  type ForemanChannelPage,
+  type ForemanChannelQuery,
+  ForemanChannelQuerySchema,
+  type ForemanChannelSender,
+  ForemanChannelSenderSchema,
+  type ForemanRun,
+  ForemanRunSchema,
   type GitOperation,
   GitOperationSchema,
   type Group,
@@ -87,9 +99,15 @@ import {
   ReporterSessionSchema,
   type Repository,
   RepositorySchema,
+  type ResolveForemanInputCommand,
+  ResolveForemanInputCommandSchema,
   type RunStatus,
+  type RuntimeRun,
+  RuntimeRunSchema,
   type ScreenObservation,
   ScreenObservationSchema,
+  type SendForemanMessageCommand,
+  SendForemanMessageCommandSchema,
   type StartGroupRunsResult,
   StartGroupRunsResultSchema,
   type SubmitMessageCommand,
@@ -112,9 +130,14 @@ import {
   resolveAttentionSubscriptionsSnapshot,
   resolveMemberAttentionSubscriptions,
 } from "./attention-subscription-policy.js";
+import type { McpForemanPrincipal } from "./mcp-auth.js";
 import { dockerMemberName, formatMemberId, type MemberNameGenerator } from "./member-id.js";
 import { orderedAgentEntries } from "./membership-order.js";
-import { openNanasaDatabase } from "./persistence/database.js";
+import { assertForemanDatabaseLayout, openNanasaDatabase } from "./persistence/database.js";
+import {
+  FOREMAN_CLEANUP_SCHEMA_SQL,
+  FOREMAN_CONVERSATIONS_SCHEMA_SQL,
+} from "./persistence/schema.js";
 import type { RepositoryTrustReceipt, TrustSubjectKind } from "./repository-trust-service.js";
 
 interface AddMembershipInput {
@@ -196,8 +219,9 @@ interface MembershipRow {
 
 interface RunRow {
   id: string;
-  group_id: string;
-  member_id: string;
+  group_id: string | null;
+  member_id: string | null;
+  foreman_id: string | null;
   agent_profile_id: string;
   checkout_id: string | null;
   resolved_working_directory: string | null;
@@ -547,6 +571,14 @@ export class NanasaStore {
 
   public constructor(path: string, options: NanasaStoreOptions = {}) {
     this.#database = openNanasaDatabase(path);
+    try {
+      assertForemanDatabaseLayout(this.#database);
+      this.#database.exec(FOREMAN_CONVERSATIONS_SCHEMA_SQL);
+      this.#database.exec(FOREMAN_CLEANUP_SCHEMA_SQL);
+    } catch (error) {
+      this.#database.close();
+      throw error;
+    }
     this.#config = options.config;
     this.#configStatus = options.configStatus;
     this.#messageRetentionPerGroup = options.config?.messages.retentionPerGroup ?? 1_000;
@@ -555,6 +587,10 @@ export class NanasaStore {
 
   public get database(): DatabaseSync {
     return this.#database;
+  }
+
+  public atomic<Result>(operation: () => Result): Result {
+    return this.#transaction(operation);
   }
 
   public close(): void {
@@ -1396,6 +1432,17 @@ export class NanasaStore {
     return this.#executeIdempotent(scope, idempotencyKey, GroupMembershipSchema, () => {
       this.#requireGroup(groupId);
       this.#requireAgentProfile(input.agentProfileId);
+      if (
+        this.#database
+          .prepare("SELECT id FROM foremen WHERE agent_profile_id = ?")
+          .get(input.agentProfileId) !== undefined
+      ) {
+        throw new DomainError(
+          "profile_is_foreman_owned",
+          "A Foreman profile cannot join a team",
+          409,
+        );
+      }
       const memberId = input.memberId ?? this.#generateMemberId(groupId);
       const existing = this.#getMembershipRow(groupId, memberId);
       if (existing?.state === "active") {
@@ -1562,47 +1609,62 @@ export class NanasaStore {
   }
 
   public createRun(run: AgentRun): AgentRun {
-    const input = AgentRunSchema.parse(run);
-    const { result, event } = this.#transaction(() => {
-      const membership = this.#getMembershipRow(input.groupId, input.memberId);
-      if (
-        membership === undefined ||
-        membership.state !== "active" ||
-        membership.agent_profile_id !== input.agentProfileId
-      ) {
-        throw new DomainError("invalid_run_membership", "Run member is not active", 409);
-      }
+    return AgentRunSchema.parse(this.#createRuntimeRun(AgentRunSchema.parse(run)));
+  }
 
+  #createRuntimeRun(run: RuntimeRun): RuntimeRun {
+    const input = RuntimeRunSchema.parse(run);
+    const { result, event } = this.#transaction(() => {
       const timestamp = new Date().toISOString();
-      this.#database
-        .prepare(
-          `UPDATE actions SET state = 'superseded', updated_at = ?,
+      if ("foremanId" in input) {
+        const actor = this.getForeman(input.foremanId);
+        if (!actor.enabled || actor.agentProfileId !== input.agentProfileId) {
+          throw new DomainError(
+            "foreman_not_enabled",
+            "Foreman is not enabled for this profile",
+            409,
+          );
+        }
+      } else {
+        const membership = this.#getMembershipRow(input.groupId, input.memberId);
+        if (
+          membership === undefined ||
+          membership.state !== "active" ||
+          membership.agent_profile_id !== input.agentProfileId
+        ) {
+          throw new DomainError("invalid_run_membership", "Run member is not active", 409);
+        }
+        this.#database
+          .prepare(
+            `UPDATE actions SET state = 'superseded', updated_at = ?,
              error_json = '{"code":"run_replaced","message":"The target run was replaced","retryable":false}'
            WHERE group_id = ? AND member_id = ? AND run_id <> ?
              AND state IN ('created', 'deferred', 'submitted', 'accepted', 'started', 'blocked')`,
-        )
-        .run(timestamp, input.groupId, input.memberId, input.id);
-      this.#database
-        .prepare(
-          `UPDATE open_waits SET state = 'superseded', updated_at = ?
+          )
+          .run(timestamp, input.groupId, input.memberId, input.id);
+        this.#database
+          .prepare(
+            `UPDATE open_waits SET state = 'superseded', updated_at = ?
            WHERE group_id = ? AND member_id = ? AND run_id <> ? AND state IN ('open', 'replying')`,
-        )
-        .run(timestamp, input.groupId, input.memberId, input.id);
+          )
+          .run(timestamp, input.groupId, input.memberId, input.id);
+      }
 
       this.#database
         .prepare(
           `INSERT INTO runs
-             (id, group_id, member_id, agent_profile_id, checkout_id,
+             (id, group_id, member_id, foreman_id, agent_profile_id, checkout_id,
               resolved_working_directory, generation, status,
             desired_state, recovery_phase, recovery_attempts, recovery_not_before,
             recovery_reason, launch_kind, requested_model, requested_model_source,
             effective_model, native_session_id, recovery_outcome, terminal_json, started_at, stopped_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.id,
-          input.groupId,
-          input.memberId,
+          "groupId" in input ? input.groupId : null,
+          "memberId" in input ? input.memberId : null,
+          "foremanId" in input ? input.foremanId : null,
           input.agentProfileId,
           input.checkoutId ?? null,
           input.resolvedWorkingDirectory ?? null,
@@ -1704,13 +1766,370 @@ export class NanasaStore {
   }
 
   public getRun(runId: string): AgentRun {
+    const run = this.getRuntimeRun(runId);
+    if ("foremanId" in run) throw new DomainError("run_not_found", "Team run not found", 404);
+    return run;
+  }
+
+  public getRuntimeRun(runId: string): RuntimeRun {
     const row = this.#database.prepare("SELECT * FROM runs WHERE id = ?").get(runId) as unknown as
       | RunRow
       | undefined;
     if (row === undefined) {
       throw new DomainError("run_not_found", "Run not found", 404);
     }
-    return this.#hydrateRun(row);
+    return this.#hydrateRuntimeRun(row);
+  }
+
+  public getForeman(foremanId: string): ForemanActor {
+    const row = this.#database.prepare("SELECT * FROM foremen WHERE id = ?").get(foremanId);
+    if (row === undefined) throw new DomainError("foreman_not_found", "Foreman not found", 404);
+    return ForemanActorSchema.parse({
+      id: row.id,
+      agentProfileId: row.agent_profile_id,
+      enabled: row.enabled === 1,
+      authorityRevision: row.authority_revision,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    });
+  }
+
+  public upsertForeman(
+    input: Pick<ForemanActor, "id" | "agentProfileId" | "enabled">,
+  ): ForemanActor {
+    const now = new Date().toISOString();
+    const actor = ForemanActorSchema.parse({ ...input, createdAt: now, updatedAt: now });
+    this.#requireAgentProfile(actor.agentProfileId);
+    return this.#transaction(() => {
+      const membership = this.#database
+        .prepare("SELECT id FROM memberships WHERE agent_profile_id = ? LIMIT 1")
+        .get(actor.agentProfileId);
+      if (membership !== undefined)
+        throw new DomainError(
+          "foreman_profile_is_team_owned",
+          "Foreman requires a repository-owned profile",
+          409,
+        );
+      const other = this.#database
+        .prepare("SELECT id FROM foremen WHERE enabled = 1 AND id <> ?")
+        .get(actor.id);
+      if (actor.enabled && other !== undefined)
+        throw new DomainError(
+          "foreman_already_enabled",
+          "Only one repository Foreman may be enabled",
+          409,
+        );
+      const active = this.getActiveForemanRun(actor.id);
+      if (active !== undefined && active.agentProfileId !== actor.agentProfileId)
+        throw new DomainError(
+          "foreman_profile_in_use",
+          "Stop Foreman before changing its profile",
+          409,
+        );
+      this.#database
+        .prepare(`INSERT INTO foremen (id, agent_profile_id, enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET
+        authority_revision = foremen.authority_revision + CASE
+          WHEN foremen.agent_profile_id <> excluded.agent_profile_id OR foremen.enabled <> excluded.enabled THEN 1 ELSE 0 END,
+        agent_profile_id = excluded.agent_profile_id, enabled = excluded.enabled, updated_at = excluded.updated_at`)
+        .run(actor.id, actor.agentProfileId, actor.enabled ? 1 : 0, now, now);
+      return this.getForeman(actor.id);
+    });
+  }
+
+  public getActiveForemanRun(foremanId: string): ForemanRun | undefined {
+    const row = this.#database
+      .prepare(`SELECT * FROM runs WHERE foreman_id = ?
+      AND status IN ('starting', 'running', 'stopping') ORDER BY generation DESC LIMIT 1`)
+      .get(foremanId) as unknown as RunRow | undefined;
+    return row === undefined ? undefined : ForemanRunSchema.parse(this.#hydrateRuntimeRun(row));
+  }
+
+  public listForemen(): ForemanActor[] {
+    return (
+      this.#database.prepare("SELECT id FROM foremen ORDER BY created_at, id").all() as {
+        id: string;
+      }[]
+    ).map(({ id }) => this.getForeman(id));
+  }
+
+  public sendForemanMessage(
+    sender: ForemanChannelSender,
+    command: SendForemanMessageCommand,
+  ): ForemanChannelMessage {
+    const principal = ForemanChannelSenderSchema.parse(sender);
+    const input = SendForemanMessageCommandSchema.parse(command);
+    return this.#transaction(() => {
+      if (principal.kind === "foreman") {
+        const actor = this.getForeman(principal.foremanId);
+        const run = this.getActiveForemanRun(actor.id);
+        if (
+          !actor.enabled ||
+          actor.authorityRevision !== principal.authorityRevision ||
+          run?.id !== principal.runId ||
+          run.generation !== principal.generation ||
+          run.desiredState !== "running" ||
+          !["starting", "running"].includes(run.status)
+        ) {
+          throw new DomainError(
+            "foreman_authority_revoked",
+            "Foreman channel authority is no longer active",
+            403,
+          );
+        }
+      }
+      const senderKey =
+        principal.kind === "operator"
+          ? `operator:${principal.operatorId}`
+          : `foreman:${principal.foremanId}`;
+      const digest = createHash("sha256")
+        .update(
+          canonicalJson({
+            requestId: input.requestId,
+            text: input.text,
+            ...(input.teamId === undefined ? {} : { teamId: input.teamId }),
+            ...(input.replyTo === undefined ? {} : { replyTo: input.replyTo }),
+          }),
+        )
+        .digest("hex");
+      const existing = this.#database
+        .prepare("SELECT * FROM foreman_messages WHERE sender_key = ? AND request_id = ?")
+        .get(senderKey, input.requestId);
+      if (existing !== undefined) {
+        if (existing.request_digest !== digest)
+          throw new DomainError(
+            "foreman_message_conflict",
+            "Request ID was already used for different content",
+            409,
+          );
+        return this.#hydrateForemanMessage(existing);
+      }
+      if (input.teamId !== undefined) this.#requireGroup(input.teamId);
+      if (input.replyTo !== undefined) {
+        const parent = this.#database
+          .prepare("SELECT * FROM foreman_messages WHERE id = ?")
+          .get(input.replyTo);
+        if (parent === undefined)
+          throw new DomainError(
+            "foreman_reply_not_found",
+            "Channel reply target does not exist",
+            404,
+          );
+        const message = this.#hydrateForemanMessage(parent);
+        if (message.teamId !== input.teamId)
+          throw new DomainError(
+            "foreman_reply_context_conflict",
+            "Replies must retain their original team context",
+            409,
+          );
+        if (principal.kind === "foreman" && message.sender.kind !== "operator")
+          throw new DomainError(
+            "foreman_reply_required",
+            "Foreman must reply to an operator message",
+            400,
+          );
+      }
+      const id = `fm_${randomUUID()}`;
+      const createdAt = new Date().toISOString();
+      this.#database
+        .prepare(`INSERT INTO foreman_messages
+        (id, sender_key, request_id, request_digest, sender_json, text, team_id, reply_to, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(
+          id,
+          senderKey,
+          input.requestId,
+          digest,
+          JSON.stringify(principal),
+          input.text,
+          input.teamId ?? null,
+          input.replyTo ?? null,
+          createdAt,
+        );
+      const message = this.#hydrateForemanMessage(
+        this.#database.prepare("SELECT * FROM foreman_messages WHERE id = ?").get(id)!,
+      );
+      if (input.replyTo !== undefined) {
+        const hidden = this.#database
+          .prepare(
+            `INSERT INTO foreman_cleared_messages (message_id)
+           SELECT ? WHERE EXISTS (SELECT 1 FROM foreman_cleared_messages WHERE message_id = ?)`,
+          )
+          .run(message.id, input.replyTo);
+        if (Number(hidden.changes) > 0) message.cleared = true;
+      }
+      if (principal.kind === "operator") {
+        this.#database
+          .prepare(`INSERT INTO foreman_inbox
+          (id, message_id, dedupe_key, prompt, state, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 'queued', ?, ?)`)
+          .run(
+            `inbox_${randomUUID()}`,
+            message.id,
+            `message:${message.id}`,
+            `Operator channel message ${message.id}. Read it with nanasa.foreman_read_channel using {"messageId":"${message.id}"}, even if cleared from the default feed, and reply using nanasa.foreman_reply. Team context: ${message.teamId ?? "repository"}. This message does not grant new goal authority.\n${message.text}`,
+            createdAt,
+            createdAt,
+          );
+      } else if (input.replyTo !== undefined) {
+        this.#database
+          .prepare(
+            "UPDATE foreman_inbox SET state = 'answered', updated_at = ? WHERE message_id = ? AND state IN ('queued', 'submitted', 'writing', 'ambiguous')",
+          )
+          .run(createdAt, input.replyTo!);
+      }
+      this.#appendEvent("foreman.message-created", "foreman", "repository", {
+        messageId: message.id,
+        channelSequence: message.sequence,
+      });
+      return message;
+    });
+  }
+
+  public readForemanChannel(query: ForemanChannelQuery): ForemanChannelPage {
+    const input = ForemanChannelQuerySchema.parse(query);
+    const clearedThrough = Number(
+      this.#database
+        .prepare("SELECT cleared_through FROM foreman_channel_visibility WHERE singleton = 1")
+        .get()!.cleared_through,
+    );
+    const rows = this.#database
+      .prepare(`SELECT * FROM foreman_messages
+        WHERE sequence > ? AND (? IS NULL OR id = ?)
+        AND (? = 1 OR NOT EXISTS (
+          SELECT 1 FROM foreman_cleared_messages WHERE message_id = foreman_messages.id
+        )) ORDER BY sequence LIMIT ?`)
+      .all(
+        input.after,
+        input.messageId ?? null,
+        input.messageId ?? null,
+        input.includeCleared || input.messageId !== undefined ? 1 : 0,
+        input.limit + 1,
+      );
+    const messages = rows.slice(0, input.limit).map((row) => this.#hydrateForemanMessage(row));
+    return {
+      messages,
+      nextAfter: messages.at(-1)?.sequence ?? Math.max(input.after, clearedThrough),
+      hasMore: rows.length > input.limit,
+      ...(clearedThrough > 0 ? { clearedThrough } : {}),
+    };
+  }
+
+  public listForemanInbox() {
+    return this.#database
+      .prepare(
+        "SELECT id, message_id, dedupe_key, prompt, target_json, state, created_at, updated_at FROM foreman_inbox ORDER BY created_at DESC, id DESC LIMIT 100",
+      )
+      .all()
+      .map((row) => {
+        const key = String(row.dedupe_key ?? "");
+        const target =
+          row.target_json === null
+            ? undefined
+            : (JSON.parse(String(row.target_json)) as { runId?: string; generation?: number });
+        return {
+          id: String(row.id),
+          messageId: row.message_id === null ? undefined : String(row.message_id),
+          kind:
+            row.message_id !== null
+              ? ("human-message" as const)
+              : key.startsWith("conversation-result:")
+                ? ("conversation-result" as const)
+                : ("notification" as const),
+          preview: String(row.prompt).slice(0, 500),
+          conversationRequestId: key.startsWith("conversation-result:")
+            ? key.slice("conversation-result:".length)
+            : undefined,
+          submittedRunId: target?.runId,
+          submittedGeneration: target?.generation,
+          createdAt: String(row.created_at),
+          state: row.state as
+            | "queued"
+            | "writing"
+            | "submitted"
+            | "answered"
+            | "ambiguous"
+            | "cancelled",
+          updatedAt: String(row.updated_at),
+        };
+      });
+  }
+
+  public resolveForemanInput(operatorId: string, command: ResolveForemanInputCommand): void {
+    const input = ResolveForemanInputCommandSchema.parse(command);
+    this.#transaction(() => {
+      const result = this.#database
+        .prepare("UPDATE foreman_inbox SET state = ?, updated_at = ? WHERE id = ? AND state = ?")
+        .run(
+          input.resolution === "cancel" ? "cancelled" : "answered",
+          new Date().toISOString(),
+          input.inboxId,
+          input.expectedState,
+        );
+      if (result.changes !== 1)
+        throw new DomainError(
+          "foreman_inbox_changed",
+          "Input state changed; inspect it again before resolving",
+          409,
+        );
+      this.#appendEvent("foreman.input-resolved", "foreman", "repository", {
+        inboxId: input.inboxId,
+        operatorId,
+        resolution: input.resolution,
+      });
+    });
+  }
+
+  #hydrateForemanMessage(row: Record<string, unknown>): ForemanChannelMessage {
+    return ForemanChannelMessageSchema.parse({
+      id: row.id,
+      sequence: row.sequence,
+      sender: JSON.parse(String(row.sender_json)),
+      text: row.text,
+      teamId: row.team_id ?? undefined,
+      replyTo: row.reply_to ?? undefined,
+      createdAt: row.created_at,
+      ...(this.#database
+        .prepare("SELECT 1 FROM foreman_cleared_messages WHERE message_id = ?")
+        .get(String(row.id))
+        ? { cleared: true }
+        : {}),
+    });
+  }
+
+  public getLatestForemanRun(foremanId: string): ForemanRun | undefined {
+    const row = this.#database
+      .prepare("SELECT * FROM runs WHERE foreman_id = ? ORDER BY generation DESC LIMIT 1")
+      .get(foremanId) as unknown as RunRow | undefined;
+    return row === undefined ? undefined : ForemanRunSchema.parse(this.#hydrateRuntimeRun(row));
+  }
+
+  public createRunForForeman(foremanId: string): { run: ForemanRun; profile: AgentProfile } {
+    return this.#transaction(() => {
+      const actor = this.getForeman(foremanId);
+      if (this.getActiveForemanRun(foremanId) !== undefined)
+        throw new DomainError("run_already_active", "Foreman already has an active run", 409);
+      const profile = this.#requireAgentProfile(actor.agentProfileId);
+      const row = this.#database
+        .prepare(
+          "SELECT COALESCE(MAX(generation), 0) + 1 AS generation FROM runs WHERE foreman_id = ?",
+        )
+        .get(foremanId) as { generation: number };
+      const run = ForemanRunSchema.parse(
+        this.#createRuntimeRun(
+          ForemanRunSchema.parse({
+            id: `run_${randomUUID()}`,
+            foremanId,
+            agentProfileId: profile.id,
+            resolvedWorkingDirectory: profile.workingDirectory,
+            generation: row.generation,
+            status: "starting",
+            startedAt: new Date().toISOString(),
+          }),
+        ),
+      );
+      return { run, profile };
+    });
   }
 
   public getAgentProfile(profileId: string): AgentProfile {
@@ -1872,7 +2291,7 @@ export class NanasaStore {
   public listActiveRuns(): AgentRun[] {
     const rows = this.#database
       .prepare(
-        `SELECT * FROM runs WHERE status IN ('starting', 'running', 'stopping')
+        `SELECT * FROM runs WHERE foreman_id IS NULL AND status IN ('starting', 'running', 'stopping')
          ORDER BY started_at, id`,
       )
       .all() as unknown as RunRow[];
@@ -1929,7 +2348,16 @@ export class NanasaStore {
     status: RunStatus,
     options: { terminal?: TerminalBinding; reason?: string } = {},
   ): AgentRun {
-    const current = this.getRun(runId);
+    this.getRun(runId);
+    return AgentRunSchema.parse(this.updateRuntimeRunStatus(runId, status, options));
+  }
+
+  public updateRuntimeRunStatus(
+    runId: string,
+    status: RunStatus,
+    options: { terminal?: TerminalBinding; reason?: string } = {},
+  ): RuntimeRun {
+    const current = this.getRuntimeRun(runId);
     const allowed: Record<RunStatus, readonly RunStatus[]> = {
       starting: ["starting", "running", "stopping", "failed"],
       running: ["running", "stopping", "stopped", "failed"],
@@ -1996,7 +2424,7 @@ export class NanasaStore {
           )
           .run(stoppedAt, runId);
       }
-      const updated = this.getRun(runId);
+      const updated = this.getRuntimeRun(runId);
       return {
         result: updated,
         event: this.#appendEvent("run.status-changed", "run", runId, {
@@ -2007,6 +2435,11 @@ export class NanasaStore {
       };
     });
     this.#publish(event);
+    if ("foremanId" in current) {
+      if (status === "stopped" || status === "failed")
+        this.revokeReporterAuthority(runId, current.generation, `run_${status}`);
+      return result;
+    }
     if (status === "running") {
       this.recordProcessStatus(runId, {
         event: "process.alive",
@@ -2039,7 +2472,15 @@ export class NanasaStore {
       >
     >,
   ): AgentRun {
-    const current = this.getRun(runId);
+    this.getRun(runId);
+    return AgentRunSchema.parse(this.updateRuntimeRunProviderMetadata(runId, metadata));
+  }
+
+  public updateRuntimeRunProviderMetadata(
+    runId: string,
+    metadata: Parameters<NanasaStore["updateRunProviderMetadata"]>[1],
+  ): RuntimeRun {
+    const current = this.getRuntimeRun(runId);
     this.#database
       .prepare(
         `UPDATE runs SET
@@ -2056,7 +2497,7 @@ export class NanasaStore {
         metadata.recoveryOutcome ?? current.recoveryOutcome ?? null,
         runId,
       );
-    return this.getRun(runId);
+    return this.getRuntimeRun(runId);
   }
 
   public registerReporterSession(session: ReporterSession): ReporterSession {
@@ -2202,7 +2643,7 @@ export class NanasaStore {
          WHERE id = ? AND revoked_at IS NULL AND closed_at IS NULL`,
       )
       .run(leaseExpiresAt, session.id);
-    const run = this.getRun(runId);
+    const run = this.getRuntimeRun(runId);
     const state = this.#agentStatusState(run);
     if (state.reporterEpoch === session.reporterEpoch) {
       this.#upsertAgentStatusState(run, { ...state, reporterLeaseExpiresAt: leaseExpiresAt });
@@ -2264,10 +2705,25 @@ export class NanasaStore {
     identity: AgentStatusIdentity,
     event: AgentStatusEventInput,
   ): AgentStatusIngestResult {
+    const result = this.#ingestRuntimeStatusEvent(identity, event);
+    return { ...result, status: AgentStatusDetailSchema.parse(result.status) };
+  }
+
+  public ingestForemanStatusEvent(identity: McpForemanPrincipal, event: AgentStatusEventInput) {
+    return this.#ingestRuntimeStatusEvent(identity, event);
+  }
+
+  #ingestRuntimeStatusEvent(
+    identity: AgentStatusIdentity | McpForemanPrincipal,
+    event: AgentStatusEventInput,
+  ) {
     const input = AgentStatusEventInputSchema.parse(event);
     const observedAt = new Date().toISOString();
     const completed = this.#transaction(() => {
-      const run = this.#requireCurrentAgentStatusRun(identity);
+      const run =
+        "foremanId" in identity
+          ? this.#requireCurrentForemanStatusRun(identity)
+          : this.#requireCurrentAgentStatusRun(identity);
       const profile = this.#requireAgentProfile(run.agentProfileId);
       const session = this.getCurrentReporterSession(run.id, run.generation);
       const wrongIdentity =
@@ -2365,11 +2821,12 @@ export class NanasaStore {
         observedAt,
         input,
       );
-      const openWaitEvents = this.#applyOpenWaitReporterEvent(run, session, input, next);
+      const openWaitEvents =
+        "foremanId" in run ? [] : this.#applyOpenWaitReporterEvent(run, session, input, next);
       this.#upsertAgentStatusState(run, next);
       this.#trimAgentStatusEvents(run.id, run.generation);
       return {
-        status: this.#getAgentStatusDetail(run.groupId, run.memberId),
+        status: this.#statusForRuntime(run),
         duplicate: false as const,
         domainEvents: [
           ...openWaitEvents,
@@ -2379,7 +2836,7 @@ export class NanasaStore {
     });
     for (const domainEvent of completed.domainEvents) this.#publish(domainEvent);
     return {
-      accepted: true,
+      accepted: true as const,
       duplicate: completed.duplicate,
       observedAt,
       status: completed.status,
@@ -2630,8 +3087,13 @@ export class NanasaStore {
     runId: string,
     observation: ProcessStatusObservation,
   ): AgentStatusDetail {
+    this.getRun(runId);
+    return AgentStatusDetailSchema.parse(this.recordRuntimeProcessStatus(runId, observation));
+  }
+
+  public recordRuntimeProcessStatus(runId: string, observation: ProcessStatusObservation) {
     const completed = this.#transaction(() => {
-      const run = this.getRun(runId);
+      const run = this.getRuntimeRun(runId);
       const duplicate = this.#database
         .prepare(
           `SELECT 1 FROM runtime_observations
@@ -2640,7 +3102,7 @@ export class NanasaStore {
         .get(run.id, run.generation, observation.eventId);
       if (duplicate !== undefined) {
         return {
-          status: this.#getAgentStatusDetail(run.groupId, run.memberId),
+          status: this.#statusForRuntime(run),
           domainEvents: [] as DomainEvent[],
         };
       }
@@ -2657,7 +3119,7 @@ export class NanasaStore {
       this.#upsertAgentStatusState(run, next);
       this.#trimAgentStatusEvents(run.id, run.generation);
       return {
-        status: this.#getAgentStatusDetail(run.groupId, run.memberId),
+        status: this.#statusForRuntime(run),
         domainEvents: this.#appendAgentStatusDomainEvents(run, previous, next),
       };
     });
@@ -2877,12 +3339,19 @@ export class NanasaStore {
     };
     const failedRows = this.#database
       .prepare(
-        `SELECT DISTINCT d.recipient_member_id
+        `SELECT d.message_id, d.recipient_member_id, d.status, d.attempts, d.updated_at, d.reason
          FROM deliveries d JOIN messages m ON m.id = d.message_id
          WHERE m.group_id = ? AND d.status IN ('failed','dead-letter','rejected')
-         ORDER BY d.recipient_member_id`,
+         ORDER BY d.recipient_member_id, m.group_seq`,
       )
-      .all(groupId) as Array<{ recipient_member_id: string }>;
+      .all(groupId) as Array<{
+      message_id: string;
+      recipient_member_id: string;
+      status: "failed" | "dead-letter" | "rejected";
+      attempts: number;
+      updated_at: string;
+      reason: string | null;
+    }>;
     return GroupMessageStateSchema.parse({
       groupId,
       latestGroupSeq: row.latest_group_seq,
@@ -2891,7 +3360,17 @@ export class NanasaStore {
         : { oldestRetainedGroupSeq: row.oldest_retained_group_seq }),
       retainedMessageCount: row.retained_message_count,
       activeDeliveryCount: row.active_delivery_count,
-      failedRecipientMemberIds: failedRows.map((failed) => failed.recipient_member_id),
+      failedRecipientMemberIds: [
+        ...new Set(failedRows.map((failed) => failed.recipient_member_id)),
+      ],
+      failedDeliveries: failedRows.map((failed) => ({
+        messageId: failed.message_id,
+        recipientMemberId: failed.recipient_member_id,
+        status: failed.status,
+        attempts: failed.attempts,
+        updatedAt: failed.updated_at,
+        ...(failed.reason === null ? {} : { reason: failed.reason }),
+      })),
     });
   }
 
@@ -4286,9 +4765,9 @@ export class NanasaStore {
     this.#database
       .prepare(
         `INSERT INTO provider_state
-           (id, integration_id, member_id, scope, storage_reference,
+            (id, integration_id, member_id, foreman_id, scope, storage_reference,
             credential_reference_json, lifecycle, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            storage_reference = excluded.storage_reference,
            credential_reference_json = excluded.credential_reference_json,
@@ -4299,6 +4778,7 @@ export class NanasaStore {
         parsed.id,
         parsed.integrationId,
         parsed.memberId ?? null,
+        parsed.foremanId ?? null,
         parsed.scope,
         parsed.storageReference,
         JSON.stringify(parsed.credentialReference),
@@ -5177,8 +5657,38 @@ export class NanasaStore {
     return run;
   }
 
+  #requireCurrentForemanStatusRun(identity: McpForemanPrincipal): ForemanRun {
+    const actor = this.getForeman(identity.foremanId);
+    const run = this.getActiveForemanRun(actor.id);
+    if (
+      !actor.enabled ||
+      actor.authorityRevision !== identity.authorityRevision ||
+      run?.id !== identity.runId ||
+      run.generation !== identity.generation ||
+      run.desiredState !== "running" ||
+      !["starting", "running"].includes(run.status)
+    ) {
+      throw new DomainError(
+        "status_generation_fenced",
+        "Foreman status generation is no longer authoritative",
+        409,
+      );
+    }
+    return run;
+  }
+
+  public getRuntimeStatusState(runId: string): AgentStatusReducerState {
+    return this.#agentStatusState(this.getRuntimeRun(runId));
+  }
+
+  #statusForRuntime(run: RuntimeRun) {
+    return "foremanId" in run
+      ? this.#agentStatusState(run)
+      : this.#getAgentStatusDetail(run.groupId, run.memberId);
+  }
+
   #insertAgentStatusEvent(
-    run: AgentRun,
+    run: RuntimeRun,
     eventId: string,
     source: string,
     kind: string,
@@ -5356,7 +5866,7 @@ export class NanasaStore {
   }
 
   #appendAgentStatusDomainEvents(
-    run: AgentRun,
+    run: RuntimeRun,
     previous: AgentStatusReducerState,
     next: AgentStatusReducerState,
   ): DomainEvent[] {
@@ -5373,6 +5883,15 @@ export class NanasaStore {
       previous.lastProgressSummary !== next.lastProgressSummary ||
       previous.blocker !== next.blocker;
     if (!material) return [];
+    if ("foremanId" in run)
+      return [
+        this.#appendEvent("foreman.status-changed", "run", run.id, {
+          foremanId: run.foremanId,
+          runId: run.id,
+          generation: run.generation,
+          statusRevision: next.statusRevision,
+        }),
+      ];
     const status = agentStatusSummary(this.#getAgentStatusDetail(run.groupId, run.memberId));
     const events = [this.#appendEvent("agent-status.changed", "run", run.id, { status })];
     if (
@@ -5386,7 +5905,7 @@ export class NanasaStore {
     return events;
   }
 
-  #agentStatusState(run: AgentRun): AgentStatusReducerState {
+  #agentStatusState(run: RuntimeRun): AgentStatusReducerState {
     const row = this.#database
       .prepare("SELECT reducer_state_json FROM status_revisions WHERE run_id = ?")
       .get(run.id) as unknown as AgentStatusCurrentRow | undefined;
@@ -5395,7 +5914,7 @@ export class NanasaStore {
       : (JSON.parse(row.reducer_state_json) as AgentStatusReducerState);
   }
 
-  #upsertAgentStatusState(run: AgentRun, state: AgentStatusReducerState): void {
+  #upsertAgentStatusState(run: RuntimeRun, state: AgentStatusReducerState): void {
     const serialized = JSON.stringify(state);
     this.#database
       .prepare(
@@ -5693,10 +6212,19 @@ export class NanasaStore {
   }
 
   #hydrateRun(row: RunRow): AgentRun {
-    return AgentRunSchema.parse({
+    return AgentRunSchema.parse(this.#hydrateRuntimeRun(row));
+  }
+
+  #hydrateRuntimeRun(row: RunRow): RuntimeRun {
+    return RuntimeRunSchema.parse({
       id: row.id,
-      groupId: row.group_id,
-      memberId: row.member_id,
+      ...(row.foreman_id === null
+        ? {
+            groupId: row.group_id,
+            memberId: row.member_id,
+            providerUpdate: this.#providerUpdateForRun(row.id, row.generation),
+          }
+        : { foremanId: row.foreman_id }),
       agentProfileId: row.agent_profile_id,
       checkoutId: row.checkout_id ?? undefined,
       resolvedWorkingDirectory: row.resolved_working_directory ?? undefined,
@@ -5713,7 +6241,6 @@ export class NanasaStore {
       effectiveModel: row.effective_model ?? undefined,
       nativeSessionId: row.native_session_id ?? undefined,
       recoveryOutcome: row.recovery_outcome ?? undefined,
-      providerUpdate: this.#providerUpdateForRun(row.id, row.generation),
       terminal: row.terminal_json === null ? undefined : JSON.parse(row.terminal_json),
       startedAt: row.started_at,
       stoppedAt: row.stopped_at ?? undefined,
@@ -6039,6 +6566,7 @@ export class NanasaStore {
       id: row.id,
       integrationId: row.integration_id,
       memberId: row.member_id ?? undefined,
+      foremanId: row.foreman_id ?? undefined,
       scope: row.scope,
       storageReference: row.storage_reference,
       credentialReference: JSON.parse(String(row.credential_reference_json)),
@@ -6115,6 +6643,7 @@ export class NanasaStore {
     }
   }
   #readTransaction<T>(operation: () => T): T {
+    if (this.#transactionDepth > 0) return operation();
     this.#database.exec("BEGIN");
     try {
       const result = operation();

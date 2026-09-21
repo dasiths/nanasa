@@ -6,6 +6,575 @@
   },
   "x-generator-version": 1,
   "paths": {
+    "/api/v1/foreman/cleanup/requests": {
+      "get": {
+        "operationId": "foreman.cleanupRequests",
+        "summary": "Read pending scoped cleanup requests awaiting operator approval",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/cleanup/approve": {
+      "post": {
+        "operationId": "foreman.approveCleanup",
+        "summary": "Approve and execute the exact stored cleanup scope, retaining a durable receipt",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "foreman_cleanup_not_found",
+          "foreman_cleanup_conflict",
+          "foreman_cleanup_stale",
+          "foreman_cleanup_active"
+        ]
+      }
+    },
+    "/api/v1/foreman/cleanup": {
+      "post": {
+        "operationId": "foreman.cleanup",
+        "summary": "Remove selected goals or clear channel visibility, retaining operational data and request receipts",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "foreman_cleanup_conflict",
+          "foreman_cleanup_stale",
+          "foreman_cleanup_active"
+        ]
+      }
+    },
+    "/api/v1/foreman/cleanup/effects": {
+      "get": {
+        "operationId": "foreman.cleanupEffects",
+        "summary": "Read pending actions and live runs retained for removed goals",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/state/reset": {
+      "post": {
+        "operationId": "foreman.resetState",
+        "summary": "Clear selected Foreman coordination history after stopping affected runtimes",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/conversations": {
+      "get": {
+        "operationId": "foreman.conversations",
+        "summary": "Read recent ad hoc team conversations and reply states",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/conversations/:requestId/cancel": {
+      "post": {
+        "operationId": "foreman.cancelConversation",
+        "summary": "Cancel a conversation request without replaying or interrupting provider work",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/connectors": {
+      "get": {
+        "operationId": "foreman.connectors",
+        "summary": "List scoped external connectors without their credentials",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      },
+      "post": {
+        "operationId": "foreman.createConnector",
+        "summary": "Issue a revocable scoped connector credential once",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/connectors/:connectorId": {
+      "delete": {
+        "operationId": "foreman.revokeConnector",
+        "summary": "Revoke an external connector",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/goals": {
+      "get": {
+        "operationId": "goals.list",
+        "summary": "List outcome goals",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      },
+      "post": {
+        "operationId": "goals.propose",
+        "summary": "Propose a high-level goal",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/goals/:goalId": {
+      "get": {
+        "operationId": "goals.get",
+        "summary": "Read goal delegations and decisions",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/goals/control": {
+      "post": {
+        "operationId": "goals.control",
+        "summary": "Apply exact human goal control without waiting for the model",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/decisions/resolve": {
+      "post": {
+        "operationId": "goals.resolve",
+        "summary": "Resolve a current human decision",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/notifications": {
+      "get": {
+        "operationId": "foreman.notifications",
+        "summary": "Catch up durable coordination notifications",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/notifications/cursor": {
+      "get": {
+        "operationId": "foreman.notificationCursor",
+        "summary": "Read this authenticated consumer's acknowledged cursor",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/notifications/ack": {
+      "post": {
+        "operationId": "foreman.ackNotifications",
+        "summary": "Persist this consumer's notification cursor",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/inbox/resolve": {
+      "post": {
+        "operationId": "foreman.resolveInput",
+        "summary": "Resolve an inspected Foreman input without replaying it",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/channel": {
+      "get": {
+        "operationId": "foreman.channel",
+        "summary": "Read bounded repository Foreman channel history",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      },
+      "post": {
+        "operationId": "foreman.send",
+        "summary": "Store an operator instruction in the repository channel using a retry-safe request ID",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "foreman_message_conflict",
+          "foreman_reply_context_conflict",
+          "foreman_reply_not_found",
+          "group_not_found"
+        ]
+      }
+    },
+    "/api/v1/foreman": {
+      "get": {
+        "operationId": "foreman.get",
+        "summary": "Read repository Foreman configuration and runtime",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": []
+      }
+    },
+    "/api/v1/foreman/configuration": {
+      "put": {
+        "operationId": "foreman.configure",
+        "summary": "Configure a stopped repository Foreman with revision checking",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "foreman_must_stop",
+          "config_revision_conflict"
+        ]
+      }
+    },
+    "/api/v1/foreman/run/start": {
+      "post": {
+        "operationId": "foreman.start",
+        "summary": "Start the configured repository Foreman",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "config_revision_conflict",
+          "foreman_not_enabled",
+          "foreman_mcp_required",
+          "foreman_launch_consent_required",
+          "run_already_active"
+        ]
+      }
+    },
+    "/api/v1/foreman/run/stop": {
+      "post": {
+        "operationId": "foreman.stop",
+        "summary": "Stop the exact repository Foreman generation",
+        "tags": [
+          "foreman"
+        ],
+        "security": [
+          {
+            "operatorSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Validated response"
+          }
+        },
+        "x-body-limit": 65536,
+        "x-idempotency": "forbidden",
+        "x-errors": [
+          "foreman_run_changed"
+        ]
+      }
+    },
     "/api/v1/meta": {
       "get": {
         "operationId": "meta.get",

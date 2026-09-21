@@ -5,6 +5,55 @@ import {
 
 export const DATABASE_SCHEMA_VERSION = 16;
 
+export const FOREMAN_CLEANUP_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS foreman_cleanup_requests (
+    id TEXT PRIMARY KEY,
+    foreman_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    data_json TEXT NOT NULL,
+    UNIQUE(foreman_id, request_id)
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS foreman_removed_goals (
+    goal_id TEXT PRIMARY KEY,
+    operator_id TEXT NOT NULL,
+    removed_at TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS foreman_cleanup_effects (
+    goal_id TEXT PRIMARY KEY,
+    data_json TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS foreman_cleanup_receipts (
+    operator_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (operator_id, request_id)
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS foreman_channel_visibility (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    cleared_through INTEGER NOT NULL DEFAULT 0
+  ) STRICT;
+  INSERT OR IGNORE INTO foreman_channel_visibility VALUES (1, 0);
+  CREATE TABLE IF NOT EXISTS foreman_cleared_messages (
+    message_id TEXT PRIMARY KEY
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS foreman_cleared_conversations (
+    conversation_id TEXT PRIMARY KEY
+  ) STRICT;
+`;
+
+export const FOREMAN_CONVERSATIONS_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS foreman_conversations (
+    id TEXT PRIMARY KEY,
+    foreman_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    data_json TEXT NOT NULL,
+    UNIQUE(foreman_id, request_id)
+  ) STRICT;
+`;
+
 const URL_OPEN_SCHEMA_SQL = `
   CREATE TABLE url_open_requests (
     id TEXT PRIMARY KEY,
@@ -134,6 +183,46 @@ export const DATABASE_MIGRATION_10_TO_11_SQL = `
 
 export const DATABASE_BASELINE_SQL = `
   ${URL_OPEN_SCHEMA_SQL}
+  ${FOREMAN_CONVERSATIONS_SCHEMA_SQL}
+  CREATE TABLE foreman_coordination_records (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('goal', 'delegation', 'report', 'decision')),
+    goal_id TEXT,
+    group_id TEXT,
+    request_key TEXT UNIQUE,
+    request_digest TEXT,
+    data_json TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX foreman_coordination_goal ON foreman_coordination_records(goal_id, kind);
+  CREATE INDEX foreman_coordination_group ON foreman_coordination_records(group_id, kind);
+  CREATE TABLE foreman_notifications (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    dedupe_key TEXT NOT NULL UNIQUE,
+    data_json TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE foreman_notification_cursors (
+    consumer_id TEXT PRIMARY KEY,
+    after_sequence INTEGER NOT NULL CHECK (after_sequence >= 0),
+    updated_at TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE foreman_connectors (
+    id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    data_json TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE delegation_actions (
+    action_id TEXT PRIMARY KEY REFERENCES actions(id),
+    delegation_id TEXT NOT NULL REFERENCES foreman_coordination_records(id)
+  ) STRICT;
+  CREATE TABLE delegation_recovery (
+    delegation_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    attempts INTEGER NOT NULL,
+    last_run_id TEXT NOT NULL,
+    next_allowed_at TEXT NOT NULL,
+    PRIMARY KEY (delegation_id, member_id)
+  ) STRICT;
   CREATE TABLE schema_metadata (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     schema_version INTEGER NOT NULL,
@@ -258,10 +347,62 @@ export const DATABASE_BASELINE_SQL = `
     error_code TEXT
   ) STRICT;
 
+  CREATE TABLE foremen (
+    id TEXT PRIMARY KEY,
+    agent_profile_id TEXT NOT NULL REFERENCES agent_profiles(id),
+    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    authority_revision INTEGER NOT NULL DEFAULT 0 CHECK (authority_revision >= 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE UNIQUE INDEX foremen_one_enabled ON foremen(enabled) WHERE enabled = 1;
+
+  CREATE TABLE foreman_native_sessions (
+    foreman_id TEXT PRIMARY KEY REFERENCES foremen(id),
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    generation INTEGER NOT NULL,
+    reference_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE foreman_recovery (
+    foreman_id TEXT PRIMARY KEY REFERENCES foremen(id),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_allowed_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE foreman_messages (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    sender_key TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    sender_json TEXT NOT NULL,
+    text TEXT NOT NULL,
+    team_id TEXT,
+    reply_to TEXT REFERENCES foreman_messages(id),
+    created_at TEXT NOT NULL,
+    UNIQUE(sender_key, request_id)
+  ) STRICT;
+
+  CREATE TABLE foreman_inbox (
+    id TEXT PRIMARY KEY,
+    message_id TEXT UNIQUE REFERENCES foreman_messages(id),
+    dedupe_key TEXT NOT NULL UNIQUE,
+    prompt TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('queued', 'writing', 'submitted', 'answered', 'ambiguous', 'cancelled')),
+    target_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT;
+
   CREATE TABLE runs (
     id TEXT PRIMARY KEY,
-    group_id TEXT NOT NULL,
-    member_id TEXT NOT NULL,
+    group_id TEXT,
+    member_id TEXT,
+    foreman_id TEXT REFERENCES foremen(id),
     agent_profile_id TEXT NOT NULL REFERENCES agent_profiles(id),
     checkout_id TEXT REFERENCES checkouts(id),
     resolved_working_directory TEXT,
@@ -274,15 +415,23 @@ export const DATABASE_BASELINE_SQL = `
     recovery_reason TEXT,
     launch_kind TEXT NOT NULL DEFAULT 'fresh' CHECK (launch_kind IN ('fresh', 'adopted', 'resuming', 'restarted')),
     requested_model TEXT,
-    requested_model_source TEXT NOT NULL DEFAULT 'provider-default' CHECK (requested_model_source IN ('membership', 'integration', 'provider-default')),
+    requested_model_source TEXT NOT NULL DEFAULT 'provider-default' CHECK (requested_model_source IN ('membership', 'foreman', 'integration', 'provider-default')),
     effective_model TEXT,
     native_session_id TEXT,
     recovery_outcome TEXT CHECK (recovery_outcome IN ('retained', 'resumed', 'restarted', 'failed')),
     terminal_json TEXT,
     started_at TEXT NOT NULL,
     stopped_at TEXT,
-    UNIQUE (group_id, member_id, generation)
+    UNIQUE (group_id, member_id, generation),
+    UNIQUE (foreman_id, generation),
+    CHECK (
+      (foreman_id IS NULL AND group_id IS NOT NULL AND member_id IS NOT NULL)
+      OR (foreman_id IS NOT NULL AND group_id IS NULL AND member_id IS NULL)
+    )
   ) STRICT;
+
+  CREATE UNIQUE INDEX runs_one_active_foreman ON runs(foreman_id)
+    WHERE foreman_id IS NOT NULL AND status IN ('starting', 'running', 'stopping');
 
   CREATE TABLE runtime_observations (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -543,12 +692,17 @@ export const DATABASE_BASELINE_SQL = `
     id TEXT PRIMARY KEY,
     integration_id TEXT NOT NULL,
     member_id TEXT,
-    scope TEXT NOT NULL CHECK (scope IN ('membership', 'integration', 'custom')),
+    foreman_id TEXT,
+    scope TEXT NOT NULL CHECK (scope IN ('membership', 'integration', 'custom', 'foreman')),
     storage_reference TEXT NOT NULL,
     credential_reference_json TEXT NOT NULL,
     lifecycle TEXT NOT NULL CHECK (lifecycle IN ('active', 'retained', 'deleting', 'deleted')),
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    CHECK (
+      (scope = 'foreman' AND foreman_id IS NOT NULL AND member_id IS NULL)
+      OR (scope <> 'foreman' AND foreman_id IS NULL)
+    )
   ) STRICT;
 
   CREATE TABLE overlays (

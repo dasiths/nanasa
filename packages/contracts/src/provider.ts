@@ -85,14 +85,28 @@ export const ProviderStateBindingSchema = z
     id: IdentifierSchema,
     integrationId: IntegrationIdSchema,
     memberId: IdentifierSchema.optional(),
-    scope: ProviderStateScopeSchema,
+    foremanId: IdentifierSchema.optional(),
+    scope: z.enum([...ProviderStateScopeSchema.options, "foreman"]),
     storageReference: z.string().trim().min(1).max(4_096),
     credentialReference: CredentialProfileReferenceSchema,
     lifecycle: z.enum(["active", "retained", "deleting", "deleted"]),
     createdAt: TimestampSchema,
     updatedAt: TimestampSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((binding, context) => {
+    if (
+      binding.scope === "foreman"
+        ? binding.foremanId === undefined || binding.memberId !== undefined
+        : binding.foremanId !== undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Foreman provider state requires an exclusive Foreman identity",
+        path: ["foremanId"],
+      });
+    }
+  });
 export type ProviderStateBinding = z.infer<typeof ProviderStateBindingSchema>;
 
 export const GeneratedOverlaySchema = z

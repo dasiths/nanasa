@@ -38,6 +38,7 @@ export class ConfigRepository {
 
   public mutate<T>(
     mutate: (config: NanasaConfig) => ConfigMutation<T>,
+    expectedRevision?: string,
   ): Promise<{ loaded: LoadedNanasaConfig; result: T }> {
     let resolveResult: (value: { loaded: LoadedNanasaConfig; result: T }) => void;
     let rejectResult: (error: unknown) => void;
@@ -47,7 +48,10 @@ export class ConfigRepository {
     });
     this.#queue = this.#queue
       .then(() => {
-        const current = this.load();
+        const current = loadNanasaConfig(this.#repositoryRoot);
+        if (expectedRevision !== undefined && expectedRevision !== current.status.revision) {
+          throw new Error("Configuration revision changed; prepare the operation again");
+        }
         const mutation = mutate(structuredClone(current.config));
         this.#write(current, mutation.config);
         resolveResult({ loaded: this.load(), result: mutation.result });
@@ -65,6 +69,9 @@ export class ConfigRepository {
       throw new Error("Configuration changed while preparing an update; retry the operation");
     }
     const document = parseDocument(source, { version: "1.2" });
+    document.set("version", config.version);
+    if (config.foreman === undefined) document.delete("foreman");
+    else document.set("foreman", config.foreman);
     document.set("instructions", config.instructions);
     document.set("roles", config.roles);
     document.set("groups", config.groups);

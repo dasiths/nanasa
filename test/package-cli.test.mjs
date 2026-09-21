@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import {
   existsSync,
   mkdirSync,
@@ -10,6 +11,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, test } from "node:test";
@@ -101,6 +103,76 @@ test("start fails clearly before launch when configuration is absent", () => {
   assert.match(result.stderr, /Run nanasa init first/);
 });
 
+test("stop shuts down and restarts a packaged daemon from a nested directory", {
+  timeout: 45000,
+}, async () => {
+  const repository = temporaryRepository();
+  assert.equal(runCli(repository, ["init"]).status, 0);
+  const configPath = join(repository, ".nanasa", "config.yaml");
+  const config = "version: 2\nintegrations: {}\n";
+  writeFileSync(configPath, config);
+  const nested = join(repository, "nested");
+  mkdirSync(nested);
+  const runtimePath = join(repository, "custom-runtime");
+  const environment = { NANASA_RUNTIME_PATH: runtimePath };
+  const listener = createServer();
+  listener.listen(0, "127.0.0.1");
+  await once(listener, "listening");
+  const port = listener.address().port;
+  await new Promise((resolveClose) => listener.close(resolveClose));
+  let child;
+  let exited;
+  try {
+    for (const command of [["stop"], ["daemon", "stop"]]) {
+      child = spawn(process.execPath, [cli, "start", "--port", String(port)], {
+        cwd: repository,
+        env: { ...process.env, ...environment },
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      exited = once(child, "exit");
+      let timer;
+      try {
+        await Promise.race([
+          new Promise((resolveReady, reject) => {
+            let output = "";
+            child.stdout.on("data", (data) => {
+              output = `${output}${data}`.slice(-4096);
+              if (output.includes(`Open http://127.0.0.1:${port}/`)) resolveReady();
+            });
+            timer = setTimeout(
+              () => reject(new Error("Packaged daemon did not become ready")),
+              15000,
+            );
+          }),
+          exited.then(([code]) => {
+            throw new Error(`Packaged daemon exited before readiness: ${code}`);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+      const secretPath = join(runtimePath, "operator-secret");
+      const secret = readFileSync(secretPath);
+      const result = runCli(nested, [...command, "--timeout", "10000", "--json"]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).state, "stopped");
+      assert.equal((await exited)[0], 0);
+      assert.equal(existsSync(join(repository, ".nanasa", "runtime", "daemon.lock")), false);
+      assert.equal(readFileSync(configPath, "utf8"), config);
+      assert.deepEqual(readFileSync(secretPath), secret);
+      assert.equal(existsSync(join(repository, ".nanasa", "state", "nanasa.sqlite")), true);
+      const repeated = runCli(nested, command, environment);
+      assert.equal(repeated.status, 0, repeated.stderr);
+      assert.match(repeated.stdout, /not running/);
+    }
+  } finally {
+    if (child !== undefined && child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGTERM");
+      await exited;
+    }
+  }
+});
+
 test("start rejects retired terminal-provider options", () => {
   const repository = temporaryRepository();
   assert.equal(runCli(repository, ["init"]).status, 0);
@@ -124,6 +196,7 @@ test("help documents default authenticated MCP and its explicit opt-out", () => 
   assert.match(result.stdout, /nanasa auth login <integration> \[--agent <agent-id>\]/);
   assert.match(result.stdout, /nanasa auth portal/);
   assert.match(result.stdout, /setup\s+Prepare repository-local integration configuration homes/);
+  assert.match(result.stdout, /stop\s+Gracefully stop this repository's daemon/);
   assert.match(result.stdout, /auth\s+Authenticate locally or inspect daemon auth state/);
   assert.match(result.stdout, /trust consent extension/);
   assert.match(result.stdout, /doctor\s+Validate configuration, commands, and integration homes/);

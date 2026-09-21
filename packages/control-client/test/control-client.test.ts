@@ -10,6 +10,68 @@ function response(payload: unknown, status = 200): Response {
 }
 
 describe("NanasaControlClient", () => {
+  it("lists pending cleanup and approves only its captured request ID and digest", async () => {
+    const request = {
+      id: "request-one",
+      foremanId: "foreman",
+      state: "pending",
+      command: { requestId: "cleanup-one", scope: "channel", throughSequence: 8 },
+      digest: "a".repeat(64),
+      createdAt: "2026-09-20T12:00:00Z",
+    };
+    const approved = {
+      ...request,
+      state: "approved",
+      operatorId: "human",
+      approvedAt: "2026-09-20T12:01:00Z",
+      result: {
+        scope: "channel",
+        messagesCleared: 2,
+        removedGoalIds: [],
+        retained: true,
+        pendingEffects: [],
+      },
+    };
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(response([request]))
+      .mockResolvedValueOnce(response(approved));
+    const client = new NanasaControlClient({ fetch, operatorToken: "test-operator" });
+    expect(await client.foremanCleanupRequests()).toEqual([request]);
+    const command = { id: request.id, digest: request.digest, confirmation: true as const };
+    expect(await client.approveForemanCleanup(command)).toEqual(approved);
+    expect(fetch.mock.calls[0]![0]).toBe("/api/v1/foreman/cleanup/requests");
+    expect(fetch.mock.calls[1]![0]).toBe("/api/v1/foreman/cleanup/approve");
+    expect(JSON.parse(String(fetch.mock.calls[1]![1]?.body))).toEqual(command);
+  });
+
+  it("sends scoped cleanup with its request receipt and reads retained live effects", async () => {
+    const result = {
+      scope: "channel",
+      removedGoalIds: [],
+      messagesCleared: 2,
+      clearedThrough: 8,
+      retained: true,
+      pendingEffects: [],
+    };
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(response(result))
+      .mockResolvedValueOnce(response([]));
+    const client = new NanasaControlClient({ fetch, operatorToken: "test-operator" });
+    const command = {
+      scope: "channel" as const,
+      requestId: "cleanup-1",
+      confirmation: true as const,
+      throughSequence: 8,
+    };
+    expect(await client.cleanupForeman(command)).toEqual(result);
+    expect(JSON.parse(String(fetch.mock.calls[0]![1]?.body))).toEqual(command);
+    expect(fetch.mock.calls[0]![0]).toBe("/api/v1/foreman/cleanup");
+    expect(await client.foremanCleanupEffects()).toEqual([]);
+    expect(fetch.mock.calls[1]![0]).toBe("/api/v1/foreman/cleanup/effects");
+  });
+
   it("normalizes current and legacy error responses", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()

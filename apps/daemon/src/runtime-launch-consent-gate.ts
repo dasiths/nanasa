@@ -100,6 +100,7 @@ export interface RuntimeLaunchConsentGateOptions {
   readonly runtimeEnvironmentNames?: readonly string[];
   readonly allowAutonomous?: boolean;
   readonly allowProviderFiles?: boolean;
+  readonly authorizeAutomaticRecovery?: (groupId: string, memberId: string) => boolean;
 }
 
 export class RuntimeLaunchConsentGate implements CoordinatorLaunchConsentGate {
@@ -111,6 +112,7 @@ export class RuntimeLaunchConsentGate implements CoordinatorLaunchConsentGate {
   readonly #runtimeEnvironmentNames: readonly string[];
   readonly #allowAutonomous: boolean;
   readonly #allowProviderFiles: boolean;
+  readonly #authorizeAutomaticRecovery: RuntimeLaunchConsentGateOptions["authorizeAutomaticRecovery"];
 
   public constructor(options: RuntimeLaunchConsentGateOptions) {
     this.#repositoryIdentity = options.repositoryIdentity;
@@ -121,6 +123,7 @@ export class RuntimeLaunchConsentGate implements CoordinatorLaunchConsentGate {
     this.#runtimeEnvironmentNames = options.runtimeEnvironmentNames ?? [];
     this.#allowAutonomous = options.allowAutonomous === true;
     this.#allowProviderFiles = options.allowProviderFiles === true;
+    this.#authorizeAutomaticRecovery = options.authorizeAutomaticRecovery;
   }
 
   public async resolve(
@@ -140,6 +143,8 @@ export class RuntimeLaunchConsentGate implements CoordinatorLaunchConsentGate {
     groupId: string,
     memberId: string,
   ): Promise<{ readonly status: "built-in" | "trusted" | "approval-required" | "denied" }> {
+    if (this.#authorizeAutomaticRecovery?.(groupId, memberId) === false)
+      return { status: "denied" };
     const resolution = this.#consentService.inspectForAutomaticRecovery(
       await this.#input(groupId, memberId),
     );

@@ -138,8 +138,9 @@ export class RunRuntimeCoordinator {
     groupId: string,
     memberId: string,
     size: { cols: number; rows: number },
+    beforeEffect?: () => void,
   ): Promise<StartAgentRunResult> {
-    return this.#serialize(() => this.#startRun(groupId, memberId, size));
+    return this.#serialize(() => this.#startRun(groupId, memberId, size, beforeEffect));
   }
 
   public startAll(
@@ -237,8 +238,22 @@ export class RunRuntimeCoordinator {
     });
   }
 
-  public stopRun(groupId: string, memberId: string): Promise<AgentRun> {
-    return this.#serialize(() => this.#stopRun(groupId, memberId));
+  public stopRun(
+    groupId: string,
+    memberId: string,
+    options?: {
+      beforeEffect: () => void;
+      beforeFinalize?: () => void;
+      reason: string;
+    },
+  ): Promise<AgentRun> {
+    return this.#serialize(async () => {
+      options?.beforeEffect();
+      const stopped = await this.#stopRun(groupId, memberId, options);
+      return options
+        ? this.#store.updateRunStatus(stopped.id, stopped.status, { reason: options.reason })
+        : stopped;
+    });
   }
 
   public restartRun(
@@ -319,10 +334,12 @@ export class RunRuntimeCoordinator {
   public assignGroupCheckout(
     groupId: string,
     command: AssignGroupCheckoutCommand,
+    beforeEffect?: () => void,
   ): Promise<AssignGroupCheckoutResult> {
     return this.#serialize(async () => {
       const previousCheckoutId = this.#store.getEffectiveGroupCheckout(groupId)?.id;
       await this.#validateCheckout?.(command.checkoutId);
+      beforeEffect?.();
       this.#store.validateGroupCheckoutAssignment(
         groupId,
         command.checkoutId,
@@ -607,9 +624,12 @@ export class RunRuntimeCoordinator {
     groupId: string,
     memberId: string,
     size: { cols: number; rows: number },
+    beforeEffect?: () => void,
   ): Promise<StartAgentRunResult> {
+    beforeEffect?.();
     const consent = await this.#resolveConsent(groupId, memberId);
     if (consent !== undefined) return consent;
+    beforeEffect?.();
     return this.#launchRun(groupId, memberId, size);
   }
 
@@ -638,20 +658,34 @@ export class RunRuntimeCoordinator {
     return { status: "started", run };
   }
 
-  async #stopRun(groupId: string, memberId: string): Promise<AgentRun> {
+  async #stopRun(
+    groupId: string,
+    memberId: string,
+    options?: { reason: string; beforeFinalize?: () => void },
+  ): Promise<AgentRun> {
     const run = this.#store.getActiveRun(groupId, memberId);
     if (run === undefined) {
       const latest = this.#store.getLatestRunForMembership(groupId, memberId);
       if (latest === undefined || latest.desiredState !== "running") {
         throw new DomainError("active_run_not_found", "The member has no active run", 404);
       }
-      return this.#store.stopDesiredRun(latest.id, latest.generation);
+      return this.#store.stopDesiredRun(latest.id, latest.generation, options?.reason);
     }
     if (run.status !== "stopping") {
-      this.#store.updateRunStatus(run.id, "stopping");
+      this.#store.updateRunStatus(run.id, "stopping", options ? { reason: options.reason } : {});
     }
     await this.#supervisor.stop(run.id);
     await this.#runtime.removeViewSession(run.id);
+    if (options) {
+      options.beforeFinalize?.();
+      const current = this.#store.getActiveRun(groupId, memberId);
+      if (current?.id !== run.id || current.generation !== run.generation)
+        throw new DomainError(
+          "run_replaced",
+          "The run changed before preparation could stop it",
+          409,
+        );
+    }
     return this.#runtime.stopRun(groupId, memberId);
   }
 

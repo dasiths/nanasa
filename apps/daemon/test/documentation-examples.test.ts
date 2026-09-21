@@ -160,6 +160,17 @@ describe("tested documentation examples", () => {
 
   it("loads the nested multi-coding-agents example with scoped prompts", () => {
     const loaded = loadNanasaConfig(multiCodingAgentsRoot);
+    expect(loaded.config.instructions).toEqual([".nanasa/instructions/team.md"]);
+    expect(statExists(join(multiCodingAgentsRoot, ".nanasa/instructions/nanasa-mcp.md"))).toBe(
+      false,
+    );
+    const foremanGuidance = readFileSync(
+      join(multiCodingAgentsRoot, ".nanasa/instructions/foreman.md"),
+      "utf8",
+    );
+    expect(foremanGuidance).toContain("apps/daemon");
+    expect(foremanGuidance).toContain("apps/portal");
+    expect(foremanGuidance).not.toMatch(/nanasa\.[a-z_]+|supervised|bounded/);
     const groupId = "grp_852f1819-0614-49b4-b193-71bf5e98becf";
     const expectedRolePaths = {
       "agent_318f514e-2347-4d87-8c64-aef0752e7bfb": ".nanasa/instructions/project-manager.md",
@@ -169,6 +180,53 @@ describe("tested documentation examples", () => {
     } as const;
 
     expect(loaded.repoRoot).toBe(multiCodingAgentsRoot);
+    expect(
+      loaded.config.groups[groupId]?.agents["agent_e0f1b592-5fb2-4fe2-93e4-ac9da40dedf1"],
+    ).toMatchObject({
+      memberId: "musing-kilby",
+      name: "Engineer 2",
+      integrationId: "pi-backend",
+      roleId: "implementor",
+    });
+    const backendPi = loaded.config.integrations["pi-backend"]!;
+    expect(backendPi.providerState).toEqual({ scope: "integration" });
+    expect(backendPi.model).toEqual({
+      model: "github-copilot/gpt-5.6-terra",
+      resumePolicy: "enforce-configured",
+    });
+    expect(
+      loaded.config.groups[groupId]?.agents["agent_318f514e-2347-4d87-8c64-aef0752e7bfb"]
+        ?.desiredModel,
+    ).toBe("gpt-5.6-terra");
+    expect(loaded.config.integrations.copilot?.model.resumePolicy).toBe("enforce-configured");
+    const backendHomes = [
+      "agent_0ae65cd2-985d-498c-9399-0978bae77827",
+      "agent_e0f1b592-5fb2-4fe2-93e4-ac9da40dedf1",
+    ].map((agentId) => {
+      const agent = loaded.config.groups[groupId]!.agents[agentId]!;
+      expect(agent.integrationId).toBe(backendPi.id);
+      return resolveProviderStateHome(
+        loaded.integrationsDirectory,
+        agent.integrationId,
+        backendPi.providerState,
+        agentId,
+      );
+    });
+    const sharedLoginHome = resolveProviderStateHome(
+      loaded.integrationsDirectory,
+      backendPi.id,
+      backendPi.providerState,
+    );
+    expect(backendHomes).toEqual([sharedLoginHome, sharedLoginHome]);
+    const frontendPi = loaded.config.integrations.pi!;
+    expect(sharedLoginHome).not.toBe(
+      resolveProviderStateHome(
+        loaded.integrationsDirectory,
+        frontendPi.id,
+        frontendPi.providerState,
+        "frontend-builder",
+      ),
+    );
     const claudeCopilot = loaded.config.integrations["claude-copilot"]!;
     expect(claudeCopilot).toMatchObject({
       command: ["sh", "bin/claude-copilot"],
@@ -211,7 +269,6 @@ describe("tested documentation examples", () => {
       expect(prompt.sources).toEqual([
         { scope: "builtin", reference: "builtin:nanasa-coordination-v1" },
         { scope: "builtin", reference: "builtin:nanasa-assignment-v1" },
-        { scope: "global", reference: ".nanasa/instructions/nanasa-mcp.md" },
         { scope: "global", reference: ".nanasa/instructions/team.md" },
         { scope: "group", reference: ".nanasa/instructions/groups/agent-team.md" },
         { scope: "role", reference: rolePath },
@@ -246,6 +303,11 @@ describe("tested documentation examples", () => {
         scope: "group",
         reference: ".nanasa/instructions/groups/frontend-team.md",
       });
+      expect(prompt.text).toContain(
+        "expertise, not permission to reinterpret an explicit requested path",
+      );
+      expect(prompt.text).toContain("not your launch cwd or a specialty directory");
+      expect(prompt.text).toContain("read-only roles");
       expect(prompt.sources).not.toContainEqual({
         scope: "group",
         reference: ".nanasa/instructions/groups/agent-team.md",
@@ -353,12 +415,15 @@ describe("tested documentation examples", () => {
     );
   });
 
-  it("forwards Claude gateway arguments without depending on the caller cwd", () => {
-    const callerDirectory = temporaryGitRepository();
-    const fakeBin = join(callerDirectory, "fake-bin");
-    mkdirSync(fakeBin);
-    const fakeCommands = {
-      curl: `#!/bin/sh
+  it.each(["model-test", ""])(
+    "forwards Claude gateway arguments and model default (%s) independently of caller cwd",
+    (configuredModel) => {
+      const expectedModel = configuredModel || "gpt-5.6-terra";
+      const callerDirectory = temporaryGitRepository();
+      const fakeBin = join(callerDirectory, "fake-bin");
+      mkdirSync(fakeBin);
+      const fakeCommands = {
+        curl: `#!/bin/sh
 set -eu
 header=$(cat)
 test "$header" = "Authorization: Bearer test-secret"
@@ -368,12 +433,12 @@ esac
 test "$6" = "--url"
 test "$7" = "http://gateway.test:4000/health/liveliness"
 `,
-      node: `#!/bin/sh
+        node: `#!/bin/sh
 set -eu
 test "$PWD" = "$EXPECTED_PRODUCT_ROOT"
 test "$1" = "scripts/prepare-claude-gateway-state.mjs"
 `,
-      claude: `#!/bin/sh
+        claude: `#!/bin/sh
 set -eu
     test "$ANTHROPIC_AUTH_TOKEN" = "test-secret"
 printf 'claude-pwd=%s\n' "$PWD"
@@ -381,50 +446,53 @@ printf 'base=%s\n' "$ANTHROPIC_BASE_URL"
 printf 'model=%s\n' "$ANTHROPIC_MODEL"
 printf 'sonnet=%s\n' "$ANTHROPIC_DEFAULT_SONNET_MODEL"
 printf 'haiku=%s\n' "$ANTHROPIC_DEFAULT_HAIKU_MODEL"
+printf 'opus=%s\n' "$ANTHROPIC_DEFAULT_OPUS_MODEL"
 printf 'betas=%s\n' "$CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"
 for argument in "$@"; do
   printf 'arg=%s\n' "$argument"
 done
 `,
-    } as const;
-    for (const [name, source] of Object.entries(fakeCommands)) {
-      const path = join(fakeBin, name);
-      writeFileSync(path, source, { mode: 0o700 });
-    }
+      } as const;
+      for (const [name, source] of Object.entries(fakeCommands)) {
+        const path = join(fakeBin, name);
+        writeFileSync(path, source, { mode: 0o700 });
+      }
 
-    const output = execFileSync(
-      "sh",
-      [
-        join(multiCodingAgentsRoot, "bin", "claude-copilot"),
-        "--permission-mode",
-        "plan mode",
-        "literal-*",
-        "",
-      ],
-      {
-        cwd: callerDirectory,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-          EXPECTED_PRODUCT_ROOT: resolve(productRoot),
-          LITELLM_URL: "http://gateway.test:4000",
-          LITELLM_KEY: "test-secret",
-          COPILOT_MODEL: "model-test",
+      const output = execFileSync(
+        "sh",
+        [
+          join(multiCodingAgentsRoot, "bin", "claude-copilot"),
+          "--permission-mode",
+          "plan mode",
+          "literal-*",
+          "",
+        ],
+        {
+          cwd: callerDirectory,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+            EXPECTED_PRODUCT_ROOT: resolve(productRoot),
+            LITELLM_URL: "http://gateway.test:4000",
+            LITELLM_KEY: "test-secret",
+            COPILOT_MODEL: configuredModel,
+          },
         },
-      },
-    );
+      );
 
-    expect(output).toBe(`claude-pwd=${callerDirectory}
+      expect(output).toBe(`claude-pwd=${callerDirectory}
 base=http://gateway.test:4000
-model=model-test
-sonnet=model-test
-haiku=model-test
+model=${expectedModel}
+sonnet=${expectedModel}
+haiku=${expectedModel}
+opus=${expectedModel}
 betas=1
 arg=--permission-mode
 arg=plan mode
 arg=literal-*
 arg=
 `);
-  });
+    },
+  );
 });

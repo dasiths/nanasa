@@ -6,7 +6,11 @@ import type { TerminalInputArbiter } from "../terminal/terminal-input-arbiter.js
 
 interface ActionRuntime {
   observeRun(run: Parameters<NanasaStore["createRun"]>[0]): Promise<RuntimeObservation>;
-  pasteToRun(run: Parameters<NanasaStore["createRun"]>[0], text: string): Promise<void>;
+  pasteToRun(
+    run: Parameters<NanasaStore["createRun"]>[0],
+    text: string,
+    assertCurrent?: () => void,
+  ): Promise<void>;
 }
 
 export type ActionReadinessDecision =
@@ -65,7 +69,11 @@ function bindingFingerprint(value: unknown): string {
 }
 
 function actionPrompt(action: AgentAction): string {
-  return `[Nanasa Action: ${action.id} | Exact Run: ${action.target.runId} | Generation: ${action.target.generation}]\n${action.prompt ?? "Wait for the correlated result."}`;
+  const sender =
+    action.principal.kind === "foreman" || action.principal.kind === "foreman-conversation"
+      ? "From: Repository Foreman | "
+      : "";
+  return `[${sender}Nanasa Action: ${action.id} | Exact Run: ${action.target.runId} | Generation: ${action.target.generation}]\n${action.prompt ?? "Wait for the correlated result."}`;
 }
 
 export class AgentActionScheduler {
@@ -81,6 +89,7 @@ export class AgentActionScheduler {
     private readonly arbiter: TerminalInputArbiter,
     private readonly now: () => Date = () => new Date(),
     private readonly pollIntervalMs = 1_000,
+    private readonly authorizeDelegatedAction?: (action: AgentAction) => void,
   ) {}
 
   public start(): void {
@@ -152,6 +161,30 @@ export class AgentActionScheduler {
   }
 
   async #consider(action: AgentAction, now: Date): Promise<void> {
+    if (
+      action.principal.kind === "foreman" ||
+      action.principal.kind === "foreman-conversation" ||
+      this.authorizeDelegatedAction !== undefined
+    ) {
+      try {
+        if (this.authorizeDelegatedAction === undefined)
+          throw new DomainError(
+            "goal_dispatch_forbidden",
+            "Goal authorization is unavailable",
+            403,
+          );
+        this.authorizeDelegatedAction(action);
+      } catch (error) {
+        this.store.transitionAgentAction(action.id, [action.state], "cancelled", {
+          error: {
+            code: error instanceof DomainError ? error.code : "goal_dispatch_forbidden",
+            message: "Goal no longer authorizes this action",
+            retryable: false,
+          },
+        });
+        return;
+      }
+    }
     if (Date.parse(action.queueDeadlineAt) <= now.getTime()) {
       this.store.transitionAgentAction(action.id, [action.state], "expired", {
         error: {
@@ -299,7 +332,14 @@ export class AgentActionScheduler {
             409,
           );
         }
-        await this.runtime.pasteToRun(run, actionPrompt(action));
+        if (this.authorizeDelegatedAction !== undefined) {
+          this.authorizeDelegatedAction!(action);
+          await this.runtime.pasteToRun(run, actionPrompt(action), () =>
+            this.authorizeDelegatedAction!(action),
+          );
+        } else {
+          await this.runtime.pasteToRun(run, actionPrompt(action));
+        }
       });
       writeCompleted = true;
       this.store.markAgentActionSubmitted(action.id, attempt.id, this.#owner);

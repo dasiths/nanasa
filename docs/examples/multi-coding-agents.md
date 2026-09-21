@@ -2,23 +2,34 @@
 
 A Nanasa group can combine provider CLIs while giving every runtime one stable
 identity, role, prompt, terminal, provider home, and authenticated coordination
-channel. This example uses four active agents:
+channel. The [runnable example](../../examples/multi-coding-agents/README.md)
+configures six team agents and a separate repository Foreman:
 
-| Agent | Provider | Responsibility |
-|-------|----------|----------------|
-| Project Manager | GitHub Copilot CLI | Assign and coordinate work |
-| Engineer 1 | Pi | Implement and validate changes |
-| Engineer 2 | Claude Code | Implement through a local model gateway |
-| Reviewer | OpenCode | Review without modifying files |
+| Scope | Agent | Provider | Responsibility |
+|-------|-------|----------|----------------|
+| Repository | Foreman | GitHub Copilot CLI | Supervise Human-approved team goals |
+| Backend | Project Manager | GitHub Copilot CLI | Coordinate Backend work |
+| Backend | Engineer 1 | Pi | Implement and validate changes |
+| Backend | Engineer 2 | Pi | Implement and validate changes |
+| Backend | Reviewer | OpenCode | Review without modifying files |
+| Frontend | Frontend Engineer | Pi | Implement in the Frontend worktree |
+| Frontend | Frontend Reviewer | OpenCode | Review Frontend work read-only |
 
 The exact providers are replaceable. The important design is the separation of
 integration, role, group, and agent identity.
 
+Foreman is a repository runtime, not a `roles.foreman` entry or team member.
+It reuses the built-in `copilot` integration but has a private home distinct
+from Backend's Project Manager. An enabled Foreman starts with the daemon.
+Team members still start independently; Foreman's startup does not start them
+or grant control of their work.
+
 ## Define integrations once
 
-An integration tells Nanasa which provider adapter and command to launch. Keep
-provider state membership-scoped so each configured agent receives a separate
-provider home:
+An integration tells Nanasa which provider adapter and command to launch.
+Membership scope gives each agent a private provider home. Engineers 1 and 2
+instead share the integration-scoped `pi-backend` home to authenticate once;
+Frontend Pi remains membership-scoped:
 
 ```yaml
 integrations:
@@ -34,6 +45,13 @@ integrations:
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
+  pi-backend:
+    name: Backend Pi
+    kind: pi
+    cwd: .
+    providerState: { scope: integration }
+    credentials: { kind: provider-managed }
+    model: { model: github-copilot/gpt-5.6-terra, resumePolicy: enforce-configured }
   opencode:
     name: OpenCode
     kind: opencode
@@ -51,12 +69,18 @@ integrations:
     credentials: { kind: provider-managed }
 ```
 
+Run `make -C examples/multi-coding-agents auth-pi` to authenticate the shared
+Backend home. Sharing provider state also shares Pi settings, but does not merge
+Nanasa identities or MCP authorization. The Frontend Engineer still logs in
+separately with `auth-frontend-pi`.
+
 When `command` is omitted, Nanasa derives the built-in executable from `kind`.
-The explicit Claude command is a custom launcher. Nanasa appends generated
+The optional Claude command is a custom launcher; no current example member
+uses it. Nanasa appends generated
 prompt, MCP, model, settings, and reporter arguments to the script command as
 individual arguments.
 
-The first start pauses before credentials or private launch state are created.
+The first start of that custom launcher pauses before credentials or private launch state are created.
 Review the command, append strategy, and repository script digest, then approve
 it in the terminal consent pane or Attention workspace. Later starts reuse the
 approval while the stable launch properties and script contents remain
@@ -91,6 +115,44 @@ The reviewer prompt describes expected behavior. The `read-only` policy asks
 the provider adapter to enforce its write-denial floor. Prompt wording alone is
 not a permission boundary.
 
+## Add the GitHub Copilot Foreman
+
+The checked-in example selects the existing Copilot CLI integration and sets
+goal supervision limits. Teams and roles are discovered dynamically:
+
+```yaml
+foreman:
+  id: repository-foreman
+  name: Foreman
+  integrationId: copilot
+  enabled: true
+  instructions: [.nanasa/instructions/foreman.md]
+  supervision:
+    reconcileIntervalSeconds: 30
+    reviewIntervalSeconds: 300
+    maxRecoveryAttempts: 3
+    recoveryCooldownSeconds: 120
+  autonomy:
+    mode: supervised
+    maxActiveGoals: 2
+    maxTeamsPerGoal: 2
+    maxConcurrentActions: 4
+    maxGoalHours: 8
+    maxForemanTurns: 100
+```
+
+This does not add a seventh member to either authored team. Goals delegate to
+existing teams after Human approval of the owner and assigned checkout.
+No Foreman model is pinned: select one in
+Settings when needed. The example's Claude-gateway `COPILOT_MODEL` variable does
+not select Foreman's model.
+
+The existing autonomous provider execution profile controls native provider
+behavior. It does not override the separate goal grant: exact operator approval
+is still required for the goal and team delegation. Discretionary idle check-ins
+and automatic worker restarts remain off by default. Native worker permission
+prompts are never approved by Foreman. See [Foreman and goals](../guides/foreman.md).
+
 ## Compose shared and specific guidance
 
 Reference global instructions at the top level and team instructions on the
@@ -98,7 +160,6 @@ group:
 
 ```yaml
 instructions:
-  - .nanasa/instructions/nanasa-mcp.md
   - .nanasa/instructions/team.md
 groups:
   backend-team:
@@ -107,7 +168,7 @@ groups:
       - .nanasa/instructions/groups/agent-team.md
 ```
 
-Nanasa builds each effective prompt in this order:
+Nanasa builds each team member's effective prompt in this order:
 
 ```text
 Built-in coordination guidance
@@ -119,9 +180,17 @@ Agent instructions
 ```
 
 One file can appear only once in the configuration. Put stable cross-provider
-rules at global scope, the team's shared mission at group scope, reusable
+rules at global scope, the team's shared purpose at group scope, reusable
 responsibility at role scope, and exceptional work for one identity at agent
 scope.
+
+Foreman's prompt instead consists of built-in Foreman guidance and identity,
+the shared project guidance, and `.nanasa/instructions/foreman.md`. It never inherits
+group or member-role instructions. Nanasa's built-in layer supplies MCP scope,
+reply routing, goal delegation and supervision rules without any user-authored
+instruction files. The short Foreman file adds project priorities only.
+Choosing a team context changes neither this
+prompt layering nor Foreman's working directory.
 
 ## Assign providers and roles independently
 
@@ -160,6 +229,7 @@ Create private state and authenticate each membership-scoped provider home:
 
 ```bash
 npx nanasa setup
+npx nanasa auth login copilot --foreman
 npx nanasa auth login copilot --agent agent_manager
 npx nanasa auth login pi --agent agent_engineer
 npx nanasa auth login opencode --agent agent_reviewer
@@ -167,7 +237,22 @@ npx nanasa doctor
 ```
 
 Each login launches the provider with the same isolated home that its later run
-will use. Do not replace the configured agent key with the member ID.
+will use. Do not replace the configured agent key with the member ID. Stop
+Foreman before its login and do not combine `--foreman` with `--agent`. Its private
+home is not populated by the Project Manager's Copilot login.
+
+For the runnable example, use its targets instead of the illustrative agent IDs
+above:
+
+```bash
+make -C examples/multi-coding-agents auth-foreman
+make -C examples/multi-coding-agents auth
+```
+
+The first target authenticates only Foreman. The second includes Foreman and
+both teams in order; use one or the other according to which homes need login.
+Foreman's login does not populate member homes. Resolve authentication for the
+selected team's members; do not copy credentials from Foreman or another worktree.
 
 ## Start authenticated coordination
 
@@ -188,6 +273,30 @@ multicast, or group messages, report progress, inspect status, and request
 correlated peer work through the MCP tools. Human portal messages remain
 operator direction and take precedence over conflicting peer requests.
 
+## Delegate a supervised goal
+
+1. Authenticate Foreman, start the example daemon with MCP, and open a one-use
+  portal session using `make example-portal-auth` from the repository root.
+2. Choose **Coordination > Foreman**; the enabled Foreman starts automatically.
+  Channel provides durable instructions and replies; Terminal directly controls
+  the same native Copilot run.
+3. Use **Ask Foreman about Backend Team** or the Frontend equivalent for context.
+  **Back to team** returns to that team's messages. Context is not authorization
+  to control or adopt an existing team or its checkout.
+4. Give Foreman a high-level objective or use **Goals > New goal**. Approve the
+  goal, then review the proposed accountable member and team under **Decisions**.
+5. The team researches, plans, implements and independently reviews the outcome.
+  Follow reports and decisions in Goals; pause or cancel the goal when needed.
+
+Backend and Frontend remain Human-managed until their exact delegation is
+approved. Their agents start at `examples/multi-coding-agents` inside the assigned
+checkout. Foreman does not create a second task graph or micromanage each phase.
+
+Completion requires validation evidence and independent review of the same clean
+committed candidate, not a message or a provider's assertion. Missing credentials,
+uncertain input, and unsupported approval states remain blocked for inspection.
+This example does not certify real-provider overnight reliability.
+
 ## Adapt the topology
 
 Provider and role are separate choices. You can add another implementor using a
@@ -202,4 +311,4 @@ generate immutable launch overlays from the new configuration.
 
 Continue with [Configure Nanasa](../guides/configuration.md),
 [Add scoped prompts](../guides/prompts.md), and
-[Send messages through MCP](../guides/messaging-and-mcp.md).
+[Foreman and goals](../guides/foreman.md).

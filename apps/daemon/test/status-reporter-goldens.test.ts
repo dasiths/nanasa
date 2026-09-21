@@ -6,10 +6,10 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   type AgentStatusEventInput,
-  type AgentStatusEventKind,
   AgentStatusEventInputSchema,
+  type AgentStatusEventKind,
 } from "@nanasa/contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   HOOK_STATUS_REPORTER_SOURCE,
   OPENCODE_STATUS_REPORTER_SOURCE,
@@ -147,7 +147,8 @@ async function runHook(
   url: string,
   configuredEvent?: string,
 ) {
-  await new Promise<void>((resolve, reject) => {
+  return await new Promise<string>((resolve, reject) => {
+    let output = "";
     const child = spawn(
       process.execPath,
       [scriptPath, source, ...(configuredEvent === undefined ? [] : [configuredEvent])],
@@ -167,11 +168,16 @@ async function runHook(
           NANASA_REPORTER_EPOCH: "epoch-golden",
           NANASA_REPORTER_SEQUENCE_FILE: `${scriptPath}.sequence.json`,
         },
-        stdio: ["pipe", "ignore", "ignore"],
+        stdio: ["pipe", "pipe", "ignore"],
       },
     );
+    child.stdout.on("data", (chunk) => {
+      output += chunk.toString();
+    });
     child.once("error", reject);
-    child.once("close", (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
+    child.once("close", (code) =>
+      code === 0 ? resolve(output) : reject(new Error(`exit ${code}`)),
+    );
     child.stdin.end(input);
   });
 }
@@ -209,12 +215,22 @@ function clearReporterEnvironment(): void {
 async function selectOpenCodeRoot(
   temporaryDirectory: string,
   sessionId: string,
+  plugin: { event(input: { event: Record<string, unknown> }): Promise<void> },
 ): Promise<() => void> {
   const modulePath = join(temporaryDirectory, "opencode-tui-session.mjs");
   writeFileSync(modulePath, OPENCODE_TUI_STATUS_REPORTER_SOURCE);
   const module = await import(`${pathToFileURL(modulePath).href}?test=${Date.now()}`);
   let dispose = () => {};
   await module.default.tui({
+    client: {
+      session: {
+        update: async (input: { metadata: unknown }) => {
+          const info = { id: sessionId, metadata: input.metadata };
+          await plugin.event({ event: { type: "session.updated", properties: { info } } });
+          return { data: info };
+        },
+      },
+    },
     route: { current: { name: "session", params: { sessionID: sessionId } } },
     state: { session: { get: () => ({ id: sessionId }) } },
     lifecycle: { onDispose: (handler: () => void) => (dispose = handler) },
@@ -223,6 +239,103 @@ async function selectOpenCodeRoot(
 }
 
 describe("version-pinned status reporter traces", () => {
+  it.each([
+    ["status_process_unverified", 2],
+    ["status_reporter_identity_fenced", 1],
+    ["status_native_session_fenced", 1],
+  ])("handles startup rejection %s without changing event identity", async (code, attempts) => {
+    const temporaryDirectory = mkdtempSync(join(tmpdir(), "nanasa-hook-startup-retry-"));
+    temporaryDirectories.push(temporaryDirectory);
+    const scriptPath = join(temporaryDirectory, "hook.mjs");
+    writeFileSync(scriptPath, HOOK_STATUS_REPORTER_SOURCE);
+    let received = 0;
+    const capture = await captureServer(() => {
+      received += 1;
+      return received === 1 ? { status: 409, body: { code } } : undefined;
+    });
+    const input = [
+      { jsonrpc: "2.0", id: 1, method: "initialize" },
+      { jsonrpc: "2.0", method: "notifications/initialized" },
+    ]
+      .map((message) => JSON.stringify(message))
+      .join("\n");
+    try {
+      await runHook(scriptPath, "copilot", input, capture.url, "mcp-startup");
+      expect(capture.events).toHaveLength(attempts);
+      expect(
+        capture.events.every(
+          (event) => event.eventId === capture.events[0]!.eventId && event.sourceSequence === 1,
+        ),
+      ).toBe(true);
+    } finally {
+      await closeServer(capture.server);
+    }
+  });
+
+  it("reports Copilot startup once after native MCP initialization without a user prompt", async () => {
+    const temporaryDirectory = mkdtempSync(join(tmpdir(), "nanasa-hook-startup-"));
+    temporaryDirectories.push(temporaryDirectory);
+    const scriptPath = join(temporaryDirectory, "hook.mjs");
+    writeFileSync(scriptPath, HOOK_STATUS_REPORTER_SOURCE);
+    const capture = await captureServer();
+    const initialize = {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-03-26" },
+    };
+    const initialized = { jsonrpc: "2.0", method: "notifications/initialized" };
+    const input = [
+      initialize,
+      initialized,
+      initialized,
+      { jsonrpc: "2.0", id: 2, method: "tools/list" },
+    ]
+      .map((message) => JSON.stringify(message))
+      .join("\n");
+    try {
+      await runHook(scriptPath, "copilot", JSON.stringify(initialize), capture.url, "mcp-startup");
+      expect(capture.events).toHaveLength(0);
+      const output = await runHook(scriptPath, "copilot", input, capture.url, "mcp-startup");
+      expect(
+        output
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+      ).toEqual([
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          result: {
+            protocolVersion: "2025-03-26",
+            capabilities: { tools: {} },
+            serverInfo: { name: "nanasa-status-reporter", version: "2" },
+          },
+        },
+        { jsonrpc: "2.0", id: 2, result: { tools: [] } },
+      ]);
+      expect(capture.events).toHaveLength(1);
+      expect(capture.events[0]).toMatchObject({ event: "session.ready", sourceSequence: 1 });
+      expect(capture.events[0]!.nativeSessionId).toBeUndefined();
+      await runHook(scriptPath, "copilot", input, capture.url, "mcp-startup");
+      expect(capture.events).toHaveLength(1);
+      await runHook(
+        scriptPath,
+        "copilot",
+        JSON.stringify({ sessionId: "native-session" }),
+        capture.url,
+        "sessionStart",
+      );
+      expect(capture.events[1]).toMatchObject({
+        event: "session.ready",
+        nativeSessionId: "native-session",
+        sourceSequence: 2,
+      });
+    } finally {
+      await closeServer(capture.server);
+    }
+  });
+
   it.each([
     ["claude-code-2.1.220", "claude-code"],
     ["copilot-1.0.79", "copilot"],
@@ -323,6 +436,339 @@ describe("version-pinned status reporter traces", () => {
     }
   });
 
+  it("creates and selects a native OpenCode root on cold startup without a prompt", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "nanasa-opencode-cold-start-"));
+    temporaryDirectories.push(directory);
+    const modulePath = join(directory, "tui.mjs");
+    writeFileSync(modulePath, OPENCODE_TUI_STATUS_REPORTER_SOURCE);
+    const serverPath = join(directory, "server.mjs");
+    writeFileSync(serverPath, OPENCODE_STATUS_REPORTER_SOURCE);
+    const capture = await captureServer();
+    const previousUrl = process.env.NANASA_STATUS_URL;
+    const previousToken = process.env.NANASA_MCP_TOKEN;
+    process.env.NANASA_STATUS_URL = capture.url;
+    process.env.NANASA_MCP_TOKEN = "fixture-token";
+    setReporterEnvironment("opencode");
+    const root = { id: "native-created-root", metadata: { existing: "preserved" } };
+    let route: { name: string; params?: { sessionID: string } } = { name: "home" };
+    const create = vi.fn(async () => ({ data: root }));
+    const navigate = vi.fn((name: string, params: { sessionID: string }) => {
+      route = { name, params };
+    });
+    const prompt = vi.fn();
+    let dispose = () => {};
+    const previousCreateRoot = process.env.NANASA_OPENCODE_CREATE_ROOT;
+    const previousOptions = process.env.NANASA_OPENCODE_SESSION_OPTIONS;
+    process.env.NANASA_OPENCODE_CREATE_ROOT = "1";
+    const options = {
+      agent: "nanasa-reviewer",
+      model: { providerID: "github-copilot", id: "gpt-5.6-terra" },
+      permission: [{ permission: "edit", pattern: "*", action: "deny" }],
+    };
+    process.env.NANASA_OPENCODE_SESSION_OPTIONS = JSON.stringify(options);
+    const plugin = await (await import(pathToFileURL(serverPath).href)).default();
+    const update = vi.fn(async (input: { sessionID: string; metadata: unknown }) => {
+      expect(route).toEqual({ name: "session", params: { sessionID: root.id } });
+      const info = { id: input.sessionID, metadata: input.metadata };
+      await plugin.event({ event: { type: "session.updated", properties: { info } } });
+      return { data: info };
+    });
+    try {
+      await plugin.event({ event: { type: "session.created", properties: { info: root } } });
+      for (const selection of [
+        {},
+        { runId: "other-run", generation: 1, reporterEpoch: "epoch-golden" },
+        { runId: "run-golden", generation: 2, reporterEpoch: "epoch-golden" },
+        { runId: "run-golden", generation: 1, reporterEpoch: "old-epoch" },
+      ]) {
+        await plugin.event({
+          event: {
+            type: "session.updated",
+            properties: { info: { ...root, metadata: { nanasaReporter: selection } } },
+          },
+        });
+      }
+      await plugin.event({
+        event: {
+          type: "session.updated",
+          properties: {
+            info: {
+              id: "child",
+              parentID: root.id,
+              metadata: {
+                nanasaReporter: {
+                  runId: "run-golden",
+                  generation: 1,
+                  reporterEpoch: "epoch-golden",
+                },
+              },
+            },
+          },
+        },
+      });
+      const module = await import(pathToFileURL(modulePath).href);
+      await module.default.tui({
+        client: { session: { create, prompt, update } },
+        route: {
+          get current() {
+            return route;
+          },
+          navigate,
+        },
+        state: { ready: true, session: { get: () => root } },
+        lifecycle: { onDispose: (handler: () => void) => (dispose = handler) },
+      });
+      await expect.poll(() => create.mock.calls.length).toBe(1);
+      expect(create).toHaveBeenCalledWith(options);
+      expect(navigate).toHaveBeenCalledWith("session", { sessionID: root.id });
+      expect(update).toHaveBeenCalledWith({
+        sessionID: root.id,
+        metadata: {
+          existing: "preserved",
+          nanasaReporter: { runId: "run-golden", generation: 1, reporterEpoch: "epoch-golden" },
+        },
+      });
+      await waitForCount(capture.events, 1);
+      expect(capture.events[0]).toMatchObject({
+        event: "session.ready",
+        nativeSessionId: root.id,
+        runId: "run-golden",
+        generation: 1,
+        reporterEpoch: "epoch-golden",
+      });
+      expect(prompt).not.toHaveBeenCalled();
+    } finally {
+      dispose();
+      plugin.dispose();
+      if (previousCreateRoot === undefined) delete process.env.NANASA_OPENCODE_CREATE_ROOT;
+      else process.env.NANASA_OPENCODE_CREATE_ROOT = previousCreateRoot;
+      if (previousOptions === undefined) delete process.env.NANASA_OPENCODE_SESSION_OPTIONS;
+      else process.env.NANASA_OPENCODE_SESSION_OPTIONS = previousOptions;
+      if (previousUrl === undefined) delete process.env.NANASA_STATUS_URL;
+      else process.env.NANASA_STATUS_URL = previousUrl;
+      if (previousToken === undefined) delete process.env.NANASA_MCP_TOKEN;
+      else process.env.NANASA_MCP_TOKEN = previousToken;
+      clearReporterEnvironment();
+      await closeServer(capture.server);
+    }
+  });
+
+  it.each(["failure", "missing-id", "child", "navigation", "disposal"])(
+    "does not select or report an OpenCode root after %s during creation",
+    async (scenario) => {
+      const directory = mkdtempSync(join(tmpdir(), "nanasa-opencode-cold-guard-"));
+      temporaryDirectories.push(directory);
+      const modulePath = join(directory, "tui.mjs");
+      writeFileSync(modulePath, OPENCODE_TUI_STATUS_REPORTER_SOURCE);
+      let route = { name: "home" };
+      let resolveCreation!: (value: unknown) => void;
+      const create = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveCreation = resolve;
+          }),
+      );
+      const navigate = vi.fn();
+      const update = vi.fn();
+      let dispose = () => {};
+      const previousCreateRoot = process.env.NANASA_OPENCODE_CREATE_ROOT;
+      process.env.NANASA_OPENCODE_CREATE_ROOT = "1";
+      try {
+        const module = await import(pathToFileURL(modulePath).href);
+        vi.useFakeTimers();
+        await module.default.tui({
+          client: { session: { create, update } },
+          route: {
+            get current() {
+              return route;
+            },
+            navigate,
+          },
+          state: { ready: true, session: { get: () => undefined } },
+          lifecycle: { onDispose: (handler: () => void) => (dispose = handler) },
+        });
+        if (scenario === "navigation") route = { name: "other" };
+        if (scenario === "disposal") dispose();
+        resolveCreation(
+          scenario === "failure"
+            ? { error: { message: "unavailable" } }
+            : {
+                data: {
+                  id: scenario === "missing-id" ? "" : "native-root",
+                  ...(scenario === "child" ? { parentID: "parent" } : {}),
+                },
+              },
+        );
+        await vi.advanceTimersByTimeAsync(400);
+        expect(create).toHaveBeenCalledTimes(1);
+        expect(navigate).not.toHaveBeenCalled();
+        expect(update).not.toHaveBeenCalled();
+      } finally {
+        dispose();
+        vi.useRealTimers();
+        if (previousCreateRoot === undefined) delete process.env.NANASA_OPENCODE_CREATE_ROOT;
+        else process.env.NANASA_OPENCODE_CREATE_ROOT = previousCreateRoot;
+      }
+    },
+  );
+
+  it.each(["resume", "selected", "child", "hydrating"])(
+    "preserves OpenCode %s startup without duplicate roots",
+    async (scenario) => {
+      const directory = mkdtempSync(join(tmpdir(), "nanasa-opencode-startup-guard-"));
+      temporaryDirectories.push(directory);
+      const modulePath = join(directory, "tui.mjs");
+      writeFileSync(modulePath, OPENCODE_TUI_STATUS_REPORTER_SOURCE);
+      const root = { id: "native-root", ...(scenario === "child" ? { parentID: "parent" } : {}) };
+      const create = vi.fn(async () => ({ data: root }));
+      const update = vi.fn(async () => ({ data: root }));
+      const navigate = vi.fn();
+      let ready = scenario !== "hydrating";
+      let dispose = () => {};
+      const previousCreateRoot = process.env.NANASA_OPENCODE_CREATE_ROOT;
+      process.env.NANASA_OPENCODE_CREATE_ROOT = scenario === "resume" ? "0" : "1";
+      setReporterEnvironment("opencode");
+      try {
+        const module = await import(pathToFileURL(modulePath).href);
+        vi.useFakeTimers();
+        await module.default.tui({
+          client: { session: { create, update } },
+          route: {
+            current: ["selected", "child"].includes(scenario)
+              ? { name: "session", params: { sessionID: root.id } }
+              : { name: "home" },
+            navigate,
+          },
+          state: {
+            get ready() {
+              return ready;
+            },
+            session: { get: () => root },
+          },
+          lifecycle: { onDispose: (handler: () => void) => (dispose = handler) },
+        });
+        await vi.advanceTimersByTimeAsync(300);
+        expect(create).not.toHaveBeenCalled();
+        expect(update).toHaveBeenCalledTimes(scenario === "selected" ? 1 : 0);
+        if (scenario === "hydrating") {
+          ready = true;
+          await vi.advanceTimersByTimeAsync(400);
+          expect(create).toHaveBeenCalledTimes(1);
+        }
+      } finally {
+        dispose();
+        vi.useRealTimers();
+        clearReporterEnvironment();
+        if (previousCreateRoot === undefined) delete process.env.NANASA_OPENCODE_CREATE_ROOT;
+        else process.env.NANASA_OPENCODE_CREATE_ROOT = previousCreateRoot;
+      }
+    },
+  );
+
+  it("correlates OpenCode native prompts and settles only the exact marked action", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "nanasa-opencode-actions-"));
+    temporaryDirectories.push(directory);
+    const modulePath = join(directory, "plugin.mjs");
+    writeFileSync(modulePath, OPENCODE_STATUS_REPORTER_SOURCE);
+    const events: AgentStatusEventInput[] = [];
+    const acknowledgements: Array<{
+      kind: string;
+      sourceSequence: number;
+      providerTurnId: string;
+      completionRevision: number;
+    }> = [];
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(chunk));
+      request.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString());
+        response.writeHead(202, { "content-type": "application/json" });
+        if (request.url?.includes("/action-acks/")) {
+          acknowledgements.push(body);
+          response.end(JSON.stringify({ state: body.kind }));
+        } else {
+          events.push(AgentStatusEventInputSchema.parse(body));
+          response.end(
+            JSON.stringify({
+              accepted: true,
+              status: {
+                state: "idle",
+                phase: "settled",
+                completionRevision: body.event === "turn.settled" ? 1 : 0,
+              },
+            }),
+          );
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as { port: number };
+    const previousUrl = process.env.NANASA_STATUS_URL;
+    const previousToken = process.env.NANASA_MCP_TOKEN;
+    process.env.NANASA_STATUS_URL = `http://127.0.0.1:${address.port}/events`;
+    process.env.NANASA_MCP_TOKEN = "fixture-token";
+    setReporterEnvironment("opencode");
+    let disposeTui = () => {};
+    try {
+      const plugin = await (await import(pathToFileURL(modulePath).href)).default();
+      disposeTui = await selectOpenCodeRoot(directory, "action-root", plugin);
+      const prompt = async (text: string, id = "native-turn") =>
+        plugin["chat.message"](
+          { sessionID: "action-root" },
+          { message: { id }, parts: [{ type: "text", text }] },
+        );
+      const turn = async (type: string) =>
+        plugin.event({
+          event: {
+            type: "session.status",
+            properties: { sessionID: "action-root", status: { type } },
+          },
+        });
+      await prompt("[Nanasa Action: action-review | Exact Run: wrong-run | Generation: 1]\nReview");
+      await turn("busy");
+      await turn("idle");
+      await prompt(
+        "[Nanasa Action: action-review | Exact Run: run-golden | Generation: 1]\nReview",
+      );
+      await prompt(
+        "[Nanasa Action: action-review | Exact Run: run-golden | Generation: 1]\nReview",
+      );
+      await plugin["chat.message"](
+        { sessionID: "child-session" },
+        { message: { id: "child-turn" }, parts: [{ type: "text", text: "Child prompt" }] },
+      );
+      await turn("busy");
+      await turn("idle");
+      await turn("idle");
+      await prompt("Ordinary human prompt", "ordinary-turn");
+      await turn("busy");
+      await turn("idle");
+      await expect.poll(() => events.length).toBe(9);
+      expect(acknowledgements).toHaveLength(2);
+      expect(acknowledgements.map((item) => item.kind)).toEqual(["accepted", "completed"]);
+      expect(acknowledgements[1]).toMatchObject({
+        providerTurnId: "native-turn",
+        completionRevision: 1,
+      });
+      const sequences = [
+        ...events.map((item) => item.sourceSequence),
+        ...acknowledgements.map((item) => item.sourceSequence),
+      ].sort((left, right) => left - right);
+      expect(sequences).toEqual(Array.from({ length: 11 }, (_, index) => index + 1));
+      await plugin.event({
+        event: { type: "session.deleted", properties: { sessionID: "action-root" } },
+      });
+    } finally {
+      disposeTui();
+      if (previousUrl === undefined) delete process.env.NANASA_STATUS_URL;
+      else process.env.NANASA_STATUS_URL = previousUrl;
+      if (previousToken === undefined) delete process.env.NANASA_MCP_TOKEN;
+      else process.env.NANASA_MCP_TOKEN = previousToken;
+      clearReporterEnvironment();
+      await closeServer(server);
+    }
+  });
+
   it("replays OpenCode 1.18.15 plugin lifecycle", async () => {
     const directory = "opencode-1.18.15";
     const temporaryDirectory = mkdtempSync(join(tmpdir(), "nanasa-opencode-golden-"));
@@ -339,7 +785,7 @@ describe("version-pinned status reporter traces", () => {
     try {
       const module = await import(`${pathToFileURL(modulePath).href}?test=${Date.now()}`);
       const plugin = await module.default();
-      disposeTui = await selectOpenCodeRoot(temporaryDirectory, "opencode-root");
+      disposeTui = await selectOpenCodeRoot(temporaryDirectory, "opencode-root", plugin);
       const raw = readJson<Array<Record<string, unknown>>>(
         fixturePath(directory, "expanded-raw.json"),
       );
@@ -414,13 +860,17 @@ describe("version-pinned status reporter traces", () => {
         handlers.get("session_shutdown")?.({});
       } else {
         const plugin = await module.default();
-        await plugin.event({
-          event: { type: "session.created", properties: { info: { id: "heartbeat-session" } } },
-        });
+        const disposeTui = await selectOpenCodeRoot(
+          temporaryDirectory,
+          "heartbeat-session",
+          plugin,
+        );
+        disposeTui();
         await waitForEvent(capture.events, "heartbeat");
         await plugin.event({
           event: { type: "session.deleted", properties: { sessionID: "heartbeat-session" } },
         });
+        plugin.dispose();
       }
     } finally {
       if (previousUrl === undefined) delete process.env.NANASA_STATUS_URL;
@@ -496,9 +946,8 @@ describe("version-pinned status reporter traces", () => {
         handlers.get("agent_start")?.({});
       } else {
         const plugin = await module.default();
-        await plugin.event({
-          event: { type: "session.created", properties: { info: { id: "session-fenced" } } },
-        });
+        const disposeTui = await selectOpenCodeRoot(temporaryDirectory, "session-fenced", plugin);
+        disposeTui();
         await waitForCount(capture.events, 1);
         await plugin.event({
           event: {
@@ -507,9 +956,12 @@ describe("version-pinned status reporter traces", () => {
           },
         });
         await new Promise((resolve) => setTimeout(resolve, 225));
-        await plugin.event({
-          event: { type: "session.created", properties: { info: { id: "session-after-fence" } } },
-        });
+        const disposeAfterFence = await selectOpenCodeRoot(
+          temporaryDirectory,
+          "session-after-fence",
+          plugin,
+        );
+        disposeAfterFence();
         await plugin.event({
           event: {
             type: "session.status",

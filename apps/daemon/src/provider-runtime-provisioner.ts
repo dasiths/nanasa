@@ -49,12 +49,25 @@ export interface AgentRuntimeConfiguration {
   readonly stateBinding: ProviderStateBinding;
   readonly nativeRecovery: NativeRecoveryPolicy;
   readonly desiredModel?: string;
-  readonly desiredModelSource: "membership" | "integration" | "provider-default";
+  readonly desiredModelSource: AgentRun["requestedModelSource"];
 }
+
+export interface ForemanRuntimeOwner {
+  readonly id: string;
+  readonly name: string;
+  readonly prompt: EffectiveAgentPrompt;
+  readonly desiredModel?: string;
+  readonly providerPolicy?: EffectiveProviderPolicy;
+}
+
+export type ProviderRuntimeOwner =
+  | { readonly kind: "team"; readonly membership: GroupMembership }
+  | { readonly kind: "foreman"; readonly foreman: ForemanRuntimeOwner };
 
 export interface AgentRuntimeProvisionerOptions {
   integrationsDirectory: string;
   integrations: Readonly<Record<string, ProviderIntegrationPolicy>>;
+  integrationPolicyResolver?: (integrationId: string) => ProviderIntegrationPolicy | undefined;
   statusEndpointUrl: string;
   mcpEndpointUrl?: string;
   repositoryIdentity: string;
@@ -98,27 +111,68 @@ export class AgentRuntimeProvisioner {
     profile: AgentProfile,
     nativeSession?: NativeSessionReference,
   ): Promise<AgentRuntimeConfiguration> {
-    const policy = this.#options.integrations[profile.agentType];
+    return this.provisionOwner(run, { kind: "team", membership }, profile, nativeSession);
+  }
+
+  public async provisionForForeman(
+    run: Pick<AgentRun, "id" | "generation">,
+    foreman: ForemanRuntimeOwner,
+    profile: AgentProfile,
+    nativeSession?: NativeSessionReference,
+  ): Promise<AgentRuntimeConfiguration> {
+    return this.provisionOwner(run, { kind: "foreman", foreman }, profile, nativeSession);
+  }
+
+  public async provisionOwner(
+    run: Pick<AgentRun, "id" | "generation">,
+    owner: ProviderRuntimeOwner,
+    profile: AgentProfile,
+    nativeSession?: NativeSessionReference,
+  ): Promise<AgentRuntimeConfiguration> {
+    const policy =
+      this.#options.integrationPolicyResolver === undefined
+        ? this.#options.integrations[profile.agentType]
+        : this.#options.integrationPolicyResolver(profile.agentType);
     if (policy === undefined)
       throw new Error(`Provider integration policy is missing for ${profile.agentType}`);
     this.#options.assertProviderExtension?.(profile.kind);
     const snapshot = await this.#bindings.resolveActiveSnapshot(profile.kind);
     const evaluator = this.#evaluator(snapshot);
     const configuredCommand = Object.freeze([profile.command, ...profile.args]);
-    const providerPolicy = this.#options.providerPolicyResolver?.(membership, profile);
-    const stateBinding = this.#states.resolve({
-      membershipId: membership.id,
-      integrationId: profile.agentType,
-      policy: policy.providerState,
-      credentialReference: policy.credentials,
-    });
-    const effectivePrompt = this.#options.promptResolver?.(membership, profile);
+    const ownerId = owner.kind === "team" ? owner.membership.id : owner.foreman.id;
+    const ownerName = owner.kind === "team" ? owner.membership.alias : owner.foreman.name;
+    const providerPolicy =
+      owner.kind === "team"
+        ? this.#options.providerPolicyResolver?.(owner.membership, profile)
+        : owner.foreman.providerPolicy;
+    const stateBinding =
+      owner.kind === "team"
+        ? this.#states.resolve({
+            membershipId: ownerId,
+            integrationId: profile.agentType,
+            policy: policy.providerState,
+            credentialReference: policy.credentials,
+          })
+        : this.#states.resolveForForeman({
+            foremanId: ownerId,
+            integrationId: profile.agentType,
+            credentialReference: policy.credentials,
+          });
+    const effectivePrompt =
+      owner.kind === "team"
+        ? this.#options.promptResolver?.(owner.membership, profile)
+        : owner.foreman.prompt;
     const permissionFloor = effectivePrompt?.role?.permissionPolicy ?? "inherit";
-    const membershipModel = this.#options.desiredModelResolver?.(membership, profile);
-    const desiredModel = membershipModel ?? policy.model.model;
+    const ownerModel =
+      owner.kind === "team"
+        ? this.#options.desiredModelResolver?.(owner.membership, profile)
+        : owner.foreman.desiredModel;
+    const desiredModel = ownerModel ?? policy.model.model;
     const desiredModelSource =
-      membershipModel !== undefined
-        ? "membership"
+      ownerModel !== undefined
+        ? owner.kind === "team"
+          ? "membership"
+          : "foreman"
         : policy.model.model !== undefined
           ? "integration"
           : "provider-default";
@@ -143,8 +197,8 @@ export class AgentRuntimeProvisioner {
             stateBinding.storageReference,
           );
     const preview = evaluator.launch({
-      membershipId: membership.id,
-      memberAlias: membership.alias,
+      membershipId: ownerId,
+      memberAlias: ownerName,
       stateRoot: stateBinding.storageReference,
       overlayRoot,
       statusEndpointUrl: this.#options.statusEndpointUrl,
@@ -226,8 +280,8 @@ export class AgentRuntimeProvisioner {
         ...(this.#options.mcpEndpointUrl === undefined ? [] : ["NANASA_MCP_URL"]),
       ],
       repositoryTrustDigest: launchManifestDigest,
-      membershipId: membership.id,
-      memberAlias: membership.alias,
+      membershipId: ownerId,
+      memberAlias: ownerName,
       stateRoot: stateBinding.storageReference,
       statusEndpointUrl: this.#options.statusEndpointUrl,
       ...(this.#options.mcpEndpointUrl === undefined
@@ -269,7 +323,9 @@ export class AgentRuntimeProvisioner {
     });
   }
 
-  public async controlPolicy(run: AgentRun): Promise<SnapshotControlPolicy> {
+  public async controlPolicy(
+    run: Pick<AgentRun, "id" | "generation">,
+  ): Promise<SnapshotControlPolicy> {
     return this.#evaluatorForRun(run).then((evaluator) => evaluator.controlPolicy());
   }
 
@@ -280,7 +336,7 @@ export class AgentRuntimeProvisioner {
     return this.#evaluatorForRun(run).then((evaluator) => evaluator.encodeWaitReply(reply));
   }
 
-  public async processRecognizer(run: AgentRun): Promise<{
+  public async processRecognizer(run: Pick<AgentRun, "id" | "generation">): Promise<{
     recognizeCommand(command: readonly string[]): boolean;
   }> {
     const evaluator = await this.#evaluatorForRun(run);
@@ -289,7 +345,7 @@ export class AgentRuntimeProvisioner {
     });
   }
 
-  public async reporterPolicy(run: AgentRun): Promise<{
+  public async reporterPolicy(run: Pick<AgentRun, "id" | "generation">): Promise<{
     integrationId: string;
     adapterId: string;
     reporterId: string;
@@ -315,7 +371,7 @@ export class AgentRuntimeProvisioner {
   }
 
   public async normalizeNativeSession(
-    run: AgentRun,
+    run: Pick<AgentRun, "id" | "generation">,
     report: {
       source: string;
       referenceKind: "id" | "path";
@@ -334,16 +390,18 @@ export class AgentRuntimeProvisioner {
     });
   }
 
-  public recover(run: AgentRun): Promise<RecoveredProviderRuntime> {
+  public recover(run: Pick<AgentRun, "id" | "generation">): Promise<RecoveredProviderRuntime> {
     return this.#planner.recover(run.id, run.generation);
   }
 
-  public async providerStateRoot(run: AgentRun): Promise<string> {
+  public async providerStateRoot(run: Pick<AgentRun, "id" | "generation">): Promise<string> {
     const recovered = await this.#bindings.requireForRecovery(run.id, run.generation);
     return recovered.binding.launchPlan.stateStorageReference;
   }
 
-  async #evaluatorForRun(run: AgentRun): Promise<ProviderSnapshotEvaluator> {
+  async #evaluatorForRun(
+    run: Pick<AgentRun, "id" | "generation">,
+  ): Promise<ProviderSnapshotEvaluator> {
     const recovered = await this.#bindings.requireForRecovery(run.id, run.generation);
     return this.#evaluator(recovered.snapshot);
   }

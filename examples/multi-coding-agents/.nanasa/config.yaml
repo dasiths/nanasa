@@ -10,7 +10,6 @@ terminal:
     retentionSeconds: 86400
     sensitivity: repository-private
 instructions:
-  - .nanasa/instructions/nanasa-mcp.md
   - .nanasa/instructions/team.md
 attention:
   defaults:
@@ -34,7 +33,7 @@ integrations:
     cwd: .
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
-    model: { resumePolicy: preserve-session }
+    model: { resumePolicy: enforce-configured }
     nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
     executionProfile: autonomous
     providerFiles:
@@ -47,6 +46,18 @@ integrations:
     providerState: { scope: membership }
     credentials: { kind: provider-managed }
     model: { resumePolicy: preserve-session }
+    nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
+    executionProfile: autonomous
+    providerFiles:
+      mcp:
+        paths: [ .nanasa/providers/pi/mcp.json ]
+  pi-backend:
+    name: Backend Pi
+    kind: pi
+    cwd: .
+    providerState: { scope: integration }
+    credentials: { kind: provider-managed }
+    model: { model: github-copilot/gpt-5.6-terra, resumePolicy: enforce-configured }
     nativeRecovery: { mode: resume-or-restart, confirmationTimeoutSeconds: 30 }
     executionProfile: autonomous
     providerFiles:
@@ -92,6 +103,39 @@ integrations:
       mcp:
         paths: [ .nanasa/providers/claude-code/mcp.json ]
 extensions: {}
+foreman:
+  id: repository-foreman
+  name: Foreman
+  enabled: true
+  integrationId: copilot
+  instructions:
+    - .nanasa/instructions/foreman.md
+  supervision:
+    reconcileIntervalSeconds: 30
+    reviewIntervalSeconds: 300
+    maxRecoveryAttempts: 3
+    recoveryCooldownSeconds: 120
+    staleProgressSeconds: 900
+  autonomy:
+    mode: supervised
+    approvalMode: autonomous
+    maxActiveGoals: 2
+    maxTeamsPerGoal: 2
+    maxConcurrentActions: 4
+    maxGoalHours: 8
+    maxForemanTurns: 100
+    transcript:
+      access: delegated-team
+      maxLines: 200
+      maxBytes: 65536
+    intervention:
+      idlePrompt: false
+      maxPerIncident: 2
+    recovery:
+      restartDelegatedAgents: false
+      maxAttemptsPerIncident: 2
+      maxAttemptsPerGoal: 6
+      cooldownSeconds: 120
 roles:
   project-manager:
     name: Project Manager
@@ -132,6 +176,7 @@ groups:
         name: Project Manager
         integrationId: copilot
         roleId: project-manager
+        desiredModel: gpt-5.6-terra
         instructions: []
         attention:
           response-required: true
@@ -143,16 +188,18 @@ groups:
       agent_0ae65cd2-985d-498c-9399-0978bae77827:
         memberId: keen-hawking
         name: Engineer 1
-        integrationId: pi
+        integrationId: pi-backend
         roleId: implementor
         instructions: []
+        attention: {}
         order: 1
       agent_e0f1b592-5fb2-4fe2-93e4-ac9da40dedf1:
         memberId: musing-kilby
         name: Engineer 2
-        integrationId: claude-copilot
+        integrationId: pi-backend
         roleId: implementor
         instructions: []
+        attention: {}
         order: 2
       agent_9e2cdefb-cc96-4b4e-865f-b4ac17f6c4f9:
         memberId: vibrant-mirzakhani
@@ -160,6 +207,7 @@ groups:
         integrationId: opencode
         roleId: reviewer
         instructions: []
+        attention: {}
         order: 3
   team-frontend:
     name: Frontend Team
@@ -186,6 +234,7 @@ groups:
         integrationId: opencode
         roleId: reviewer
         instructions: []
+        attention: {}
         order: 1
 messages:
   retentionPerGroup: 1000

@@ -48,6 +48,32 @@ for (const route of CONTROL_ROUTE_REGISTRY) {
 }
 
 const references = {
+  "foreman.json": {
+    ...header,
+    configuration: schema(contracts.ForemanConfigSchema, "input"),
+    workspace: schema(contracts.ForemanWorkspaceSchema),
+    channel: schema(contracts.ForemanChannelPageSchema),
+    conversation: schema(contracts.ForemanConversationRequestSchema),
+    goal: schema(contracts.ForemanGoalWorkspaceSchema),
+    notifications: schema(contracts.ForemanNotificationPageSchema),
+    commands: {
+      configure: schema(contracts.ConfigureForemanCommandSchema, "input"),
+      start: schema(contracts.StartForemanCommandSchema, "input"),
+      stop: schema(contracts.StopForemanCommandSchema, "input"),
+      send: schema(contracts.SendForemanMessageCommandSchema, "input"),
+      askMember: schema(contracts.AskForemanMemberCommandSchema, "input"),
+      replyToForeman: schema(contracts.ReplyForemanConversationCommandSchema, "input"),
+      resolveInput: schema(contracts.ResolveForemanInputCommandSchema, "input"),
+      proposeGoal: schema(contracts.ProposeForemanGoalCommandSchema, "input"),
+      controlGoal: schema(contracts.ControlForemanGoalCommandSchema, "input"),
+      delegateGoal: schema(contracts.DelegateForemanGoalCommandSchema, "input"),
+      reportDelegation: schema(contracts.ReportDelegationCommandSchema, "input"),
+      requestDecision: schema(contracts.RequestHumanDecisionCommandSchema, "input"),
+      resolveDecision: schema(contracts.ResolveHumanDecisionCommandSchema, "input"),
+      checkIn: schema(contracts.ForemanCheckInCommandSchema, "input"),
+      createConnector: schema(contracts.CreateForemanConnectorCommandSchema, "input"),
+    },
+  },
   "config.schema.json": {
     ...header,
     schemaVersion: contracts.CONFIG_VERSION,

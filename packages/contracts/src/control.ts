@@ -198,7 +198,7 @@ export const AgentRunSchema = z
     launchKind: z.enum(["fresh", "adopted", "resuming", "restarted"]).default("fresh"),
     requestedModel: z.string().trim().min(1).max(256).optional(),
     requestedModelSource: z
-      .enum(["membership", "integration", "provider-default"])
+      .enum(["membership", "foreman", "integration", "provider-default"])
       .default("provider-default"),
     effectiveModel: z.string().trim().min(1).max(256).optional(),
     nativeSessionId: IdentifierSchema.optional(),
@@ -210,6 +210,30 @@ export const AgentRunSchema = z
   })
   .strict();
 export type AgentRun = z.infer<typeof AgentRunSchema>;
+
+export const ForemanActorSchema = z
+  .object({
+    id: IdentifierSchema,
+    agentProfileId: IdentifierSchema,
+    enabled: z.boolean(),
+    authorityRevision: z.number().int().nonnegative().default(0),
+    createdAt: TimestampSchema,
+    updatedAt: TimestampSchema,
+  })
+  .strict();
+export type ForemanActor = z.infer<typeof ForemanActorSchema>;
+
+export const ForemanRunSchema = AgentRunSchema.omit({
+  groupId: true,
+  memberId: true,
+  providerUpdate: true,
+})
+  .extend({ foremanId: IdentifierSchema })
+  .strict();
+export type ForemanRun = z.infer<typeof ForemanRunSchema>;
+
+export const RuntimeRunSchema = z.union([AgentRunSchema, ForemanRunSchema]);
+export type RuntimeRun = z.infer<typeof RuntimeRunSchema>;
 
 export const CreateGroupAgentCommandSchema = z
   .object({

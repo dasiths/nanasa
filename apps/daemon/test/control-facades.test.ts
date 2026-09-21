@@ -112,6 +112,8 @@ describe("typed control facade registries", () => {
         "doctor",
         "events",
         "extension",
+        "foreman",
+        "goal",
         "group",
         "message",
         "metadata",
@@ -317,6 +319,14 @@ describe("typed control facade registries", () => {
     );
     const ownWaits = MCP_TOOL_REGISTRY.find((tool) => tool.name === "nanasa.list_own_waits");
     expect(ownWaits?.principals).toEqual(["agent"]);
+    const browser = MCP_TOOL_REGISTRY.find(
+      (tool) => tool.name === "nanasa.verify_browser_candidate",
+    );
+    expect(browser).toMatchObject({
+      principals: ["agent"],
+      authority: "read",
+      scope: "team:delegations:verify-browser",
+    });
     expect(MCP_TOOL_REGISTRY.every((tool) => tool.scope.length > 0)).toBe(true);
   });
 });

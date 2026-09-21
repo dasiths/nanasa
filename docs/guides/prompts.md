@@ -15,6 +15,14 @@ Role instructions
 Agent instructions
 ```
 
+The built-in layer also explains the optional repository Foreman, its separation
+from team managers and broadcasts, and the supported progress and escalation
+paths. Nanasa supplies this guidance to every team member's launch prompt and
+MCP initialization, even when all user instruction lists are empty. Custom files
+such as `team.md` are for repository conventions, not a prerequisite for learning
+Nanasa's coordination model. Instruction text does not grant additional MCP
+permissions. See [Foreman and goals](foreman.md) for the communication boundaries.
+
 Later scopes are more specific, but they do not erase earlier text. Put rules
 that apply everywhere at global scope. Put team conventions at group scope.
 Describe one responsibility at role scope. Reserve agent scope for one stable
@@ -114,3 +122,7 @@ silently changing a running agent's contract.
 
 After editing, run `npx nanasa setup` to validate paths and sizes, then start the
 agents again. Inspect the portal status and terminal to confirm a new run starts.
+
+After upgrading Nanasa's built-in guidance, stop and start affected agents to
+regenerate their launch prompts. Running providers retain their existing launch
+overlays; changing built-in text does not rewrite an active session's prompt.

@@ -2,6 +2,56 @@
   "generatorVersion": 1,
   "packageVersion": "0.1.0-next.12.0",
   "routeErrors": {
+    "foreman.cleanupRequests": [],
+    "foreman.approveCleanup": [
+      "foreman_cleanup_not_found",
+      "foreman_cleanup_conflict",
+      "foreman_cleanup_stale",
+      "foreman_cleanup_active"
+    ],
+    "foreman.cleanup": [
+      "foreman_cleanup_conflict",
+      "foreman_cleanup_stale",
+      "foreman_cleanup_active"
+    ],
+    "foreman.cleanupEffects": [],
+    "foreman.resetState": [],
+    "foreman.conversations": [],
+    "foreman.cancelConversation": [],
+    "foreman.connectors": [],
+    "foreman.createConnector": [],
+    "foreman.revokeConnector": [],
+    "goals.list": [],
+    "goals.propose": [],
+    "goals.get": [],
+    "goals.control": [],
+    "goals.resolve": [],
+    "foreman.notifications": [],
+    "foreman.notificationCursor": [],
+    "foreman.ackNotifications": [],
+    "foreman.resolveInput": [],
+    "foreman.channel": [],
+    "foreman.send": [
+      "foreman_message_conflict",
+      "foreman_reply_context_conflict",
+      "foreman_reply_not_found",
+      "group_not_found"
+    ],
+    "foreman.get": [],
+    "foreman.configure": [
+      "foreman_must_stop",
+      "config_revision_conflict"
+    ],
+    "foreman.start": [
+      "config_revision_conflict",
+      "foreman_not_enabled",
+      "foreman_mcp_required",
+      "foreman_launch_consent_required",
+      "run_already_active"
+    ],
+    "foreman.stop": [
+      "foreman_run_changed"
+    ],
     "meta.get": [],
     "schema.openapi": [],
     "schema.events": [],
@@ -319,6 +369,31 @@
     ]
   },
   "requestBodyLimits": {
+    "foreman.cleanupRequests": 65536,
+    "foreman.approveCleanup": 65536,
+    "foreman.cleanup": 65536,
+    "foreman.cleanupEffects": 65536,
+    "foreman.resetState": 65536,
+    "foreman.conversations": 65536,
+    "foreman.cancelConversation": 65536,
+    "foreman.connectors": 65536,
+    "foreman.createConnector": 65536,
+    "foreman.revokeConnector": 65536,
+    "goals.list": 65536,
+    "goals.propose": 65536,
+    "goals.get": 65536,
+    "goals.control": 65536,
+    "goals.resolve": 65536,
+    "foreman.notifications": 65536,
+    "foreman.notificationCursor": 65536,
+    "foreman.ackNotifications": 65536,
+    "foreman.resolveInput": 65536,
+    "foreman.channel": 65536,
+    "foreman.send": 65536,
+    "foreman.get": 65536,
+    "foreman.configure": 65536,
+    "foreman.start": 65536,
+    "foreman.stop": 65536,
     "meta.get": 65536,
     "schema.openapi": 65536,
     "schema.events": 65536,

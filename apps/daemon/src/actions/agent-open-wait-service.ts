@@ -8,7 +8,11 @@ import { PeerCapabilityPolicy } from "./peer-capability-policy.js";
 
 interface WaitReplyRuntime {
   observeRun(run: Parameters<NanasaStore["createRun"]>[0]): Promise<RuntimeObservation>;
-  pasteToRun(run: Parameters<NanasaStore["createRun"]>[0], text: string): Promise<void>;
+  pasteToRun(
+    run: Parameters<NanasaStore["createRun"]>[0],
+    text: string,
+    assertCurrent?: () => void,
+  ): Promise<void>;
 }
 
 export class AgentOpenWaitService {
@@ -36,6 +40,7 @@ export class AgentOpenWaitService {
     principal: AgentActionPrincipal,
     waitId: string,
     command: ReplyOpenWaitCommand,
+    assertScope?: () => void,
   ): Promise<OpenWait> {
     const input = ReplyOpenWaitCommandSchema.parse(command);
     const wait = this.store.getOpenWait(waitId);
@@ -127,7 +132,16 @@ export class AgentOpenWaitService {
             409,
           );
         }
-        await this.runtime.pasteToRun(run, terminalInput);
+        if (principal.kind === "foreman") {
+          const guard = () => {
+            this.policy.assertReply(principal, wait, input.reply);
+            assertScope?.();
+          };
+          guard();
+          await this.runtime.pasteToRun(run, terminalInput, guard);
+        } else {
+          await this.runtime.pasteToRun(run, terminalInput);
+        }
       });
       const completed = this.store.getOpenWait(wait.id);
       if (completed.state !== "replying") {

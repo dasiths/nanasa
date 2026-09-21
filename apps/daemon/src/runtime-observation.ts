@@ -9,7 +9,7 @@ export type RuntimeObservationKind = "present" | "dead" | "missing" | "indetermi
 export type RuntimeObservation = RuntimeStatusObservation;
 
 export function runtimeObservation(
-  run: AgentRun,
+  run: Pick<AgentRun, "id" | "generation">,
   state: RuntimeObservationKind,
   options: {
     observedAt?: string;

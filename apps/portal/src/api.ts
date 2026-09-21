@@ -1,7 +1,4 @@
 import {
-  type UrlOpenRequest,
-  UrlOpenRequestListSchema,
-  UrlOpenRequestSchema,
   type AdHocConsoleSession,
   AdHocConsoleSessionSchema,
   type AgentAction,
@@ -30,6 +27,7 @@ import {
   ClearMessageHistoryResultSchema,
   type ConfigStatus,
   ConfigStatusSchema,
+  type ConfigureForemanCommand,
   type ControlMetadata,
   type CreateAgentActionCommand,
   CreateAgentActionCommandSchema,
@@ -55,6 +53,16 @@ import {
   type ExtensionLifecycleCommand,
   type ExtensionTrustReceipt,
   ExtensionTrustReceiptSchema,
+  type ForemanChannelMessage,
+  ForemanChannelMessageSchema,
+  type ForemanChannelPage,
+  ForemanChannelPageSchema,
+  type ForemanConversationRequest,
+  ForemanConversationRequestSchema,
+  type ForemanRun,
+  ForemanRunSchema,
+  type ForemanWorkspace,
+  ForemanWorkspaceSchema,
   type GitReference,
   type GitStatusProjection,
   type Group,
@@ -106,17 +114,21 @@ import {
   type ReparentGroupAgentResult,
   type ReplyOpenWaitCommand,
   ReplyOpenWaitCommandSchema,
+  type ResolveForemanInputCommand,
   type RevokeCustomLaunchConsentCommand,
   RevokeCustomLaunchConsentCommandSchema,
   type RoleDefinition,
   RoleDefinitionSchema,
+  type SendForemanMessageCommand,
   type ServiceDescriptor,
   ServiceDescriptorSchema,
   type SetAttentionSubscriptionCommand,
   type StartAgentRunResult,
   StartAgentRunResultSchema,
+  type StartForemanCommand,
   type StartGroupRunsResult,
   StartGroupRunsResultSchema,
+  type StopForemanCommand,
   type SubmitMessageCommand,
   SubmitMessageCommandSchema,
   type TerminalCheckpoint,
@@ -134,6 +146,9 @@ import {
   UpdateGroupCommandSchema,
   type UpdateRolePresentationCommand,
   UpdateRolePresentationCommandSchema,
+  type UrlOpenRequest,
+  UrlOpenRequestListSchema,
+  UrlOpenRequestSchema,
   type WorktreeOperationResult,
 } from "@nanasa/contracts";
 import {
@@ -146,7 +161,45 @@ import {
 
 export { ControlClientError as ApiError };
 
+import {
+  type ForemanGoal,
+  ForemanGoalSchema,
+  type ForemanGoalWorkspace,
+  ForemanGoalWorkspaceSchema,
+  type HumanDecision,
+  HumanDecisionSchema,
+  type ProposeForemanGoalCommand,
+  type ResetForemanStateCommand,
+  ResetForemanStateCommandSchema,
+  type ResetForemanStateResult,
+  ResetForemanStateResultSchema,
+  type ResolveHumanDecisionCommand,
+} from "@nanasa/contracts";
+
 export interface PortalClient {
+  cleanupForeman: NanasaControlClient["cleanupForeman"];
+  loadForemanCleanupEffects: NanasaControlClient["foremanCleanupEffects"];
+  loadForemanCleanupRequests: NanasaControlClient["foremanCleanupRequests"];
+  approveForemanCleanup: NanasaControlClient["approveForemanCleanup"];
+  resetForemanState(command: ResetForemanStateCommand): Promise<ResetForemanStateResult>;
+  loadForemanConversations(): Promise<ForemanConversationRequest[]>;
+  cancelForemanConversation(id: string): Promise<ForemanConversationRequest>;
+  listForemanGoals(includeRemoved?: boolean): Promise<ForemanGoal[]>;
+  getForemanGoal(id: string): Promise<ForemanGoalWorkspace>;
+  proposeForemanGoal(command: ProposeForemanGoalCommand): Promise<ForemanGoal>;
+  controlForemanGoal(command: {
+    id: string;
+    expectedRevision: number;
+    action: "approve" | "pause" | "resume" | "cancel" | "accept";
+  }): Promise<ForemanGoal>;
+  resolveHumanDecision(command: ResolveHumanDecisionCommand): Promise<HumanDecision>;
+  resolveForemanInput(command: ResolveForemanInputCommand): Promise<ForemanWorkspace>;
+  loadForeman(): Promise<ForemanWorkspace>;
+  configureForeman(command: ConfigureForemanCommand): Promise<ForemanWorkspace>;
+  startForeman(command: StartForemanCommand): Promise<ForemanRun>;
+  stopForeman(command: StopForemanCommand): Promise<ForemanWorkspace>;
+  loadForemanChannel(after?: number): Promise<ForemanChannelPage>;
+  sendForemanMessage(command: SendForemanMessageCommand): Promise<ForemanChannelMessage>;
   createConsole(): Promise<AdHocConsoleSession>;
   closeConsole(consoleId: string): Promise<void>;
   loadMetadata(): Promise<ControlMetadata>;
@@ -257,7 +310,11 @@ export interface PortalClient {
     receiptId: string,
     command: RevokeCustomLaunchConsentCommand,
   ): Promise<CustomLaunchConsentDecision>;
-  submitMessage(groupId: string, command: SubmitMessageCommand): Promise<MessageSubmissionResult>;
+  submitMessage(
+    groupId: string,
+    command: SubmitMessageCommand,
+    idempotencyKey?: string,
+  ): Promise<MessageSubmissionResult>;
   createAgentAction(command: CreateAgentActionCommand): Promise<AgentAction>;
   loadActionWorkspace(groupId: string): Promise<AgentActionWorkspace>;
   cancelAgentAction(actionId: string): Promise<AgentAction>;
@@ -324,6 +381,81 @@ function commandInit(
 }
 
 export const api: PortalClient = {
+  loadForemanConversations: () =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/conversations`,
+      ForemanConversationRequestSchema.array(),
+    ),
+  cancelForemanConversation: (id) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/conversations/${encodeURIComponent(id)}/cancel`,
+      ForemanConversationRequestSchema,
+      commandInit("POST", {}),
+    ),
+  cleanupForeman: (command) => control.cleanupForeman(command),
+  loadForemanCleanupEffects: () => control.foremanCleanupEffects(),
+  loadForemanCleanupRequests: () => control.foremanCleanupRequests(),
+  approveForemanCleanup: (command) => control.approveForemanCleanup(command),
+  listForemanGoals: (includeRemoved = false) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/goals${includeRemoved ? "?includeRemoved=true" : ""}`,
+      ForemanGoalSchema.array(),
+    ),
+  getForemanGoal: (id) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/goals/${encodeURIComponent(id)}`,
+      ForemanGoalWorkspaceSchema,
+    ),
+  proposeForemanGoal: (command) =>
+    request(`${CONTROL_API_PREFIX}/foreman/goals`, ForemanGoalSchema, commandInit("POST", command)),
+  controlForemanGoal: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/goals/control`,
+      ForemanGoalSchema,
+      commandInit("POST", command),
+    ),
+  resolveHumanDecision: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/decisions/resolve`,
+      HumanDecisionSchema,
+      commandInit("POST", command),
+    ),
+  resolveForemanInput: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/inbox/resolve`,
+      ForemanWorkspaceSchema,
+      commandInit("POST", command),
+    ),
+  loadForeman: () => request(`${CONTROL_API_PREFIX}/foreman`, ForemanWorkspaceSchema),
+  configureForeman: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/configuration`,
+      ForemanWorkspaceSchema,
+      commandInit("PUT", command),
+    ),
+  startForeman: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/run/start`,
+      ForemanRunSchema,
+      commandInit("POST", command),
+    ),
+  stopForeman: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/run/stop`,
+      ForemanWorkspaceSchema,
+      commandInit("POST", command),
+    ),
+  loadForemanChannel: (after = 0) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/channel?after=${after}&limit=100`,
+      ForemanChannelPageSchema,
+    ),
+  sendForemanMessage: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/channel`,
+      ForemanChannelMessageSchema,
+      commandInit("POST", command),
+    ),
   createConsole: () =>
     request(`${CONTROL_API_PREFIX}/consoles`, AdHocConsoleSessionSchema, commandInit("POST", {})),
   closeConsole: (consoleId) =>
@@ -531,11 +663,21 @@ export const api: PortalClient = {
       CustomLaunchConsentDecisionSchema,
       commandInit("POST", RevokeCustomLaunchConsentCommandSchema.parse(command)),
     ),
-  submitMessage: (groupId, command) =>
+  resetForemanState: (command) =>
+    request(
+      `${CONTROL_API_PREFIX}/foreman/state/reset`,
+      ResetForemanStateResultSchema,
+      commandInit("POST", ResetForemanStateCommandSchema.parse(command)),
+    ),
+  submitMessage: (groupId, command, idempotencyKey) =>
     request(
       `${CONTROL_API_PREFIX}/groups/${encodeURIComponent(groupId)}/messages`,
       MessageSubmissionResultSchema,
-      commandInit("POST", SubmitMessageCommandSchema.parse(command), crypto.randomUUID()),
+      commandInit(
+        "POST",
+        SubmitMessageCommandSchema.parse(command),
+        idempotencyKey ?? crypto.randomUUID(),
+      ),
     ),
   createAgentAction: (command) =>
     request(

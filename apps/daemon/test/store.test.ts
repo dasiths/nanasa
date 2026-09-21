@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { NanasaConfigSchema } from "@nanasa/contracts";
 import { afterEach, describe, expect, it } from "vitest";
-
+import { DatabaseSchemaError } from "../src/persistence/database.js";
 import { DATABASE_SCHEMA_VERSION } from "../src/persistence/schema.js";
 import { NanasaStore } from "../src/store.js";
 
@@ -19,6 +19,249 @@ afterEach(() => {
 });
 
 describe("NanasaStore persistence", () => {
+  it("adds conversation storage to an existing goal database without resetting team state", () => {
+    const root = mkdtempSync(join(tmpdir(), "nanasa-conversation-upgrade-"));
+    temporaryDirectories.push(root);
+    const path = join(root, "state.sqlite");
+    const store = new NanasaStore(path);
+    const group = store.createGroup({ name: "Keep this team" });
+    store.database.exec("DROP TABLE foreman_conversations");
+    store.close();
+    const reopened = new NanasaStore(path);
+    try {
+      expect(reopened.getSnapshot().groups).toContainEqual(group);
+      expect(
+        reopened.database.prepare("SELECT COUNT(*) AS count FROM foreman_conversations").get()
+          ?.count,
+      ).toBe(0);
+      expect(reopened.database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        DATABASE_SCHEMA_VERSION,
+      );
+    } finally {
+      reopened.close();
+    }
+  });
+  it("initializes goal storage without legacy mission tables", () => {
+    const store = new NanasaStore(":memory:");
+    try {
+      const tables = store.database
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table'")
+        .all()
+        .map((row) => String(row.name));
+      expect(tables).toContain("foreman_coordination_records");
+      expect(tables.filter((name) => /^mission/.test(name))).toEqual([]);
+      expect(
+        store.database
+          .prepare("PRAGMA table_info(foreman_inbox)")
+          .all()
+          .map((column) => column.name),
+      ).not.toContain("mission_id");
+    } finally {
+      store.close();
+    }
+  });
+
+  it.each(["foreman_notifications", "foreman_coordination_records"])(
+    "rejects a same-version database missing %s before startup can mutate records",
+    (missingTable) => {
+      const root = mkdtempSync(join(tmpdir(), "nanasa-old-layout-"));
+      temporaryDirectories.push(root);
+      const path = join(root, "state.sqlite");
+      const store = new NanasaStore(path);
+      const group = store.createGroup({ name: "Preserve my team" });
+      store.close();
+      const old = new DatabaseSync(path);
+      old.exec(`DROP TABLE ${missingTable}`);
+      const before = old.prepare("SELECT * FROM groups").all();
+      old.close();
+
+      expect(() => new NanasaStore(path)).toThrow(DatabaseSchemaError);
+      expect(() => new NanasaStore(path)).toThrow(`missing tables: ${missingTable}`);
+      expect(() => new NanasaStore(path)).toThrow("No state was reset");
+      const retained = new DatabaseSync(path, { readOnly: true });
+      try {
+        expect(retained.prepare("SELECT * FROM groups").all()).toEqual(before);
+        expect(retained.prepare("SELECT name FROM groups WHERE id = ?").get(group.id)?.name).toBe(
+          "Preserve my team",
+        );
+        expect(retained.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          DATABASE_SCHEMA_VERSION,
+        );
+        expect(retained.prepare("SELECT COUNT(*) AS count FROM daemon_epochs").get()?.count).toBe(
+          0,
+        );
+      } finally {
+        retained.close();
+      }
+    },
+  );
+
+  it("persists an isolated retry-safe Foreman channel with scoped replies", () => {
+    const root = mkdtempSync(join(tmpdir(), "nanasa-channel-"));
+    temporaryDirectories.push(root);
+    const path = join(root, "state.sqlite");
+    let store = new NanasaStore(path);
+    try {
+      const team = store.createGroup({ name: "Team" });
+      const operator = { kind: "operator" as const, operatorId: "operator-one" };
+      const input = { requestId: "request-one", text: "Coordinate this work", teamId: team.id };
+      const message = store.sendForemanMessage(operator, input);
+      expect(store.listForemanInbox()[0]).toMatchObject({
+        messageId: message.id,
+        kind: "human-message",
+        preview: expect.stringContaining(input.text),
+        createdAt: expect.any(String),
+      });
+      expect(store.sendForemanMessage(operator, input)).toEqual(message);
+      expect(() => store.sendForemanMessage(operator, { ...input, text: "changed" })).toThrow(
+        "different content",
+      );
+      expect(() =>
+        store.sendForemanMessage(operator, { ...input, requestId: "bad-team", teamId: "unknown" }),
+      ).toThrow();
+      expect(store.getSnapshot().messages).toEqual([]);
+      const profile = store.createInternalAgentProfile({
+        name: "Foreman",
+        agentType: "copilot",
+        kind: "copilot",
+        command: "copilot",
+        args: [],
+        environment: {},
+      });
+      store.upsertForeman({ id: "foreman", agentProfileId: profile.id, enabled: true });
+      const run = store.createRunForForeman("foreman").run;
+      const sender = {
+        kind: "foreman" as const,
+        foremanId: "foreman",
+        runId: run.id,
+        generation: run.generation,
+        authorityRevision: 0,
+      };
+      const reply = {
+        requestId: "reply-one",
+        text: "Plan received",
+        replyTo: message.id,
+        teamId: team.id,
+      };
+      expect(() => store.sendForemanMessage(sender, { ...reply, teamId: undefined })).toThrow(
+        "original team context",
+      );
+      const response = store.sendForemanMessage(sender, reply);
+      expect(response.sequence).toBe(message.sequence + 1);
+      store.updateRuntimeRunStatus(run.id, "failed");
+      expect(() => store.sendForemanMessage(sender, { ...reply, requestId: "revoked" })).toThrow(
+        "no longer active",
+      );
+      store.close();
+      store = new NanasaStore(path);
+      const first = store.readForemanChannel({ after: 0, limit: 1 });
+      expect(first).toEqual({ messages: [message], nextAfter: message.sequence, hasMore: true });
+      expect(store.readForemanChannel({ after: first.nextAfter, limit: 100 })).toEqual({
+        messages: [response],
+        nextAfter: response.sequence,
+        hasMore: false,
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("exposes bounded context for unresolved Foreman notifications without internal target details", () => {
+    const store = new NanasaStore(":memory:");
+    try {
+      const timestamp = new Date().toISOString();
+      store.database
+        .prepare(
+          "INSERT INTO foreman_inbox (id, dedupe_key, prompt, state, target_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          "result-inbox",
+          "conversation-result:question-one",
+          "Result ".repeat(100),
+          "submitted",
+          JSON.stringify({
+            runId: "old-run",
+            generation: 6,
+            processFingerprint: "internal-process-fingerprint",
+          }),
+          timestamp,
+          timestamp,
+        );
+      const result = store.listForemanInbox()[0]!;
+      expect(result).toMatchObject({
+        kind: "conversation-result",
+        conversationRequestId: "question-one",
+        submittedRunId: "old-run",
+        submittedGeneration: 6,
+        createdAt: timestamp,
+      });
+      expect(result.preview).toHaveLength(500);
+      expect(JSON.stringify(result)).not.toContain("internal-process-fingerprint");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("owns Foreman runs outside teams with durable monotonically increasing generations", () => {
+    const root = mkdtempSync(join(tmpdir(), "nanasa-foreman-store-"));
+    temporaryDirectories.push(root);
+    const path = join(root, "state.sqlite");
+    let store = new NanasaStore(path);
+    try {
+      const profile = store.createInternalAgentProfile({
+        name: "Foreman",
+        agentType: "copilot",
+        kind: "copilot",
+        command: "copilot",
+        args: [],
+        environment: {},
+      });
+      store.upsertForeman({ id: "foreman", agentProfileId: profile.id, enabled: true });
+      const group = store.createGroup({ name: "Team" });
+      expect(() =>
+        store.addMembership(group.id, { agentProfileId: profile.id, alias: "Foreman" }),
+      ).toThrow("cannot join a team");
+      expect(() =>
+        store.upsertForeman({ id: "second", agentProfileId: profile.id, enabled: true }),
+      ).toThrow("Only one");
+      const { run } = store.createRunForForeman("foreman");
+      expect(run).toMatchObject({ foremanId: "foreman", generation: 1, status: "starting" });
+      expect(run).not.toHaveProperty("groupId");
+      expect(run).not.toHaveProperty("memberId");
+      expect(store.listActiveRuns()).toEqual([]);
+      expect(store.listDesiredRunningRuns()).toEqual([]);
+      expect(() => store.getRun(run.id)).toThrow("Team run not found");
+      expect(() => store.updateRunStatus(run.id, "running")).toThrow("Team run not found");
+      expect(() => store.createRunForForeman("foreman")).toThrow("already has an active run");
+      store.updateRuntimeRunStatus(run.id, "running");
+      store.updateRuntimeRunProviderMetadata(run.id, {
+        requestedModel: "model-one",
+        requestedModelSource: "foreman",
+      });
+      store.close();
+      store = new NanasaStore(path);
+      expect(store.getActiveForemanRun("foreman")).toMatchObject({
+        id: run.id,
+        generation: 1,
+        status: "running",
+      });
+      expect(store.getRuntimeRun(run.id)).toMatchObject({
+        requestedModel: "model-one",
+        requestedModelSource: "foreman",
+      });
+      store.updateRuntimeRunStatus(run.id, "stopping");
+      store.updateRuntimeRunStatus(run.id, "stopped");
+      expect(store.createRunForForeman("foreman").run.generation).toBe(2);
+      store.upsertForeman({ id: "foreman", agentProfileId: profile.id, enabled: false });
+      const active = store.getActiveForemanRun("foreman")!;
+      store.updateRuntimeRunStatus(active.id, "stopping");
+      store.updateRuntimeRunStatus(active.id, "stopped");
+      expect(() => store.createRunForForeman("foreman")).toThrow("not enabled");
+    } finally {
+      store.close();
+    }
+  });
+
   it("persists one checkout per team and maps every member run into it", () => {
     const root = mkdtempSync(join(tmpdir(), "nanasa-team-checkout-"));
     temporaryDirectories.push(root);
@@ -457,8 +700,31 @@ describe("NanasaStore persistence", () => {
       );
 
     const first = send("one", "one");
-    send("two", "two");
-    send("three", "three");
+    const second = send("two", "two");
+    const third = send("three", "three");
+    store.database
+      .prepare("UPDATE deliveries SET status = 'failed' WHERE message_id = ?")
+      .run(second.message.id);
+    store.database
+      .prepare("UPDATE deliveries SET status = 'terminal_injected' WHERE message_id = ?")
+      .run(third.message.id);
+    const failure = store.getGroupMessageState(group.id).failedDeliveries!;
+    expect(failure).toHaveLength(1);
+    expect(failure[0]).toMatchObject({
+      messageId: second.message.id,
+      recipientMemberId: "reviewer",
+      status: "failed",
+      attempts: 0,
+    });
+    expect(store.getGroupMessageState(group.id).failedRecipientMemberIds).toEqual(["reviewer"]);
+    store.database
+      .prepare("UPDATE deliveries SET status = 'dead-letter', attempts = 2 WHERE message_id = ?")
+      .run(second.message.id);
+    expect(store.getGroupMessageState(group.id).failedDeliveries![0]).toMatchObject({
+      messageId: second.message.id,
+      status: "dead-letter",
+      attempts: 2,
+    });
 
     expect(store.getGroupMessageState(group.id)).toMatchObject({
       latestGroupSeq: 3,
@@ -485,6 +751,8 @@ describe("NanasaStore persistence", () => {
     expect(store.getGroupMessageState(group.id)).toMatchObject({
       latestGroupSeq: 3,
       retainedMessageCount: 0,
+      failedDeliveries: [],
+      failedRecipientMemberIds: [],
     });
     expect(store.clearMessageHistory(group.id, "clear")).toEqual(cleared);
     expect(send("four", "four").message.groupSeq).toBe(4);

@@ -50,6 +50,72 @@ function createFixture() {
 }
 
 describe("McpCredentialIssuer", () => {
+  it("fences Foreman credentials by repository, generation, and authority revision", () => {
+    const fixture = createFixture();
+    const other = createFixture();
+    try {
+      const profile = fixture.store.createInternalAgentProfile({
+        name: "Foreman",
+        agentType: "fixture",
+        kind: "opencode",
+        command: "node",
+        args: [],
+        environment: {},
+      });
+      const configured = { id: "foreman", agentProfileId: profile.id, enabled: true };
+      fixture.store.upsertForeman(configured);
+      const { run } = fixture.store.createRunForForeman("foreman");
+      const token = fixture.issuer.issueForeman(run);
+      expect(fixture.issuer.authenticate(`Bearer ${token}`)).toEqual({
+        kind: "foreman",
+        foremanId: "foreman",
+        runId: run.id,
+        generation: 1,
+        authorityRevision: 0,
+      });
+      fixture.store.upsertForeman(configured);
+      expect(fixture.issuer.authenticate(`Bearer ${token}`).kind).toBe("foreman");
+      expect(() => other.issuer.authenticate(`Bearer ${token}`)).toThrowError(
+        expect.objectContaining({ code: "mcp_unauthorized" }),
+      );
+      const spoofedTeamToken = fixture.issuer.issueAgent({
+        ...run,
+        groupId: fixture.group.id,
+        memberId: fixture.membership.memberId,
+      });
+      expect(() => fixture.issuer.authenticate(`Bearer ${spoofedTeamToken}`)).toThrowError(
+        expect.objectContaining({ code: "mcp_credential_revoked" }),
+      );
+      fixture.store.upsertForeman({ ...configured, enabled: false });
+      expect(() => fixture.issuer.authenticate(`Bearer ${token}`)).toThrowError(
+        expect.objectContaining({ code: "mcp_credential_revoked" }),
+      );
+      fixture.store.upsertForeman(configured);
+      expect(() => fixture.issuer.authenticate(`Bearer ${token}`)).toThrowError(
+        expect.objectContaining({ code: "mcp_credential_revoked" }),
+      );
+      const currentToken = fixture.issuer.issueForeman(run);
+      expect(fixture.issuer.authenticate(`Bearer ${currentToken}`)).toMatchObject({
+        authorityRevision: 2,
+      });
+      fixture.store.updateRuntimeRunStatus(run.id, "failed");
+      const replacement = fixture.store.createRunForForeman("foreman").run;
+      expect(replacement.generation).toBe(2);
+      expect(() => fixture.issuer.authenticate(`Bearer ${currentToken}`)).toThrowError(
+        expect.objectContaining({ code: "mcp_credential_revoked" }),
+      );
+      expect(() => fixture.issuer.issueForeman(run)).toThrowError(
+        expect.objectContaining({ code: "mcp_credential_revoked" }),
+      );
+      expect(
+        fixture.issuer.authenticate(`Bearer ${fixture.issuer.issueForeman(replacement)}`),
+      ).toMatchObject({ generation: 2 });
+    } finally {
+      fixture.store.close();
+      other.store.close();
+    }
+  });
+
   it("authenticates live generation-scoped agent and configured operator credentials", () => {
     const fixture = createFixture();
     const token = fixture.issuer.issueAgent(fixture.run);

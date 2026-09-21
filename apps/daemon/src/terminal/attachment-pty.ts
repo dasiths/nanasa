@@ -1,5 +1,5 @@
-import type { AgentRun } from "@nanasa/contracts";
-import { spawn, type IPty } from "node-pty";
+import type { RuntimeRun } from "@nanasa/contracts";
+import { type IPty, spawn } from "node-pty";
 import { terminalViewSessionName } from "./terminal-input-arbiter.js";
 
 export interface AttachmentPtyOptions {
@@ -12,7 +12,7 @@ export class AttachmentPty {
   #closed = false;
 
   public constructor(
-    run: AgentRun,
+    run: RuntimeRun,
     role: "controller" | "observer",
     size: { cols: number; rows: number },
     options: AttachmentPtyOptions = {},

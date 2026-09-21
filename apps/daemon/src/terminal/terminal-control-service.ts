@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AgentRun, TerminalLease, TerminalRole } from "@nanasa/contracts";
+import type { RuntimeRun, TerminalLease, TerminalRole } from "@nanasa/contracts";
 import { DomainError, type NanasaStore } from "../store.js";
 import { TERMINAL_LIMITS } from "./terminal-transport-limits.js";
 
@@ -14,7 +14,7 @@ interface Viewer {
 }
 
 interface RunControl {
-  run: AgentRun;
+  run: RuntimeRun;
   streamGeneration: number;
   viewers: Map<string, Viewer>;
   controllerStreamId?: string;
@@ -26,14 +26,18 @@ export class TerminalControlService {
   readonly #runs = new Map<string, RunControl>();
   readonly #expiry: NodeJS.Timeout;
 
-  public constructor(store: NanasaStore, now: () => Date = () => new Date()) {
+  public constructor(
+    store: NanasaStore,
+    now: () => Date = () => new Date(),
+    private readonly onTakeover?: (run: RuntimeRun) => void,
+  ) {
     this.#store = store;
     this.#now = now;
     this.#expiry = setInterval(() => this.expire(), TERMINAL_LIMITS.heartbeatMs);
     this.#expiry.unref();
   }
 
-  public register(run: AgentRun): void {
+  public register(run: RuntimeRun): void {
     if (run.terminal === undefined) throw new Error("Terminal binding is required");
     const existing = this.#runs.get(run.id);
     if (existing !== undefined && existing.run.generation === run.generation) {
@@ -63,7 +67,7 @@ export class TerminalControlService {
     requestedRole: TerminalRole;
     takeover: boolean;
     close: (code: number, reason: string) => void;
-  }): { viewer: Viewer; run: AgentRun } {
+  }): { viewer: Viewer; run: RuntimeRun } {
     const control = this.#runs.get(input.runId);
     if (control === undefined)
       throw new DomainError("terminal_unavailable", "Terminal is unavailable", 503);
@@ -178,7 +182,7 @@ export class TerminalControlService {
   public status(runId: string) {
     const control = this.#runs.get(runId);
     if (control === undefined) {
-      const run = this.#store.getRun(runId);
+      const run = this.#store.getRuntimeRun(runId);
       return {
         runId,
         provider: "nanasa-terminal.v1" as const,
@@ -223,6 +227,7 @@ export class TerminalControlService {
   }
 
   #grant(control: RunControl, viewer: Viewer, takeover: boolean): void {
+    if (takeover) this.onTakeover?.(control.run);
     const previous =
       control.controllerStreamId === undefined
         ? undefined

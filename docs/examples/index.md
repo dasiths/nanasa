@@ -24,11 +24,14 @@ task and authentication sequence.
 ## Run several coding-agent providers
 
 The [multi-coding-agents walkthrough](multi-coding-agents.md) explains a
-four-agent team that combines GitHub Copilot CLI, Pi, Claude Code, OpenCode,
-scoped prompts, and authenticated MCP coordination.
+pair of teams with six agents plus a repository Foreman using GitHub Copilot CLI.
+It combines Copilot, Pi, Claude Code, OpenCode, scoped prompts, authenticated
+MCP coordination, and Human-approved goal delegation to existing teams.
 
 Use this example when evaluating provider interoperability or designing a team
-with separate project-manager, implementor, and reviewer responsibilities.
+with separate repository coordination, project-manager, implementor, and
+reviewer responsibilities. Foreman starts in supervised mode and uses
+a private authentication home outside the team memberships.
 
 ## Compare provider-state scopes
 

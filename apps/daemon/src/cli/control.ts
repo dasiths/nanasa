@@ -5,6 +5,8 @@ import { type ErrorPayload, ErrorPayloadSchema } from "@nanasa/contracts";
 import { ControlClientError } from "@nanasa/control-client";
 import WebSocket from "ws";
 import { authenticateAgent, CliAdminError, doctorIntegrations } from "../cli-admin.js";
+import { loadNanasaConfig } from "../config-loader.js";
+import { DaemonInstanceGuard } from "../daemon-instance-guard.js";
 import { matchControlRoute } from "../http/route-registry.js";
 import { repositoryIdentity } from "../protocol-metadata.js";
 import { loadBuildIdentity } from "../release/build-identity.js";
@@ -33,7 +35,7 @@ function publicPackageRoot(start: string): string {
     const manifest = join(current, "package.json");
     if (existsSync(manifest)) {
       const value = JSON.parse(readFileSync(manifest, "utf8")) as { name?: string };
-      if (value.name === "nanasa") return current;
+      if (value.name === "@dasiths/nanasa" || value.name === "nanasa") return current;
     }
     const parent = resolve(current, "..");
     if (parent === current) throw new Error("Unable to discover the Nanasa package root");
@@ -42,6 +44,7 @@ function publicPackageRoot(start: string): string {
 }
 
 interface ParsedOptions {
+  foremanScope?: boolean;
   positionals: string[];
   body?: unknown;
   apiUrl?: string;
@@ -119,6 +122,10 @@ function parseOptions(args: readonly string[]): ParsedOptions {
       options.forceJson = true;
       continue;
     }
+    if (argument === "--foreman") {
+      options.foremanScope = true;
+      continue;
+    }
     if (argument === "--mcp" || argument === "--no-mcp") {
       const enabled = argument === "--mcp";
       if (options.mcpEnabled !== undefined && options.mcpEnabled !== enabled) {
@@ -169,6 +176,10 @@ function selectCommand(args: readonly string[]): {
 } {
   const family = args[0];
   if (family === undefined) throw new CliUsageError("A command family is required");
+  if (family === "stop") {
+    const declaration = findCliCommand("daemon", "stop") as CliCommandDeclaration;
+    return { declaration, remainder: args.slice(1) };
+  }
   if (family === "completion") {
     const declaration = findCliCommand("completion", "generate") as CliCommandDeclaration;
     return { declaration, remainder: args.slice(1) };
@@ -221,6 +232,7 @@ function completionInventory(): ReadonlyMap<string, readonly string[]> {
     inventory.set(entry.family, commands);
   }
   inventory.set("doctor", []);
+  inventory.set("stop", []);
   inventory.set("completion", ["bash", "fish", "powershell", "zsh"]);
   return new Map(
     [...inventory.entries()]
@@ -434,6 +446,27 @@ export async function runControlCli(
     const { declaration, remainder } = selectCommand(args);
     const options = parseOptions(remainder);
     assertArguments(declaration, options);
+    if (declaration.id === "daemon.stop") {
+      if (
+        options.apiUrl !== undefined ||
+        options.operatorTokenFile !== undefined ||
+        options.remoteRepo !== undefined
+      ) {
+        throw new CliUsageError(
+          "daemon stop is repository-local; API and remote connection overrides are not supported",
+        );
+      }
+      const loaded = loadNanasaConfig(repositoryRoot);
+      const value = await DaemonInstanceGuard.stop(repositoryRoot, loaded.runtimeDirectory, {
+        timeoutMs: options.timeoutMs,
+      });
+      outputSuccess(
+        value,
+        options.forceJson ? "json" : options.outputExplicit ? options.output : "text",
+        stdout,
+      );
+      return 0;
+    }
     if (declaration.id === "completion.generate") {
       stdout.write(completion(options.positionals[0] as string));
       return 0;
@@ -443,7 +476,12 @@ export async function runControlCli(
       return 0;
     }
     if (declaration.id === "auth.login") {
-      await authenticateAgent(repositoryRoot, options.positionals[0] as string, options.agentId);
+      await authenticateAgent(
+        repositoryRoot,
+        options.positionals[0] as string,
+        options.agentId,
+        options.foremanScope,
+      );
       return 0;
     }
     const packageRoot = publicPackageRoot(import.meta.dirname);

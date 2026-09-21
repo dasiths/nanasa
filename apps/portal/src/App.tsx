@@ -1,5 +1,6 @@
 import type {
   AttentionSubscriptionsSnapshot,
+  CleanupForemanResult,
   CustomLaunchConsentRequest,
   ProviderUpdateOutcome,
   ProviderUpdateRecoveryResult,
@@ -53,7 +54,6 @@ import { TeamRecoveryResults } from "./components/team-recovery-results.js";
 import { ErrorNotice, type PortalError, toPortalError } from "./errors.js";
 import { useAttentionWorkspaces } from "./hooks/use-attention-workspaces.js";
 import { useLaunchConsents } from "./hooks/use-launch-consents.js";
-import { useUrlOpenRequests } from "./hooks/use-url-open-requests.js";
 import { useMessageReadCursors } from "./hooks/use-message-read-cursors.js";
 import {
   type TerminalColumnsPreference,
@@ -61,6 +61,7 @@ import {
   usePortalPreferences,
 } from "./hooks/use-portal-preferences.js";
 import { useDomainEvents, usePortalSnapshot } from "./hooks/use-portal-snapshot.js";
+import { useUrlOpenRequests } from "./hooks/use-url-open-requests.js";
 import { memberStatusView } from "./member-status.js";
 import {
   globalDestinationDefinition,
@@ -360,6 +361,33 @@ export function App({ client = api }: AppProps) {
     snapshot === undefined ? undefined : `${snapshot.instanceId}:${snapshot.daemonEpoch}`,
     snapshot?.sequence,
   );
+  const [foremanEffects, setForemanEffects] = useState<CleanupForemanResult["pendingEffects"]>([]);
+  const [foremanEffectsReady, setForemanEffectsReady] = useState(false);
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    setForemanEffects([]);
+    setForemanEffectsReady(false);
+    if (snapshot?.instanceId === undefined) return;
+    const load = async () => {
+      try {
+        const effects = await client.loadForemanCleanupEffects();
+        if (active) {
+          setForemanEffects(effects);
+          setForemanEffectsReady(true);
+        }
+      } catch (cause) {
+        if (active) setActionError(toPortalError(cause, "Unable to load retained goal effects"));
+      } finally {
+        if (active) timer = setTimeout(() => void load(), 3000);
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [client, snapshot?.instanceId, snapshot?.daemonEpoch]);
   useEffect(() => {
     let active = true;
     setAttentionDismissalsReady(false);
@@ -407,6 +435,7 @@ export function App({ client = api }: AppProps) {
       return [];
     }
     const candidates = deriveAttentionItems(snapshot, {
+      foremanEffects,
       workspaces: attentionWorkspaces.workspaces,
       unreadCounts,
       launchConsents: launchConsents.latestRequests,
@@ -417,6 +446,7 @@ export function App({ client = api }: AppProps) {
     );
   }, [
     attentionDismissalsReady,
+    foremanEffects,
     attentionWorkspaces.workspaces,
     attentionSubscriptions,
     dismissedAttentionItemIds,
@@ -460,6 +490,7 @@ export function App({ client = api }: AppProps) {
       attentionSubscriptionsReady &&
       attentionSubscriptions !== undefined &&
       attentionWorkspaces.ready &&
+      foremanEffectsReady &&
       attentionWorkspaces.errors.size === 0 &&
       !launchConsents.loading &&
       launchConsents.error === undefined &&
@@ -531,7 +562,7 @@ export function App({ client = api }: AppProps) {
     if (snapshot === undefined) return;
     const fallback = snapshot.groups[0];
     if (route.kind === "home" || route.kind === "invalid") {
-      if (fallback !== undefined) navigate(groupRoute(fallback.id), { replace: true });
+      navigate("/foreman", { replace: true });
       return;
     }
     if (route.kind !== "group") return;
@@ -905,7 +936,7 @@ export function App({ client = api }: AppProps) {
               />
             }
             unreadCounts={unreadCounts}
-            {...(selectedGroupId === undefined ? {} : { selectedGroupId })}
+            {...(route.kind === "group" ? { selectedGroupId: route.groupId } : {})}
             {...(busyAction === undefined ? {} : { busyAction })}
             onSelectGroup={(groupId) => {
               const section = preferences.lastSectionByGroup[groupId] ?? "terminals";
@@ -920,10 +951,6 @@ export function App({ client = api }: AppProps) {
               setSelectedGroup(groupId, "terminals");
               if (runId !== undefined) setActiveRun(groupId, runId);
               navigate(groupRoute(groupId, "terminals", runId));
-            }}
-            onOpenMessages={(groupId) => {
-              setSelectedGroup(groupId, "messages");
-              navigate(groupRoute(groupId, "messages"));
             }}
             onCreateGroup={createGroup}
             onRenameGroup={renameGroup}
@@ -1021,6 +1048,17 @@ export function App({ client = api }: AppProps) {
           />
         )}
         <div className="header-actions">
+          {route.kind === "group" && selectedGroup !== undefined && (
+            <a
+              className="compact-button header-icon-button"
+              href={`/foreman?team=${encodeURIComponent(selectedGroup.id)}`}
+              aria-label={`Ask Foreman about ${selectedGroup.name}`}
+              title={`Ask Foreman about ${selectedGroup.name}`}
+              onClick={link(`/foreman?team=${encodeURIComponent(selectedGroup.id)}`)}
+            >
+              <Bot aria-hidden="true" size={15} />
+            </a>
+          )}
           <button
             type="button"
             className="icon-button mobile-navigation-trigger"
@@ -1358,7 +1396,9 @@ export function App({ client = api }: AppProps) {
         open={mobileNavigationOpen}
         route={route}
         groups={snapshot.groups}
-        {...(selectedGroupId === undefined ? {} : { selectedGroupId })}
+        config={config}
+        snapshot={snapshot}
+        {...(route.kind === "group" ? { selectedGroupId: route.groupId } : {})}
         lastSectionByGroup={preferences.lastSectionByGroup}
         attentionCount={globalAttentionCount}
         theme={preferences.theme}
@@ -1369,6 +1409,7 @@ export function App({ client = api }: AppProps) {
           navigate(groupRoute(groupId, section));
         }}
         onOpenCommandPalette={() => setPaletteOpen(true)}
+        onOpenConsole={() => setConsoleOpen(true)}
         onClose={() => setMobileNavigationOpen(false)}
       />
       {roleSettingsOpen && (

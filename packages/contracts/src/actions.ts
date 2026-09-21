@@ -81,6 +81,28 @@ export const AgentActionPrincipalSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("operator"), operatorId: IdentifierSchema }).strict(),
   z
     .object({
+      kind: z.literal("foreman-conversation"),
+      foremanId: IdentifierSchema,
+      runId: IdentifierSchema,
+      generation: z.number().int().positive(),
+      authorityRevision: z.number().int().nonnegative(),
+      conversationRequestId: IdentifierSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("foreman"),
+      foremanId: IdentifierSchema,
+      runId: IdentifierSchema,
+      generation: z.number().int().positive(),
+      authorityRevision: z.number().int().nonnegative(),
+      goalId: IdentifierSchema,
+      delegationId: IdentifierSchema,
+      goalRevision: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal("agent"),
       groupId: IdentifierSchema,
       memberId: IdentifierSchema,
@@ -516,6 +538,13 @@ export const GroupMessageStateSchema = z
     retainedMessageCount: z.number().int().nonnegative(),
     activeDeliveryCount: z.number().int().nonnegative(),
     failedRecipientMemberIds: z.array(IdentifierSchema),
+    failedDeliveries: z
+      .array(
+        DeliveryOutcomeSchema.extend({
+          status: z.enum(["failed", "dead-letter", "rejected"]),
+        }),
+      )
+      .optional(),
   })
   .strict();
 export type GroupMessageState = z.infer<typeof GroupMessageStateSchema>;

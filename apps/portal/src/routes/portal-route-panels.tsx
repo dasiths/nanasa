@@ -25,6 +25,7 @@ import {
 import { AgentDirectory } from "../components/agent-directory.js";
 import { CheckoutWorkspace } from "../components/checkout-workspace.js";
 import { ExtensionsWorkspace } from "../components/extensions-workspace.js";
+import { ForemanWorkspace } from "../components/foreman-workspace.js";
 import { UrlOpenAction } from "../components/url-open-action.js";
 import { ErrorNotice, type PortalError, toPortalError } from "../errors.js";
 import { generatedOfflineHelp } from "../help/generated-offline-help.js";
@@ -85,6 +86,7 @@ function attentionInboxView(item: AttentionItem): Exclude<AttentionInboxView, "a
 }
 
 function attentionDestination(item: AttentionItem): { label: string; path: string } {
+  if (item.kind === "foreman-effect") return { label: "Inspect goal", path: item.targetPath };
   if (item.kind === "delivery" || item.kind === "unread") {
     return { label: "Open messages", path: item.targetPath };
   }
@@ -105,6 +107,8 @@ function attentionDestination(item: AttentionItem): { label: string; path: strin
 
 function attentionStateLabel(item: AttentionItem): string {
   switch (item.kind) {
+    case "foreman-effect":
+      return item.counted ? "Processes still running" : "Unconfirmed receipts";
     case "url-open-request":
       return "Browser requested";
     case "launch-consent":
@@ -149,6 +153,7 @@ function attentionItemTimestamp(item: AttentionItem): string | undefined {
       return item.run.providerUpdate?.updatedAt;
     case "delivery":
     case "unread":
+    case "foreman-effect":
       return undefined;
   }
 }
@@ -227,7 +232,13 @@ function AttentionPanel({
   const teams =
     scope.kind === "group"
       ? snapshot.groups.filter((item) => item.id === scope.groupId)
-      : [...new Map(scopedItems.map((item) => [item.groupId, item.group])).values()];
+      : [
+          ...new Map(
+            scopedItems.flatMap((item) =>
+              item.group ? [[item.group.id, item.group] as const] : [],
+            ),
+          ).values(),
+        ];
   const normalizedSearch = search.trim().toLocaleLowerCase();
   const visibleItems = scopedItems.filter((item) => {
     if (view !== "all" && attentionInboxView(item) !== view) return false;
@@ -238,7 +249,7 @@ function AttentionPanel({
       item.title,
       item.summary,
       item.label,
-      item.group.name,
+      item.group?.name ?? "Foreman",
       ATTENTION_CATEGORY_LABELS[item.category],
       attentionStateLabel(item),
     ].some((value) => value.toLocaleLowerCase().includes(normalizedSearch));
@@ -441,7 +452,7 @@ function AttentionPanel({
                     <span className="attention-state-badge">{attentionStateLabel(item)}</span>
                   </div>
                   <small className="attention-inbox-meta">
-                    <span>{item.group.name}</span>
+                    <span>{item.group?.name ?? "Foreman"}</span>
                     <span>{ATTENTION_CATEGORY_LABELS[item.category]}</span>
                     {item.kind === "action" && <span>{actionKindLabel(item.action.kind)}</span>}
                     {timestamp !== undefined && (
@@ -968,6 +979,19 @@ export function PortalRoutePanel(props: PortalRoutePanelProps) {
   }
   if (route.kind !== "global") return null;
   switch (route.destination) {
+    case "foreman":
+      return (
+        <ForemanWorkspace
+          key={window.location.search}
+          client={props.client}
+          config={props.config}
+          groups={props.snapshot.groups}
+          themePreference={props.preferences.theme}
+          initialTeamId={new URLSearchParams(window.location.search).get("team") ?? ""}
+          initialGoalId={new URLSearchParams(window.location.search).get("goal") ?? undefined}
+          onNavigate={props.onNavigate}
+        />
+      );
     case "attention":
       return <AttentionPanel {...props} />;
     case "agents":

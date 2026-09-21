@@ -173,7 +173,17 @@ export const AgentProgressReportCommandSchema = z
     stage: z.string().trim().min(1).max(100),
     summary: z.string().trim().min(1).max(1_000),
     nextStep: z.string().trim().min(1).max(1_000).optional(),
-    blocker: z.string().trim().min(1).max(1_000).optional(),
+    blocker: z
+      .string()
+      .trim()
+      .max(1_000)
+      .nullish()
+      .transform((value) =>
+        value == null || value === "" || value.toLowerCase() === "none" ? undefined : value,
+      )
+      .describe(
+        "Omit when no blocker. Null, empty text and exact case-insensitive none also mean no blocker; otherwise describe the actual blocker.",
+      ),
     outcome: AgentStatusOutcomeSchema.exclude(["unknown", "cancelled"]).optional(),
   })
   .strict();

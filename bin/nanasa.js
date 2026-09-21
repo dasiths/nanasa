@@ -10,6 +10,7 @@ const configRelativePath = join(".nanasa", "config.yaml");
 
 function usage() {
   return `Usage: nanasa [start] [options]
+      nanasa stop [--timeout <ms>] [--output json|text]
        nanasa init
        nanasa setup
        nanasa doctor
@@ -21,6 +22,7 @@ function usage() {
 
 Commands:
   start              Start the daemon and portal (default)
+  stop               Gracefully stop this repository's daemon; preserve agent sessions
   init               Create .nanasa/config.yaml when absent
   setup              Prepare repository-local integration configuration homes
   doctor             Validate configuration, commands, and integration homes

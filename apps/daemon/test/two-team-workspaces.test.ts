@@ -142,7 +142,11 @@ it("keeps the sample teams in separate checkouts and persists local assignments"
       }
     }
     expect(runIds).toHaveLength(6);
-    expect(homes.size).toBe(6);
+    expect(new Set(runIds).size).toBe(6);
+    expect(homes.size).toBe(5);
+    expect(homes).toContain(
+      join(sample, ".nanasa", "integrations", "state", "integrations", "pi-backend"),
+    );
     expect(readFileSync(configPath, "utf8")).toBe(configBefore);
     expect(
       execFileSync("git", ["-C", repository, "branch", "--show-current"], { encoding: "utf8" }),

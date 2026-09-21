@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync } from "node:fs";
 import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { IntegrationConfig } from "@nanasa/contracts";
 import { loadNanasaConfig } from "./config-loader.js";
 import {
@@ -134,7 +135,19 @@ function selectedHome(
   repositoryRoot: string,
   integration: IntegrationConfig,
   agentId?: string,
+  foremanScope = false,
 ): string {
+  if (foremanScope) {
+    const loaded = loadNanasaConfig(repositoryRoot);
+    if (agentId !== undefined) throw new Error("--foreman and --agent cannot be combined");
+    if (loaded.config.foreman?.integrationId !== integration.id)
+      throw new Error("Integration does not match the configured Foreman");
+    return new ProviderStateRepository(loaded.integrationsDirectory).resolveForForeman({
+      foremanId: loaded.config.foreman.id,
+      integrationId: integration.id,
+      credentialReference: integration.credentials,
+    }).storageReference;
+  }
   if (
     (integration.providerState.scope === "membership" ||
       (integration.providerState.scope === "custom" &&
@@ -168,6 +181,13 @@ export function setupIntegrations(repositoryRoot: string): void {
     if (!hasSharedHome(integration)) continue;
     ensurePrivateTree(loaded.integrationsDirectory, selectedHome(repositoryRoot, integration));
   }
+  if (loaded.config.foreman !== undefined)
+    selectedHome(
+      repositoryRoot,
+      loaded.config.integrations[loaded.config.foreman.integrationId]!,
+      undefined,
+      true,
+    );
   process.stdout.write(`Prepared isolated integrations at ${loaded.integrationsDirectory}\n`);
 }
 
@@ -178,13 +198,27 @@ export function doctorIntegrations(repositoryRoot: string): void {
   inspectPrivateDirectory(loaded.integrationsDirectory, problems, true);
   for (const integration of Object.values(loaded.config.integrations)) {
     const command = integration.command[0] as string;
-    if (executablePath(command, process.env, integration.cwd) === undefined) {
+    if (
+      executablePath(command, { ...process.env, ...integration.environment }, integration.cwd) ===
+      undefined
+    ) {
       problems.push(`${integration.id}: command not found: ${command}`);
     }
     if (hasSharedHome(integration)) {
       inspectPrivateDirectory(selectedHome(repositoryRoot, integration), problems, true);
     }
   }
+  if (loaded.config.foreman !== undefined)
+    inspectPrivateDirectory(
+      selectedHome(
+        repositoryRoot,
+        loaded.config.integrations[loaded.config.foreman.integrationId]!,
+        undefined,
+        true,
+      ),
+      problems,
+      true,
+    );
   if (problems.length > 0) {
     throw new CliAdminError(
       "doctor_failed",
@@ -201,10 +235,29 @@ export async function authenticateAgent(
   repositoryRoot: string,
   integrationId: string,
   agentId?: string,
+  foremanScope = false,
 ): Promise<void> {
   const loaded = loadNanasaConfig(repositoryRoot);
+  if (foremanScope && existsSync(loaded.dataPath)) {
+    const database = new DatabaseSync(loaded.dataPath, { readOnly: true });
+    try {
+      if (
+        database
+          .prepare(
+            "SELECT id FROM runs WHERE foreman_id IS NOT NULL AND status IN ('starting', 'running', 'stopping') LIMIT 1",
+          )
+          .get() !== undefined
+      )
+        throw new CliAdminError(
+          "foreman_auth_requires_stop",
+          "Stop Foreman before authenticating its private provider home",
+        );
+    } finally {
+      database.close();
+    }
+  }
   const integration = selectedIntegration(repositoryRoot, integrationId);
-  const configHome = selectedHome(repositoryRoot, integration, agentId);
+  const configHome = selectedHome(repositoryRoot, integration, agentId, foremanScope);
   ensurePrivateTree(loaded.integrationsDirectory, configHome);
   const command = integration.command[0] as string;
   const providerPackage = await {
@@ -225,7 +278,10 @@ export async function authenticateAgent(
   if (credentials.health === "missing") {
     throw new Error(`Credential profile ${credentials.profileId} is unavailable`);
   }
-  if (executablePath(command, process.env, integration.cwd) === undefined) {
+  if (
+    executablePath(command, { ...process.env, ...integration.environment }, integration.cwd) ===
+    undefined
+  ) {
     throw new Error(`Agent command not found: ${command}`);
   }
   process.stdout.write(`Launching ${integration.name} with isolated home ${configHome}\n`);

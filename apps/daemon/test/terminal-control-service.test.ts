@@ -23,7 +23,8 @@ describe("TerminalControlService", () => {
   it("enforces one controller, bounded observers, takeover, generation fences, and cleanup", () => {
     const store = new NanasaStore(":memory:");
     let now = new Date("2026-08-29T00:00:00.000Z");
-    const service = new TerminalControlService(store, () => now);
+    const onTakeover = vi.fn();
+    const service = new TerminalControlService(store, () => now, onTakeover);
     service.register(run);
     const firstClose = vi.fn();
     const first = service.connect({
@@ -44,7 +45,9 @@ describe("TerminalControlService", () => {
       close: vi.fn(),
     });
     expect(observer.viewer.role).toBe("observer");
+    expect(onTakeover).not.toHaveBeenCalled();
     const lease = service.takeover(run.id, observer.viewer.streamId, first.viewer.lease?.id);
+    expect(onTakeover).toHaveBeenCalledWith(run);
     expect(lease.viewerId).toBe("viewer-two");
     expect(firstClose).toHaveBeenCalledWith(4001, "terminal_controller_taken_over");
     expect(service.release(run.id, observer.viewer.streamId, lease.id).role).toBe("observer");

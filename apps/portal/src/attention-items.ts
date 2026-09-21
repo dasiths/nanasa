@@ -8,6 +8,7 @@ import type {
   AgentStatusSummary,
   AttentionEventType,
   AttentionSubscriptionsSnapshot,
+  CleanupForemanResult,
   CustomLaunchConsentRequest,
   Group,
   GroupMembership,
@@ -18,6 +19,7 @@ import type {
 import { type MemberStatusView, memberStatusView } from "./member-status.js";
 
 export type AttentionReviewKind =
+  | "foreman-effect"
   | "url-open-request"
   | "launch-consent"
   | "wait"
@@ -133,6 +135,17 @@ export interface DeliveryAttentionItem
   member?: GroupMembership;
 }
 
+export interface ForemanEffectAttentionItem
+  extends Omit<
+    AttentionItemBase<"foreman-effect", "health" | "delivery", "medium", boolean>,
+    "scope" | "groupId" | "group"
+  > {
+  scope: { kind: "repository" };
+  groupId?: never;
+  group?: never;
+  effect: CleanupForemanResult["pendingEffects"][number];
+}
+
 export interface ActionAttentionItem
   extends AttentionItemBase<"action", "progress", "none", false> {
   memberId: string;
@@ -160,6 +173,7 @@ export interface ProviderUpdateAttentionItem
 }
 
 export type AttentionReviewItem =
+  | ForemanEffectAttentionItem
   | UrlOpenAttentionItem
   | LaunchConsentAttentionItem
   | WaitAttentionItem
@@ -182,6 +196,7 @@ export type AttentionUnreadCounts =
   | Readonly<Record<string, number | undefined>>;
 
 export interface AttentionProjectionOptions {
+  foremanEffects?: CleanupForemanResult["pendingEffects"];
   workspaces?: AttentionWorkspaceCollection;
   unreadCounts?: AttentionUnreadCounts;
   launchConsents?: readonly CustomLaunchConsentRequest[];
@@ -212,6 +227,7 @@ const activeActionStates = new Set<AgentActionState>([
 ]);
 
 const kindSortRank = {
+  "foreman-effect": 3,
   "url-open-request": 0,
   "launch-consent": 0,
   wait: 1,
@@ -302,7 +318,8 @@ function isProjectionOptions(
     input !== undefined &&
     !Array.isArray(input) &&
     !(input instanceof Map) &&
-    (Object.hasOwn(input, "workspaces") ||
+    (Object.hasOwn(input, "foremanEffects") ||
+      Object.hasOwn(input, "workspaces") ||
       Object.hasOwn(input, "unreadCounts") ||
       Object.hasOwn(input, "urlOpenRequests") ||
       Object.hasOwn(input, "launchConsents"))
@@ -760,8 +777,30 @@ function deliveryItems(
   for (const state of snapshot.messageGroups ?? []) {
     const group = groups.get(state.groupId);
     if (group === undefined) continue;
-    for (const recipientMemberId of state.failedRecipientMemberIds) {
-      const deliveryKey = `${state.groupId}\u0000${recipientMemberId}`;
+    const failures =
+      state.failedDeliveries?.map((receipt) => ({
+        recipientMemberId: receipt.recipientMemberId,
+        receipt,
+      })) ??
+      state.failedRecipientMemberIds.map((recipientMemberId) => ({
+        recipientMemberId,
+        receipt: undefined,
+      }));
+    for (const failure of failures) {
+      const { recipientMemberId, receipt } = failure;
+      const source =
+        receipt !== undefined
+          ? sourceIdentity(
+              "delivery",
+              state.groupId,
+              recipientMemberId,
+              receipt.messageId,
+              receipt.attempts,
+              receipt.status,
+              receipt.updatedAt,
+            )
+          : sourceIdentity("delivery", state.groupId, recipientMemberId);
+      const deliveryKey = source;
       if (seen.has(deliveryKey)) continue;
       seen.add(deliveryKey);
       const member = snapshot.memberships.find(
@@ -771,13 +810,15 @@ function deliveryItems(
           candidate.memberId === recipientMemberId,
       );
       const label = memberLabel(member, recipientMemberId);
-      const source = sourceIdentity("delivery", state.groupId, recipientMemberId);
       items.push({
         ...commonFields(source, group, {
           memberId: recipientMemberId,
           label,
           title: `${label} · Delivery failed`,
-          summary: `Message delivery to ${label} failed in ${group.name}.`,
+          summary:
+            receipt !== undefined
+              ? `Message ${receipt.messageId} delivery to ${label} failed in ${group.name}.${receipt.reason ? ` ${receipt.reason}` : ""}`
+              : `Message delivery to ${label} failed in ${group.name}.`,
           targetPath: groupPath(state.groupId, "messages"),
         }),
         kind: "delivery",
@@ -831,7 +872,7 @@ function unreadItems(
 export function compareAttentionItems(left: AttentionItem, right: AttentionItem): number {
   return (
     kindSortRank[left.kind] - kindSortRank[right.kind] ||
-    left.groupId.localeCompare(right.groupId) ||
+    (left.groupId ?? "").localeCompare(right.groupId ?? "") ||
     (left.memberId ?? "").localeCompare(right.memberId ?? "") ||
     left.id.localeCompare(right.id)
   );
@@ -862,7 +903,31 @@ export function deriveAttentionItems(
         )),
   );
 
+  const foremanEffects: ForemanEffectAttentionItem[] = (options.foremanEffects ?? [])
+    .filter((effect) => effect.runIds.length > 0 || effect.actionIds.length > 0)
+    .map((effect) => {
+      const source = sourceIdentity("foreman-effect", effect.goalId);
+      const live = effect.runIds.length > 0;
+      return {
+        id: itemIdentity(source),
+        sourceIdentity: source,
+        kind: "foreman-effect",
+        scope: { kind: "repository" },
+        category: live ? "health" : "delivery",
+        urgency: "medium",
+        counted: live,
+        review: live,
+        label: "Foreman",
+        title: effect.goalTitle ?? "Removed goal",
+        summary: live
+          ? `${effect.runIds.length} associated processes still running after removal. They may be idle; inspect them before reusing the workspace.`
+          : `${effect.actionIds.length} unconfirmed action receipts retained. No associated processes are running.`,
+        targetPath: `/foreman?goal=${encodeURIComponent(effect.goalId)}`,
+        effect,
+      };
+    });
   return [
+    ...foremanEffects,
     ...consents,
     ...urlOpenItems(snapshot, groups, options.urlOpenRequests),
     ...deduplicatedStatuses,
@@ -875,6 +940,8 @@ export function deriveAttentionItems(
 
 export function attentionEventType(item: AttentionItem): AttentionEventType {
   switch (item.kind) {
+    case "foreman-effect":
+      return item.counted ? "agent-health" : "delivery-failure";
     case "url-open-request":
       return "url-open-request";
     case "launch-consent":
@@ -992,7 +1059,7 @@ export function attentionReviewCountsByGroup(
 ): ReadonlyMap<string, number> {
   const counts = new Map<string, number>();
   for (const item of items) {
-    if (!item.counted) continue;
+    if (!item.counted || item.groupId === undefined) continue;
     counts.set(item.groupId, (counts.get(item.groupId) ?? 0) + 1);
   }
   return counts;

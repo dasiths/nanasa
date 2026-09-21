@@ -16,6 +16,7 @@ import {
   ExecutionProfileIdSchema,
   ExecutionProfileSchema,
   ExtensionIdSchema,
+  ForemanConfigSchema,
   InstructionPathSchema,
   IntegrationConfigSchema,
   IntegrationIdSchema,
@@ -84,6 +85,7 @@ type RawIntegrationConfig = z.infer<typeof RawIntegrationConfigSchema>;
 export const AuthoredNanasaConfigSchema = z
   .object({
     version: z.literal(CONFIG_VERSION),
+    foreman: ForemanConfigSchema.optional(),
     repository: RepositoryIntentSchema.default({ path: ".", checkout: { kind: "current" } }),
     terminal: TerminalPolicySchema.default({
       checkpoints: {
@@ -381,11 +383,26 @@ export function parseNanasaConfigSource(
       );
     resolvedHomes.set(home, id);
   }
-  const config = NanasaConfigSchema.parse({
+  const validated = NanasaConfigSchema.safeParse({
     ...parsed.data,
     repository: { ...parsed.data.repository, path: repositoryPath },
     integrations,
   });
+  if (!validated.success) {
+    throw new ConfigLoadError(
+      errorStatus(
+        paths,
+        validated.error.issues.map((issue) =>
+          diagnostic(
+            "invalid_config",
+            issue.message,
+            issue.path.filter((segment): segment is string | number => typeof segment !== "symbol"),
+          ),
+        ),
+      ),
+    );
+  }
+  const config = validated.data;
   try {
     validateInstructionFiles(paths.repoRoot, config);
   } catch (error) {

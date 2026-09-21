@@ -112,8 +112,14 @@ export class WorktreeService {
     });
   }
 
-  public create(command: CreateWorktreeCommand): Promise<WorktreeOperationResult> {
-    return this.#serialize(() => this.#create(command));
+  public create(
+    command: CreateWorktreeCommand,
+    options?: {
+      provenanceToken: string;
+      beforeEffect: () => void;
+    },
+  ): Promise<WorktreeOperationResult> {
+    return this.#serialize(() => this.#create(command, options));
   }
 
   public open(command: OpenCheckoutCommand): Promise<WorktreeOperationResult> {
@@ -228,7 +234,13 @@ export class WorktreeService {
     });
   }
 
-  async #create(command: CreateWorktreeCommand): Promise<WorktreeOperationResult> {
+  async #create(
+    command: CreateWorktreeCommand,
+    options?: {
+      provenanceToken: string;
+      beforeEffect: () => void;
+    },
+  ): Promise<WorktreeOperationResult> {
     const source = this.store.getCheckout(command.sourceCheckoutId);
     if (source.kind === "bare") {
       throw new DomainError(
@@ -270,6 +282,24 @@ export class WorktreeService {
       (candidate) => candidate.branch === command.branch && !candidate.prunable,
     );
     if (existing !== undefined) {
+      if (
+        options &&
+        !this.store
+          .listWorktrees(source.repositoryId)
+          .some(
+            (worktree) =>
+              worktree.branch === command.branch &&
+              worktree.state === "ready" &&
+              worktree.provenanceToken === options.provenanceToken &&
+              worktree.base === command.base &&
+              worktree.sourceCheckoutId === source.id,
+          )
+      )
+        throw new DomainError(
+          "worktree_ownership_conflict",
+          "Existing branch is not owned by this preparation request",
+          409,
+        );
       const checkout = await this.checkouts.discover(existing.path);
       const operation = this.store.beginGitOperation({
         repositoryId: source.repositoryId,
@@ -299,9 +329,11 @@ export class WorktreeService {
       );
     }
     const worktreeId = `worktree_${randomUUID()}`;
-    const provenanceToken = createHash("sha256")
-      .update(`${worktreeId}:${source.id}:${targetPath}:${randomUUID()}`)
-      .digest("hex");
+    const provenanceToken =
+      options?.provenanceToken ??
+      createHash("sha256")
+        .update(`${worktreeId}:${source.id}:${targetPath}:${randomUUID()}`)
+        .digest("hex");
     const createdAt = new Date().toISOString();
     const operation = this.store.beginGitOperation({
       repositoryId: source.repositoryId,
@@ -339,6 +371,13 @@ export class WorktreeService {
               targetPath,
               command.base,
             ];
+      if (options && localBranch.exitCode === 0)
+        throw new DomainError(
+          "worktree_ownership_conflict",
+          "Preparation cannot adopt an existing branch",
+          409,
+        );
+      options?.beforeEffect();
       await this.git.run(addArguments);
       gitAdded = true;
       const checkout = await this.checkouts.discover(targetPath);

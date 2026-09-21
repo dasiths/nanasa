@@ -6,9 +6,18 @@ messages from Nanasa's local web portal.
 ## Open an authenticated session
 
 Start Nanasa, then run `npx nanasa auth portal` in another terminal. Open the
-one-use URL. The portal has repository operations, group navigation, system
-views, and utility controls. On narrow screens, the application menu exposes
-the same destinations.
+one-use URL. The portal opens **Foreman** by default. Explicit links to a team,
+terminal, or another page still open that destination.
+
+The left menu lists **Foreman**, **Team workspaces**, **All agents**, and
+**Attention**, followed by the expandable **Teams** tree. The current page is
+highlighted; a remembered team is not highlighted while a repository-wide page
+is open. **Console** and **More** provide utility access.
+
+On narrow screens, the application menu keeps the same primary order. Expand a
+team to see its members, roles, and run statuses. Utility links scroll with the
+menu while theme controls remain at the bottom. **Commands** opens the command
+palette, and **Console** is available under Utilities.
 
 ## Manage groups and agents
 
@@ -56,6 +65,13 @@ deliveries, health problems, and completion items. Reply to the exact wait or
 open the linked terminal. A settled provider event does not by itself prove task
 success.
 
+Failed deliveries appear as **Attention** items and contribute to its badge when
+delivery-failure subscriptions are enabled. There is no separate envelope warning
+beside the member. Dismiss the delivery item after reviewing it to clear the alert
+across reloads. Opening Attention alone does not acknowledge it. Dismissal does
+not retry the message or change its failed delivery history; a new failure or
+failed retry creates a fresh Attention item.
+
 ## Use terminal tabs and grid view
 
 Open an agent terminal from its group row. Tabs keep one terminal visible. Grid
@@ -85,6 +101,27 @@ replies, and terminal output.
 The browser stores a per-repository, per-group read cursor. Opening Messages
 marks retained messages as read. Clearing history deletes that group's stored
 messages and delivery outcomes for all portal sessions.
+
+## Coordinate repository goals
+
+Choose **Foreman** for the repository-owned channel, native
+terminal, goals, and settings. Foreman is outside team broadcasts.
+
+The Goals tab opens on **Active** work. **History** contains completed and
+cancelled goals, with title search and outcome filters. Select **Show removed**
+to inspect retained goals after cleanup. Removed goals cannot be resumed from
+this view. **Clear finished** removes only the non-removed finished goals named
+in its confirmation, not active work or goals that finish later.
+
+Associated processes that remain running after goal removal appear by goal
+title in global **Attention**. A running process may be idle; it does not prove
+goal work is still executing. Receipt-only leftovers appear in Attention's
+History without increasing its badge count. Dismissing an Attention item does
+not stop processes or erase receipts. Goal IDs and retained effect IDs remain
+available under **Technical details** in the goal.
+
+See [Foreman and goals](foreman.md) for private authentication, team delegation,
+human decisions, recovery limits, and outcome acceptance.
 
 ## Adjust the interface
 

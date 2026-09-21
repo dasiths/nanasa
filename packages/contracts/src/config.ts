@@ -223,6 +223,67 @@ export const ConfiguredAgentSchema = z
   .strict();
 export type ConfiguredAgent = z.infer<typeof ConfiguredAgentSchema>;
 
+export const ForemanAutonomySchema = z
+  .object({
+    mode: z.enum(["supervised", "bounded"]).default("supervised"),
+    approvalMode: z.enum(["human", "autonomous"]).default("human"),
+    maxActiveGoals: z.number().int().min(1).max(16).default(1),
+    maxTeamsPerGoal: z.number().int().min(1).max(16).default(3),
+    maxConcurrentActions: z.number().int().min(1).max(32).default(4),
+    maxGoalHours: z.number().int().min(1).max(168).default(24),
+    maxForemanTurns: z.number().int().min(1).max(10_000).default(200),
+    transcript: z
+      .object({
+        access: z.literal("delegated-team").default("delegated-team"),
+        maxLines: z.number().int().min(1).max(5_000).default(200),
+        maxBytes: z.number().int().min(1).max(65_536).default(65_536),
+      })
+      .strict()
+      .prefault({}),
+    intervention: z
+      .object({
+        idlePrompt: z.boolean().default(false),
+        maxPerIncident: z.number().int().min(0).max(5).default(2),
+      })
+      .strict()
+      .prefault({}),
+    recovery: z
+      .object({
+        restartDelegatedAgents: z.boolean().default(false),
+        maxAttemptsPerIncident: z.number().int().min(0).max(5).default(2),
+        maxAttemptsPerGoal: z.number().int().min(0).max(30).default(6),
+        cooldownSeconds: z.number().int().min(30).max(86_400).default(120),
+      })
+      .strict()
+      .prefault({}),
+  })
+  .strict();
+export type ForemanAutonomy = z.infer<typeof ForemanAutonomySchema>;
+
+export const ForemanConfigSchema = z
+  .object({
+    id: IdentifierSchema.default("repository-foreman"),
+    name: z.string().trim().min(1).max(100).default("Foreman"),
+    enabled: z.boolean().default(false),
+    integrationId: IntegrationIdSchema,
+    desiredModel: z.string().trim().min(1).max(256).optional(),
+    instructions: z.array(InstructionPathSchema).max(32).default([]),
+    providerFiles: ProviderFileSelectionSchema.optional(),
+    supervision: z
+      .object({
+        reconcileIntervalSeconds: z.number().int().min(5).max(3_600).default(30),
+        reviewIntervalSeconds: z.number().int().min(30).max(86_400).default(300),
+        maxRecoveryAttempts: z.number().int().min(0).max(5).default(3),
+        recoveryCooldownSeconds: z.number().int().min(30).max(3600).default(120),
+        staleProgressSeconds: z.number().int().min(60).max(86_400).default(900),
+      })
+      .strict()
+      .prefault({}),
+    autonomy: ForemanAutonomySchema.prefault({}),
+  })
+  .strict();
+export type ForemanConfig = z.infer<typeof ForemanConfigSchema>;
+
 export const ConfiguredGroupSchema = z
   .object({
     name: z.string().trim().min(1).max(100),
@@ -278,6 +339,7 @@ export type RepositoryIntent = z.infer<typeof RepositoryIntentSchema>;
 export const NanasaConfigSchema = z
   .object({
     version: z.literal(CONFIG_VERSION),
+    foreman: ForemanConfigSchema.optional(),
     repository: RepositoryIntentSchema.default({ path: ".", checkout: { kind: "current" } }),
     terminal: TerminalPolicySchema.default({
       checkpoints: {
@@ -303,6 +365,15 @@ export const NanasaConfigSchema = z
   })
   .strict()
   .superRefine((config, context) => {
+    if (config.foreman !== undefined) {
+      if (config.integrations[config.foreman.integrationId] === undefined) {
+        context.addIssue({
+          code: "custom",
+          message: "Foreman references an unknown integration",
+          path: ["foreman", "integrationId"],
+        });
+      }
+    }
     for (const [integrationId, integration] of Object.entries(config.integrations)) {
       if (integration.id !== integrationId) {
         context.addIssue({

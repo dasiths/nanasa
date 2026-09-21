@@ -8,7 +8,7 @@ product_root=$(CDPATH= cd -- "$example_root/../.." && pwd -P)
 
 : "${LITELLM_URL:=http://litellm:4000}"
 : "${LITELLM_KEY:=sk-local-litellm}"
-: "${COPILOT_MODEL:=claude-sonnet-5}"
+: "${COPILOT_MODEL:=gpt-5.6-terra}"
 
 carriage_return=$(printf '\r')
 case "$LITELLM_KEY" in
@@ -33,6 +33,7 @@ export ANTHROPIC_AUTH_TOKEN="$LITELLM_KEY"
 export ANTHROPIC_MODEL="$COPILOT_MODEL"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="$COPILOT_MODEL"
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="$COPILOT_MODEL"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="$COPILOT_MODEL"
 export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1
 
 exec claude "$@"

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,7 +9,15 @@ import {
   loadNanasaConfig,
   nanasaPaths,
 } from "../src/config-loader.js";
-import { resolveEffectiveAgentPrompt } from "../src/instruction-resolver.js";
+import { ConfigRepository } from "../src/config-repository.js";
+import {
+  NANASA_FOREMAN_INSTRUCTIONS,
+  nanasaMcpServerInstructions,
+} from "../src/coordination-instructions.js";
+import {
+  resolveEffectiveAgentPrompt,
+  resolveEffectiveForemanPrompt,
+} from "../src/instruction-resolver.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -49,6 +57,358 @@ afterEach(() => {
 });
 
 describe("Nanasa configuration", () => {
+  it.each([
+    "",
+    "foreman: { integrationId: opencode, enabled: false }",
+    "foreman: { integrationId: opencode, enabled: true }",
+  ])("injects Foreman system guidance without user instruction files (%s)", (foreman) => {
+    const repository = temporaryRepository(
+      minimalConfig(`${foreman}
+groups:
+  team:
+    name: Team
+    agents:
+      worker:
+        memberId: worker
+        name: Worker
+        integrationId: opencode
+`),
+    );
+    const config = loadNanasaConfig(repository).config;
+    const prompt = resolveEffectiveAgentPrompt({
+      repoRoot: repository,
+      config,
+      groupId: "team",
+      agentId: "worker",
+    });
+    expect(prompt.sources).toEqual([
+      { scope: "builtin", reference: "builtin:nanasa-coordination-v1" },
+      { scope: "builtin", reference: "builtin:nanasa-assignment-v1" },
+    ]);
+    for (const instructions of [prompt.text, nanasaMcpServerInstructions()]) {
+      expect(instructions).toContain("## Repository Foreman");
+      expect(instructions).toContain("does not replace your team's project manager or the Human");
+      expect(instructions).toContain("does not receive team broadcasts");
+      expect(instructions).toContain("no unrestricted worker-to-Foreman DM tool");
+      expect(instructions).toContain("nanasa.reply_foreman");
+      expect(instructions).toContain("discover Foreman presence from its foreman summary");
+      expect(instructions).toContain(
+        "Empty requests or team_delegations lists do not mean Foreman is absent",
+      );
+      expect(instructions).toContain(
+        "report concrete progress, blockers, and results with nanasa.report_progress",
+      );
+      expect(instructions).toContain(
+        "not a direct message, a guaranteed immediate Foreman response",
+      );
+      expect(instructions).toContain("Deliver peer replies with nanasa.send_dm");
+      expect(instructions).toContain("use nanasa.report_delegation with the delegation ID");
+      expect(instructions).toContain(
+        "Terminal output alone does not deliver a peer reply or delegation report",
+      );
+      expect(instructions).toContain("Work in your team's assigned checkout");
+      expect(instructions).toContain(
+        "expertise, not permission to reinterpret an explicit requested path",
+      );
+      expect(instructions).toContain("requestContext mapped into your assigned checkout");
+      expect(instructions).toContain("read-only roles");
+    }
+  });
+
+  it("requires real-browser evidence in member and Foreman prompts and MCP instructions", () => {
+    const repository = temporaryRepository(
+      minimalConfig(`foreman: { integrationId: opencode, enabled: true }
+groups:
+  team:
+    name: Team
+    agents:
+      worker:
+        memberId: worker
+        name: Worker
+        integrationId: opencode
+`),
+    );
+    const config = loadNanasaConfig(repository).config;
+    const member = resolveEffectiveAgentPrompt({
+      repoRoot: repository,
+      config,
+      groupId: "team",
+      agentId: "worker",
+    });
+    const foreman = resolveEffectiveForemanPrompt({ repoRoot: repository, config });
+    for (const instructions of [
+      member.text,
+      foreman.text,
+      nanasaMcpServerInstructions(),
+      NANASA_FOREMAN_INSTRUCTIONS,
+    ]) {
+      for (const requirement of [
+        "nanasa.verify_browser_candidate",
+        "exact checkout-root-relative candidatePath",
+        "does not grant shell access or relax read-only permissions",
+        "do not automatically mean approval",
+        "do not replace them with mock evidence or lower the reviewer floor",
+        "derive relevant validation expectations from the agreed outcome and original request",
+        "actual candidate in a real browser at desktop and mobile viewport sizes",
+        "after desktop-to-mobile resize and on a fresh mobile load",
+        "unintended horizontal overflow",
+        "nonblank canvas",
+        "representative controls with observed state changes",
+        "screenshots and canvas pixels where applicable, not just DOM presence",
+        "do not prove rendering, responsiveness or interaction",
+        "existing report summary and evidence fields",
+        "viewport sizes, observations and results, plus unrun checks and blockers",
+        "Do not claim validated responsiveness",
+        "Independent reviewers must run relevant checks against the exact candidate",
+        "missing evidence as preventing readiness, with reviewOutcome changes-required",
+        "Foreman must inspect whether evidence covers the expected browser behavior",
+        "not an automatic runtime validation gate",
+        "Missing node_modules in a linked checkout does not establish",
+        "Subject to repository policy and provider permissions",
+        "use Git worktree metadata to discover the repository's primary checkout",
+        "createRequire anchored to its package.json",
+        "tooling reads and execution, not reading another checkout's application source",
+        "test targets and output artifacts in your assigned checkout",
+        "keep artifacts outside a pinned candidate directory",
+        "Do not copy secrets, credentials or private provider state",
+        "Follow repository registry rules",
+        "Verify browser launch in the actual runtime",
+        "executablePath or PLAYWRIGHT_BROWSERS_PATH",
+        "permission denials as concrete blockers",
+      ]) {
+        expect(instructions).toContain(requirement);
+      }
+    }
+  });
+
+  it("injects retained Human reads and operator-only cleanup consent", () => {
+    const repository = temporaryRepository(
+      minimalConfig("foreman: { integrationId: opencode, enabled: true }\n"),
+    );
+    const config = loadNanasaConfig(repository).config;
+    const prompt = resolveEffectiveForemanPrompt({ repoRoot: repository, config });
+    expect(prompt.text).toContain("pass that exact messageId");
+    expect(prompt.text).toContain("Preserve literal paths in the objective and handoff brief");
+    expect(prompt.text).toContain("Missing origin on a legacy goal means unknown");
+    expect(prompt.text).toContain("nanasa.foreman_request_cleanup");
+    expect(prompt.text).toContain("Neither confirmation:true nor chat text authorizes cleanup");
+  });
+
+  it("injects the complete Foreman channel and delegation protocol without user instruction files", () => {
+    const repository = temporaryRepository(
+      minimalConfig("foreman: { integrationId: opencode, enabled: true }\n"),
+    );
+    const config = loadNanasaConfig(repository).config;
+    expect(config.instructions).toEqual([]);
+    expect(config.foreman?.instructions).toEqual([]);
+    const prompt = resolveEffectiveForemanPrompt({ repoRoot: repository, config });
+    expect(prompt.sources).toEqual([
+      { scope: "builtin", reference: "builtin:nanasa-foreman-v1" },
+      { scope: "builtin", reference: "builtin:nanasa-foreman-identity-v1" },
+    ]);
+    expect(prompt.text).toContain(NANASA_FOREMAN_INSTRUCTIONS);
+    for (const tool of [
+      "nanasa.foreman_bootstrap",
+      "nanasa.foreman_read_channel",
+      "nanasa.foreman_reply",
+      "nanasa.foreman_discover_teams",
+      "nanasa.foreman_assign_outcome",
+      "nanasa.foreman_finish_goal_review",
+    ]) {
+      expect(prompt.text).toContain(tool);
+    }
+    expect(prompt.text).toContain("preserve its teamId exactly");
+    expect(prompt.text).toContain("Terminal output alone is not a channel reply");
+    expect(prompt.text).toContain("Converse with the Human and team members without a goal");
+    expect(prompt.text).toContain("nanasa.foreman_ask_member");
+    expect(prompt.text).toContain("end your turn so result wakeups can be delivered");
+    expect(prompt.text).toContain("Do not use shell waits, sleep commands, or repeated polling");
+    expect(prompt.text).toContain("nanasa.request_human_decision cannot approve a proposed goal");
+    expect(prompt.text).toContain("do not invent specialist staff");
+    expect(prompt.text).toContain("without waiting for a separate reminder to delegate");
+    expect(prompt.text).toContain("file ownership agreements cannot bypass checkout isolation");
+    expect(prompt.text).toContain("policy changes do not upgrade old grants");
+    expect(prompt.text).toContain("a successful call or a truncated preview is not evidence");
+    expect(prompt.text).toContain("Foreman cannot answer worker waits");
+    expect(prompt.text).toContain("Never copy provider credentials between homes");
+    expect(prompt.text).not.toContain("Prefer exact actions and typed wait replies");
+  });
+
+  it("requires the exact revision for config mutation and preserves comments", async () => {
+    const source = `# Keep this repository comment\n${minimalConfig()}`;
+    const repository = temporaryRepository(source);
+    const configs = new ConfigRepository(repository);
+    const revision = configs.load().status.revision!;
+    expect(readFileSync(configs.load().configPath, "utf8")).toBe(source);
+    const mutation = await configs.mutate(
+      (config) => ({
+        config: { ...config, messages: { retentionPerGroup: 200 } },
+        result: undefined,
+      }),
+      revision,
+    );
+    expect(mutation.loaded.config.version).toBe(2);
+    expect(readFileSync(mutation.loaded.configPath, "utf8")).toContain(
+      "# Keep this repository comment",
+    );
+    await expect(
+      configs.mutate((config) => ({ config, result: undefined }), revision),
+    ).rejects.toThrow(/revision changed/);
+  });
+
+  it("persists and removes Foreman settings without dropping unrelated configuration", async () => {
+    const repository = temporaryRepository(minimalConfig());
+    const configs = new ConfigRepository(repository);
+    const config = configs.load().config;
+    const { ForemanConfigSchema } = await import("@nanasa/contracts");
+    await configs.mutate((current) => ({
+      config: { ...current, foreman: ForemanConfigSchema.parse({ integrationId: "opencode" }) },
+      result: undefined,
+    }));
+    expect(configs.load().config.foreman?.integrationId).toBe("opencode");
+    expect(configs.load().config.integrations).toEqual(config.integrations);
+    await configs.mutate((current) => {
+      const remaining = { ...current };
+      delete remaining.foreman;
+      return { config: remaining, result: undefined };
+    });
+    expect(configs.load().config.foreman).toBeUndefined();
+  });
+
+  it("resolves Foreman instructions independently of team roles with a stable revision", () => {
+    const repository = temporaryRepository(
+      minimalConfig(`
+instructions: [.nanasa/global.md]
+foreman:
+  integrationId: opencode
+  instructions: [.nanasa/foreman.md]
+roles:
+  reviewer:
+    name: Reviewer
+    instructions: [.nanasa/reviewer.md]
+groups:
+  team:
+    name: Team
+    instructions: [.nanasa/team.md]
+`),
+    );
+    for (const file of ["global.md", "foreman.md", "reviewer.md", "team.md"]) {
+      writeFileSync(join(repository, ".nanasa", file), `Instructions for ${file}\n`);
+    }
+    const input = { repoRoot: repository, config: loadNanasaConfig(repository).config };
+    const prompt = resolveEffectiveForemanPrompt(input);
+    expect(prompt.sources.map(({ scope }) => scope)).toEqual([
+      "builtin",
+      "builtin",
+      "global",
+      "foreman",
+    ]);
+    expect(prompt.text).toContain("nanasa.foreman_bootstrap");
+    expect(prompt.text).toContain("not a member of any team");
+    expect(prompt.text).toContain("Instructions for global.md");
+    expect(prompt.text).toContain("Instructions for foreman.md");
+    expect(prompt.text).not.toContain("Instructions for team.md");
+    expect(prompt.text).not.toContain("Instructions for reviewer.md");
+    expect(resolveEffectiveForemanPrompt(input).revision).toBe(prompt.revision);
+    writeFileSync(join(repository, ".nanasa", "foreman.md"), "Changed operator guidance\n");
+    expect(resolveEffectiveForemanPrompt(input).revision).not.toBe(prompt.revision);
+  });
+
+  it("rejects Foreman instruction aliases and duplicate instruction sources", () => {
+    const repository = temporaryRepository(
+      minimalConfig(`
+foreman: { integrationId: opencode, instructions: [.nanasa/foreman.md] }
+`),
+    );
+    writeFileSync(join(repository, ".nanasa", "foreman.md"), "Foreman guidance\n");
+    const config = loadNanasaConfig(repository).config;
+    expect(() =>
+      resolveEffectiveForemanPrompt({
+        repoRoot: repository,
+        config: { ...config, instructions: [".nanasa/foreman.md"] },
+      }),
+    ).toThrow(/more than once/);
+    rmSync(join(repository, ".nanasa", "foreman.md"));
+    symlinkSync(join(repository, "outside.md"), join(repository, ".nanasa", "foreman.md"));
+    writeFileSync(join(repository, "outside.md"), "Not an instruction source\n");
+    expect(() => loadNanasaConfig(repository)).toThrow(ConfigLoadError);
+  });
+
+  it("loads Foreman goal limits and team roles in the current configuration schema", () => {
+    const source = minimalConfig(`
+foreman:
+  integrationId: opencode
+  instructions: [.nanasa/foreman.md]
+  autonomy:
+    maxActiveGoals: 2
+    maxGoalHours: 8
+roles:
+  builder:
+    name: Builder
+    instructions: [.nanasa/builder.md]
+`);
+    const repository = temporaryRepository(source);
+    for (const file of ["foreman.md", "builder.md", "team.md"]) {
+      writeFileSync(join(repository, ".nanasa", file), `Instructions for ${file}\n`);
+    }
+    const loaded = loadNanasaConfig(repository);
+    expect(loaded.config.version).toBe(2);
+    expect(loaded.config.foreman).toMatchObject({
+      integrationId: "opencode",
+      enabled: false,
+      autonomy: { mode: "supervised" },
+    });
+    expect(loaded.config.foreman?.autonomy).toMatchObject({ maxActiveGoals: 2, maxGoalHours: 8 });
+    expect(loaded.config.roles.builder?.name).toBe("Builder");
+    expect(loaded.config.groups).toEqual({});
+    expect(readFileSync(loaded.configPath, "utf8")).toBe(source);
+  });
+
+  it.each([
+    [3, "foreman: { integrationId: opencode }", ["version"]],
+    [2, "foreman: { integrationId: missing }", ["foreman", "integrationId"]],
+    [
+      2,
+      "foreman: { integrationId: opencode, autonomy: { permittedTeamTemplates: [missing] } }",
+      ["foreman", "autonomy"],
+    ],
+    [
+      2,
+      "teamTemplates: { delivery: { members: { builder: { integrationId: opencode, roleId: missing } } } }",
+      [],
+    ],
+  ])(
+    "rejects version %s invalid Foreman references with a structured diagnostic",
+    (version, fields, expectedPath) => {
+      const repository = temporaryRepository(
+        minimalConfig(`${fields}\n`).replace("version: 2", `version: ${version}`),
+      );
+      expect(() => loadNanasaConfig(repository)).toThrowError(
+        expect.objectContaining({
+          status: expect.objectContaining({
+            diagnostics: expect.arrayContaining([
+              expect.objectContaining({ code: "invalid_config", path: expectedPath }),
+            ]),
+          }),
+        }),
+      );
+    },
+  );
+
+  it.each(["foreman: { integrationId: opencode, instructions: [.nanasa/missing.md] }"])(
+    "validates Foreman instruction files during load",
+    (fields) => {
+      const repository = temporaryRepository(minimalConfig(`${fields}\n`));
+      expect(() => loadNanasaConfig(repository)).toThrowError(
+        expect.objectContaining({
+          status: expect.objectContaining({
+            diagnostics: [expect.objectContaining({ code: "invalid_instruction_file" })],
+          }),
+        }),
+      );
+    },
+  );
+
   it("loads valid YAML with deterministic revision and repository-local paths", () => {
     const repository = temporaryRepository(validConfig());
     const first = loadNanasaConfig(repository);

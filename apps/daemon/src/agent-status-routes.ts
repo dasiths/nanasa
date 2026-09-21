@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import type { AgentActionAckService } from "./actions/agent-action-ack-service.js";
 import type { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
 import { AgentStatusService } from "./agent-status-service.js";
+import type { ForemanRuntimeService } from "./foreman-runtime-service.js";
 import { McpCredentialIssuer } from "./mcp-auth.js";
 import { NativeSessionService } from "./native-session-service.js";
 import { DomainError, NanasaStore } from "./store.js";
@@ -18,6 +19,7 @@ export interface AgentStatusRouteOptions {
   nativeSessions?: NativeSessionService;
   runtimeProvisioner?: AgentRuntimeProvisioner;
   actionAcks?: AgentActionAckService;
+  foreman?: ForemanRuntimeService;
 }
 
 class AgentStatusRateLimiter {
@@ -48,6 +50,82 @@ export function registerAgentStatusRoutes(
       return;
     }
     const principal = options.credentials.authenticate(request.headers.authorization);
+    if (principal.kind === "foreman") {
+      limiter.check(principal.runId);
+      const event = AgentStatusEventInputSchema.parse(request.body);
+      const run = options.store.getActiveForemanRun(principal.foremanId);
+      if (run === undefined || run.id !== principal.runId)
+        throw new DomainError("status_generation_fenced", "Foreman run changed", 409);
+      await options.foreman?.observeReporterProcess(run);
+      try {
+        const result = options.store.ingestForemanStatusEvent(principal, event);
+        if (event.event === "session.ready" && options.runtimeProvisioner !== undefined) {
+          const reported =
+            event.data.nativeSession ??
+            (event.nativeSessionId === undefined
+              ? undefined
+              : { kind: "id" as const, value: event.nativeSessionId });
+          if (reported !== undefined) {
+            const reference = await options.runtimeProvisioner.normalizeNativeSession(
+              run,
+              {
+                source: event.source,
+                referenceKind: reported.kind,
+                referenceValue: reported.value,
+              },
+              await options.runtimeProvisioner.providerStateRoot(run),
+            );
+            const prior = options.store.database
+              .prepare("SELECT reference_json FROM foreman_native_sessions WHERE foreman_id = ?")
+              .get(run.foremanId);
+            if (
+              run.recoveryPhase === "resuming" &&
+              (prior === undefined ||
+                (JSON.parse(String(prior.reference_json)) as { dedupeHash: string }).dedupeHash !==
+                  reference.dedupeHash)
+            ) {
+              options.store.revokeReporterAuthority(
+                run.id,
+                run.generation,
+                "foreman_native_session_mismatch",
+              );
+              throw new DomainError(
+                "foreman_native_session_mismatch",
+                "The provider did not confirm the expected native session",
+                409,
+              );
+            }
+            options.store.database
+              .prepare(`INSERT INTO foreman_native_sessions (foreman_id, run_id, generation, reference_json, updated_at)
+              VALUES (?, ?, ?, ?, ?) ON CONFLICT(foreman_id) DO UPDATE SET run_id = excluded.run_id, generation = excluded.generation, reference_json = excluded.reference_json, updated_at = excluded.updated_at`)
+              .run(
+                run.foremanId,
+                run.id,
+                run.generation,
+                JSON.stringify(reference),
+                new Date().toISOString(),
+              );
+            if (["resuming", "restarting"].includes(run.recoveryPhase))
+              options.store.database
+                .prepare(
+                  "UPDATE runs SET recovery_phase = 'recovered', recovery_outcome = ? WHERE id = ?",
+                )
+                .run(run.recoveryPhase === "resuming" ? "resumed" : "restarted", run.id);
+          }
+        }
+        if (event.data.effectiveModel !== undefined)
+          options.store.updateRuntimeRunProviderMetadata(run.id, {
+            effectiveModel: event.data.effectiveModel,
+          });
+        return reply.status(202).send(result);
+      } catch (error) {
+        options.store.recordReporterRejection(
+          event,
+          error instanceof DomainError ? error.code : "status_reporter_rejected",
+        );
+        throw error;
+      }
+    }
     if (principal.kind !== "agent") {
       throw new DomainError(
         "status_agent_required",

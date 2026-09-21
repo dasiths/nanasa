@@ -17,6 +17,7 @@ import {
   BrowserRestartFrameSchema,
   CancelCustomLaunchConsentCommandSchema,
   CheckoutSchema,
+  ConfigureForemanCommandSchema,
   type ControlMetadata,
   CreateAgentActionCommandSchema,
   CreateGroupAgentCommandSchema,
@@ -28,6 +29,9 @@ import {
   DismissAttentionItemsCommandSchema,
   EventServerFrameSchema,
   ExtensionLifecycleCommandSchema,
+  ForemanChannelQuerySchema,
+  ForemanRunSchema,
+  ForemanWorkspaceSchema,
   GitReferenceListSchema,
   GitStatusProjectionSchema,
   InstallProviderExtensionCommandSchema,
@@ -35,6 +39,7 @@ import {
   MemberAttentionSubscriptionsSchema,
   OpenCheckoutCommandSchema,
   OpenWaitSchema,
+  ProposeForemanGoalCommandSchema,
   ProviderStateBindingSchema,
   ProviderUpdateOutcomeSchema,
   ProviderUpdateRecoveryCommandSchema,
@@ -52,14 +57,19 @@ import {
   ReparentGroupAgentResultSchema,
   ReplyOpenWaitCommandSchema,
   RepositorySchema,
+  ResolveForemanInputCommandSchema,
+  ResolveHumanDecisionCommandSchema,
   RevokeCustomLaunchConsentCommandSchema,
   RoleDefinitionSchema,
+  SendForemanMessageCommandSchema,
   type ServiceDescriptor,
   SetAttentionSubscriptionCommandSchema,
   StartAgentRunCommandSchema,
+  StartForemanCommandSchema,
   StartGroupRunsCommandSchema,
   StartGroupRunsResultSchema,
   StopAgentRunCommandSchema,
+  StopForemanCommandSchema,
   SubmitMessageCommandSchema,
   TerminalCheckpointCaptureSchema,
   TerminalCheckpointContentSchema,
@@ -89,6 +99,10 @@ import type { EventLog } from "../event-log.js";
 import { EventStreamSession } from "../event-stream-session.js";
 import type { ProviderExtensionService } from "../extensions/provider-extension-service.js";
 import type { ProviderHealthService } from "../extensions/provider-health-service.js";
+import { ForemanCleanupService } from "../foreman-cleanup-service.js";
+import type { ForemanConversationService } from "../foreman-conversation-service.js";
+import type { ForemanGoalService } from "../foreman-goal-service.js";
+import type { ForemanRuntimeService } from "../foreman-runtime-service.js";
 import type { CheckoutService } from "../git/checkout-service.js";
 import type { WorktreeService } from "../git/worktree-service.js";
 import type { LaunchConsentService } from "../launch-consent-service.js";
@@ -117,6 +131,9 @@ export interface ControlRouterServices {
   service(): ServiceDescriptor;
   remote(): RemoteDescriptor;
   config: ConfigRepository;
+  foreman: ForemanRuntimeService;
+  goals: ForemanGoalService;
+  conversations: ForemanConversationService;
   snapshot: SnapshotReadModel;
   store: NanasaStore;
   repositoryIdentity: string;
@@ -274,6 +291,7 @@ function parseAfterSequence(value: string | undefined): number {
 }
 
 export function registerControlRouter(app: FastifyInstance, services: ControlRouterServices): void {
+  const cleanup = new ForemanCleanupService(services.store, services.goals);
   const register = (id: string, handler: RouteHandler): void => {
     const declaration = controlRoute(id);
     if (declaration.transport === "websocket") {
@@ -327,6 +345,132 @@ export function registerControlRouter(app: FastifyInstance, services: ControlRou
     return reply.status(204).send();
   });
   register("config.get", () => services.config.load().config);
+  register("foreman.get", () => ForemanWorkspaceSchema.parse(services.foreman.status()));
+  register("foreman.conversations", () =>
+    cleanup.visibleConversations(services.conversations.list()),
+  );
+  register("foreman.cancelConversation", (request) =>
+    services.conversations.cancel(record(request.params).requestId ?? ""),
+  );
+  register("goals.list", (request) =>
+    cleanup.listGoals(record(request.query).includeRemoved === "true"),
+  );
+  register("foreman.cleanup", (request) =>
+    cleanup.execute(
+      operatorPrincipal(services, request).operatorId,
+      routeBody(controlRoute("foreman.cleanup"), request),
+    ),
+  );
+  register("foreman.cleanupEffects", () => cleanup.pendingEffects());
+  register("foreman.cleanupRequests", (request) => {
+    operatorPrincipal(services, request);
+    return cleanup.requests();
+  });
+  register("foreman.approveCleanup", (request) =>
+    cleanup.approve(
+      operatorPrincipal(services, request).operatorId,
+      routeBody(controlRoute("foreman.approveCleanup"), request),
+    ),
+  );
+  register("foreman.connectors", () => services.auth.listConnectors());
+  register("foreman.createConnector", (request) => services.auth.createConnector(request.body));
+  register("foreman.revokeConnector", (request) =>
+    services.auth.revokeConnector(record(request.params).connectorId ?? ""),
+  );
+  register("goals.propose", (request) =>
+    services.goals.propose(ProposeForemanGoalCommandSchema.parse(request.body)),
+  );
+  register("goals.get", (request) => services.goals.workspace(record(request.params).goalId ?? ""));
+  register("goals.control", async (request) => {
+    const command = request.body as { id: string; action: string };
+    if (command.action === "accept")
+      for (const delegation of services.goals
+        .workspace(command.id)
+        .delegations.filter((item) => item.state === "ready"))
+        await services.checkouts.refresh(delegation.checkoutId);
+    return services.goals.control(operatorPrincipal(services, request).operatorId, request.body);
+  });
+  register("goals.resolve", (request) =>
+    services.goals.resolve(
+      operatorPrincipal(services, request).operatorId,
+      ResolveHumanDecisionCommandSchema.parse(request.body),
+    ),
+  );
+  register("foreman.notifications", (request) => services.goals.notifications(request.query));
+  register("foreman.notificationCursor", (request) => {
+    const principal = operatorPrincipal(services, request);
+    return services.goals.cursor(principal.connectorId ?? principal.operatorId);
+  });
+  register("foreman.ackNotifications", (request) => {
+    const principal = operatorPrincipal(services, request);
+    return services.goals.acknowledge(
+      principal.connectorId ?? principal.operatorId,
+      Number((request.body as { after: number }).after),
+    );
+  });
+  register("foreman.resolveInput", (request) => {
+    services.store.resolveForemanInput(
+      operatorPrincipal(services, request).operatorId,
+      ResolveForemanInputCommandSchema.parse(
+        routeBody(controlRoute("foreman.resolveInput"), request),
+      ),
+    );
+    return services.foreman.status();
+  });
+  register("foreman.resetState", (request) =>
+    services.goals.resetState(
+      operatorPrincipal(services, request).operatorId,
+      routeBody(controlRoute("foreman.resetState"), request),
+    ),
+  );
+  register("foreman.channel", (request) => {
+    const query = record(request.query);
+    return services.store.readForemanChannel(
+      ForemanChannelQuerySchema.parse({
+        after: query.after === undefined ? 0 : Number(query.after),
+        limit: query.limit === undefined ? 50 : Number(query.limit),
+        includeCleared:
+          query.includeCleared === undefined
+            ? undefined
+            : z.enum(["true", "false"]).parse(query.includeCleared) === "true",
+        messageId: query.messageId,
+      }),
+    );
+  });
+  register("foreman.send", (request) =>
+    services.store.sendForemanMessage(
+      { kind: "operator", operatorId: operatorPrincipal(services, request).operatorId },
+      SendForemanMessageCommandSchema.parse(routeBody(controlRoute("foreman.send"), request)),
+    ),
+  );
+  register("foreman.configure", async (request) => {
+    const command = ConfigureForemanCommandSchema.parse(
+      routeBody(controlRoute("foreman.configure"), request),
+    );
+    const state = await services.foreman.configure(
+      command.configuration,
+      command.expectedConfigRevision,
+    );
+    await services.topology.reconcile();
+    return ForemanWorkspaceSchema.parse(state);
+  });
+  register("foreman.start", async (request) => {
+    const command = StartForemanCommandSchema.parse(
+      routeBody(controlRoute("foreman.start"), request),
+    );
+    return ForemanRunSchema.parse(
+      await services.foreman.start(command.expectedConfigRevision, {
+        cols: command.cols,
+        rows: command.rows,
+      }),
+    );
+  });
+  register("foreman.stop", async (request) => {
+    await services.foreman.stop(
+      StopForemanCommandSchema.parse(routeBody(controlRoute("foreman.stop"), request)),
+    );
+    return ForemanWorkspaceSchema.parse(services.foreman.status());
+  });
   register("config.status", () => services.config.load().status);
   register("snapshot.get", (request) => ({
     ...services.snapshot.read(operatorPrincipal(services, request).operatorId),

@@ -9,6 +9,7 @@ import { AgentActionScheduler } from "./actions/agent-action-scheduler.js";
 import { AgentActionService } from "./actions/agent-action-service.js";
 import { AgentOpenWaitService } from "./actions/agent-open-wait-service.js";
 import { AgentWaitService } from "./actions/agent-wait-service.js";
+import { PeerCapabilityPolicy } from "./actions/peer-capability-policy.js";
 import { AdHocConsoleManager } from "./ad-hoc-console-manager.js";
 import { AgentRuntimeProvisioner } from "./agent-runtime-provisioner.js";
 import { AgentStatusQueryService } from "./agent-status-query-service.js";
@@ -30,6 +31,12 @@ import { ProviderCatalogService } from "./extensions/provider-catalog-service.js
 import { ProviderExtensionPlanner } from "./extensions/provider-extension-planner.js";
 import { ProviderExtensionService } from "./extensions/provider-extension-service.js";
 import { ProviderHealthService } from "./extensions/provider-health-service.js";
+import { foremanTurnContext } from "./foreman-context.js";
+import { ForemanConversationService } from "./foreman-conversation-service.js";
+import { ForemanGoalService } from "./foreman-goal-service.js";
+import { ForemanOrchestrationService } from "./foreman-orchestration-service.js";
+import { ForemanInboxScheduler } from "./foreman-inbox-scheduler.js";
+import { ForemanRuntimeService } from "./foreman-runtime-service.js";
 import { GeneratedOverlayTransaction } from "./generated-overlay-transaction.js";
 import { CheckoutService } from "./git/checkout-service.js";
 import { GitCommandAdapter } from "./git/git-command-adapter.js";
@@ -93,9 +100,9 @@ import { TmuxEventObserver, type TmuxInvalidationKind } from "./tmux-event-obser
 import { TmuxRuntime } from "./tmux-runtime.js";
 import { TopologyOrderService } from "./topology-order-service.js";
 import { TopologyService } from "./topology-service.js";
-import { UserCredentialBroker } from "./user-credential-broker.js";
 import { registerUrlOpenRoutes } from "./url-open-routes.js";
 import { UrlOpenService } from "./url-open-service.js";
+import { UserCredentialBroker } from "./user-credential-broker.js";
 
 export interface DaemonOptions {
   dataPath?: string;
@@ -150,6 +157,10 @@ export interface DaemonContext {
   checkouts: CheckoutService;
   worktrees: WorktreeService;
   loadedConfig: LoadedNanasaConfig;
+  foreman: ForemanRuntimeService;
+  goals: ForemanGoalService;
+  orchestration: ForemanOrchestrationService;
+  conversations: ForemanConversationService;
   runtimePath: string;
   guard: DaemonInstanceGuard;
   lifecycle: DaemonLifecycle;
@@ -197,6 +208,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     });
     const authorityPolicy = new AuthorityPolicy(options.authority);
     const operatorAuth = new OperatorAuth({
+      database: store.database,
       secretPath: join(runtimePath, "operator-secret"),
       secureCookies: options.authority?.secureCookies ?? false,
     });
@@ -329,6 +341,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     const credentialBroker = new UserCredentialBroker();
     const repositoryTrust = new RepositoryTrustService(store);
     const launchConsentReference: { current?: RuntimeLaunchConsentGate } = {};
+    const goalRecoveryReference: { current?: ForemanGoalService } = {};
     const launchConsentService = new LaunchConsentService(store, (request) => {
       if (launchConsentReference.current === undefined) {
         throw new Error("Runtime launch consent gate is unavailable");
@@ -336,6 +349,8 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       return launchConsentReference.current.resolveCurrentSubject(request);
     });
     const launchConsent = new RuntimeLaunchConsentGate({
+      authorizeAutomaticRecovery: (groupId, memberId) =>
+        goalRecoveryReference.current?.authorizeRecovery(groupId, memberId) ?? true,
       repositoryIdentity,
       configRepository,
       store,
@@ -355,6 +370,19 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     });
     const runtimeProvisioner = new AgentRuntimeProvisioner({
       integrationsDirectory: loadedConfig.integrationsDirectory,
+      integrationPolicyResolver: (integrationId) => {
+        const integration = configRepository.load().config.integrations[integrationId];
+        if (integration === undefined) return undefined;
+        return {
+          providerState: integration.providerState,
+          credentials: integration.credentials,
+          model: integration.model,
+          nativeRecovery: integration.nativeRecovery,
+          ...(integration.launcher?.providerArguments === undefined
+            ? {}
+            : { providerArgumentStrategy: integration.launcher.providerArguments }),
+        };
+      },
       integrations: Object.fromEntries(
         Object.entries(loadedConfig.config.integrations).map(([key, integration]) => [
           key,
@@ -440,9 +468,32 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         NANASA_STATUS_URL: statusEndpointUrl,
         ...(await reporterRegistry.environment(run)),
       }),
+      foremanRuntimeEnvironment: async (run) => ({
+        ...(options.mcp?.enabled === true ? { NANASA_MCP_URL: mcpEndpointUrl } : {}),
+        NANASA_MCP_TOKEN: mcpCredentials.issueForeman(run),
+        NANASA_STATUS_URL: statusEndpointUrl,
+        ...(await reporterRegistry.environment(run)),
+      }),
     });
-    const terminalControl = new TerminalControlService(store);
+    const terminalControl = new TerminalControlService(
+      store,
+      () => new Date(),
+      (run) => {
+        goals?.pauseForTakeover(run.id);
+      },
+    );
     const terminalInput = new TerminalInputArbiter(terminalControl);
+    const goals = new ForemanGoalService(
+      store,
+      () => configRepository.load().config,
+      (runId) => terminalControl.hasController(runId),
+    );
+    const goalService = goals;
+    const foremanContext = () => foremanTurnContext(goals, configRepository.load().config);
+    const conversations = new ForemanConversationService(store, goals, (runId) =>
+      terminalControl.hasController(runId),
+    );
+    goalRecoveryReference.current = goalService;
     const terminalReads = new TerminalReadService(
       store,
       runtime,
@@ -457,17 +508,78 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       terminalInput,
     );
     const artifactPreviews = new ArtifactPreviewService(loadedConfig.repoRoot);
-    const terminalDelivery = new TmuxTerminalDelivery(runtime, terminalInput);
+    const foreman = new ForemanRuntimeService({
+      store,
+      config: configRepository,
+      runtime,
+      bindings: providerBindings,
+      reporters: reporterRegistry,
+      mcpEnabled: options.mcp?.enabled === true,
+      allowAutonomous: options.providerPolicy?.allowAutonomous === true,
+      allowProviderFiles: options.providerPolicy?.allowProviderFiles === true,
+      onRunAvailable: (run) => terminalGateway.start(run),
+      onRunUnavailable: (runId) => terminalControl.unregister(runId),
+      contextSnapshot: foremanContext,
+    });
+    const terminalDelivery = new TmuxTerminalDelivery(runtime, terminalInput, (claim) =>
+      goalService.authorizeMessage(claim.message.groupId, claim.message),
+    );
     const consoles = new AdHocConsoleManager(runtime, terminalGateway, loadedConfig.repoRoot);
+    const foremanInbox = new ForemanInboxScheduler(
+      store,
+      foreman,
+      runtime,
+      terminalInput,
+      (runId) => terminalGateway.hasController(runId),
+      () => new Date(),
+      (inboxId) => {
+        goalService.authorizeInbox(inboxId);
+        conversations.authorizeInbox(inboxId, foreman.status().configuration?.id);
+      },
+      foremanContext,
+    );
     const deliveries = new DeliveryRepository(store);
     const messages = new MessageRepository(store);
     const dispatcher = new DeliveryDispatcher(store, deliveries, terminalDelivery);
-    const messageCommands = new MessageCommandService(messages);
-    const actions = new AgentActionService(store, daemonEpoch);
-    const actionScheduler = new AgentActionScheduler(store, runtime, terminalInput);
+    const messageCommands = new MessageCommandService(messages, (groupId, command) =>
+      goalService.authorizeMessage(groupId, command),
+    );
+    const actions = new AgentActionService(
+      store,
+      daemonEpoch,
+      new PeerCapabilityPolicy(
+        (principal, command) => {
+          goalService.authorizeHandoff(principal, command);
+        },
+        (principal, command) => goalService.authorizePeer(principal, command),
+        undefined,
+        (principal, command) => conversations.authorize(principal, command),
+      ),
+      () => new Date(),
+      (action) => goalService.linkAction(action),
+    );
+    const actionScheduler = new AgentActionScheduler(
+      store,
+      runtime,
+      terminalInput,
+      () => new Date(),
+      1000,
+      (action) => {
+        goalService.authorizeAction(action);
+        conversations.authorizeAction(action);
+      },
+    );
     const actionAcks = new AgentActionAckService(store);
     const actionWaits = new AgentWaitService(store);
-    const openWaits = new AgentOpenWaitService(store, runtime, terminalInput, runtimeProvisioner);
+    const openWaits = new AgentOpenWaitService(
+      store,
+      runtime,
+      terminalInput,
+      runtimeProvisioner,
+      new PeerCapabilityPolicy(undefined, undefined, (principal) => {
+        goalService.authorizeTeamInput(principal);
+      }),
+    );
     const nativeRecoveryPolicy = (
       run: Parameters<NonNullable<RunRuntimeCoordinatorOptions["nativeRecoveryPolicy"]>>[0],
     ) => {
@@ -499,6 +611,13 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       nativeRecoveryPolicy,
     });
     coordinatorReference.current = coordinator;
+    const orchestration = new ForemanOrchestrationService(
+      store,
+      goalService,
+      checkouts,
+      worktrees,
+      coordinator,
+    );
     const topology = new TopologyService(configRepository, store, coordinator);
     const topologyOrder = new TopologyOrderService(configRepository, store);
     await topology.reconcile();
@@ -507,6 +626,10 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     await coordinator.reconcile(true);
     coordinator.start();
     actionScheduler.start();
+    foreman.startMonitoring();
+    foremanInbox.start();
+    goalService.start(actions, coordinator);
+    conversations.start(actions);
 
     app.addHook("onRequest", async (request, reply) => {
       const path = requestPath(request.url);
@@ -550,6 +673,11 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       for (const session of eventSessions) session.plannedRestart();
       await consoles.close();
       await actionScheduler.close();
+      await goalService.close();
+      await orchestration.close();
+      await conversations.close();
+      await foremanInbox.close();
+      await foreman.close();
       await coordinator.close();
     });
 
@@ -621,6 +749,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       nativeSessions,
       runtimeProvisioner,
       actionAcks,
+      foreman,
     });
     if (options.mcp?.enabled === true) {
       registerMcpRoutes(app, {
@@ -635,6 +764,12 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
         actions,
         actionWaits,
         openWaits,
+        foremanConfig: () => configRepository.load().config,
+        goals: goalService,
+        orchestration,
+        conversations,
+        terminalReads,
+        checkouts,
       });
     }
     registerControlRouter(app, {
@@ -642,8 +777,11 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       remote: () => createRemoteDescriptorFromMetadata(metadata(), systemdService.status()),
       metadata,
       config: configRepository,
+      foreman,
       snapshot: snapshotReadModel,
       store,
+      goals: goalService,
+      conversations,
       repositoryIdentity,
       launchConsent: launchConsentService,
       urlOpenService,
@@ -700,6 +838,7 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
     }
 
     await app.ready();
+    await foreman.startAutomatically();
     lifecycle.markReady();
     return {
       app,
@@ -720,7 +859,11 @@ export async function createDaemon(options: DaemonOptions): Promise<DaemonContex
       checkouts,
       worktrees,
       loadedConfig,
+      foreman,
+      goals: goalService,
+      orchestration,
       runtimePath,
+      conversations,
       guard,
       lifecycle,
       daemonEpoch,
